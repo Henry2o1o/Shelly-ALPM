@@ -10,14 +10,16 @@ public class DefaultCommand : AsyncCommand
 {
     public override async Task<int> ExecuteAsync(CommandContext context)
     {
-        //TODO: UPDATE TO READ LOCAL USER NOT ROOT INSTEAD OF CURRENT SITUATION
-        var configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "shelly", "config.json");
+        var username = Environment.GetEnvironmentVariable("SUDO_USER");
+        var configPath = Path.Combine("/home", username, ".config", "shelly", "config.json");
+        Console.WriteLine(configPath);
         if (!File.Exists(configPath))
         {
             return 1;
         }
 
         var json = await File.ReadAllTextAsync(configPath);
+
         var config = JsonSerializer.Deserialize<ShellyConfig>(json, ShellyCLIJsonContext.Default.ShellyConfig);
         if (config == null)
         {

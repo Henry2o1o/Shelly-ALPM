@@ -18,7 +18,18 @@ public class Program
     public static int Main(string[] args)
     {
         // Ensure default configuration exists in ~/.config/shelly/config.json
-        var configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "shelly", "config.json");
+        string configPath;
+        if (Environment.GetEnvironmentVariable("USER") == "root")
+        {
+            var username = Environment.GetEnvironmentVariable("SUDO_USER");
+            configPath = Path.Combine("/home", username, ".config", "shelly", "config.json");
+        }
+        else
+        {
+            configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "shelly", "config.json");
+        }
+
         if (!File.Exists(configPath))
         {
             var configDir = Path.GetDirectoryName(configPath);
@@ -71,7 +82,7 @@ public class Program
         {
             config.SetApplicationName("shelly");
             config.SetApplicationVersion(Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown");
-            
+
             config.AddCommand<VersionCommand>("version")
                 .WithDescription("Display the application version")
                 .WithExample("version");
@@ -99,7 +110,7 @@ public class Program
             config.AddCommand<ListUpdatesCommand>("list-updates")
                 .WithDescription("List packages that need updates")
                 .WithExample("list-updates");
-            
+
             config.AddCommand<PackageInformationCommand>("info")
                 .WithDescription("Display information about a package")
                 .WithExample("info", "firefox", "--installed")
@@ -158,10 +169,10 @@ public class Program
                 .WithExample("downgrade", "firefox")
                 .WithExample("downgrade", "firefox", "--oldest")
                 .WithExample("downgrade", "firefox", "--latest");
-            
+
             config.AddCommand<ArchNews>("news")
                 .WithDescription("Shows Arch news you haven't seen before")
-                .WithExample("news","--all");
+                .WithExample("news", "--all");
 
             config.AddBranch("keyring", keyring =>
             {
