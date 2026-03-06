@@ -1,9 +1,7 @@
 using System.Globalization;
 using Gtk;
 using Shelly.Gtk.Services;
-using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.AUR.GObjects;
-using Shelly.Gtk.Windows.Dialog;
 
 namespace Shelly.Gtk.Windows.AUR;
 
@@ -111,6 +109,23 @@ public class AurInstall(
         };
         nameColumn.SetFactory(nameFactory);
         
+        var votesFactory = SignalListItemFactory.New();
+        votesFactory.OnSetup += (_, args) =>
+        {
+            var listItem = (ListItem)args.Object;
+            var label = Label.New(string.Empty);
+            listItem.SetChild(label);
+        };
+        votesFactory.OnBind += (_, args) =>
+        {
+            var listItem = (ListItem)args.Object;
+            if (listItem.GetItem() is not AurPackageGObject { Package: { } pkg } ||
+                listItem.GetChild() is not Label label) return;
+            label.SetText(pkg.NumVotes.ToString(CultureInfo.InvariantCulture));
+            label.Halign = Align.End;
+        };
+        votesColumn.SetFactory(votesFactory);
+        
         var sizeFactory = SignalListItemFactory.New();
         sizeFactory.OnSetup += (_, args) =>
         {
@@ -123,7 +138,7 @@ public class AurInstall(
             var listItem = (ListItem)args.Object;
             if (listItem.GetItem() is not AurPackageGObject { Package: { } pkg } ||
                 listItem.GetChild() is not Label label) return;
-            label.SetText(pkg.NumVotes.ToString(CultureInfo.InvariantCulture));
+            label.SetText(pkg.Popularity.ToString("F2",CultureInfo.InvariantCulture));
             label.Halign = Align.End;
         };
         popColumn.SetFactory(sizeFactory);

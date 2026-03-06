@@ -68,8 +68,8 @@ sealed class Program
 
             // AUR Actions
             AddAction("install-aur", NavigateTo<AurInstall>);
-            AddAction("update-aur", NavigateTo<HomeWindow>); // Placeholder
-            AddAction("remove-aur", NavigateTo<HomeWindow>); // Placeholder
+            AddAction("update-aur", NavigateTo<AurUpdate>); 
+            AddAction("remove-aur", NavigateTo<AurRemove>); 
 
             // Flatpak Actions
             AddAction("install-flatpak", NavigateTo<FlatpakInstall>);
@@ -140,6 +140,8 @@ sealed class Program
         collection.AddTransient<HomeWindow>();
         collection.AddTransient<FlatpakRemove>();
         collection.AddTransient<AurInstall>();
+        collection.AddTransient<AurUpdate>();
+        collection.AddTransient<AurRemove>();
         collection.AddTransient<FlatpakInstall>();
         collection.AddTransient<FlatpakUpdate>();
         collection.AddTransient<PackageManagement>();

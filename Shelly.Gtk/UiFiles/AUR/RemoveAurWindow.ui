@@ -1,37 +1,67 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
   <requires lib="gtk" version="4.0"/>
-  <object class="GtkWindow" id="RemoveAurWindow">
-    <property name="title">Remove AUR Package</property>
-    <property name="modal">true</property>
+  <object class="GtkBox" id="RemoveAurWindow">
+    <property name="orientation">vertical</property>
     <child>
       <object class="GtkBox">
-        <property name="orientation">vertical</property>
-        <property name="margin-start">20</property>
-        <property name="margin-end">20</property>
-        <property name="margin-top">20</property>
-        <property name="margin-bottom">20</property>
-        <property name="spacing">10</property>
+     <property name="halign">baseline</property>
+     <property name="margin-bottom">10</property>
+     <property name="spacing">5</property>
+      <child>
+        <object class="GtkButton" id="remove_button">
+          <property name="halign">start</property>
+          <property name="label">Remove Aur Package(s)</property>
+          <style>
+            <class name="suggested-action"/>
+          </style>
+        </object>
+      </child>
+      <child>
+        <object class="GtkBox">
+          <property name="hexpand">true</property>
+        </object>
+      </child>
+      <child>
+        <object class="GtkSearchEntry" id="search_entry">
+          <property name="placeholder-text">Search packages...</property>
+          <property name="width-request">200</property>
+          <style>
+            <class name="spaced-search"/>
+          </style>
+        </object>
+      </child>
+      <child>
+        <object class="GtkButton" id="search_button">
+          <property name="icon-name">view-search-symbolic</property>
+          <property name="tooltip-text">search</property>
+        </object>
+      </child>
+    </object>
+    </child>
+    <child>
+      <object class="GtkScrolledWindow">
+        <property name="overlay-scrolling">false</property>
+        <property name="vexpand">true</property>
         <child>
-          <object class="GtkLabel">
-            <property name="label">Are you sure you want to remove this AUR package?</property>
-          </object>
-        </child>
-        <child>
-          <object class="GtkBox">
-            <property name="halign">end</property>
-            <property name="spacing">6</property>
+          <object class="GtkColumnView" id="package_grid">
+            <property name="hexpand">true</property>
+            <property name="vexpand">true</property>
             <child>
-              <object class="GtkButton" id="cancel_button">
-                <property name="label">Cancel</property>
+              <object class="GtkColumnViewColumn" id="name_column">
+                <property name="title">Name</property>
+                <property name="expand">true</property>
               </object>
             </child>
             <child>
-              <object class="GtkButton" id="remove_button">
-                <property name="label">Remove</property>
-                <style>
-                  <class name="destructive-action"/>
-                </style>
+              <object class="GtkColumnViewColumn" id="version_column">
+                <property name="title">Version</property>
+                <property name="expand">true</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkColumnViewColumn" id="check_column">
+                <property name="title"></property>
               </object>
             </child>
           </object>
