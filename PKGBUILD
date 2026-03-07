@@ -39,15 +39,15 @@ build() {
   cd "$srcdir/Shelly-ALPM-${pkgver}"
 
   dotnet publish Shelly-CLI/Shelly-CLI.csproj -c Release -o out-cli --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64-v3}
-  dotnet publish Shelly-UI/Shelly-UI.csproj -c Release -r linux-x64 -o out --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64-v3}
+  dotnet publish Shelly.Gtk/Shelly.Gtk.csproj -c Release -r linux-x64 -o out --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64-v3}
   dotnet publish Shelly-Notifications/Shelly-Notifications.csproj -c Release -r linux-x64 -o out-notify --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64-v3}
 }
 
 package() {
   cd "$srcdir/Shelly-ALPM-${pkgver}"
 
-  # Install Shelly-UI binary
-  install -Dm755 out/Shelly-UI "$pkgdir/usr/bin/shelly-ui"
+  # Install Shelly.Gtk binary
+  install -Dm755 out/Shelly.Gtk "$pkgdir/usr/bin/shelly-ui"
 
   # Install bundled native libraries (SkiaSharp and HarfBuzzSharp)
   install -Dm755 out/libSkiaSharp.so "$pkgdir/usr/lib/libSkiaSharp.so"
@@ -72,5 +72,5 @@ Terminal=false
 EOF
 
   # Install icon
-  install -Dm644 Shelly-UI/Assets/shellylogo.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly.png"
+  install -Dm644 Shelly.Gtk/Assets/shellylogo.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly.png"
 }

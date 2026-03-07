@@ -6,6 +6,7 @@ using Shelly.Gtk.Windows;
 using Shelly.Gtk.Windows.AUR;
 using Shelly.Gtk.Windows.Dialog;
 using Shelly.Gtk.Windows.Flatpak;
+using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Windows.Packages;
 
 namespace Shelly.Gtk;
@@ -22,16 +23,16 @@ sealed class Program
         application.OnActivate += (sender, _) =>
         {
             var cssProvider = CssProvider.New();
-            cssProvider.LoadFromPath("Assets/style.css");
+            cssProvider.LoadFromString(ResourceHelper.LoadAsset("Assets/style.css"));
             StyleContext.AddProviderForDisplay(Gdk.Display.GetDefault()!, cssProvider, 800);
 
-            var mainBuilder = Builder.NewFromFile("UiFiles/MainWindow.ui");
+            var mainBuilder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/MainWindow.ui"), -1);
             var window = (ApplicationWindow)mainBuilder.GetObject("MainWindow")!;
 
             window.SetIconName("shelly");
             window.Application = application;
 
-            var menuBuilder = Builder.NewFromFile("UiFiles/MainMenu.ui");
+            var menuBuilder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/MainMenu.ui"), -1);
             var appMenu = (Gio.Menu)menuBuilder.GetObject("AppMenu")!;
             application.Menubar = appMenu;
 

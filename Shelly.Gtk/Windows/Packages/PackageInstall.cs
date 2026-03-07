@@ -27,7 +27,7 @@ public class PackageInstall(IPrivilegedOperationService privilegedOperationServi
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/Package/PackageWindow.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Package/PackageWindow.ui"), -1);
         _overlay = (Overlay)builder.GetObject("PackageWindow")!;
         _columnView = (ColumnView)builder.GetObject("package_column_view")!;
         var checkColumn = (ColumnViewColumn)builder.GetObject("check_column")!;

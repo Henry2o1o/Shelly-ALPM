@@ -1,5 +1,6 @@
 using System.Globalization;
 using Gtk;
+using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels.AUR.GObjects;
 
@@ -19,7 +20,7 @@ public class AurInstall(
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/AUR/AurWindow.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/AUR/AurWindow.ui"), -1);
         _box = (Box)builder.GetObject("AurInstallWindow")!;
         _columnView = (ColumnView)builder.GetObject("package_grid")!;
         _searchEntry = (SearchEntry)builder.GetObject("search_entry")!;

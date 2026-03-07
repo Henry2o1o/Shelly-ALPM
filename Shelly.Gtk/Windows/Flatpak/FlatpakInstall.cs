@@ -1,5 +1,6 @@
 using Gtk;
 using Shelly.Gtk.Enums;
+using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 
@@ -18,7 +19,7 @@ public class FlatpakInstall(IUnprivilegedOperationService unprivilegedOperationS
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/Flatpak/FlatpakInstallWindow.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakInstallWindow.ui"), -1);
         var box = (Box)builder.GetObject("FlatpakInstallWindow")!;
         
         _listView = (ListView)builder.GetObject("list_flatpaks")!;

@@ -1,4 +1,5 @@
 using Gtk;
+using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels.AUR.GObjects;
 
@@ -17,7 +18,7 @@ public class AurUpdate(IPrivilegedOperationService privilegedOperationService, I
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/AUR/UpdateAurWindow.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/AUR/UpdateAurWindow.ui"), -1);
         _box = (Box)builder.GetObject("AurUpdateWindow")!;
         _columnView = (ColumnView)builder.GetObject("package_grid")!;
         var searchEntry = (SearchEntry)builder.GetObject("search_entry")!;

@@ -1,4 +1,5 @@
 using Gtk;
+using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 
@@ -21,7 +22,7 @@ public class PackageUpdate(IPrivilegedOperationService privilegedOperationServic
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/Package/UpdateWindow.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Package/UpdateWindow.ui"), -1);
         _box = (Box)builder.GetObject("UpdateWindow")!;
         _columnView = (ColumnView)builder.GetObject("package_grid")!;
         var searchEntry = (SearchEntry)builder.GetObject("search_entry")!;

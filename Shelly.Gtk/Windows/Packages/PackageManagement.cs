@@ -26,7 +26,7 @@ public class PackageManagement(IPrivilegedOperationService privilegedOperationSe
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/Package/PackageManagement.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Package/PackageManagement.ui"), -1);
         _box = (Box)builder.GetObject("PackageManagement")!;
         _columnView = (ColumnView)builder.GetObject("package_grid")!;
         _searchEntry = (SearchEntry)builder.GetObject("search_entry")!;

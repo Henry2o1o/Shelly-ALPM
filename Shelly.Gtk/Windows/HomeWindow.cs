@@ -19,7 +19,7 @@ public class HomeWindow(
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/HomeWindow.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/HomeWindow.ui"), -1);
         _box = (Box)builder.GetObject("HomeWindow")!;
 
         var listBox = (ListBox)builder.GetObject("NewsListBox")!;

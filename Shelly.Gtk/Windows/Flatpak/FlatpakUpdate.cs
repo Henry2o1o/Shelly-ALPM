@@ -1,4 +1,5 @@
 using Gtk;
+using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 
@@ -15,7 +16,7 @@ public class FlatpakUpdate(IUnprivilegedOperationService unprivilegedOperationSe
 
     public Widget CreateWindow()
     {
-        var builder = Builder.NewFromFile("UiFiles/Flatpak/FlatpakUpdateWindow.ui");
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakUpdateWindow.ui"), -1);
         var box = (Box)builder.GetObject("FlatpakUpdateWindow")!;
 
         _listView = (ListView)builder.GetObject("installed_flatpaks")!;
