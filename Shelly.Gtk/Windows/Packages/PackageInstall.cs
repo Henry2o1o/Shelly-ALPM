@@ -375,16 +375,11 @@ public class PackageInstall(IPrivilegedOperationService privilegedOperationServi
 
         try
         {
-
-
-            var suggestName = $"{DateTime.Now:yyyyMMddHHmmss}_shelly.sync";
-
             var dialog = FileDialog.New();
             dialog.SetTitle("Install Local Package");
-            dialog.SetInitialName(suggestName);
 
             var filter = FileFilter.New();
-            filter.SetName("Sync Files (\"*.xz\", \"*.gz\", \"*.zst\")");
+            filter.SetName("Local package files (\"*.xz\", \"*.gz\", \"*.zst\")");
             filter.AddPattern("*.xz");
             filter.AddPattern("*.gz");
             filter.AddPattern("*.zst");
