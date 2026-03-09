@@ -7,15 +7,23 @@ public class PasswordDialog(ICredentialManager credentialManager)
 {
     public void ShowPasswordDialog(Overlay parentOverlay, string reason)
     {
+        var background = Box.New(Orientation.Vertical, 0);
+        background.AddCssClass("lockout-overlay");
+        background.SetHalign(Align.Fill);
+        background.SetValign(Align.Fill);
+
         var box = Box.New(Orientation.Vertical, 12);
         box.SetHalign(Align.Center);
         box.SetValign(Align.Center);
+        box.SetHexpand(true);
+        box.SetVexpand(true);
         box.SetSizeRequest(400, -1);
         box.SetMarginTop(20);
         box.SetMarginBottom(20);
         box.SetMarginStart(20);
         box.SetMarginEnd(20);
         box.AddCssClass("dialog-overlay");
+        background.Append(box);
 
         var titleLabel = Label.New("Authentication Required");
         titleLabel.AddCssClass("title-4");
@@ -43,7 +51,7 @@ public class PasswordDialog(ICredentialManager credentialManager)
         cancelButton.OnClicked += async (s, e) =>
         {
             await credentialManager.CompleteCredentialRequestAsync(false);
-            parentOverlay.RemoveOverlay(box);
+            parentOverlay.RemoveOverlay(background);
         };
 
         submitButton.OnClicked += async (s, e) =>
@@ -54,7 +62,7 @@ public class PasswordDialog(ICredentialManager credentialManager)
 
             if (credentialManager.IsValidated)
             {
-                parentOverlay.RemoveOverlay(box);
+                parentOverlay.RemoveOverlay(background);
             }
             else
             {
@@ -70,6 +78,6 @@ public class PasswordDialog(ICredentialManager credentialManager)
         buttonBox.Append(submitButton);
         box.Append(buttonBox);
 
-        parentOverlay.AddOverlay(box);
+        parentOverlay.AddOverlay(background);
     }
 }
