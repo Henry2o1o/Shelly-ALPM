@@ -26,26 +26,20 @@ optdepends=(
 )
 
 source=(
-    "shelly-ui-${pkgver}::https://github.com/ZoeyErinBauer/Shelly-ALPM/releases/download/v${pkgver}/shelly-ui"
-    "shelly-${pkgver}::https://github.com/ZoeyErinBauer/Shelly-ALPM/releases/download/v${pkgver}/shelly"
-    "shelly-notifications-${pkgver}::https://github.com/ZoeyErinBauer/Shelly-ALPM/releases/download/v${pkgver}/shelly-notifications"
-    "shellylogo-${pkgver}.png::https://raw.githubusercontent.com/ZoeyErinBauer/Shelly-ALPM/v${pkgver}/Shelly.Gtk/Assets/shellylogo.png"
+    "Shelly-ALPM-linux-x64-${pkgver}.tar.gz::https://github.com/ZoeyErinBauer/Shelly-ALPM/releases/download/v${pkgver}/Shelly-ALPM-linux-x64.tar.gz"
 )
 
-sha256sums=('SKIP'
-            'SKIP'
-            'SKIP'
-            'SKIP')
+sha256sums=('SKIP')
 
 package() {
   # Install Shelly.Gtk binary
-  install -Dm755 "$srcdir/shelly-ui-${pkgver}" "$pkgdir/usr/bin/shelly-ui"
+  install -Dm755 "$srcdir/shelly-ui" "$pkgdir/usr/bin/shelly-ui"
 
   # Install Shelly-Notifications binary
-  install -Dm755 "$srcdir/shelly-notifications-${pkgver}" "$pkgdir/usr/bin/shelly-notifications"
+  install -Dm755 "$srcdir/shelly-notifications" "$pkgdir/usr/bin/shelly-notifications"
 
   # Install Shelly-CLI binary
-  install -Dm755 "$srcdir/shelly-${pkgver}" "$pkgdir/usr/bin/shelly"
+  install -Dm755 "$srcdir/shelly" "$pkgdir/usr/bin/shelly"
 
   # Install desktop entry
   cat <<'EOF' | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/shelly.desktop"
@@ -60,7 +54,7 @@ Terminal=false
 EOF
 
   # Install icon
-  install -Dm644 "$srcdir/shellylogo-${pkgver}.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly.png"
-  install -Dm644 Shelly.Gtk/Assets/svg/flatpak-symbolic.svg "$pkgdir/usr/share/icons/hicolor/symbolic/apps/flatpak-symbolic.svg"
-  install -Dm644 Shelly.Gtk/Assets//svg/arch-symbolic.svg "$pkgdir/usr/share/icons/hicolor/symbolic/apps/arch-symbolic.svg"
+  install -Dm644 "$srcdir/shellylogo.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly.png"
+  install -Dm644 "$srcdir/flatpak-symbolic.svg" "$pkgdir/usr/share/icons/hicolor/symbolic/apps/flatpak-symbolic.svg"
+  install -Dm644 "$srcdir/arch-symbolic.svg" "$pkgdir/usr/share/icons/hicolor/symbolic/apps/arch-symbolic.svg"
 }
