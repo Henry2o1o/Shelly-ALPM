@@ -96,9 +96,7 @@ public class Settings(
             {
                 TrayStartService.End();
             }
-
-            updateAction(e.State);
-            SaveConfig();
+            
             return false;
         };
     }
@@ -109,15 +107,9 @@ public class Settings(
         sw.Active = initialValue;
         sw.OnStateSet += (s, e) =>
         {
-            if (e.State)
-            {
-                _ = HandleFlatpakMissingAsync(sw, updateAction);
-                return true;
-            }
-
-            updateAction(e.State);
-            SaveConfig();
-            return false;
+            if (!e.State) return false;
+            _ = HandleFlatpakMissingAsync(sw, updateAction);
+            return true;
         };
     }
 
@@ -133,16 +125,23 @@ public class Settings(
         genericQuestionService.RaiseQuestion(args);
         var confirmed = await args.ResponseTask;
 
-        if (confirmed)
+        GLib.Functions.IdleAdd(0, () =>
         {
-            _config.AurWarningConfirmed = true;
-            updateAction(true);
-            SaveConfig();
-        }
-        else
-        {
-            sw.SetActive(false);
-        }
+            if (confirmed)
+            {
+                _config.AurWarningConfirmed = true;
+                updateAction(true);
+                SaveConfig();
+                sw.Active = true;
+                sw.State = true;
+            }
+            else
+            {
+                sw.Active = false;
+                sw.State = false;
+            }
+            return false;
+        });
     }
 
     private async Task HandleFlatpakMissingAsync(Switch sw, Action<bool> updateAction)
@@ -165,10 +164,24 @@ public class Settings(
                 {
                     lockoutService.Show("Installing flatpak...");
                     await privilegedOperationService.InstallPackagesAsync(["flatpak"]);
+                    GLib.Functions.IdleAdd(0, () =>
+                    {
+                        updateAction(true);
+                        SaveConfig();
+                        sw.Active = true;
+                        sw.State = true;
+                        return false;
+                    });
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Error installing flatpak: {ex.Message}");
+                    GLib.Functions.IdleAdd(0, () =>
+                    {
+                        sw.Active = false;
+                        sw.State = false;
+                        return false;
+                    });
                 }
                 finally
                 {
@@ -177,10 +190,25 @@ public class Settings(
             }
             else
             {
-                sw.SetActive(false);
+                GLib.Functions.IdleAdd(0, () =>
+                {
+                    sw.Active = false;
+                    sw.State = false;
+                    return false;
+                });
             }
         }
-       
+        else
+        {
+            GLib.Functions.IdleAdd(0, () =>
+            {
+                updateAction(true);
+                SaveConfig();
+                sw.Active = true;
+                sw.State = true;
+                return false;
+            });
+        }
     }
 
     private void SaveConfig()
