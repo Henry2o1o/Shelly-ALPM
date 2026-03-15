@@ -52,8 +52,13 @@
                                             </object>
                                         </child>
                                         <child>
+                                            <object class="GtkDropDown" id="overlay_remote_selection">
+                                                <property name="tooltip-text">Group Filter</property>
+                                            </object>
+                                        </child>
+                                        <child>
                                             <object class="GtkButton" id="overlay_install_button">
-                                                <property name="label">Install from Flathub</property>
+                                                <property name="label">Install</property>
                                                 <style>
                                                     <class name="suggested-action"/>
                                                 </style>
@@ -205,11 +210,37 @@
                                                     </object>
                                                 </child>
                                                 <child>
-                                                    <object class="GtkLabel" id="overlay_urls_label">
-                                                        <property name="halign">start</property>
-                                                        <property name="xalign">0</property>
-                                                        <property name="use-markup">true</property>
-                                                        <property name="wrap">true</property>
+                                                    <object class="GtkGrid">
+                                                        <child>
+                                                            <object class="GtkLabel" id="overlay_urls_label">
+                                                                <property name="halign">start</property>
+                                                                <property name="xalign">0</property>
+                                                                <property name="use-markup">true</property>
+                                                                <layout>
+                                                                    <property name="column">0</property>
+                                                                    <property name="row">0</property>
+                                                                </layout>
+                                                            </object>
+                                                        </child>
+                                                        <child>
+                                                            <object class="GtkGrid">
+                                                                <property name="hexpand">true</property>
+                                                                <layout>
+                                                                    <property name="column">1</property>
+                                                                    <property name="row">0</property>
+                                                                </layout>
+                                                            </object>
+                                                        </child>
+                                                        <child>
+                                                            <object class="GtkButton" id="version_history_button">
+                                                                <property name="halign">end</property>
+                                                                <property name="label">Version History</property>
+                                                                <layout>
+                                                                    <property name="column">2</property>
+                                                                    <property name="row">0</property>
+                                                                </layout>
+                                                            </object>
+                                                        </child>
                                                     </object>
                                                 </child>
                                             </object>

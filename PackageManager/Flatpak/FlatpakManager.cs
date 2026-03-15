@@ -282,6 +282,7 @@ public class FlatpakManager : IDisposable
     /// <param name="appId">The application ID (e.g., "org.mozilla.firefox")</param>
     /// <param name="remoteName">The remote name (e.g., "flathub"). If null, will try the first available remote.</param>
     /// <param name="isUser">Whether to install to user installation (true) or system installation (false)</param>
+    /// <param name="branch"></param>
     /// <returns>A result message indicating success or failure</returns>
     public string InstallApp(string appId, string? remoteName = null, bool isUser = false, string branch = "stable")
     {
@@ -337,6 +338,9 @@ public class FlatpakManager : IDisposable
 
             var transactionPtr = FlatpakReference.TransactionNewForInstallation(
                 installationPtr, IntPtr.Zero, out IntPtr transactionError);
+            
+            FlatpakReference.InstallationUpdateRemoteSync(
+                installationPtr, remote, IntPtr.Zero, out IntPtr updateError);
 
             if (transactionError != IntPtr.Zero || transactionPtr == IntPtr.Zero)
             {
@@ -980,7 +984,7 @@ public class FlatpakManager : IDisposable
         {
             try
             {
-                AddRemotesFromInstallation(userInstallationPtr, remotesDto, "u");
+                AddRemotesFromInstallation(userInstallationPtr, remotesDto, "user");
             }
             finally
             {
@@ -1121,19 +1125,48 @@ public class FlatpakManager : IDisposable
 
         try
         {
+            var actualUrl = remoteUrl;
+            var actualGpgVerify = gpgVerify;
+            
+            if (remoteUrl.EndsWith(".flatpakrepo", StringComparison.OrdinalIgnoreCase))
+            {
+                var repoConfig = DownloadAndParseFlatpakrepo(remoteUrl);
+                if (repoConfig == null || string.IsNullOrEmpty(repoConfig.Url))
+                {
+                    return $"Failed to download or parse .flatpakrepo file from: {remoteUrl}";
+                }
+
+                actualUrl = repoConfig.Url;
+                actualGpgVerify = repoConfig.GpgVerify ?? gpgVerify;
+
+                Console.Error.WriteLine($"Parsed .flatpakrepo: URL={actualUrl}, GPGVerify={actualGpgVerify}");
+            }
+            
             var remotePtr = FlatpakReference.RemoteNew(remoteName);
             if (remotePtr == IntPtr.Zero)
             {
                 return "Failed to create remote object.";
             }
 
+            FlatpakReference.RemoteSetUrl(remotePtr, actualUrl);
+            FlatpakReference.RemoteSetGpgVerify(remotePtr, actualGpgVerify);
+
             try
             {
-                FlatpakReference.RemoteSetUrl(remotePtr, remoteUrl);
-                FlatpakReference.RemoteSetGpgVerify(remotePtr, gpgVerify);
+                var result = FlatpakReference.FlatpakInstallationModifyRemote(
+                    installationPtr, remotePtr, IntPtr.Zero, out IntPtr error);
+
+                if (error != IntPtr.Zero || result == false)
+                {
+                    Console.WriteLine($"Failed to modify remote: {FlatpakReference.GetErrorMessage(error)}");
+                    if (error != IntPtr.Zero)
+                    {
+                        FlatpakReference.GErrorFree(error);
+                    }
+                }
 
                 var success = FlatpakReference.InstallationAddRemote(
-                    installationPtr, remotePtr, true, IntPtr.Zero, out IntPtr error);
+                    installationPtr, remotePtr, true, IntPtr.Zero, out error);
 
                 if (!success || error != IntPtr.Zero)
                 {
@@ -1143,7 +1176,17 @@ public class FlatpakManager : IDisposable
                 }
 
                 var scope = isSystemWide ? "system" : "user";
-                return $"Successfully added remote '{remoteName}' to {scope} installation with URL: {remoteUrl}";
+
+                if (remoteUrl.EndsWith(".flatpakrepo", StringComparison.OrdinalIgnoreCase))
+                {
+                    var configuredUrl = PtrToStringSafe(FlatpakReference.RemoteGetUrl(remotePtr));
+                    if (!string.IsNullOrEmpty(configuredUrl))
+                    {
+                        actualUrl = configuredUrl;
+                    }
+                }
+
+                return $"Successfully added remote '{remoteName}' to {scope} installation with URL: {actualUrl}";
             }
             finally
             {
@@ -1601,7 +1644,7 @@ public class FlatpakManager : IDisposable
             }
 
             var parser = new AppstreamParser();
-            return parser.ParseFile(appstreamPath, remoteName);
+            return parser.ParseFile(appstreamPath);
         }
         catch (Exception e)
         {
@@ -1722,24 +1765,30 @@ public class FlatpakManager : IDisposable
         }
     }
 
-    public ulong GetRemoteSize(string remote, string name, string arch, string branch)
+    public FlatpakRemoteRefInfo GetRemoteSize(string remote, string name, string arch, string branch)
     {
         if (!NativeResolver.IsLibraryAvailable(FlatpakReference.LibName))
         {
-            return 0;
+            return new FlatpakRemoteRefInfo();
         }
-        
-        var installation = FlatpakReference.FlatpakInstallationNewSystem(IntPtr.Zero, out var error);
-        
-        var remoteRef = FlatpakReference.InstallationFetchRemoteRefsSync(installation, remote, 0, name, GetCurrentArch(), branch,IntPtr.Zero,out _);
-        
-        if (remoteRef == IntPtr.Zero) return 0;
-        var size = FlatpakReference.RemoteRefGetInstalledSize(remoteRef);
-        FlatpakReference.GObjectUnref(remoteRef);
-        return size;
-        
-        
 
+        var installation = FlatpakReference.FlatpakInstallationNewSystem(IntPtr.Zero, out var error);
+
+        var remoteRef = FlatpakReference.InstallationFetchRemoteRefsSync(installation, remote, 0, name,
+            GetCurrentArch(), branch, IntPtr.Zero, out _);
+
+        if (remoteRef == IntPtr.Zero) return new FlatpakRemoteRefInfo();
+
+        var remoteRefInfo = new FlatpakRemoteRefInfo
+        {
+            DownloadSize = FlatpakReference.RemoteRefGetDownloadSize(remoteRef),
+            InstalledSize = FlatpakReference.RemoteRefGetInstalledSize(remoteRef),
+        };
+
+
+        FlatpakReference.GObjectUnref(remoteRef);
+        return remoteRefInfo;
+        
     }
 
     /// <summary>
@@ -1753,17 +1802,25 @@ public class FlatpakManager : IDisposable
         var apps = new List<AppstreamApp>();
         if (getAll)
         {
-            var remotes = ListRemotes();
+            var remotes = ListRemotesWithDetails();
             foreach (var remote in remotes)
             {
-                foreach (var app in GetAvailableAppsFromAppstream(remote, arch))
+                foreach (var app in GetAvailableAppsFromAppstream(remote.Name, arch))
                 {
-                    var existing = apps.FirstOrDefault(a => a.Name == app.Name);
+                    var existing = apps.FirstOrDefault(a => a.Id == app.Id);
                     if (existing != null)
-                        existing.Remotes.Add(remote);
+                        existing.Remotes.Add(new FlatpakRemoteDto()
+                        {
+                            Name = remote.Name,
+                            Scope = remote.Scope
+                        });
                     else
                     {
-                        app.Remotes.Add(remote);
+                        app.Remotes.Add(new FlatpakRemoteDto()
+                        {
+                            Name = remote.Name,
+                            Scope = remote.Scope
+                        });
                         apps.Add(app);
                     }
                 }
@@ -1915,8 +1972,60 @@ public class FlatpakManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Downloads and parses a .flatpakrepo file to extract repository configuration.
+    /// </summary>
+    private FlatpakrepoConfig? DownloadAndParseFlatpakrepo(string url)
+    {
+        try
+        {
+            using var httpClient = new System.Net.Http.HttpClient();
+            httpClient.Timeout = TimeSpan.FromSeconds(30);
+            var content = httpClient.GetStringAsync(url).GetAwaiter().GetResult();
+
+            var config = new FlatpakrepoConfig();
+            
+            foreach (var line in content.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('[') || trimmed.StartsWith('#'))
+                    continue;
+
+                var parts = trimmed.Split('=', 2);
+                if (parts.Length != 2)
+                    continue;
+
+                var key = parts[0].Trim();
+                var value = parts[1].Trim();
+
+                switch (key)
+                {
+                    case "Url":
+                        config.Url = value;
+                        break;
+                    case "GPGVerify":
+                        config.GpgVerify = value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                        break;
+                }
+            }
+
+            return config;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error downloading/parsing .flatpakrepo: {ex.Message}");
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         //Currently just here to have it when needed.
+    }
+
+    private class FlatpakrepoConfig
+    {
+        public string? Url { get; set; }
+        public bool? GpgVerify { get; set; }
     }
 }

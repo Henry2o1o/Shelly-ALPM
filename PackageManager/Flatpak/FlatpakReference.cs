@@ -44,6 +44,10 @@ internal static partial class FlatpakReference
         StringMarshalling = StringMarshalling.Utf8)]
     public static partial ulong RemoteRefGetInstalledSize(IntPtr installation);
     
+    [LibraryImport(LibName, EntryPoint = "flatpak_remote_ref_get_download_size",
+        StringMarshalling = StringMarshalling.Utf8)]
+    public static partial ulong RemoteRefGetDownloadSize(IntPtr installation);
+  
     [LibraryImport(LibName, EntryPoint = "flatpak_installation_new_system",
         StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr FlatpakInstallationNewSystem(IntPtr cancellable, out IntPtr error);
@@ -52,12 +56,18 @@ internal static partial class FlatpakReference
         StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr InstallationListUnusedRefs(IntPtr installation, string? arch,
         IntPtr cancellable, out IntPtr error);
-
-    [LibraryImport(LibName, EntryPoint = "flatpak_installation_prune_local_repo",
+    
+    [LibraryImport(LibName, EntryPoint = "flatpak_installation_update_remote_sync",
         StringMarshalling = StringMarshalling.Utf8)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool InstallationPruneLocalRepo(IntPtr installation, IntPtr cancellable, out IntPtr error);
+    public static partial bool InstallationUpdateRemoteSync(IntPtr installation, string remoteName,
+        IntPtr cancellable, out IntPtr error);
     
+    [LibraryImport(LibName, EntryPoint = "flatpak_installation_modify_remote",
+        StringMarshalling = StringMarshalling.Utf8)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool FlatpakInstallationModifyRemote(IntPtr installation, IntPtr remote,
+        IntPtr cancellable, out IntPtr error);
     
     #endregion
 
@@ -116,16 +126,6 @@ internal static partial class FlatpakReference
 
     [LibraryImport(LibName, EntryPoint = "flatpak_ref_get_kind", StringMarshalling = StringMarshalling.Utf8)]
     public static partial int RefGetKind(IntPtr instance);
-    
-    
-    [LibraryImport(LibName, EntryPoint = "flatpak_remote_ref_get_installed_size", StringMarshalling = StringMarshalling.Utf8)]
-    public static partial int GetRemoteInstalledSize(IntPtr instance);
-    
-    [LibraryImport(LibName, EntryPoint = "flatpak_installation_launch_full",
-        StringMarshalling = StringMarshalling.Utf8)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool InstallationLaunchFull(IntPtr installation, FlatpakLaunchFlags flags, string name,
-        string? arch, string? branch, string? commit, out IntPtr instanceOut, IntPtr cancellable, out IntPtr error);
 
     [Flags]
     public enum FlatpakLaunchFlags : uint
@@ -184,6 +184,13 @@ internal static partial class FlatpakReference
 
     [LibraryImport(LibName, EntryPoint = "flatpak_remote_new", StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr RemoteNew(string name);
+
+    [LibraryImport(LibName, EntryPoint = "flatpak_remote_get_url", StringMarshalling = StringMarshalling.Utf8)]
+    public static partial IntPtr RemoteGetUrl(IntPtr remote);
+
+    [LibraryImport(LibName, EntryPoint = "flatpak_remote_get_gpg_verify", StringMarshalling = StringMarshalling.Utf8)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RemoteGetGpgVerify(IntPtr remote);
 
     [LibraryImport(LibName, EntryPoint = "flatpak_remote_set_url", StringMarshalling = StringMarshalling.Utf8)]
     public static partial void RemoteSetUrl(IntPtr remote, string url);

@@ -54,7 +54,7 @@ public class AppstreamApp
     public string VerificationMethod { get; set; } = string.Empty;
     
     [JsonPropertyName("remotes")]
-    public List<string> Remotes { get; set; } = [];
+    public List<FlatpakRemoteDto> Remotes { get; set; } = [];
 }
 
 /// <summary>

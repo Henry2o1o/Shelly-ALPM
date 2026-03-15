@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
@@ -132,7 +133,8 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
     public async Task<List<AppstreamApp>> ListAppstreamFlatpak()
     {
         var result =
-            await ExecuteUnprivilegedCommandAsync("Get local appstream", "flatpak get-remote-appstream", "flathub", "--json");
+            await ExecuteUnprivilegedCommandAsync("Get local appstream", "flatpak get-remote-appstream", "all",
+                "--json");
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
         {
@@ -175,9 +177,17 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
         return await ExecuteUnprivilegedCommandAsync("Remove package", "flatpak uninstall", package);
     }
 
-    public async Task<UnprivilegedOperationResult> InstallFlatpakPackage(string package)
+    public async Task<UnprivilegedOperationResult> InstallFlatpakPackage(string package, bool user, string remote,
+        string branch)
     {
-        return await ExecuteUnprivilegedCommandAsync("Remove package", "flatpak install", package);
+        if (user)
+        {
+            return await ExecuteUnprivilegedCommandAsync("Install package", "flatpak install", package, "--user",
+                "--remote", remote, "--branch", branch);
+        }
+
+        return await ExecuteUnprivilegedCommandAsync("Install package", "flatpak install", package, "--remote", remote,
+            "--branch", branch);
     }
 
     public async Task<UnprivilegedOperationResult> FlatpakUpgrade()
@@ -189,12 +199,28 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
     {
         return await ExecuteUnprivilegedCommandAsync("Sync remote", "flatpak sync-remote-appstream");
     }
-    
-    public async Task<UnprivilegedOperationResult> GetFlatpakAppDataAsync(string remote, string app, string arch)
+
+    public async Task<ulong> GetFlatpakAppDataAsync(string remote, string app, string arch)
     {
-        return await ExecuteUnprivilegedCommandAsync("Sync remote", "flatpak app-size", remote, app , arch);
+        try
+        {
+            var result =
+                await ExecuteUnprivilegedCommandAsync("Sync remote", "flatpak app-remote-info", remote, app, arch,
+                    "-j");
+            var json = StripBom(result.Output.Trim());
+            var remoteInfo =
+                JsonSerializer.Deserialize<FlatpakRemoteRefInfo>(json,
+                    ShellyGtkJsonContext.Default.FlatpakRemoteRefInfo);
+            return remoteInfo!.DownloadSize;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to get remote info: {ex.Message}");
+        }
+
+        return 0;
     }
-    
+
     public async Task<UnprivilegedOperationResult> ExportSyncFile(string filePath, string name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -217,7 +243,8 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
                 if (trimmedLine.StartsWith("{") && trimmedLine.EndsWith("}"))
                 {
                     var updates =
-                        System.Text.Json.JsonSerializer.Deserialize(trimmedLine,ShellyGtkJsonContext.Default.SyncModel);
+                        System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                            ShellyGtkJsonContext.Default.SyncModel);
                     return updates ?? new SyncModel();
                 }
             }
@@ -235,7 +262,9 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
 
     public async Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query)
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Search Flathub", "flatpak search", query, "--json", "--limit", "100");
+        var result =
+            await ExecuteUnprivilegedCommandAsync("Search Flathub", "flatpak search", query, "--json", "--limit",
+                "100");
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
         {
@@ -245,12 +274,12 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
         try
         {
             var trimmedOutput = StripBom(result.Output.Trim());
-            
+
             if (trimmedOutput.StartsWith("{"))
             {
-                var response = System.Text.Json.JsonSerializer.Deserialize(trimmedOutput, 
+                var response = System.Text.Json.JsonSerializer.Deserialize(trimmedOutput,
                     ShellyGtkJsonContext.Default.FlathubSearchResponse);
-                    
+
                 if (response?.Hits == null) return [];
 
                 return response.Hits.Select(hit => new FlatpakPackageDto
@@ -262,7 +291,7 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
                     IconPath = hit.Icon
                 }).ToList();
             }
-            
+
             return [];
         }
         catch (Exception ex)
@@ -321,7 +350,7 @@ public class UnprivilegedOperationService : IUnprivilegedOperationService
 
                     // Show dialog on UI thread and get response
                     //TODO: IMPLEMENT INTERACTION HERE 
-                    
+
                     // var response = await Dispatcher.UIThread.InvokeAsync(async () =>
                     // {
                     //     if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop

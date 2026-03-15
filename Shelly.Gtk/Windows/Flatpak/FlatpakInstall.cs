@@ -1,3 +1,5 @@
+using System.Text.Json;
+using GObject;
 using Gtk;
 using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
@@ -20,6 +22,7 @@ public class FlatpakInstall(
     private readonly CancellationTokenSource _cts = new();
     private Gio.ListStore? _listStore;
     private SingleSelection? _selectionModel;
+    private SignalHandler<Button>? _versionHistoryHandler;
     private ListBox? _categoryListBox;
     private List<AppstreamApp> _allPackages = [];
     private string _searchText = string.Empty;
@@ -28,6 +31,7 @@ public class FlatpakInstall(
     private Box? _overlay;
     private Button _overlayCloseButton = null!;
     private Button _overlayInstallButton = null!;
+    private Button _versionHistoryButton = null!;
     private Label _overlayAuthorLabel = null!;
     private Label _overlayNameLabel = null!;
     private Label _overlayVersionLabel = null!;
@@ -38,7 +42,13 @@ public class FlatpakInstall(
     private Label _overlayDescriptionLabel = null!;
     private Image _overlayIconImage = null!;
     private Box? _overlayScreenshotsBox = null!;
-
+    private Box? _overlayBoxRoot = null!;
+    private List<string> _remotes = [];
+    private StringList _remotesStringList = null!;
+    private string _selectedRemote = "Any";
+    private DropDown _remoteDropDown = null!;
+    private AppstreamApp _selectedPackage = null!;
+    
     public Widget CreateWindow()
     {
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakInstallWindow.ui"), -1);
@@ -58,10 +68,25 @@ public class FlatpakInstall(
         _overlayUrlLabel = (Label)builder.GetObject("overlay_urls_label")!;
         _overlaySummaryLabel = (Label)builder.GetObject("overlay_summary_label")!;
         _overlayDescriptionLabel = (Label)builder.GetObject("overlay_description_label")!;
+        _remoteDropDown = (DropDown)builder.GetObject("overlay_remote_selection")!;
 
         _overlayCloseButton = (Button)builder.GetObject("overlay_back_button")!;
         _overlayInstallButton = (Button)builder.GetObject("overlay_install_button")!;
+        _versionHistoryButton = (Button)builder.GetObject("version_history_button")!;
 
+        _overlayInstallButton.OnClicked += (_, _) => { _ = InstallSelectedAsync(); };
+        
+        _remoteDropDown.OnNotify += (sender, args) =>
+        {
+            if (args.Pspec.GetName() == "selected")
+            {
+                var idx = _remoteDropDown.GetSelected();
+                var item = (StringObject)_remoteDropDown.GetModel()!.GetObject(idx)!;
+                _selectedRemote = item.GetString();
+                ApplyFilter();
+            }
+        };
+        
         var categories = Enum.GetNames<FlatpakCategories>();
         foreach (var category in categories)
         {
@@ -71,11 +96,11 @@ public class FlatpakInstall(
 
             var image = new Image();
             image.PixelSize = 16;
-            
-            
+
+
             var label = new Label();
             label.SetText(category);
-            
+
             switch (category)
             {
                 case "AllApplications":
@@ -125,7 +150,7 @@ public class FlatpakInstall(
                     gtkBox.Append(image);
                     break;
             }
-         
+
             label.Halign = Align.Start;
             gtkBox.Append(label);
             _categoryListBox.Append(gtkBox);
@@ -164,47 +189,63 @@ public class FlatpakInstall(
         _listView.OnActivate += (_, _) =>
         {
             var item = _selectionModel.GetSelectedItem();
-            if (item is FlatpakGObject pkgObj)
+            
+            if (item is not FlatpakGObject pkgObj) return;
+            
+            var obj = pkgObj.Package;
+
+            if (obj == null) return;
+
+            _overlayCloseButton.OnClicked += (_, _) =>
             {
-                var obj = pkgObj.Package;
+                _overlay.SetVisible(false);
+                _overlay.Dispose();
+            };
+                
+            _overlayIconImage = (Image)builder.GetObject("overlay_icon")!;
 
-                if (obj == null) return;
+            _overlayAuthorLabel.SetText(obj.DeveloperName);
+            _overlayNameLabel.SetText(obj.Name);
+            _overlayVersionLabel.SetText(obj.Releases.First().Version);
 
-                _overlayCloseButton.OnClicked += (_, _) =>
-                {
-                    _overlay.SetVisible(false);
-                    _overlay.Dispose();
-                };
-                _overlayInstallButton.OnClicked += (_, _) => { _ = InstallSelectedAsync(); };
+            _overlayLicenseLabel.SetText(obj.ProjectLicense);
+            _overlaySummaryLabel.SetText(obj.Summary);
+            _overlayDescriptionLabel.SetText(obj.Description);
+            var result = unprivilegedOperationService
+                .GetFlatpakAppDataAsync(obj!.Remotes!.FirstOrDefault()?.Name ?? String.Empty, obj.Id, "stable").Result;
+           
+            _overlaySizeLabel.SetText(SizeHelpers.FormatSize((long)result));
+            
+            SetUrlLinks(obj.Urls);
 
-                _overlayIconImage = (Image)builder.GetObject("overlay_icon")!;
+            _overlayIconImage.SetFromFile(
+                $"/var/lib/flatpak/appstream/{obj.Remotes.FirstOrDefault()!.Name}/x86_64/active/icons/64x64/{obj.Id}.png");
 
-                _overlayAuthorLabel.SetText(obj.DeveloperName);
-                _overlayNameLabel.SetText(obj.Name);
-                _overlayVersionLabel.SetText(obj.Releases.First().Version);
+            List<string> images = [];
+            
+            images.AddRange(obj.Screenshots
+                .Select(screenshot => screenshot.Images.FirstOrDefault()?.Url)
+                .Where(url => !string.IsNullOrEmpty(url))!);
 
-                _overlayLicenseLabel.SetText(obj.ProjectLicense);
-                _overlaySummaryLabel.SetText(obj.Summary);
-                _overlayDescriptionLabel.SetText(obj.Description);
-                var result = unprivilegedOperationService
-                    .GetFlatpakAppDataAsync(obj!.Remotes!.FirstOrDefault()!, obj.Id, "stable").Result;
-                _overlaySizeLabel.SetText(result.Output.TrimEnd());
+            PopulateScreenshots(images);
+            
+            if (_versionHistoryHandler is not null)
+                _versionHistoryButton.OnClicked -= _versionHistoryHandler;
+            
+            _versionHistoryHandler = (_, _) =>
+            {
+                _overlayBoxRoot?.Dispose();
+                ShowVersionHistory(obj.Releases);
+            };
 
-                SetUrlLinks(obj.Urls);
+            _versionHistoryButton.OnClicked += _versionHistoryHandler;
+            
+            _remotesStringList = StringList.New(obj.Remotes.Select(r => r.Name + " : " + r.Scope).ToArray() );
+            _remoteDropDown.SetModel(_remotesStringList);
 
-                _overlayIconImage.SetFromFile(
-                    $"/var/lib/flatpak/appstream/{obj.Remotes.FirstOrDefault()}/x86_64/active/icons/64x64/{obj.Id}.png");
+            _selectedPackage = obj;
 
-                List<string> images = [];
-
-                images.AddRange(obj.Screenshots
-                    .Select(screenshot => screenshot.Images.FirstOrDefault()?.Url)
-                    .Where(url => !string.IsNullOrEmpty(url))!);
-
-                PopulateScreenshots(images);
-
-                _overlay.SetVisible(true);
-            }
+            _overlay.SetVisible(true);
         };
 
         return box;
@@ -328,7 +369,8 @@ public class FlatpakInstall(
         var idLabel = (Label)nameLabel.GetNextSibling()!;
         var versionLabel = (Label)vbox.GetNextSibling()!;
 
-        icon.SetFromFile($"/var/lib/flatpak/appstream/{package.Remotes.FirstOrDefault()}/x86_64/active/icons/64x64/{package.Id}.png");
+        icon.SetFromFile(
+            $"/var/lib/flatpak/appstream/{package.Remotes.FirstOrDefault()!.Name}/x86_64/active/icons/64x64/{package.Id}.png");
 
         nameLabel.SetText(package.Name);
         idLabel.SetText(package.Summary);
@@ -357,12 +399,6 @@ public class FlatpakInstall(
         finally
         {
             lockoutService.Hide();
-            
-            var args = new ToastMessageEventArgs(
-                $"Installed Flatpak"
-            );
-
-            genericQuestionService.RaiseToastMessage(args);
         }
     }
 
@@ -398,15 +434,11 @@ public class FlatpakInstall(
 
     private async Task InstallSelectedAsync()
     {
-        var selectedItem = _selectionModel?.GetSelectedItem();
-        if (selectedItem is not FlatpakGObject stringObj) return;
-
-        var packageId = stringObj.Package?.Id;
-
+        
         if (!configService.LoadConfig().NoConfirm)
         {
             var args = new GenericQuestionEventArgs(
-                "Install Package?", packageId ?? string.Empty
+                "Install Package?", _selectedPackage?.Id ?? string.Empty
             );
 
             genericQuestionService.RaiseQuestion(args);
@@ -418,16 +450,25 @@ public class FlatpakInstall(
 
         try
         {
-            lockoutService.Show($"Installing {packageId}...");
-            var result = await unprivilegedOperationService.InstallFlatpakPackage(packageId ?? string.Empty);
-
-            if (!result.Success)
+            UnprivilegedOperationResult result;
+            lockoutService.Show($"Installing {_selectedPackage?.Id}...");
+            if (_selectedRemote.Contains("user"))
             {
-                Console.WriteLine($"Failed to install package {packageId}: {result.Error}");
+                result = await unprivilegedOperationService.InstallFlatpakPackage(_selectedPackage?.Id ?? string.Empty, true,_selectedRemote.Split(":")[0].Trim(), _selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable");
             }
             else
             {
-                await LoadDataAsync();
+                result = await unprivilegedOperationService.InstallFlatpakPackage(_selectedPackage?.Id ?? string.Empty, false, _selectedRemote.Split(":")[0].Trim(), _selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable");
+            }
+            
+
+            if (!result.Success)
+            {
+                var args = new ToastMessageEventArgs(
+                    $"Installing Flatpak failed"
+                );
+                genericQuestionService.RaiseToastMessage(args);
+                Console.WriteLine($"Failed to install package {_selectedPackage?.Id}: {result.Error}");
             }
         }
         finally
@@ -439,6 +480,105 @@ public class FlatpakInstall(
             );
             genericQuestionService.RaiseToastMessage(args);
         }
+    }
+
+    private void ShowVersionHistory(List<AppstreamRelease> releases)
+    {
+
+        _overlayBoxRoot = new Box();
+        _overlayBoxRoot.SetOrientation(Orientation.Vertical);
+        _overlayBoxRoot.SetSpacing(12);
+        _overlayBoxRoot.SetSizeRequest(500, -1);
+        
+        var title = new Label();
+        title.SetText("Version History");
+        title.AddCssClass("title-2");
+        title.SetHalign(Align.Start);
+        _overlayBoxRoot.Append(title);
+        
+        var scroll = new ScrolledWindow();
+        scroll.HscrollbarPolicy = PolicyType.Never;
+        scroll.VscrollbarPolicy = PolicyType.Automatic;
+        scroll.SetSizeRequest(-1, 400);
+
+        var list = new Box();
+        list.SetOrientation(Orientation.Vertical);
+        list.SetSpacing(8);
+
+        foreach (var release in releases)
+            list.Append(BuildReleaseCard(release.Version,DateTimeOffset.FromUnixTimeSeconds(release.Timestamp).ToString("yyyy-MM-dd"),release.Description));
+
+        scroll.SetChild(list);
+        _overlayBoxRoot.Append(scroll);
+        
+        genericQuestionService.RaiseDialog(new GenericDialogEventArgs(_overlayBoxRoot));
+    }
+
+    protected virtual Widget BuildReleaseCard(string version, string date, string description)
+    {
+        var card = new Box();
+        card.SetOrientation(Orientation.Vertical);
+        card.SetSpacing(4);
+        card.AddCssClass("card");
+        card.SetMarginBottom(4);
+        card.SetMarginStart(2);
+        card.SetMarginEnd(2);
+        
+        var header = new Box();
+        header.SetOrientation(Orientation.Horizontal);
+        header.SetSpacing(0);
+        header.SetMarginBottom(4);
+        header.SetMarginStart(8);
+        header.SetMarginEnd(8);
+
+        var versionLabel = new Label();
+        versionLabel.SetText($"Version {version}");
+        versionLabel.AddCssClass("heading");
+        versionLabel.SetHalign(Align.Start);
+        versionLabel.Hexpand = true;
+        versionLabel.SetMarginBottom(4);
+        versionLabel.SetMarginStart(8);
+        versionLabel.SetMarginEnd(8);
+
+        var dateLabel = new Label();
+        dateLabel.SetText(date);
+        dateLabel.AddCssClass("dim-label");
+        dateLabel.SetHalign(Align.End);
+        dateLabel.SetMarginBottom(4);
+        dateLabel.SetMarginStart(8);
+        dateLabel.SetMarginEnd(8);
+
+        header.Append(versionLabel);
+        header.Append(dateLabel);
+        card.Append(header);
+        
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            foreach (var line in description.Split('\n'))
+            {
+                var desc = new Label();
+                desc.SetText(line);
+                desc.SetWrap(true);
+                desc.SetXalign(0);
+                desc.SetMarginBottom(4);
+                desc.SetMarginStart(8);
+                desc.SetMarginEnd(8);
+                desc.SetHalign(Align.Fill);
+                card.Append(desc);
+            }
+        }
+        else
+        {
+            var noDetails = new Label();
+            noDetails.SetText("No details for this release");
+            noDetails.AddCssClass("dim-label");
+            noDetails.SetXalign(0);
+            noDetails.SetMarginBottom(4);
+            noDetails.SetMarginStart(8);
+            noDetails.SetMarginEnd(8);
+            card.Append(noDetails);
+        }
+        return card;
     }
 
     public void Dispose()
