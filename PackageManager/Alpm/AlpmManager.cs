@@ -101,7 +101,12 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             _handle = IntPtr.Zero;
             throw new Exception($"Error initializing alpm library: {error}");
         }
-
+        
+        foreach (var ignorePkg in _config.IgnorePkg)
+        {
+            AddIgnorePkg(_handle,ignorePkg);
+        }
+        
         if (!string.IsNullOrEmpty(_config.GpgDir) && root)
         {
             SetGpgDir(_handle, _config.GpgDir);
