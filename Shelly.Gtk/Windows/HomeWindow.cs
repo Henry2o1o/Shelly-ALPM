@@ -17,6 +17,7 @@ public class HomeWindow(
     IUnprivilegedOperationService unprivilegedOperationService,
     IConfigService configService,
     ILockoutService lockoutService,
+    IGenericQuestionService genericQuestionService,
     MetaSearch metaSearch) : IShellyWindow
 {
     private Box _box = null!;
@@ -102,6 +103,29 @@ public class HomeWindow(
     {
         try
         {
+            var packagesNeedingUpdate = await privilegedOperationService.GetPackagesNeedingUpdateAsync();
+            if (packagesNeedingUpdate.Count == 0)
+            {
+                var toastArgs = new ToastMessageEventArgs("System is already up to date");
+                genericQuestionService.RaiseToastMessage(toastArgs);
+                return;
+            }
+
+            if (!configService.LoadConfig().NoConfirm)
+            {
+                var confirmArgs = new GenericQuestionEventArgs(
+                    "Upgrade All Packages?",
+                    BuildUpgradeConfirmationMessage(packagesNeedingUpdate),
+                    true
+                );
+
+                genericQuestionService.RaiseQuestion(confirmArgs);
+                if (!await confirmArgs.ResponseTask)
+                {
+                    return;
+                }
+            }
+
             lockoutService.Show("Upgrading all packages...");
             await privilegedOperationService.UpgradeAllAsync();
         }
@@ -113,6 +137,34 @@ public class HomeWindow(
         {
             lockoutService.Hide();
         }
+    }
+
+    private static string BuildUpgradeConfirmationMessage(IEnumerable<AlpmPackageUpdateDto> packages)
+    {
+        var packageList = packages.ToList();
+        if (packageList.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        const int maxPackageColumnWidth = 28;
+        var packageColumnWidth = Math.Min(
+            maxPackageColumnWidth,
+            packageList.Max(package => package.Name.Length));
+
+        return string.Join(Environment.NewLine, packageList.Select(package =>
+            $"{FormatPackageName(package.Name, packageColumnWidth)}  {package.CurrentVersion} -> {package.NewVersion}"));
+    }
+
+    private static string FormatPackageName(string packageName, int width)
+    {
+        if (packageName.Length > width)
+        {
+            var truncatedWidth = Math.Max(1, width - 1);
+            packageName = packageName[..truncatedWidth] + "…";
+        }
+
+        return packageName.PadRight(width);
     }
 
     private async Task ExportSync()
