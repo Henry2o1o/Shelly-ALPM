@@ -23,6 +23,12 @@ public class HomeWindow(
     private Box _box = null!;
     private readonly CancellationTokenSource _cts = new();
     private ListBox? _listBox;
+    private Label? _totalAurLabel;
+    private Label? _percentAurLabel;
+    private Label? _totalPackageLabel;
+    private Label? _packagePercentLabel;
+    private Label? _totalFlatpakLabel;
+    private Label? _flatpakPercentLabel;
 
     public Widget CreateWindow()
     {
@@ -52,26 +58,26 @@ public class HomeWindow(
             homeSearchEntry.SetText(string.Empty);
         };
 
-        var totalAurLabel = (Label)builder.GetObject("TotalAurLabel")!;
-        totalAurLabel.OnRealize += (sender, args) => { _ = LoadAurTotalData(totalAurLabel, _cts.Token); };
+        _totalAurLabel = (Label)builder.GetObject("TotalAurLabel")!;
+        _totalAurLabel.OnRealize += (sender, args) => { _ = LoadAurTotalData(_totalAurLabel, _cts.Token); };
 
-        var percentAurLabel = (Label)builder.GetObject("AurPercentLabel")!;
-        percentAurLabel.OnRealize += (sender, args) => { _ = LoadAurPercentData(percentAurLabel, _cts.Token); };
+        _percentAurLabel = (Label)builder.GetObject("AurPercentLabel")!;
+        _percentAurLabel.OnRealize += (sender, args) => { _ = LoadAurPercentData(_percentAurLabel, _cts.Token); };
 
-        var totalPackageLabel = (Label)builder.GetObject("TotalPackagesLabel")!;
-        totalPackageLabel.OnRealize += (sender, args) => { _ = LoadTotalPackageData(totalPackageLabel, _cts.Token); };
+        _totalPackageLabel = (Label)builder.GetObject("TotalPackagesLabel")!;
+        _totalPackageLabel.OnRealize += (sender, args) => { _ = LoadTotalPackageData(_totalPackageLabel, _cts.Token); };
 
-        var packagePercentLabel = (Label)builder.GetObject("StandardPercent")!;
-        packagePercentLabel.OnRealize += (sender, args) =>
+        _packagePercentLabel = (Label)builder.GetObject("StandardPercent")!;
+        _packagePercentLabel.OnRealize += (sender, args) =>
         {
-            _ = LoadTotalPackagePercentData(packagePercentLabel, _cts.Token);
+            _ = LoadTotalPackagePercentData(_packagePercentLabel, _cts.Token);
         };
 
-        var totalFlatpakLabel = (Label)builder.GetObject("TotalFlatpakLabel")!;
-        totalFlatpakLabel.OnRealize += (sender, args) => { _ = LoadTotalFlatpak(totalFlatpakLabel, _cts.Token); };
+        _totalFlatpakLabel = (Label)builder.GetObject("TotalFlatpakLabel")!;
+        _totalFlatpakLabel.OnRealize += (sender, args) => { _ = LoadTotalFlatpak(_totalFlatpakLabel, _cts.Token); };
 
-        var flatpakPercentLabel = (Label)builder.GetObject("FlatpakPercent")!;
-        flatpakPercentLabel.OnRealize += (sender, args) => { _ = LoadPercentFlatpak(flatpakPercentLabel, _cts.Token); };
+        _flatpakPercentLabel = (Label)builder.GetObject("FlatpakPercent")!;
+        _flatpakPercentLabel.OnRealize += (sender, args) => { _ = LoadPercentFlatpak(_flatpakPercentLabel, _cts.Token); };
 
         var exportSyncButton = (Button)builder.GetObject("ExportSyncButton")!;
         exportSyncButton.OnClicked += (sender, args) => { _ = ExportSync(); };
@@ -150,6 +156,7 @@ public class HomeWindow(
             }
 
             await privilegedOperationService.UpgradeAllAsync();
+            await ReloadHomePageData();
         }
         catch (Exception e)
         {
@@ -159,6 +166,28 @@ public class HomeWindow(
         {
             lockoutService.Hide();
         }
+    }
+
+    private async Task ReloadHomePageData()
+    {
+        var tasks = new List<Task>();
+
+        if (_totalAurLabel is not null)
+            tasks.Add(LoadAurTotalData(_totalAurLabel, _cts.Token));
+        if (_percentAurLabel is not null)
+            tasks.Add(LoadAurPercentData(_percentAurLabel, _cts.Token));
+        if (_totalPackageLabel is not null)
+            tasks.Add(LoadTotalPackageData(_totalPackageLabel, _cts.Token));
+        if (_packagePercentLabel is not null)
+            tasks.Add(LoadTotalPackagePercentData(_packagePercentLabel, _cts.Token));
+        if (_totalFlatpakLabel is not null)
+            tasks.Add(LoadTotalFlatpak(_totalFlatpakLabel, _cts.Token));
+        if (_flatpakPercentLabel is not null)
+            tasks.Add(LoadPercentFlatpak(_flatpakPercentLabel, _cts.Token));
+        if (_listBox is not null)
+            tasks.Add(LoadFeedAsync(_listBox, _cts.Token));
+
+        await Task.WhenAll(tasks);
     }
 
     private static string BuildUpgradeConfirmationMessage(IEnumerable<AlpmPackageUpdateDto> packages)
