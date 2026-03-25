@@ -14,3 +14,14 @@ public class GenericDialogEventArgs(Box box)
         _tcs.TrySetResult(response);
     }
 }
+
+public class GenericDialogEventArgs<TResult>(Box box) : GenericDialogEventArgs(box)
+{
+    private readonly TaskCompletionSource<TResult> _tcs = new();
+    public new Task<TResult> ResponseTask => _tcs.Task;
+
+    public void SetResponse(TResult response)
+    {
+        _tcs.TrySetResult(response);
+    }
+}
