@@ -806,6 +806,7 @@ public class FlatpakInstall(
         var scroll = new ScrolledWindow();
         scroll.HscrollbarPolicy = PolicyType.Never;
         scroll.VscrollbarPolicy = PolicyType.Automatic;
+        scroll.SetOverlayScrolling(false);
         scroll.SetSizeRequest(-1, 400);
 
         var list = new Box();
@@ -864,34 +865,30 @@ public class FlatpakInstall(
         card.SetMarginStart(2);
         card.SetMarginEnd(2);
 
-        var header = new Box();
-        header.SetOrientation(Orientation.Horizontal);
-        header.SetSpacing(0);
-        header.SetMarginBottom(4);
-        header.SetMarginStart(8);
-        header.SetMarginEnd(8);
+        var row = new Box();
+        row.SetOrientation(Orientation.Horizontal);
+        row.SetSpacing(8);
+        row.SetMarginTop(8);
+        row.SetMarginBottom(8);
+        row.SetMarginStart(8);
+        row.SetMarginEnd(8);
 
         var versionLabel = new Label();
         versionLabel.SetText($"Version {version}");
         versionLabel.AddCssClass("heading");
         versionLabel.SetHalign(Align.Start);
         versionLabel.Hexpand = true;
-        versionLabel.SetMarginBottom(4);
-        versionLabel.SetMarginStart(8);
-        versionLabel.SetMarginEnd(8);
 
         var dateLabel = new Label();
         dateLabel.SetText(date);
         dateLabel.AddCssClass("dim-label");
         dateLabel.SetHalign(Align.End);
-        dateLabel.SetMarginBottom(4);
-        dateLabel.SetMarginStart(8);
-        dateLabel.SetMarginEnd(8);
+        dateLabel.SetValign(Align.Center);
 
-        header.Append(versionLabel);
-        header.Append(dateLabel);
-        card.Append(header);
-
+        row.Append(versionLabel);
+        row.Append(dateLabel);
+        card.Append(row);
+        
         if (!string.IsNullOrWhiteSpace(description))
         {
             foreach (var line in description.Split('\n'))
