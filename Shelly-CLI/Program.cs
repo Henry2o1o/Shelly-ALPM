@@ -77,8 +77,7 @@ public class Program
             });
         }
 
-        var app = new CommandApp();
-        app.SetDefaultCommand<Commands.DefaultCommand>();
+        var app = new CommandApp<Commands.DefaultCommand>();
         app.Configure(config =>
         {
             config.SetApplicationName("shelly");

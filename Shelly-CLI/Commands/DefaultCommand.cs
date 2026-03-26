@@ -1,17 +1,23 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using PackageManager.Alpm;
+using PackageManager.Aur;
+using PackageManager.Aur.Models;
 using Shelly_CLI.Commands.Aur;
 using Shelly_CLI.Commands.Flatpak;
 using Shelly_CLI.Commands.Standard;
 using Shelly_CLI.Configuration;
+using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands;
 
-public class DefaultCommand : AsyncCommand
+public class DefaultCommand : AsyncCommand<DefaultCommandSettings>
 {
-    public override async Task<int> ExecuteAsync(CommandContext context)
+    public override async Task<int> ExecuteAsync(CommandContext context, [NotNull] DefaultCommandSettings settings)
     {
-        var username = Environment.GetEnvironmentVariable("SUDO_USER") ?? Environment.UserName;;
+        var username = Environment.GetEnvironmentVariable("SUDO_USER") ?? Environment.UserName;
+        ;
         var configPath = Path.Combine("/home", username, ".config", "shelly", "config.json");
         Console.WriteLine(configPath);
         if (!File.Exists(configPath))
@@ -25,6 +31,38 @@ public class DefaultCommand : AsyncCommand
         if (config == null)
         {
             return 1;
+        }
+
+        if (!string.IsNullOrEmpty(settings.SearchString))
+        {
+            RootElevator.EnsureRootExectuion();
+            var standard = SearchStandard(settings.SearchString);
+            var aur = SearchAur(settings.SearchString);
+            var selection = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title($"[yellow]Found {standard.Count + aur.Count} packages please select one to install[/]")
+                    .AddChoices(standard.Select(x => $"{x.Name} : {x.Version} : Standard"))
+                    .AddChoices(aur.Select(x => $"{x.Name} : {x.Version} : AUR")));
+            var selectionArray = selection.Split(":");
+            var name = selectionArray[0].Trim();
+            Console.WriteLine(name);
+            var repo = selectionArray[2].Trim();
+            if (repo == "AUR")
+            {
+                new Aur.AurInstallCommand().ExecuteAsync(context, new AurInstallSettings()
+                {
+                    Packages = [name]
+                }).Wait();
+            }
+            else
+            {
+                new InstallCommand().Execute(context, new InstallPackageSettings()
+                {
+                    Packages = [name]
+                });
+            }
+
+            return 0;
         }
 
         var parsed =
@@ -46,5 +84,35 @@ public class DefaultCommand : AsyncCommand
                 new ListSettings()),
             _ => 1
         };
+    }
+
+    private List<AlpmPackageDto> SearchStandard(string filter)
+    {
+        var manager = new AlpmManager();
+        manager.Initialize();
+        var packages = manager.GetAvailablePackages();
+        packages = packages.Select(x => new { Package = x, Score = StringMatching.PartialRatio(filter, x.Name) })
+            .Where(x => x.Score >= 75)
+            .OrderByDescending(x => x.Score)
+            .Select(x => x.Package)
+            .Take(5) //Add configuration here to control amount visible.
+            .ToList();
+        manager.Dispose();
+        return packages;
+    }
+
+    private List<AurPackageDto> SearchAur(string filter)
+    {
+        var manager = new AurPackageManager();
+        manager.Initialize().Wait();
+        var packages = manager.SearchPackages(filter).Result;
+        packages = packages.Select(x => new { Package = x, Score = StringMatching.PartialRatio(filter, x.Name) })
+            .Where(x => x.Score >= 75)
+            .OrderByDescending(x => x.Score)
+            .Select(x => x.Package)
+            .Take(5) //Add configuration here to control amount visible.
+            .ToList();
+        manager.Dispose();
+        return packages;
     }
 }
