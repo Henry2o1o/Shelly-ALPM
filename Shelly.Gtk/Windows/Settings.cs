@@ -3,6 +3,10 @@ using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.TrayServices;
 using Shelly.Gtk.UiModels;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Shelly.Gtk.Windows.Dialog;
+
 
 namespace Shelly.Gtk.Windows;
 
@@ -14,7 +18,13 @@ public class Settings(
 {
     private Box _box = null!;
     private ShellyConfig _config = null!;
+    private Overlay? _parentOverlay = null!;
 
+    public void SetParentOverlay(Overlay overlay)
+    {
+        _parentOverlay = overlay;
+    }
+    
     public event Action? NavigationToHomeRequested;
 
     public Widget CreateWindow()
@@ -76,6 +86,9 @@ public class Settings(
 
         var removeLockButton = (Button)builder.GetObject("rm_db_lock_button")!;
         removeLockButton.OnClicked += (s, e) => { _ = RemoveDbLockAsync(); };
+        
+        var viewChangelogButton = (Button)builder.GetObject("changelog_button")!;
+        viewChangelogButton.OnClicked += async (s, e) => { await ShowAppChangelogAsync(); };
 
         var versionLabel = (Label)builder.GetObject("version_label")!;
         versionLabel.SetLabel(
@@ -356,7 +369,83 @@ public class Settings(
         }
     }
     
+private async Task ShowAppChangelogAsync()
+{
+    if (_parentOverlay is null)
+    {
+        Console.WriteLine("Parent overlay is null");
+        genericQuestionService.RaiseToastMessage(
+            new ToastMessageEventArgs("Overlay not available"));
+        return;
+    }
+
+    try
+    {
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
+
+        var url = "https://api.github.com/repos/Seafoam-Labs/Shelly-ALPM/releases";
+        var json = await client.GetStringAsync(url);
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
+        {
+            genericQuestionService.RaiseToastMessage(
+                new ToastMessageEventArgs("No changelog entries found"));
+            return;
+        }
+
+        var releases = new List<ReleaseNotesDialog.ReleaseItem>();
+
+        foreach (var release in root.EnumerateArray())
+        {
+            var version = release.TryGetProperty("tag_name", out var tagNameProp)
+                ? tagNameProp.GetString() ?? "Unknown"
+                : "Unknown";
+
+            var markdown = release.TryGetProperty("body", out var bodyProp)
+                ? bodyProp.GetString() ?? "No details for this release"
+                : "No details for this release";
+
+            var publishedAtRaw = release.TryGetProperty("published_at", out var publishedAtProp)
+                ? publishedAtProp.GetString()
+                : null;
+
+            var date = DateTimeOffset.TryParse(publishedAtRaw, out var published)
+                ? published.ToString("yyyy-MM-dd")
+                : "Unknown date";
+
+            releases.Add(new ReleaseNotesDialog.ReleaseItem
+            {
+                Version = version,
+                Date = date,
+                Markdown = string.IsNullOrWhiteSpace(markdown)
+                    ? "No details for this release"
+                    : markdown
+            });
+        }
+
+        if (releases.Count == 0)
+        {
+            genericQuestionService.RaiseToastMessage(
+                new ToastMessageEventArgs("No changelog entries found"));
+            return;
+        }
+
+        ReleaseNotesDialog.ShowReleaseHistoryDialog(_parentOverlay, releases);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error loading changelog: {ex.Message}");
+        genericQuestionService.RaiseToastMessage(
+            new ToastMessageEventArgs("Failed to load changelog"));
+    }
+}
+
     public void Dispose()
     {
     }
 }
+

@@ -67,6 +67,9 @@ sealed class Program
             aboutAction.OnActivate += (_, _) => Console.WriteLine("About clicked");
             application.AddAction(aboutAction);
 
+            
+            var mainOverlay = (Overlay)mainBuilder.GetObject("MainOverlay")!;
+
             var contentArea = (Box)mainBuilder.GetObject("ContentArea")!;
             var mainBox = (Box)mainBuilder.GetObject("MainBox")!;
             var homeButton = (Button)mainBuilder.GetObject("HomeButton")!;
@@ -151,7 +154,6 @@ sealed class Program
             contentArea.Append(initialHomeWindow.CreateWindow());
             currentPage = initialHomeWindow;
 
-            var mainOverlay = (Overlay)mainBuilder.GetObject("MainOverlay")!;
             var lockoutOverlay = (Box)mainBuilder.GetObject("LockoutOverlay")!;
             var lockoutDescription = (Label)mainBuilder.GetObject("LockoutDescription")!;
             var lockoutProgressBar = (ProgressBar)mainBuilder.GetObject("LockoutProgressBar")!;
@@ -294,6 +296,7 @@ sealed class Program
                 if (page is Settings settings)
                 {
                     settings.NavigationToHomeRequested += NavigateTo<HomeWindow>;
+                    settings.SetParentOverlay(mainOverlay);
                 }
 
                 if (page is MetaSearch metaSearch && query != null)
