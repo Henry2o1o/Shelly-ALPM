@@ -252,11 +252,22 @@ public class AurPackageManager(string? configPath = null)
             Message = $"Installing dependencies: {string.Join(", ", depsToInstall)}"
         });
 
-        var alpmPackages = _availablePackages.Where(x => depsToInstall.Contains(x)).ToList();
-        var aurPackages = depsToInstall.Where(x => !alpmPackages.Contains(x)).ToList();
+
+        var alpmPackages = new List<string>();
+        var aurPackages = new List<string>();
+
+        foreach (var dep in depsToInstall)
+        {
+            var repoName = _alpm.FindSatisfierInSyncDbs(dep);
+            if (repoName != null)
+                alpmPackages.Add(repoName);
+            else
+                aurPackages.Add(dep);
+        }
         if (alpmPackages.Count > 0)
         {
             _alpm.InstallPackages(alpmPackages);
+            _alpm.Refresh();  
         }
 
         foreach (var pkg in aurPackages)
@@ -323,8 +334,17 @@ public class AurPackageManager(string? configPath = null)
             var allDeps = depends.Concat(makeDepends).Distinct().ToList();
             var depsToInstall = allDeps.Where(x => !_alpm.IsDependencySatisfiedByInstalled(x)).ToList();
             Console.Error.WriteLine($"dependency count {depsToInstall.Count}");
-            var alpmPackages = _availablePackages.Where(x => depsToInstall.Contains(x)).ToList();
-            var aurPackages = depsToInstall.Where(x => !alpmPackages.Contains(x)).ToList();
+            var alpmPackages = new List<string>();
+            var aurPackages = new List<string>();
+
+            foreach (var dep in depsToInstall)
+            {
+                var repoName = _alpm.FindSatisfierInSyncDbs(dep);
+                if (repoName != null)
+                    alpmPackages.Add(repoName);
+                else
+                    aurPackages.Add(dep);
+            }
             if (alpmPackages.Count > 0)
             {
                 _alpm.InstallPackages(alpmPackages);
@@ -430,6 +450,7 @@ public class AurPackageManager(string? configPath = null)
             try
             {
                 _alpm.InstallLocalPackage(pkgFiles[0]);
+                _alpm.Refresh();  
             }
             catch (Exception ex)
             {
@@ -535,9 +556,17 @@ public class AurPackageManager(string? configPath = null)
         var makeDepends = pkgbuildInfo.MakeDepends.Select(x => x.Trim()).ToList();
         var allDeps = depends.Concat(makeDepends).Distinct().ToList();
         var depsToInstall = allDeps.Where(x => !_alpm.IsDependencySatisfiedByInstalled(x)).ToList();
-        var availablePackages = _alpm.GetAvailablePackages();
-        var alpmPackages = availablePackages.Where(x => depsToInstall.Contains(x.Name)).Select(x => x.Name).ToList();
-        var aurPackages = depsToInstall.Where(x => !alpmPackages.Contains(x)).ToList();
+        var alpmPackages = new List<string>();
+        var aurPackages = new List<string>();
+
+        foreach (var dep in depsToInstall)
+        {
+            var repoName = _alpm.FindSatisfierInSyncDbs(dep);
+            if (repoName != null)
+                alpmPackages.Add(repoName);
+            else
+                aurPackages.Add(dep);
+        }
         if (alpmPackages.Count > 0)
         {
             _alpm.InstallPackages(alpmPackages);
@@ -608,6 +637,7 @@ public class AurPackageManager(string? configPath = null)
         });
 
         _alpm.InstallLocalPackage(pkgFiles[0]);
+        _alpm.Refresh();
 
         PackageProgress?.Invoke(this, new PackageProgressEventArgs
         {
@@ -966,8 +996,17 @@ public class AurPackageManager(string? configPath = null)
             var makeDepends = pkgbuildInfo.MakeDepends.Select(x => x.Trim()).ToList();
             var allDeps = depends.Concat(makeDepends).Distinct().ToList();
             var depsToInstall = allDeps.Where(x => !_alpm.IsDependencySatisfiedByInstalled(x)).ToList();
-            var alpmPackages = _availablePackages.Where(x => depsToInstall.Contains(x)).ToList();
-            var aurPackages = depsToInstall.Where(x => !alpmPackages.Contains(x)).ToList();
+            var alpmPackages = new List<string>();
+            var aurPackages = new List<string>();
+
+            foreach (var dep in depsToInstall)
+            {
+                var repoName = _alpm.FindSatisfierInSyncDbs(dep);
+                if (repoName != null)
+                    alpmPackages.Add(repoName);
+                else
+                    aurPackages.Add(dep);
+            }
             if (alpmPackages.Count > 0)
             {
                 _alpm.InstallPackages(alpmPackages);
@@ -1029,7 +1068,7 @@ public class AurPackageManager(string? configPath = null)
 
             _alpm.InstallLocalPackage(pkgFiles[0]);
             _alpm.Refresh();
-            alpmPackages = _alpm.GetAvailablePackages().Select(x => x.Name).ToList();
+            _availablePackages = _alpm.GetAvailablePackages().Select(x => x.Name).ToList();
         }
         finally
 
@@ -1079,7 +1118,7 @@ public class AurPackageManager(string? configPath = null)
             StartInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "arch-nspawn",
-                Arguments = $"{chrootRoot} pacman -Syu --noconfirm",
+                Arguments = $"{chrootRoot} shelly upgrade -n",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -1096,7 +1135,7 @@ public class AurPackageManager(string? configPath = null)
         File.Copy("/etc/makepkg.conf", destination, overwrite: true);
     }
 
-    private System.Diagnostics.Process CreateBuildProcess(string tempPath, string makepkgArgs = "-f --noconfirm --skippgpcheck")
+    private System.Diagnostics.Process CreateBuildProcess(string tempPath, string makepkgArgs = "-f -c --noconfirm --skippgpcheck")
     {
         if (_useChroot)
         {

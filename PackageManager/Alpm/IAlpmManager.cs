@@ -52,6 +52,20 @@ public interface IAlpmManager
     /// <param name="dependency">The dependency string to check (e.g., "dotnetsdk", "python>=3.10")</param>
     /// <returns>True if the dependency is satisfied by an installed package, false otherwise</returns>
     bool IsDependencySatisfiedByInstalled(string dependency);
+
+    /// <summary>
+    /// Checks if a depdency is satified by any package in the sync db
+    /// </summary>
+    /// <param name="depdency"></param>
+    /// <returns></returns>
+    bool IsDepdencySatisfiedBySyncDbs(string depdency);
+
+    /// <summary>
+    /// Finds the package name in sync databases that satisfies the given dependency string.
+    /// </summary>
+    /// <param name="dependency">The dependency string (e.g., "python>=3.10", "libgl")</param>
+    /// <returns>The package name that satisfies the dependency, or null if not found</returns>
+    string? FindSatisfierInSyncDbs(string dependency);
     
     void Refresh();
 }

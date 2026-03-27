@@ -1353,6 +1353,34 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         return pkgPtr != IntPtr.Zero;
     }
 
+    public bool IsDepdencySatisfiedBySyncDbs(string dependency)
+    {
+        return FindSatisfierInSyncDbs(dependency) != null;
+    }
+
+    public string? FindSatisfierInSyncDbs(string dependency)
+    {
+        if (_handle == IntPtr.Zero) Initialize();
+        var syncDbsPtr = GetSyncDbs(_handle);
+        var currentPtr = syncDbsPtr;
+
+        while (currentPtr != IntPtr.Zero)
+        {
+            var node = Marshal.PtrToStructure<AlpmList>(currentPtr);
+            if (node.Data != IntPtr.Zero)
+            {
+                var dbPkgCache = DbGetPkgCache(node.Data);
+                var pkgPtr = PkgFindSatisfier(dbPkgCache, dependency);
+                if (pkgPtr != IntPtr.Zero)
+                    return Marshal.PtrToStringUTF8(GetPkgName(pkgPtr));
+            }
+
+            currentPtr = node.Next;
+        }
+
+        return null;
+    }
+
     public void InstallDependenciesOnly(string packageName,
         bool includeMakeDeps = false,
         AlpmTransFlag flags = AlpmTransFlag.None)

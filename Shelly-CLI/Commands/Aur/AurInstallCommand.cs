@@ -138,6 +138,9 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
                     };
                     await manager.InstallPackages(packageList);
                 });
+            manager.Dispose();
+            manager = new AurPackageManager();
+            await manager.Initialize(root: true, useChroot: settings.UseChroot);
             var missingPackages = await GetMissingPackages(manager, packageList);
             if (missingPackages.Count > 0)
             {
