@@ -17,6 +17,8 @@ public partial class LockoutService : ILockoutService
         AlpmRegex();
     
     private static readonly Regex RunningHooksPattern = HooksRegex();
+    
+    private static readonly Regex BracketPrefixPattern = BracketPrefixRegex();
 
     private readonly Lock _lock = new();
 
@@ -84,7 +86,11 @@ public partial class LockoutService : ILockoutService
     public void ParseLog(string? logLine)
     {
         if (string.IsNullOrEmpty(logLine)) return;
-        LogLineReceived?.Invoke(this, logLine);
+        var cleanedLine = BracketPrefixPattern.Replace(logLine, "");
+        if (!string.IsNullOrWhiteSpace(cleanedLine))
+        {
+            LogLineReceived?.Invoke(this, cleanedLine);
+        }
 
         var matchFlatpak = FlatpakProgressPattern.Match(logLine);
         var matchAur = AurProgressPattern.Match(logLine);
@@ -168,4 +174,7 @@ public partial class LockoutService : ILockoutService
 
     [GeneratedRegex(@"(?:\[.*?\]\s*)*Running hooks\.\.\.", RegexOptions.Compiled)]
     private static partial Regex HooksRegex();
+
+    [GeneratedRegex(@"^(\[.*?\]\s*)+", RegexOptions.Compiled)]
+    private static partial Regex BracketPrefixRegex();
 }
