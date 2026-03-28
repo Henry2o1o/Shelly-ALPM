@@ -18,7 +18,7 @@ public class Settings(
 {
     private Box _box = null!;
     private ShellyConfig _config = null!;
-    private Overlay? _parentOverlay = null!;
+    private Overlay? _parentOverlay;
 
     public void SetParentOverlay(Overlay overlay)
     {
@@ -377,80 +377,80 @@ public class Settings(
         }
     }
     
-private async Task ShowAppChangelogAsync()
-{
-    if (_parentOverlay is null)
+    private async Task ShowAppChangelogAsync()
     {
-        Console.WriteLine("Parent overlay is null");
-        genericQuestionService.RaiseToastMessage(
-            new ToastMessageEventArgs("Overlay not available"));
-        return;
-    }
-
-    try
-    {
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
-
-        var url = "https://api.github.com/repos/Seafoam-Labs/Shelly-ALPM/releases";
-        var json = await client.GetStringAsync(url);
-
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-
-        if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
+        if (_parentOverlay is null)
         {
+            Console.WriteLine("Parent overlay is null");
             genericQuestionService.RaiseToastMessage(
-                new ToastMessageEventArgs("No changelog entries found"));
+                new ToastMessageEventArgs("Overlay not available"));
             return;
         }
 
-        var releases = new List<ReleaseNotesDialog.ReleaseItem>();
-
-        foreach (var release in root.EnumerateArray())
+        try
         {
-            var version = release.TryGetProperty("tag_name", out var tagNameProp)
-                ? tagNameProp.GetString() ?? "Unknown"
-                : "Unknown";
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
 
-            var markdown = release.TryGetProperty("body", out var bodyProp)
-                ? bodyProp.GetString() ?? "No details for this release"
-                : "No details for this release";
+            var url = "https://api.github.com/repos/Seafoam-Labs/Shelly-ALPM/releases";
+            var json = await client.GetStringAsync(url);
 
-            var publishedAtRaw = release.TryGetProperty("published_at", out var publishedAtProp)
-                ? publishedAtProp.GetString()
-                : null;
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
 
-            var date = DateTimeOffset.TryParse(publishedAtRaw, out var published)
-                ? published.ToString("yyyy-MM-dd")
-                : "Unknown date";
-
-            releases.Add(new ReleaseNotesDialog.ReleaseItem
+            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0)
             {
-                Version = version,
-                Date = date,
-                Markdown = string.IsNullOrWhiteSpace(markdown)
-                    ? "No details for this release"
-                    : markdown
-            });
-        }
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs("No changelog entries found"));
+                return;
+            }
 
-        if (releases.Count == 0)
+            var releases = new List<ReleaseNotesDialog.ReleaseItem>();
+
+            foreach (var release in root.EnumerateArray())
+            {
+                var version = release.TryGetProperty("tag_name", out var tagNameProp)
+                    ? tagNameProp.GetString() ?? "Unknown"
+                    : "Unknown";
+
+                var markdown = release.TryGetProperty("body", out var bodyProp)
+                    ? bodyProp.GetString() ?? "No details for this release"
+                    : "No details for this release";
+
+                var publishedAtRaw = release.TryGetProperty("published_at", out var publishedAtProp)
+                    ? publishedAtProp.GetString()
+                    : null;
+
+                var date = DateTimeOffset.TryParse(publishedAtRaw, out var published)
+                    ? published.ToString("yyyy-MM-dd")
+                    : "Unknown date";
+
+                releases.Add(new ReleaseNotesDialog.ReleaseItem
+                {
+                    Version = version,
+                    Date = date,
+                    Markdown = string.IsNullOrWhiteSpace(markdown)
+                        ? "No details for this release"
+                        : markdown
+                });
+            }
+
+            if (releases.Count == 0)
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs("No changelog entries found"));
+                return;
+            }
+
+            ReleaseNotesDialog.ShowReleaseHistoryDialog(_parentOverlay, releases);
+        }
+        catch (Exception ex)
         {
+            Console.WriteLine($"Error loading changelog: {ex.Message}");
             genericQuestionService.RaiseToastMessage(
-                new ToastMessageEventArgs("No changelog entries found"));
-            return;
+                new ToastMessageEventArgs("Failed to load changelog"));
         }
-
-        ReleaseNotesDialog.ShowReleaseHistoryDialog(_parentOverlay, releases);
     }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Error loading changelog: {ex.Message}");
-        genericQuestionService.RaiseToastMessage(
-            new ToastMessageEventArgs("Failed to load changelog"));
-    }
-}
 
     public void Dispose()
     {
