@@ -218,6 +218,12 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
 
             Console.Error.WriteLine($"Installing AUR packages: {string.Join(", ", packageList)}");
             await manager.InstallPackages(packageList);
+
+            // Recreate manager to get fresh installed package list (avoid stale cache)
+            manager.Dispose();
+            manager = new AurPackageManager();
+            await manager.Initialize(root: true, useChroot: settings.UseChroot);
+
             var missingPackages = await GetMissingPackages(manager, packageList);
             if (missingPackages.Count > 0)
             {
