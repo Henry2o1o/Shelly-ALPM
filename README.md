@@ -113,9 +113,9 @@ makepkg -si
 You can also build the project manually using the .NET CLI:
 
 ```bash
-dotnet publish Shelly-UI/Shelly-UI.csproj -c Release -o publish/shelly-ui
-dotnet publish Shelly-CLI/Shelly-CLI.csproj -C Release -o publish/shelly-cli
-dotnet publish Shelly-CLI/Shelly-CLI.csproj -C Release -o publish/shelly-notifications
+dotnet publish Shelly.Gtk/Shelly.Gtk.csproj -c Release -o publish/shelly-ui
+dotnet publish Shelly-CLI/Shelly-CLI.csproj -c Release -o publish/shelly-cli
+dotnet publish Shelly-CLI/Shelly-CLI.csproj -c Release -o publish/shelly-notifications
 ```
 
 alternatively, you can run
