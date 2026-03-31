@@ -86,6 +86,12 @@ if [ -f "$USER_DESKTOP/shelly.desktop" ]; then
     rm -f "$USER_DESKTOP/shelly.desktop"
 fi
 
+# Remove notification service shortcut
+if [ -f "$USER_DESKTOP/shelly-notifications.desktop" ]; then
+    echo "Removing desktop shortcut for user: $REAL_USER"
+    rm -f "$USER_DESKTOP/shelly-notifications.desktop
+fi
+
 # Remove user config directory (~/.local/share/Shelly)
 USER_CONFIG_DIR="$USER_HOME/.local/share/Shelly"
 if [ -d "$USER_CONFIG_DIR" ]; then

@@ -64,6 +64,19 @@ Categories=System;Utility;
 Terminal=false
 EOF
 
+  # Install desktop entry for notification service
+  cat <<'EOF' | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/com.shellyorg.shelly-notifications.desktop"
+[Desktop Entry]
+Name=Shelly Notifications
+Comment=Notification service for Shelly package manager
+Exec=/usr/bin/shelly-notifications
+Icon=shelly
+Type=Application
+Categories=System;Utility;
+Terminal=false
+NoDisplay=true
+EOF
+
   # Install icon
   install -Dm644 Shelly.Gtk/Assets/shellylogo.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly.png"
   install -Dm644 Shelly.Gtk/Assets/svg/flatpak-symbolic.svg "$pkgdir/usr/share/icons/hicolor/symbolic/apps/flatpak-symbolic.svg"
