@@ -38,9 +38,9 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
 
 
         using var manager = new AlpmManager();
-        //manager.Initialize(true);
-        //await SplitOutput.Output(manager, x => x.InstallPackages(packageList), settings.NoConfirm);
-        //return 0;
+        manager.Initialize(true);
+        await SplitOutput.Output(manager, x => x.InstallPackages(packageList), settings.NoConfirm);
+        return 0;
         object renderLock = new();
 
         manager.Question += (sender, args) =>

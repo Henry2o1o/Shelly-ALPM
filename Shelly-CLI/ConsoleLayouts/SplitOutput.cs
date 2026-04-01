@@ -10,7 +10,6 @@ public static class SplitOutput
         int consoleRation = 3,
         int progressRatio = 2)
     {
-        var currentPkgIndex = 0;
         string? lastPackageName = null;
         var consoleLines = new List<string>();
         var progressLines = new List<string>();
@@ -35,15 +34,8 @@ public static class SplitOutput
             var bar = new string('█', pct / 5) + new string('░', 20 - pct / 5);
             var actionType = e.ProgressType;
 
-            if (name != lastPackageName)
-            {
-                if (lastPackageName != null)
-                    currentPkgIndex++;
-                lastPackageName = name;
-            }
-
             var line =
-                $"({currentPkgIndex + 1}/{e.HowMany}) {actionType} [bold]{name.EscapeMarkup()}[/] [green]{bar}[/] {pct,3}%";
+                $"({e.Current}/{e.HowMany}) {actionType} [bold]{name.EscapeMarkup()}[/] [green]{bar}[/] {pct,3}%";//$"({currentPkgIndex + 1}/{e.HowMany}) {actionType} [bold]{name.EscapeMarkup()}[/] [green]{bar}[/] {pct,3}%";
 
             // Replace last line if same package, otherwise add new line
             if (progressLines.Count > 0 && progressLines[^1].Contains(name.EscapeMarkup()))
@@ -113,6 +105,49 @@ public static class SplitOutput
                 liveCtx?.Refresh();
             }
         };
+
+        manager.Replaces += (sender, e) =>
+        {
+            lock (renderLock)
+            {
+                consoleLines.Add($"{e.Repository}/{e.PackageName} replaces {string.Join(",", e.Replaces)} packages");
+                var visible = consoleLines.Skip(Math.Max(0, consoleLines.Count - maxVisibleLines)).ToList();
+                layout["Console"].Update(
+                    new Panel(new Markup(string.Join("\n", visible)))
+                        .Header("Console")
+                        .Expand());
+                liveCtx?.Refresh();
+            }
+        };
+
+        manager.PacnewInfo += (sender, e) =>
+        {
+            lock (renderLock)
+            {
+                consoleLines.Add($"Pacnew stored @ {e.FileLocation}.pacnew");
+                var visible = consoleLines.Skip(Math.Max(0, consoleLines.Count - maxVisibleLines)).ToList();
+                layout["Console"].Update(
+                    new Panel(new Markup(string.Join("\n", visible)))
+                        .Header("Console")
+                        .Expand());
+                liveCtx?.Refresh();
+            }
+        };
+        
+        manager.PacsaveInfo += (sender, e) =>
+        {
+            lock (renderLock)
+            {
+                consoleLines.Add($"Pacnew stored @ {e.FileLocation}.pacsave");
+                var visible = consoleLines.Skip(Math.Max(0, consoleLines.Count - maxVisibleLines)).ToList();
+                layout["Console"].Update(
+                    new Panel(new Markup(string.Join("\n", visible)))
+                        .Header("Console")
+                        .Expand());
+                liveCtx?.Refresh();
+            }
+        };
+
 
         manager.Question += (sender, e) =>
         {
