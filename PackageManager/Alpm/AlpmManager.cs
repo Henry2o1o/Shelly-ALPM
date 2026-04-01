@@ -5,10 +5,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using PackageManager.Alpm.Events;
+using PackageManager.Alpm.Events.EventArgs;
 using PackageManager.Alpm.Questions;
 using PackageManager.Utilities;
 using static PackageManager.Alpm.AlpmReference;
@@ -41,6 +42,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     public event EventHandler<AlpmReplacesEventArgs>? Replaces;
     public event EventHandler<AlpmScriptletEventArgs>? ScriptletInfo;
     public event EventHandler<AlpmHookEventArgs>? HookRun;
+    public event EventHandler<AlpmPacnewEventArgs>? PacnewInfo;
+    public event EventHandler<AlpmPacsaveEventArgs>? PacsaveInfo;
 
     public void IntializeWithSync()
     {
@@ -1241,7 +1244,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     ));
                 }
             }));
-            await Task.WhenAll(downloadTasks); 
+            await Task.WhenAll(downloadTasks);
             if (TransInit(_handle, flags) != 0)
             {
                 Console.Error.WriteLine(
@@ -1768,10 +1771,10 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     Console.Error.WriteLine("[ALPM] Dependency resolution finished.");
                     break;
                 case AlpmEventType.InterConflictsStart:
-                    Console.Error.WriteLine("[ALPM] Checking for inter-conflicts...");
+                    Console.Error.WriteLine("[ALPM] Checking for conflicting packages...");
                     break;
                 case AlpmEventType.InterConflictsDone:
-                    Console.Error.WriteLine("[ALPM] Inter-conflict check finished.");
+                    Console.Error.WriteLine("[ALPM] Conflict checking finished.");
                     break;
                 case AlpmEventType.TransactionStart:
                     Console.Error.WriteLine("[ALPM] Starting transaction...");
@@ -1824,6 +1827,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                         Console.Error.WriteLine($"[ALPM_SCRIPTLET]{line}");
                         ScriptletInfo?.Invoke(this, new AlpmScriptletEventArgs(line));
                     }
+
                     break;
                 }
 
@@ -1904,10 +1908,49 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     break;
 
                 case AlpmEventType.PacnewCreated:
-                    Console.Error.WriteLine("[ALPM] .pacnew file created.");
+                    var pacnewEvent = Marshal.PtrToStructure<AlpmPacnewCreatedEvent>(eventPtr);
+
+                    string? file = pacnewEvent.File != IntPtr.Zero
+                        ? Marshal.PtrToStringUTF8(pacnewEvent.File)
+                        : null;
+
+                    string? oldPkgName = null;
+                    if (pacnewEvent.OldPkg != IntPtr.Zero)
+                    {
+                        IntPtr namePtr = AlpmReference.GetPkgName(pacnewEvent.OldPkg);
+                        oldPkgName = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
+                    }
+
+                    string? newPkgName = null;
+                    if (pacnewEvent.NewPkg != IntPtr.Zero)
+                    {
+                        IntPtr namePtr = AlpmReference.GetPkgName(pacnewEvent.NewPkg);
+                        newPkgName = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
+                    }
+
+                    bool fromNoupgrade = pacnewEvent.FromNoUpgrade != 0;
+
+                    Console.Error.WriteLine($"[ALPM] .pacnew file created: {file}");
+                    PacnewInfo?.Invoke(this, new AlpmPacnewEventArgs(file!));
                     break;
                 case AlpmEventType.PacsaveCreated:
                     Console.Error.WriteLine("[ALPM] .pacsave file created.");
+                    var pacsaveEvent = Marshal.PtrToStructure<AlpmPacsaveCreatedEvent>(eventPtr);
+
+                    var fileLocation = pacsaveEvent.File != IntPtr.Zero
+                        ? Marshal.PtrToStringUTF8(pacsaveEvent.File)
+                        : null;
+
+                    string? pkgNameOld = null;
+                    if (pacsaveEvent.OldPkg != IntPtr.Zero)
+                    {
+                        IntPtr namePtr = AlpmReference.GetPkgName(pacsaveEvent.OldPkg);
+                        oldPkgName = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
+                    }
+
+                    Console.Error.WriteLine($"[ALPM] .pacsave file created: {fileLocation}");
+                    PacsaveInfo?.Invoke(this,
+                        new AlpmPacsaveEventArgs(pkgNameOld ?? "No package name", fileLocation ?? "No file location"));
                     break;
 
                 default:
