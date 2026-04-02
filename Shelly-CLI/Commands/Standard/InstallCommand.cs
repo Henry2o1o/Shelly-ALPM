@@ -1,20 +1,18 @@
-using System;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using PackageManager.Alpm;
+using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands.Standard;
 
-public class InstallCommand : Command<InstallPackageSettings>
+public class InstallCommand : AsyncCommand<InstallPackageSettings>
 {
-    public override int Execute([NotNull] CommandContext context, [NotNull] InstallPackageSettings settings)
+    public override async Task<int> ExecuteAsync(CommandContext context, InstallPackageSettings settings)
     {
         if (Program.IsUiMode)
         {
-            return HandleUiModeInstall(context,settings);
+            return HandleUiModeInstall(context, settings);
         }
 
         if (settings.Packages.Length == 0)
@@ -37,23 +35,12 @@ public class InstallCommand : Command<InstallPackageSettings>
 
 
         using var manager = new AlpmManager();
-        object renderLock = new();
-
-        manager.Question += (sender, args) =>
-        {
-            lock (renderLock)
-            {
-                AnsiConsole.WriteLine();
-                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
-            }
-        };
-
-        AnsiConsole.MarkupLine("[yellow]Initializing and syncing ALPM...[/]");
+        AnsiConsole.MarkupLine("[yellow]Initializing ALPM...[/]");
         manager.Initialize(true);
         if (settings.Upgrade)
         {
             AnsiConsole.Markup("[yellow]Running system upgrade[/yellow]");
-            manager.SyncSystemUpdate();
+            await SplitOutput.Output(manager, x => x.SyncSystemUpdate(), settings.NoConfirm);
         }
 
         if (settings.BuildDepsOn)
@@ -67,12 +54,14 @@ public class InstallCommand : Command<InstallPackageSettings>
             if (settings.MakeDepsOn)
             {
                 AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
-                manager.InstallDependenciesOnly(packageList.First(), true, AlpmTransFlag.None);
+                await SplitOutput.Output(manager, x => x.InstallDependenciesOnly(packageList.First(), true),
+                    settings.NoConfirm);
                 return 0;
             }
 
             AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
-            manager.InstallDependenciesOnly(packageList.First(), false, AlpmTransFlag.None);
+            await SplitOutput.Output(manager, x => x.InstallDependenciesOnly(packageList.First()),
+                settings.NoConfirm);
             AnsiConsole.MarkupLine("[green]Packages installed successfully![/]");
             return 0;
         }
@@ -81,60 +70,15 @@ public class InstallCommand : Command<InstallPackageSettings>
         {
             AnsiConsole.MarkupLine("[yellow]Skipping dependency installation.[/]");
             AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
-            manager.InstallPackages(packageList, AlpmTransFlag.NoDeps);
+            await SplitOutput.Output(manager, x => x.InstallPackages(packageList, AlpmTransFlag.NoDeps),
+                settings.NoConfirm);
             AnsiConsole.MarkupLine("[green]Packages installed successfully![/]");
             return 0;
         }
 
         AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
 
-        int currentPkgIndex = 0;
-        int totalPkgs = packageList.Count;
-        string? lastPackageName = null;
-        int lastPercent = 0;
-
-        manager.Progress += (sender, args) =>
-        {
-            lock (renderLock)
-            {
-                var name = args.PackageName ?? "unknown";
-                var pct = args.Percent ?? 0;
-                var bar = new string('█', pct / 5) + new string('░', 20 - pct / 5);
-                var actionType = args.ProgressType;
-
-                // Detect package change
-                if (name != lastPackageName)
-                {
-                    // If this isn't the first package, complete the previous line
-                    if (lastPackageName != null)
-                    {
-                        Console.WriteLine(); // Move to new line
-                        currentPkgIndex++;
-                    }
-
-                    lastPackageName = name;
-                    lastPercent = 0;
-                }
-
-                // Update current line with carriage return
-                Console.Write(
-                    $"\r({currentPkgIndex + 1}/{totalPkgs}) installing {name,-40}  [{bar}] {pct,3}% - {actionType,-20}");
-
-                lastPercent = pct;
-            }
-        };
-        
-        manager.ScriptletInfo += (sender, args) =>
-        {
-            Console.WriteLine(args.Line);
-        };
-
-        manager.HookRun += (sender, args) =>
-        {
-            Console.WriteLine(args.Description);
-        };
-
-        manager.InstallPackages(packageList);
+        await SplitOutput.Output(manager, x => x.InstallPackages(packageList), settings.NoConfirm);
         Console.WriteLine(); // Final newline after last package
 
         AnsiConsole.MarkupLine("[green]Packages installed successfully![/]");
@@ -159,7 +103,7 @@ public class InstallCommand : Command<InstallPackageSettings>
         }
 
         using var manager = new AlpmManager();
-        manager.Question += (sender, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
+        manager.Question += (_, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
         Console.Error.WriteLine("Initializing ALPM...");
         manager.Initialize(true);
 
@@ -174,12 +118,12 @@ public class InstallCommand : Command<InstallPackageSettings>
             if (settings.MakeDepsOn)
             {
                 Console.Error.WriteLine("Installing packages...");
-                manager.InstallDependenciesOnly(settings.Packages.ToList().First(), true, AlpmTransFlag.None);
+                manager.InstallDependenciesOnly(settings.Packages.ToList().First(), true);
                 return 0;
             }
 
             Console.Error.WriteLine("Installing packages...");
-            manager.InstallDependenciesOnly(settings.Packages.ToList().First(), false, AlpmTransFlag.None);
+            manager.InstallDependenciesOnly(settings.Packages.ToList().First());
             Console.Error.WriteLine("Packages installed successfully!");
             return 0;
         }
@@ -194,12 +138,8 @@ public class InstallCommand : Command<InstallPackageSettings>
         }
 
         Console.WriteLine("Installing packages...");
-        var rowIndex = new Dictionary<string, int>();
-        manager.Progress += (sender, args) => { Console.WriteLine($"{args.PackageName}: {args.Percent}%"); };
-        manager.HookRun += (sender, args) =>
-        {
-            Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}");
-        };
+        manager.Progress += (_, args) => { Console.WriteLine($"{args.PackageName}: {args.Percent}%"); };
+        manager.HookRun += (_, args) => { Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}"); };
         try
         {
             manager.InstallPackages(settings.Packages.ToList());
@@ -210,7 +150,7 @@ public class InstallCommand : Command<InstallPackageSettings>
             Console.Error.WriteLine($"[ALPM_ERROR]Failed to install packages: {ex.Message}");
             return 1;
         }
-        
+
         return 0;
     }
 }

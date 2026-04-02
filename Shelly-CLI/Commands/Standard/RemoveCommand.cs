@@ -1,17 +1,14 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using PackageManager.Alpm;
+using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands.Standard;
 
-public class RemoveCommand : Command<RemovePackageSettings>
+public class RemoveCommand : AsyncCommand<RemovePackageSettings>
 {
-    public override int Execute([NotNull] CommandContext context, [NotNull] RemovePackageSettings settings)
+    public override async Task<int> ExecuteAsync(CommandContext context, RemovePackageSettings settings)
     {
         if (Program.IsUiMode)
         {
@@ -39,79 +36,25 @@ public class RemoveCommand : Command<RemovePackageSettings>
         }
 
         using var manager = new AlpmManager();
-        object renderLock = new();
-
-        manager.Question += (sender, args) =>
-        {
-            lock (renderLock)
-            {
-                AnsiConsole.WriteLine();
-                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
-            }
-        };
 
         AnsiConsole.MarkupLine("[yellow]Initializing ALPM...[/]");
         manager.Initialize(true);
 
         AnsiConsole.MarkupLine("[yellow]Removing packages...[/]");
 
-        int currentPkgIndex = 0;
-        int totalPkgs = packageList.Count;
-        string? lastPackageName = null;
-        int lastPercent = 0;
-
-        manager.Progress += (sender, args) =>
-        {
-            lock (renderLock)
-            {
-                var name = args.PackageName ?? "unknown";
-                var pct = args.Percent ?? 0;
-                var bar = new string('█', pct / 5) + new string('░', 20 - pct / 5);
-                var actionType = args.ProgressType;
-
-                // Detect package change
-                if (name != lastPackageName)
-                {
-                    // If this isn't the first package, complete the previous line
-                    if (lastPackageName != null)
-                    {
-                        Console.WriteLine(); // Move to new line
-                        currentPkgIndex++;
-                    }
-
-                    lastPackageName = name;
-                    lastPercent = 0;
-                }
-
-                // Update current line with carriage return
-                Console.Write(
-                    $"\r({currentPkgIndex + 1}/{totalPkgs}) installing {name,-40}  [{bar}] {pct,3}% - {actionType,-20}");
-
-                lastPercent = pct;
-            }
-        };
 
         var flags = AlpmTransFlag.None;
         if (settings.Cascade)
         {
-            flags |= AlpmTransFlag.NoSave|AlpmTransFlag.Recurse;
-
+            flags |= AlpmTransFlag.NoSave | AlpmTransFlag.Recurse;
         }
-        else if(settings.Ripple)
+        else if (settings.Ripple)
         {
             flags |= AlpmTransFlag.Cascade;
         }
-        manager.ScriptletInfo += (sender, args) =>
-        {
-            Console.WriteLine(args.Line);
-        };
 
-        manager.HookRun += (sender, args) =>
-        {
-            Console.WriteLine(args.Description);
-        };
+        await SplitOutput.Output(manager, x => x.RemovePackages(packageList, flags), settings.NoConfirm);
 
-        manager.RemovePackages(packageList,flags);
         if (settings.RemoveConfig)
         {
             HandleConfigRemoval(settings.Packages);
@@ -165,22 +108,20 @@ public class RemoveCommand : Command<RemovePackageSettings>
             var flags = AlpmTransFlag.None;
             if (settings.Cascade)
             {
-                flags |= AlpmTransFlag.NoSave|AlpmTransFlag.Recurse;
-
+                flags |= AlpmTransFlag.NoSave | AlpmTransFlag.Recurse;
             }
-            else if(settings.Ripple)
+            else if (settings.Ripple)
             {
                 flags |= AlpmTransFlag.Cascade;
             }
-            manager.HookRun += (sender, args) =>
-            {
-                Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}");
-            };
-            manager.RemovePackages(packageList,flags);
+
+            manager.HookRun += (sender, args) => { Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}"); };
+            manager.RemovePackages(packageList, flags);
             if (settings.RemoveConfig)
             {
                 HandleConfigRemoval(settings.Packages);
             }
+
             Console.Error.WriteLine("Packages removed successfully!");
 
             return 0;

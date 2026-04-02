@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using PackageManager.Alpm;
 using SharpCompress.Compressors.Xz;
+using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -21,7 +22,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         {
             if (Program.IsUiMode)
             {
-                Console.Error.WriteLine("Error: No package specified");
+                await Console.Error.WriteLineAsync("Error: No package specified");
             }
             else
             {
@@ -35,7 +36,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         {
             if (Program.IsUiMode)
             {
-                Console.Error.WriteLine("Error: Specified file does not exist.");
+                await Console.Error.WriteLineAsync("Error: Specified file does not exist.");
             }
             else
             {
@@ -54,7 +55,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
                 return HandleUiModeInstall(settings);
             }
 
-            InitializeAndInstallLocalAlpmPackage(settings);
+            await InitializeAndInstallLocalAlpmPackage(settings);
             return 0;
         }
 
@@ -221,57 +222,13 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         return false;
     }
 
-    private static void InitializeAndInstallLocalAlpmPackage(InstallLocalPackageSettings settings)
+    private static async Task InitializeAndInstallLocalAlpmPackage(InstallLocalPackageSettings settings)
     {
-        object renderLock = new();
-        var isPaused = false;
+
         var manager = new AlpmManager();
-        var progressTable = new Table().AddColumns("Package", "Progress", "Status", "Stage");
-        AnsiConsole.Live(progressTable).AutoClear(false)
-            .Start(ctx =>
-            {
-                var rowIndex = new Dictionary<string, int>();
-                manager.Progress += (sender, args) =>
-                {
-                    lock (renderLock)
-                    {
-                        var name = args.PackageName ?? "unknown";
-                        var pct = args.Percent ?? 0;
-                        var bar = new string('█', pct / 5) + new string('░', 20 - pct / 5);
-                        var actionType = args.ProgressType;
-
-                        if (!rowIndex.TryGetValue(name, out var idx))
-                        {
-                            progressTable.AddRow(
-                                $"[blue]{Markup.Escape(name)}[/]",
-                                $"[green]{bar}[/]",
-                                $"{pct}%",
-                                $"{actionType}"
-                            );
-                            rowIndex[name] = rowIndex.Count;
-                        }
-                        else
-                        {
-                            progressTable.UpdateCell(idx, 1, $"[green]{bar}[/]");
-                            progressTable.UpdateCell(idx, 2, $"{pct}%");
-                        }
-                    }
-
-                    ctx.Refresh();
-                };
-            });
-        manager.Question += (sender, args) =>
-        {
-            lock (renderLock)
-            {
-                AnsiConsole.WriteLine();
-                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
-            }
-        };
-
         AnsiConsole.MarkupLine("[yellow]Initializing ALPM...[/]");
         manager.Initialize();
-        manager.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation!));
+        await SplitOutput.Output(manager, x => x.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation!)));
         manager.Dispose();
     }
 
@@ -287,10 +244,10 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         try
         {
             // Handle questions
-            manager.Question += (sender, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
+            manager.Question += (_, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
 
             // Handle progress events
-            manager.Progress += (sender, args) => { Console.Error.WriteLine($"{args.PackageName}: {args.Percent}%"); };
+            manager.Progress += (_, args) => { Console.Error.WriteLine($"{args.PackageName}: {args.Percent}%"); };
 
             Console.Error.WriteLine("Initializing ALPM...");
             manager.Initialize();

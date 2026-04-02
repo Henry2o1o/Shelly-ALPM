@@ -1,17 +1,18 @@
-using System.Diagnostics.CodeAnalysis;
 using PackageManager.Alpm;
 using Shelly_CLI.Commands.Aur;
 using Shelly_CLI.Commands.Flatpak;
 using Shelly_CLI.Configuration;
+using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using static System.Enum;
 
 namespace Shelly_CLI.Commands.Standard;
 
 public class UpgradeCommand : AsyncCommand<UpgradeSettings>
 {
-    public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] UpgradeSettings settings)
+    public override async Task<int> ExecuteAsync(CommandContext context,UpgradeSettings settings)
     {
         if (Program.IsUiMode)
         {
@@ -25,25 +26,6 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
         AnsiConsole.MarkupLine("[yellow]Performing full system upgrade...[/]");
 
         var manager = new AlpmManager();
-        object renderLock = new();
-
-        manager.Replaces += (sender, args) =>
-        {
-            foreach (var replace in args.Replaces)
-            {
-                AnsiConsole.MarkupLine(
-                    $"[magenta]Replacement:[/] [cyan]{args.Repository}/{args.PackageName}[/] replaces [red]{replace}[/]");
-            }
-        };
-
-        manager.Question += (sender, args) =>
-        {
-            lock (renderLock)
-            {
-                AnsiConsole.WriteLine();
-                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
-            }
-        };
 
         AnsiConsole.MarkupLine("[yellow]Checking for system updates...[/]");
         AnsiConsole.MarkupLine("[yellow]Initializing and syncing repositories...[/]");
@@ -58,7 +40,7 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
 
         var config = ConfigManager.ReadConfig();
         var parsed =
-            (Shelly_CLI.Configuration.SizeDisplay)Enum.Parse(typeof(Shelly_CLI.Configuration.SizeDisplay),
+            (SizeDisplay)Parse(typeof(SizeDisplay),
                 config.FileSizeDisplay);
 
         var table = new Table();
@@ -82,54 +64,7 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
         }
 
         AnsiConsole.MarkupLine("[yellow] Starting System Upgrade...[/]");
-        var progressTable = new Table().AddColumns("Package", "Progress", "Status", "Stage");
-        await AnsiConsole.Live(progressTable).AutoClear(false)
-            .StartAsync(async ctx =>
-            {
-                var rowIndex = new Dictionary<string, int>();
-
-                manager.Progress += (sender, args) =>
-                {
-                    lock (renderLock)
-                    {
-                        var name = args.PackageName ?? "unknown";
-                        var pct = args.Percent ?? 0;
-                        var bar = new string('█', pct / 5) + new string('░', 20 - pct / 5);
-                        var actionType = args.ProgressType;
-
-                        if (!rowIndex.TryGetValue(name, out var idx))
-                        {
-                            progressTable.AddRow(
-                                $"[blue]{Markup.Escape(name)}[/]",
-                                $"[green]{bar}[/]",
-                                $"{pct}%",
-                                $"{actionType}"
-                            );
-                            rowIndex[name] = rowIndex.Count;
-                        }
-                        else
-                        {
-                            progressTable.UpdateCell(idx, 1, $"[green]{bar}[/]");
-                            progressTable.UpdateCell(idx, 2, $"{pct}%");
-                            progressTable.UpdateCell(idx, 3, $"{actionType}");
-                        }
-
-                        ctx.Refresh();
-                    }
-                };
-                manager.ScriptletInfo += (sender, args) =>
-                {
-                    Console.WriteLine(args.Line);
-                };
-
-                manager.HookRun += (sender, args) =>
-                {
-                    Console.WriteLine(args.Description);
-                };
-
-                await manager.SyncSystemUpdate();
-            });
-
+        await SplitOutput.Output(manager, x => x.SyncSystemUpdate(), settings.NoConfirm);
         AnsiConsole.MarkupLine("[green]System upgraded successfully![/]");
         manager.Dispose();
         if (settings.Aur || settings.All)
@@ -153,12 +88,12 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
 
     private static async Task<int> HandleUiModeUpgrade(CommandContext context, UpgradeSettings settings)
     {
-        Console.Error.WriteLine("Performing full system upgrade...");
+        await Console.Error.WriteLineAsync("Performing full system upgrade...");
 
         var manager = new AlpmManager();
         object renderLock = new();
 
-        manager.Replaces += (sender, args) =>
+        manager.Replaces += (_, args) =>
         {
             foreach (var replace in args.Replaces)
             {
@@ -167,7 +102,7 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
             }
         };
 
-        manager.Question += (sender, args) =>
+        manager.Question += (_, args) =>
         {
             lock (renderLock)
             {
@@ -176,26 +111,26 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
             }
         };
 
-        Console.Error.WriteLine("Checking for system updates...");
-        Console.Error.WriteLine(" Initializing and syncing repositories...");
+        await Console.Error.WriteLineAsync("Checking for system updates...");
+        await Console.Error.WriteLineAsync(" Initializing and syncing repositories...");
         manager.IntializeWithSync();
         var packagesNeedingUpdate = manager.GetPackagesNeedingUpdate();
         if (packagesNeedingUpdate.Count == 0)
         {
-            Console.Error.WriteLine("System is up to date!");
+            await Console.Error.WriteLineAsync("System is up to date!");
             return 0;
         }
 
-        Console.Error.WriteLine($"{packagesNeedingUpdate.Count} packages need updates:");
+        await Console.Error.WriteLineAsync($"{packagesNeedingUpdate.Count} packages need updates:");
         foreach (var pkg in packagesNeedingUpdate)
         {
-            Console.Error.WriteLine(
+            await Console.Error.WriteLineAsync(
                 $"  {pkg.Name}: {pkg.CurrentVersion} -> {pkg.NewVersion} ({pkg.DownloadSize} bytes)");
         }
 
-        Console.Error.WriteLine(" Starting System Upgrade...");
+        await Console.Error.WriteLineAsync(" Starting System Upgrade...");
 
-        manager.Progress += (sender, args) =>
+        manager.Progress += (_, args) =>
         {
             lock (renderLock)
             {
@@ -206,7 +141,7 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
             }
         };
 
-        manager.HookRun += (sender, args) =>
+        manager.HookRun += (_, args) =>
         {
             Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}");
         };
@@ -229,7 +164,7 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
             flatpakCommand.Execute(context);
         }
 
-        Console.Error.WriteLine("System upgraded successfully!");
+        await Console.Error.WriteLineAsync("System upgraded successfully!");
         manager.Dispose();
         return 0;
     }

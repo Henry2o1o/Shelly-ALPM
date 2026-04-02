@@ -963,7 +963,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
     }
 
-    public void InstallPackages(List<string> packageNames,
+    public Task InstallPackages(List<string> packageNames,
         AlpmTransFlag flags = AlpmTransFlag.None)
     {
         if (_handle == IntPtr.Zero) Initialize();
@@ -997,7 +997,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             pkgPtrs.Add(pkgPtr);
         }
 
-        if (pkgPtrs.Count == 0) return;
+        if (pkgPtrs.Count == 0) return Task.CompletedTask;
 
         // If we are doing a DbOnly install, we should also skip dependency checks, 
         // extraction, and signature/checksum validation to avoid requirement for the physical package file.
@@ -1051,9 +1051,11 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             // Release transaction
             TransRelease(_handle);
         }
+
+        return Task.CompletedTask;
     }
 
-    public void RemovePackages(List<string> packageNames,
+    public Task RemovePackages(List<string> packageNames,
         AlpmTransFlag flags = AlpmTransFlag.None)
     {
         var heldPackagesBeingRemove = packageNames.Intersect(_config.HoldPkg).ToList();
@@ -1075,7 +1077,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             if (args.Response == 0)
             {
                 Console.Error.WriteLine("[ALPM_ERROR] Held Package removal cancelled.");
-                return;
+                return Task.CompletedTask;
             }
         }
 
@@ -1098,7 +1100,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             pkgPtrs.Add(pkgPtr);
         }
 
-        if (pkgPtrs.Count == 0) return;
+        if (pkgPtrs.Count == 0) return Task.CompletedTask;
 
         // If we are doing a DbOnly install, we should also skip dependency checks, 
         // extraction, and signature/checksum validation to avoid requirement for the physical package file.
@@ -1152,6 +1154,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             // Release transaction
             TransRelease(_handle);
         }
+
+        return Task.CompletedTask;
     }
 
     public void RemovePackage(string packageName,
@@ -1221,6 +1225,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         {
             _isPackageDownload = true;
             var updates = GetPackagesNeedingUpdate();
+            //TODO: Implement this with better handling across all levels of the project
             var downloadTasks = updates.Select(pkg => Task.Run(() =>
             {
                 var url = BuildPackageUrl(pkg);
@@ -1298,7 +1303,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
     }
 
-    public void InstallLocalPackage(string path, AlpmTransFlag flags = AlpmTransFlag.None)
+    public Task InstallLocalPackage(string path, AlpmTransFlag flags = AlpmTransFlag.None)
     {
         if (_handle == IntPtr.Zero) Initialize();
 
@@ -1359,6 +1364,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             TransRelease(_handle);
             Refresh();
         }
+
+        return Task.CompletedTask;
     }
 
     public string GetPackageNameFromProvides(string provides, AlpmTransFlag flags = AlpmTransFlag.None)
@@ -1423,7 +1430,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         return null;
     }
 
-    public void InstallDependenciesOnly(string packageName,
+    public Task InstallDependenciesOnly(string packageName,
         bool includeMakeDeps = false,
         AlpmTransFlag flags = AlpmTransFlag.None)
     {
@@ -1447,7 +1454,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         if (pkgPtr == IntPtr.Zero)
         {
             Console.WriteLine($"Package '{packageName}' not found");
-            return;
+            return Task.CompletedTask;
         }
 
         var dependencies = GetDependencyList(GetPkgDepends(pkgPtr));
@@ -1463,9 +1470,10 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         var installedPackages = GetInstalledPackages().ToDictionary(x => x.Name, x => x.Version);
         var dependencyToInstall = dependencies.Where(x => !installedPackages.ContainsKey(x)).ToList();
 
-        if (dependencyToInstall.Count == 0) return;
+        if (dependencyToInstall.Count == 0) return Task.CompletedTask;
 
         InstallPackages(dependencyToInstall, flags);
+        return Task.CompletedTask;
     }
 
     public void Refresh()
