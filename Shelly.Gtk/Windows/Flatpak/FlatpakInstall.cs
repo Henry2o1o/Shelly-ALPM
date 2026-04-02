@@ -69,13 +69,15 @@ public class FlatpakInstall(
     private Button _installFromFlatpakRef = null!;
     private DropDown _installFromFlatpakRefDropDown = null!;
     private string _selectedRefScope = "system";
-    
+
     private Button _overlayShowPluginButton = null!;
-    
+
     private CancellationTokenSource _searchDebounce = new();
 
     private readonly HttpClient _httpClient = new();
-    
+
+    private bool _userOnly;
+
     public Widget CreateWindow()
     {
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakInstallWindow.ui"), -1);
@@ -84,7 +86,7 @@ public class FlatpakInstall(
         _gridView = (GridView)builder.GetObject("list_flatpaks")!;
         _gridView.SetMaxColumns(4);
         _gridView.SetMinColumns(1);
-        
+
         var reloadButton = (Button)builder.GetObject("reload_button")!;
         var searchEntry = (SearchEntry)builder.GetObject("search_entry")!;
         _categoryListBox = (ListBox)builder.GetObject("category_list")!;
@@ -137,7 +139,8 @@ public class FlatpakInstall(
         _factory.OnBind += OnBind;
         _factory.OnUnbind += OnUnbind;
         _gridView.SetFactory(_factory);
-        
+
+
         _installFromFlatpakRefDropDown.OnNotify += (_, args) =>
         {
             if (args.Pspec.GetName() != "selected") return;
@@ -274,7 +277,7 @@ public class FlatpakInstall(
             gtkBox.Append(label);
             _categoryListBox.Append(gtkBox);
         }
-        
+
         _gridView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
 
         reloadButton.OnClicked += (_, _) => { _ = LoadDataAsync(_cts.Token); };
@@ -303,7 +306,7 @@ public class FlatpakInstall(
             _overlay.SetVisible(false);
             _remoteRefOverlay.SetVisible(false);
             _addRemoteOverlay.SetVisible(false);
-   
+
             ApplyFilter();
         };
 
@@ -317,14 +320,10 @@ public class FlatpakInstall(
 
             if (obj == null) return;
 
-            _overlayCloseButton.OnClicked += (_, _) =>
-            {
-                _overlay.SetVisible(false);
-            };
+            _overlayCloseButton.OnClicked += (_, _) => { _overlay.SetVisible(false); };
 
             _overlayIconImage = (Image)builder.GetObject("overlay_icon")!;
 
-           
 
             _overlayAuthorLabel.SetText(obj.DeveloperName);
             _overlayNameLabel.SetText(obj.Name);
@@ -333,15 +332,40 @@ public class FlatpakInstall(
             _overlayLicenseLabel.SetText(obj.ProjectLicense);
             _overlaySummaryLabel.SetText(obj.Summary);
             _overlayDescriptionLabel.SetText(obj.Description);
+
             var result = unprivilegedOperationService
                 .GetFlatpakAppDataAsync(obj.Remotes.FirstOrDefault()?.Name ?? String.Empty, obj.Id, "stable").Result;
+
+            var installed = unprivilegedOperationService.ListFlatpakPackages().Result;
+
+            if (installed.Any(p => p.Id == obj.Id))
+            {
+                _overlayInstallButton.SetSensitive(false);
+                _overlayInstallButton.Label = "Installed";
+            }
+            else
+            {
+                _overlayInstallButton.SetSensitive(true);
+                _overlayInstallButton.Label = "Install";
+            }
 
             _overlaySizeLabel.SetText(SizeHelpers.FormatSize((long)result));
 
             SetUrlLinks(obj.Urls);
 
-            _overlayIconImage.SetFromFile(
-                $"/var/lib/flatpak/appstream/{obj.Remotes.FirstOrDefault()!.Name}/x86_64/active/icons/64x64/{obj.Id}.png");
+            if (_userOnly)
+            {
+                var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                _overlayIconImage.SetFromFile(
+                    Path.Combine(userHome, ".local/share/flatpak/appstream", obj.Remotes.FirstOrDefault()!.Name,
+                        "x86_64/active/icons/64x64", $"{obj.Id}.png"));
+            }
+            else
+            {
+                _overlayIconImage.SetFromFile(
+                    $"/var/lib/flatpak/appstream/{obj.Remotes.FirstOrDefault()!.Name}/x86_64/active/icons/64x64/{obj.Id}.png");
+            }
+
 
             List<string> images = [];
 
@@ -361,11 +385,11 @@ public class FlatpakInstall(
             };
 
             _versionHistoryButton.OnClicked += _versionHistoryHandler;
-            
+
             if (obj.Addons.Count > 0)
             {
-                _overlayShowPluginButton.SetVisible(true); 
-                
+                _overlayShowPluginButton.SetVisible(true);
+
                 if (_addonHistoryHandler is not null)
                     _overlayShowPluginButton.OnClicked -= _addonHistoryHandler;
 
@@ -379,7 +403,7 @@ public class FlatpakInstall(
             }
             else
             {
-                _overlayShowPluginButton.SetVisible(false); 
+                _overlayShowPluginButton.SetVisible(false);
             }
 
             var remoteStrings = obj.Remotes.Select(r => r.Name + " : " + r.Scope).ToArray();
@@ -399,17 +423,17 @@ public class FlatpakInstall(
     private bool FilterPackage(GObject.Object obj)
     {
         if (obj is not FlatpakGObject pkgObj || pkgObj.Package == null) return false;
-        
+
         if (_selectedCategory != FlatpakCategories.AllApplications)
         {
             var categoryName = _selectedCategory.ToString();
-            var result = pkgObj.Package.Categories.Contains( categoryName, StringComparer.OrdinalIgnoreCase);
+            var result = pkgObj.Package.Categories.Contains(categoryName, StringComparer.OrdinalIgnoreCase);
             if (!result) return false;
         }
 
         if (string.IsNullOrWhiteSpace(_searchText))
             return true;
-        
+
         return pkgObj.Package.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
                pkgObj.Package.Description.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
     }
@@ -545,7 +569,7 @@ public class FlatpakInstall(
     }
 
 
-    private static void OnBind(SignalListItemFactory sender, SignalListItemFactory.BindSignalArgs args)
+    private void OnBind(SignalListItemFactory sender, SignalListItemFactory.BindSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
         if (listItem.GetItem() is not FlatpakGObject obj) return;
@@ -567,8 +591,20 @@ public class FlatpakInstall(
         idLabel.SetText(app.Summary);
         verifiedIcon.SetVisible(app.IsVerified);
 
-        var path =
-            $"/var/lib/flatpak/appstream/{app.Remotes.FirstOrDefault()?.Name}/x86_64/active/icons/64x64/{app.Id}.png";
+        var path = "";
+        if (_userOnly)
+        {
+            var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            _overlayIconImage.SetFromFile(
+                Path.Combine(userHome, ".local/share/flatpak/appstream", app.Remotes.FirstOrDefault()?.Name ?? "",
+                    "x86_64/active/icons/64x64", $"{app.Id}.png"));
+        }
+        else
+        {
+            path =
+                $"/var/lib/flatpak/appstream/{app.Remotes.FirstOrDefault()?.Name}/x86_64/active/icons/64x64/{app.Id}.png";
+        }
+
         if (File.Exists(path))
             icon.SetFromFile(path);
         else
@@ -587,10 +623,12 @@ public class FlatpakInstall(
                 return false;
             });
 
-            
+
+            await RefreshRemotesList(); //Refresh before getting for icons 
+
             var syncTask = unprivilegedOperationService.FlatpakSyncRemoteAppstream();
             await Task.WhenAny(syncTask, Task.Delay(TimeSpan.FromSeconds(5), ct));
-            
+
             ct.ThrowIfCancellationRequested();
             _allPackages = await unprivilegedOperationService.ListAppstreamFlatpak(ct);
             ct.ThrowIfCancellationRequested();
@@ -613,6 +651,7 @@ public class FlatpakInstall(
                     {
                         _listStore!.Append(new FlatpakGObject { Package = pkg });
                     }
+
                     return false;
                 });
                 await Task.Delay(10, ct);
@@ -620,7 +659,6 @@ public class FlatpakInstall(
         }
         catch (OperationCanceledException)
         {
-            
         }
         catch (Exception e)
         {
@@ -653,20 +691,20 @@ public class FlatpakInstall(
         nameLabel.SetText(string.Empty);
         idLabel.SetText(string.Empty);
         verifiedIcon.SetVisible(false);
-        icon.Clear(); 
+        icon.Clear();
     }
 
 
     private void ApplyFilter()
     {
         var newText = _searchText;
-    
+
         if (newText.Length > _searchText.Length)
-            _filter.Changed(FilterChange.MoreStrict);  
+            _filter.Changed(FilterChange.MoreStrict);
         else if (newText.Length < _searchText.Length)
-            _filter.Changed(FilterChange.LessStrict);  
+            _filter.Changed(FilterChange.LessStrict);
         else
-            _filter.Changed(FilterChange.Different); 
+            _filter.Changed(FilterChange.Different);
     }
 
     private async Task InstallFromFlatpakRef()
@@ -693,19 +731,16 @@ public class FlatpakInstall(
                     await unprivilegedOperationService.FlatpakInsallFromRef(file.GetPath()!, _selectedRefScope);
                 if (!result.Success)
                 {
-                    Console.WriteLine($"Failed to install local package: {result.Error}");
-                }
-
-                if (!result.Success)
-                {
                     var args = new ToastMessageEventArgs(
                         $"Installing Flatpak failed"
                     );
                     genericQuestionService.RaiseToastMessage(args);
-                    Console.WriteLine($"Failed to install package {_selectedPackage.Id}: {result.Error}");
+                    Console.WriteLine($"Failed to install local package: {result.Error}");
                 }
                 else
                 {
+                    _overlayInstallButton.SetSensitive(false);
+
                     var args = new ToastMessageEventArgs(
                         $"Installed Flatpak"
                     );
@@ -752,7 +787,16 @@ public class FlatpakInstall(
             }
 
 
-            if (!result.Success)
+            if (result.Success)
+            {
+                _overlayInstallButton.SetSensitive(false);
+
+                var args = new ToastMessageEventArgs(
+                    $"Installed Flatpak"
+                );
+                genericQuestionService.RaiseToastMessage(args);
+            }
+            else
             {
                 var args = new ToastMessageEventArgs(
                     $"Installing Flatpak failed"
@@ -764,14 +808,9 @@ public class FlatpakInstall(
         finally
         {
             lockoutService.Hide();
-
-            var args = new ToastMessageEventArgs(
-                $"Installed Flatpak"
-            );
-            genericQuestionService.RaiseToastMessage(args);
         }
     }
-    
+
     private async Task InstallFromIdAsync(string id)
     {
         if (!configService.LoadConfig().NoConfirm)
@@ -805,7 +844,14 @@ public class FlatpakInstall(
             }
 
 
-            if (!result.Success)
+            if (result.Success)
+            {
+                var args = new ToastMessageEventArgs(
+                    $"Installed Flatpak addon"
+                );
+                genericQuestionService.RaiseToastMessage(args);
+            }
+            else
             {
                 var args = new ToastMessageEventArgs(
                     $"Installing Flatpak failed"
@@ -817,11 +863,6 @@ public class FlatpakInstall(
         finally
         {
             lockoutService.Hide();
-
-            var args = new ToastMessageEventArgs(
-                $"Installed Flatpak addon"
-            );
-            genericQuestionService.RaiseToastMessage(args);
         }
     }
 
@@ -857,7 +898,7 @@ public class FlatpakInstall(
 
         genericQuestionService.RaiseDialog(new GenericDialogEventArgs(_overlayBoxRoot));
     }
-    
+
     private void ShowAddons(List<AppstreamApp> addons)
     {
         _overlayBoxRoot = new Box();
@@ -923,7 +964,7 @@ public class FlatpakInstall(
         row.Append(versionLabel);
         row.Append(dateLabel);
         card.Append(row);
-        
+
         if (!string.IsNullOrWhiteSpace(description))
         {
             foreach (var line in description.Split('\n'))
@@ -963,7 +1004,7 @@ public class FlatpakInstall(
         card.SetMarginBottom(4);
         card.SetMarginStart(2);
         card.SetMarginEnd(2);
-        
+
         var row = new Box();
         row.SetOrientation(Orientation.Horizontal);
         row.SetSpacing(8);
@@ -971,7 +1012,7 @@ public class FlatpakInstall(
         row.SetMarginBottom(8);
         row.SetMarginStart(8);
         row.SetMarginEnd(8);
-        
+
         var textBox = new Box();
         textBox.SetOrientation(Orientation.Vertical);
         textBox.SetSpacing(4);
@@ -993,15 +1034,12 @@ public class FlatpakInstall(
             summaryLabel.SetHalign(Align.Fill);
             textBox.Append(summaryLabel);
         }
-        
+
         var button = new Button();
         button.SetIconName("folder-download-symbolic");
         button.SetValign(Align.Center);
         button.SetHalign(Align.End);
-        button.OnClicked += async (_, _) =>
-        {
-            await InstallFromIdAsync(id);
-        };
+        button.OnClicked += async (_, _) => { await InstallFromIdAsync(id); };
 
         row.Append(textBox);
         row.Append(button);
@@ -1066,12 +1104,14 @@ public class FlatpakInstall(
 
         GLib.Functions.IdleAdd(0, () =>
         {
+            _userOnly = remotes.Any(r => r.Scope != "system");
             if (_cts.Token.IsCancellationRequested) return false;
             _remoteListStore.RemoveAll();
             foreach (var obj in remotes.Select(remote => new FlatpakRemoteGObject { Remote = remote }))
             {
                 _remoteListStore.Append(obj);
             }
+
             return false;
         });
     }
