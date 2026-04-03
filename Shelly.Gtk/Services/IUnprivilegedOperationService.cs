@@ -36,7 +36,7 @@ public interface IUnprivilegedOperationService
 
     Task<SyncModel> CheckForApplicationUpdates();
 
-    Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates();
+    Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates(bool showHidden = false);
 
     Task<UnprivilegedOperationResult> ExportSyncFile(string filePath, string name);
 

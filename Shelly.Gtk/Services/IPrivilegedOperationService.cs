@@ -23,10 +23,10 @@ public interface IPrivilegedOperationService
     Task<OperationResult> UpdateAurPackagesAsync(IEnumerable<string> packages);
     Task<List<PackageBuild>> GetAurPackageBuild(IEnumerable<string> packages);
     Task<List<AlpmPackageUpdateDto>> GetPackagesNeedingUpdateAsync();
-    Task<List<AlpmPackageDto>> GetAvailablePackagesAsync();
-    Task<List<AlpmPackageDto>> GetInstalledPackagesAsync();
-    Task<List<AurPackageDto>> GetAurInstalledPackagesAsync();
-    Task<List<AurUpdateDto>> GetAurUpdatePackagesAsync();
+    Task<List<AlpmPackageDto>> GetAvailablePackagesAsync(bool showHidden = false);
+    Task<List<AlpmPackageDto>> GetInstalledPackagesAsync(bool showHidden = false);
+    Task<List<AurPackageDto>> GetAurInstalledPackagesAsync(bool showHidden = false);
+    Task<List<AurUpdateDto>> GetAurUpdatePackagesAsync(bool showHidden = false);
     Task<List<AurPackageDto>> SearchAurPackagesAsync(string query);
     Task<bool> IsPackageInstalledOnMachine(string packageName);
 }

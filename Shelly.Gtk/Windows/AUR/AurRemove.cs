@@ -37,6 +37,7 @@ public class AurRemove(
     private ColumnViewColumn _versionColumn = null!;
     private Button _removeButton = null!;
     private CheckButton _cascadeDeleteCheck = null!;
+    private CheckButton _showHiddenCheck = null!;
 
 
     public Widget CreateWindow()
@@ -52,6 +53,7 @@ public class AurRemove(
         _removeButton = (Button)builder.GetObject("remove_button")!;
         _removeButton.SetSensitive(false);
         _cascadeDeleteCheck = (CheckButton)builder.GetObject("cascade_delete_check")!;
+        _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
         _listStore = Gio.ListStore.New(AurPackageGObject.GetGType());
         _filter = CustomFilter.New(FilterPackage);
         _filterListModel = FilterListModel.New(_listStore, _filter);
@@ -78,6 +80,7 @@ public class AurRemove(
             ApplyFilter();
         };
         _removeButton.OnClicked += (_, _) => { _ = RemovePackagesAsync(); };
+        _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
 
         return _box;
     }
@@ -188,7 +191,7 @@ public class AurRemove(
     {
         try
         {
-            var packages = await privilegedOperationService.GetAurInstalledPackagesAsync();
+            var packages = await privilegedOperationService.GetAurInstalledPackagesAsync(_showHiddenCheck.Active);
             ct.ThrowIfCancellationRequested();
             Console.WriteLine($@"[DEBUG_LOG] Loaded {packages.Count} installed packages");
 

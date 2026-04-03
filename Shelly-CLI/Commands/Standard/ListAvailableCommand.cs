@@ -33,7 +33,7 @@ public class ListAvailableCommand : Command<ListSettings>
                 {
                     AnsiConsole.Status()
                         .Spinner(Spinner.Known.Dots)
-                        .Start("Initializing ALPM...", ctx => { manager.Initialize(); });
+                        .Start("Initializing ALPM...", ctx => { manager.Initialize(showHiddenPackages: settings.ShowHidden); });
                 }
             }
             else if (settings.Sync)
@@ -42,7 +42,7 @@ public class ListAvailableCommand : Command<ListSettings>
             }
             else
             {
-                manager.Initialize();
+                manager.Initialize(showHiddenPackages: settings.ShowHidden);
             }
 
 
@@ -124,7 +124,7 @@ public class ListAvailableCommand : Command<ListSettings>
             }
             else
             {
-                manager.Initialize();
+                manager.Initialize(showHiddenPackages: settings.ShowHidden);
             }
 
             var packages = manager.GetAvailablePackages();

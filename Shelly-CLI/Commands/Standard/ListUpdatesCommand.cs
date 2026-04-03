@@ -9,9 +9,9 @@ using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands.Standard;
 
-public class ListUpdatesCommand : Command<DefaultSettings>
+public class ListUpdatesCommand : Command<ListSettings>
 {
-    public override int Execute([NotNull] CommandContext context, [NotNull] DefaultSettings settings)
+    public override int Execute([NotNull] CommandContext context, [NotNull] ListSettings settings)
     {
         if (Program.IsUiMode)
         {
@@ -29,13 +29,13 @@ public class ListUpdatesCommand : Command<DefaultSettings>
                 .Start("Initializing and syncing ALPM...", ctx =>
                 {
                     manager.Initialize(false, int.Parse(ConfigManager.GetConfigValue("ParallelDownloadCount")!), true,
-                        dbPath);
+                        dbPath, showHiddenPackages: settings.ShowHidden);
                     manager.Sync();
                 });
         }
         else
         {
-            manager.Initialize(false, int.Parse(ConfigManager.GetConfigValue("ParallelDownloadCount")!), true, dbPath);
+            manager.Initialize(false, int.Parse(ConfigManager.GetConfigValue("ParallelDownloadCount")!), true, dbPath, showHiddenPackages: settings.ShowHidden);
             manager.Sync();
         }
 
@@ -95,13 +95,13 @@ public class ListUpdatesCommand : Command<DefaultSettings>
         return $"{size:0.##} {sizes[order]}";
     }
 
-    private static int HandleUiModeListUpdates(DefaultSettings settings)
+    private static int HandleUiModeListUpdates(ListSettings settings)
     {
         using var manager = new AlpmManager();
         var username = Environment.GetEnvironmentVariable("USER");
         var dbPath = Path.Combine("/home", username, ".cache", "Shelly", "db");
         Directory.CreateDirectory(dbPath);
-        manager.Initialize(false, int.Parse(ConfigManager.GetConfigValue("ParallelDownloadCount")!),true, dbPath);
+        manager.Initialize(false, int.Parse(ConfigManager.GetConfigValue("ParallelDownloadCount")!),true, dbPath, showHiddenPackages: settings.ShowHidden);
         manager.Sync();
         var updates = manager.GetPackagesNeedingUpdate();
 

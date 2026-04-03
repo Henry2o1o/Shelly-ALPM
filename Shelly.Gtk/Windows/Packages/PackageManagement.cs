@@ -37,6 +37,7 @@ public class PackageManagement(
     private SearchEntry _searchEntry = null!;
     private CheckButton _cascadeDeleteCheck = null!;
     private CheckButton _removeConfigsCheck = null!;
+    private CheckButton _showHiddenCheck = null!;
     private Button _refreshButton = null!;
     private Button _removeButton = null!;
     private readonly List<AlpmPackageGObject> _packageGObjectRefs = [];
@@ -63,6 +64,7 @@ public class PackageManagement(
         _searchEntry = (SearchEntry)builder.GetObject("search_entry")!;
         _cascadeDeleteCheck = (CheckButton)builder.GetObject("cascade_delete_check")!;
         _removeConfigsCheck = (CheckButton)builder.GetObject("remove_configs_check")!;
+        _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
 
         _checkColumn = (ColumnViewColumn)builder.GetObject("check_column")!;
         _checkColumn.Resizable = true;
@@ -122,6 +124,7 @@ public class PackageManagement(
         };
         _removeButton.OnClicked += (_, _) => { _ = RemoveSelectedAsync(); };
         _refreshButton.OnClicked += (_, _) => { _ = LoadDataAsync(); };
+        _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         _groupDropDown.OnNotify += (sender, args) =>
         {
             if (args.Pspec.GetName() == "selected")
@@ -444,7 +447,7 @@ public class PackageManagement(
     {
         try
         {
-            _packages = await privilegedOperationService.GetInstalledPackagesAsync();
+            _packages = await privilegedOperationService.GetInstalledPackagesAsync(_showHiddenCheck.Active);
             _groups = _packages.SelectMany(x => x.Groups).Distinct().ToList();
             _groups.Insert(0, "Any");
             _groupsStringList = StringList.New(_groups.ToArray());

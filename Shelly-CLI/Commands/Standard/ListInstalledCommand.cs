@@ -22,11 +22,11 @@ public class ListInstalledCommand : Command<ListSettings>
         {
             AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
-                .Start("Initializing ALPM...", ctx => { manager.Initialize(true); });
+                .Start("Initializing ALPM...", ctx => { manager.Initialize(true, showHiddenPackages: settings.ShowHidden); });
         }
         else
         {
-            manager.Initialize(true);
+            manager.Initialize(true, showHiddenPackages: settings.ShowHidden);
         }
 
         var packages = manager.GetInstalledPackages();
@@ -106,7 +106,7 @@ public class ListInstalledCommand : Command<ListSettings>
     private static int HandleUiModeListInstalled(ListSettings settings)
     {
         using var manager = new AlpmManager();
-        manager.Initialize(true);
+        manager.Initialize(true, showHiddenPackages: settings.ShowHidden);
 
         var packages = manager.GetInstalledPackages();
 

@@ -34,6 +34,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     private AlpmQuestionCallback _questionCallback;
     private AlpmProgressCallback? _progressCallback;
     private int _parallelDownloads = 1;
+    private bool _showHiddenPackages = false;
     private bool _isPackageDownload;
 
     public event EventHandler<AlpmProgressEventArgs>? Progress;
@@ -52,9 +53,10 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     }
 
     public void Initialize(bool root = false, int parallelDownloads = 10, bool useTempPath = false,
-        string tempPath = "")
+        string tempPath = "", bool showHiddenPackages = false)
     {
         _parallelDownloads = parallelDownloads;
+        _showHiddenPackages = showHiddenPackages;
         if (_handle != IntPtr.Zero)
         {
             Release(_handle);
@@ -774,7 +776,14 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         if (_handle == IntPtr.Zero) Initialize();
         var dbPtr = GetLocalDb(_handle);
         var pkgPtr = DbGetPkgCache(dbPtr);
-        return AlpmPackage.FromList(pkgPtr).Select(p => p.ToDto()).ToList();
+        var packages = AlpmPackage.FromList(pkgPtr).Select(p => p.ToDto()).ToList();
+
+        if (!_showHiddenPackages)
+        {
+            packages.RemoveAll(x => _config.IgnorePkg.Contains(x.Name));
+        }
+
+        return packages;
     }
 
     public List<AlpmPackageDto> GetForeignPackages()
@@ -816,6 +825,11 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             }
         }
 
+        if (!_showHiddenPackages)
+        {
+            foreignPackages.RemoveAll(x => _config.IgnorePkg.Contains(x.Name));
+        }
+
         return foreignPackages;
     }
 
@@ -854,6 +868,11 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             currentPtr = node.Next;
         }
 
+        if (!_showHiddenPackages)
+        {
+            packages.RemoveAll(x => _config.IgnorePkg.Contains(x.Name));
+        }
+
         return packages;
     }
 
@@ -876,7 +895,10 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             }
         }
 
-        updates.RemoveAll(p => _config.IgnorePkg.Contains(p.Name));
+        if (!_showHiddenPackages)
+        {
+            updates.RemoveAll(p => _config.IgnorePkg.Contains(p.Name));
+        }
 
         return updates;
     }
@@ -1192,7 +1214,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         return Task.CompletedTask;
     }
-    
+
     public async Task SyncSystemUpdate(AlpmTransFlag flags = AlpmTransFlag.None)
     {
         if (_handle == IntPtr.Zero) Initialize();

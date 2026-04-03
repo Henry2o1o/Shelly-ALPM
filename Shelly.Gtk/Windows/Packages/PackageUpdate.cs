@@ -48,6 +48,7 @@ public class PackageUpdate(
     private Button _refreshButton = null!;
     private Button _updateButton = null!;
     private Label _noPackagesLabel = null!;
+    private CheckButton _showHiddenCheck = null!;
 
     private Revealer _detailRevealer = null!;
     private Box _detailBox = null!;
@@ -73,6 +74,7 @@ public class PackageUpdate(
         _sizeDiffColumn.Resizable = true;
         _refreshButton = (Button)builder.GetObject("sync_button")!;
         _updateButton = (Button)builder.GetObject("update_button")!;
+        _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
         _noPackagesLabel = (Label)builder.GetObject("no_packages_label")!;
         _noPackagesLabel.Label_ = "<span size='large'>System packages are up to date</span>";
         _noPackagesLabel.Visible = false;
@@ -128,6 +130,7 @@ public class PackageUpdate(
         };
         _updateButton.OnClicked += (_, _) => { _ = UpdateSelectedAsync(); };
         _refreshButton.OnClicked += (_, _) => { _ = LoadDataAsync(); };
+        _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(); };
 
         return _box;
     }
@@ -380,7 +383,7 @@ public class PackageUpdate(
     {
         try
         {
-            var packages = await unprivilegedOperationService.CheckForStandardApplicationUpdates();
+            var packages = await unprivilegedOperationService.CheckForStandardApplicationUpdates(_showHiddenCheck.Active);
             GLib.Functions.IdleAdd(0, () =>
             {
                 _listStore.RemoveAll();

@@ -36,6 +36,7 @@ public class AurUpdate(
     private ColumnViewColumn _versionColumn = null!;
     private Button _updateButton = null!;
     private Label _noPackagesLabel = null!;
+    private CheckButton _showHiddenCheck = null!;
 
     public Widget CreateWindow()
     {
@@ -54,6 +55,7 @@ public class AurUpdate(
         _versionColumn.Resizable = true;
 
         _updateButton = (Button)builder.GetObject("update_button")!;
+        _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
         _noPackagesLabel = (Label)builder.GetObject("no_packages_label")!;
         _noPackagesLabel.Label_ = "<span size='large'>AUR packages are up to date</span>";
         _noPackagesLabel.Visible = false;
@@ -85,6 +87,7 @@ public class AurUpdate(
             ApplyFilter();
         };
         _updateButton.OnClicked += (_, _) => { _ = RemovePackagesAsync(); };
+        _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
 
         return _box;
     }
@@ -195,7 +198,7 @@ public class AurUpdate(
     {
         try
         {
-            var packages = await privilegedOperationService.GetAurUpdatePackagesAsync();
+            var packages = await privilegedOperationService.GetAurUpdatePackagesAsync(_showHiddenCheck.Active);
             ct.ThrowIfCancellationRequested();
             Console.WriteLine($@"[DEBUG_LOG] {packages.Count} AUR packages for update.");
 

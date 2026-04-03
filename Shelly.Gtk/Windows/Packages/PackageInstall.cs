@@ -57,6 +57,7 @@ public class PackageInstall(
     private ColumnViewColumn _repositoryColumn = null!;
     private DropDown _groupDropDown = null!;
     private CheckButton _upgradeCheck = null!;
+    private CheckButton _showHiddenCheck = null!;
 
     private Revealer _detailRevealer = null!;
     private Box _detailBox = null!;
@@ -86,6 +87,7 @@ public class PackageInstall(
         _detailBox = (Box)_builder.GetObject("detail_box")!;
         _groupDropDown = (DropDown)_builder.GetObject("grouping_selection")!;
         _upgradeCheck = (CheckButton)_builder.GetObject("upgrade_check")!;
+        _showHiddenCheck = (CheckButton)_builder.GetObject("show_hidden_check")!;
 
         _listStore = Gio.ListStore.New(AlpmPackageGObject.GetGType());
         _filter = CustomFilter.New(FilterPackage);
@@ -131,6 +133,7 @@ public class PackageInstall(
         _installButton.OnClicked += (_, _) => { _ = InstallSelectedAsync(); };
         _localInstallButton.OnClicked += (_, _) => { _ = InstallLocalPackage(); };
         _appImageButton.OnClicked += (_, _) => { _ = InstallAppImage(); };
+        _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
 
         _groupDropDown.OnNotify += (sender, args) =>
         {
@@ -468,7 +471,7 @@ public class PackageInstall(
 
         try
         {
-            _packages = await privilegedOperationService.GetAvailablePackagesAsync();
+            _packages = await privilegedOperationService.GetAvailablePackagesAsync(_showHiddenCheck.Active);
             _groups = _packages.SelectMany(x => x.Groups).Distinct().ToList();
             _groups.Insert(0, "Any");
 
