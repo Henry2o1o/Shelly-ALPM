@@ -14,7 +14,7 @@ public interface IAlpmManager
 
     event EventHandler<AlpmScriptletEventArgs>? ScriptletInfo;
     event EventHandler<AlpmHookEventArgs>? HookRun;
-    
+
     event EventHandler<AlpmPacnewEventArgs>? PacnewInfo;
     event EventHandler<AlpmPacsaveEventArgs>? PacsaveInfo;
 
@@ -30,8 +30,6 @@ public interface IAlpmManager
 
     Task RemovePackages(List<string> packageNames,
         AlpmTransFlag flags = AlpmTransFlag.None);
-
-    void RemovePackage(string packageName, AlpmTransFlag flags = AlpmTransFlag.None);
 
     void UpdatePackages(List<string> packageNames,
         AlpmTransFlag flags = AlpmTransFlag.None);

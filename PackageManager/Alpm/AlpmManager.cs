@@ -886,83 +886,6 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         return Marshal.PtrToStringUTF8(StrError(error)) ?? $"Unknown error ({error})";
     }
 
-    public void InstallPackage(string packageName,
-        AlpmTransFlag flags = AlpmTransFlag.NoScriptlet | AlpmTransFlag.NoHooks)
-    {
-        if (_handle == IntPtr.Zero) Initialize();
-
-        // 1. Find the package in sync databases
-        IntPtr pkgPtr = IntPtr.Zero;
-        var syncDbsPtr = GetSyncDbs(_handle);
-        var currentPtr = syncDbsPtr;
-        while (currentPtr != IntPtr.Zero)
-        {
-            var node = Marshal.PtrToStructure<AlpmList>(currentPtr);
-            if (node.Data != IntPtr.Zero)
-            {
-                pkgPtr = DbGetPkg(node.Data, packageName);
-                if (pkgPtr != IntPtr.Zero) break;
-            }
-
-            currentPtr = node.Next;
-        }
-
-        if (pkgPtr == IntPtr.Zero)
-        {
-            Console.Error.WriteLine($"[ALPM_ERROR]Package '{packageName}' not found in any sync database.");
-            throw new Exception($"Package '{packageName}' not found in any sync database.");
-        }
-
-        // If we are doing a DbOnly install, we should also skip dependency checks, 
-        // extraction, and signature/checksum validation to avoid requirement for the physical package file.
-        if (flags.HasFlag(AlpmTransFlag.DbOnly))
-        {
-            flags |= AlpmTransFlag.NoDeps | AlpmTransFlag.NoExtract | AlpmTransFlag.NoPkgSig |
-                     AlpmTransFlag.NoCheckSpace;
-        }
-
-        // 2. Initialize transaction
-        if (TransInit(_handle, flags) != 0)
-        {
-            Console.Error.WriteLine(
-                $"[ALPM_ERROR]Failed to initialize transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            throw new Exception($"Failed to initialize transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-        }
-
-        try
-        {
-            // 3. Add package to transaction
-            if (AddPkg(_handle, pkgPtr) != 0)
-            {
-                Console.Error.WriteLine(
-                    $"[ALPM_ERROR]Failed to add package '{packageName}' to transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-                throw new Exception(
-                    $"Failed to add package '{packageName}' to transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            }
-
-            // 4. Prepare transaction
-            if (TransPrepare(_handle, out var dataPtr) != 0)
-            {
-                Console.Error.WriteLine(
-                    $"[ALPM_ERROR]Failed to prepare transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-                throw new Exception($"Failed to prepare transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            }
-
-            // 5. Commit transaction
-            if (TransCommit(_handle, out dataPtr) != 0)
-            {
-                Console.Error.WriteLine(
-                    $"[ALPM_ERROR]Failed to commit transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-                throw new Exception($"Failed to commit transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            }
-        }
-        finally
-        {
-            // 6. Release transaction
-            TransRelease(_handle);
-        }
-    }
-
     public Task InstallPackages(List<string> packageNames,
         AlpmTransFlag flags = AlpmTransFlag.None)
     {
@@ -976,6 +899,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             IntPtr pkgPtr = IntPtr.Zero;
             var syncDbsPtr = GetSyncDbs(_handle);
             var currentPtr = syncDbsPtr;
+            List<IntPtr> groupPkgs = null;
             while (currentPtr != IntPtr.Zero)
             {
                 var node = Marshal.PtrToStructure<AlpmList>(currentPtr);
@@ -983,18 +907,77 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 {
                     pkgPtr = DbGetPkg(node.Data, packageName);
                     if (pkgPtr != IntPtr.Zero) break;
+
+                    //Group search next
+                    var groupCachePtr = DbGetGroupCache(node.Data);
+                    var groupNode = groupCachePtr;
+                    while (groupNode != IntPtr.Zero)
+                    {
+                        var groupNodeData = Marshal.PtrToStructure<AlpmList>(groupNode);
+                        if (groupNodeData.Data != IntPtr.Zero)
+                        {
+                            var group = Marshal.PtrToStructure<AlpmPackageGroup>(groupNodeData.Data);
+                            var groupName = Marshal.PtrToStringUTF8(group.Name);
+                            try
+                            {
+                                if (groupName!.Equals(packageName, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    groupPkgs = new List<IntPtr>();
+                                    var pkgNode = group.Packages;
+                                    while (pkgNode != IntPtr.Zero)
+                                    {
+                                        var pkg = Marshal.PtrToStructure<AlpmList>(pkgNode);
+                                        if (pkg.Data != IntPtr.Zero)
+                                        {
+                                            groupPkgs.Add(pkg.Data);
+                                        }
+
+                                        pkgNode = pkg.Next;
+                                    }
+
+                                    break;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.Error.WriteLine($"[DEBUG_LOG] Exception: {ex.Message}");
+                            }
+                        }
+
+                        groupNode = groupNodeData.Next;
+                    }
+
+                    if (groupPkgs != null)
+                    {
+                        break;
+                    }
+
+                    var pkgCache = DbGetPkgCache(node.Data);
+                    pkgPtr = PkgFindSatisfier(pkgCache, packageName);
+                    if (pkgPtr != IntPtr.Zero)
+                    {
+                        break;
+                    }
                 }
 
                 currentPtr = node.Next;
             }
 
-            if (pkgPtr == IntPtr.Zero)
+            if (pkgPtr == IntPtr.Zero && groupPkgs == null)
             {
                 Console.Error.WriteLine($"[ALPM_ERROR]Package '{packageName}' not found in any sync database.");
                 throw new Exception($"Package '{packageName}' not found in any sync database.");
             }
 
-            pkgPtrs.Add(pkgPtr);
+            if (pkgPtr != IntPtr.Zero)
+            {
+                pkgPtrs.Add(pkgPtr);
+            }
+
+            if (groupPkgs != null)
+            {
+                pkgPtrs.AddRange(groupPkgs);
+            }
         }
 
         if (pkgPtrs.Count == 0) return Task.CompletedTask;
@@ -1087,17 +1070,69 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         var localDbPtr = GetLocalDb(_handle);
         foreach (var packageName in packageNames)
         {
-            // Find the package in sync databases
+            IntPtr pkgPtr = IntPtr.Zero;
+            List<IntPtr> groupPkgs = null;
 
-            var pkgPtr = DbGetPkg(localDbPtr, packageName);
+            // 1. Try exact package name in local db
+            pkgPtr = DbGetPkg(localDbPtr, packageName);
 
+            // 2. If not found, try as a group in local db
             if (pkgPtr == IntPtr.Zero)
             {
-                Console.Error.WriteLine($"[ALPM_ERROR]Package '{packageName}' not found in local database.");
-                throw new Exception($"Package '{packageName}' not found in any sync database.");
+                var groupCachePtr = DbGetGroupCache(localDbPtr);
+                var groupNode = groupCachePtr;
+                while (groupNode != IntPtr.Zero)
+                {
+                    var groupNodeData = Marshal.PtrToStructure<AlpmList>(groupNode);
+                    if (groupNodeData.Data != IntPtr.Zero)
+                    {
+                        var group = Marshal.PtrToStructure<AlpmPackageGroup>(groupNodeData.Data);
+                        var groupName = Marshal.PtrToStringUTF8(group.Name);
+                        try
+                        {
+                            if (groupName!.Equals(packageName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                groupPkgs = new List<IntPtr>();
+                                var pkgNode = group.Packages;
+                                while (pkgNode != IntPtr.Zero)
+                                {
+                                    var pkg = Marshal.PtrToStructure<AlpmList>(pkgNode);
+                                    if (pkg.Data != IntPtr.Zero)
+                                    {
+                                        groupPkgs.Add(pkg.Data);
+                                    }
+
+                                    pkgNode = pkg.Next;
+                                }
+
+                                break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[DEBUG_LOG] Exception: {ex.Message}");
+                        }
+                    }
+
+                    groupNode = groupNodeData.Next;
+                }
             }
 
-            pkgPtrs.Add(pkgPtr);
+            // 3. If still not found, try find_satisfier on local db
+            if (pkgPtr == IntPtr.Zero && groupPkgs == null)
+            {
+                var pkgCache = DbGetPkgCache(localDbPtr);
+                pkgPtr = PkgFindSatisfier(pkgCache, packageName);
+            }
+
+            if (pkgPtr == IntPtr.Zero && groupPkgs == null)
+            {
+                Console.Error.WriteLine($"[ALPM_ERROR]Package '{packageName}' not found in local database.");
+                throw new Exception($"Package '{packageName}' not found in local database.");
+            }
+
+            if (pkgPtr != IntPtr.Zero) pkgPtrs.Add(pkgPtr);
+            if (groupPkgs != null) pkgPtrs.AddRange(groupPkgs);
         }
 
         if (pkgPtrs.Count == 0) return Task.CompletedTask;
@@ -1157,65 +1192,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         return Task.CompletedTask;
     }
-
-    public void RemovePackage(string packageName,
-        AlpmTransFlag flags = AlpmTransFlag.None)
-    {
-        if (_handle == IntPtr.Zero) Initialize();
-
-        // 1. Find the package in the local database
-        var localDbPtr = GetLocalDb(_handle);
-        var pkgPtr = DbGetPkg(localDbPtr, packageName);
-
-        if (pkgPtr == IntPtr.Zero)
-        {
-            Console.Error.WriteLine($"[ALPM_ERROR]Package '{packageName}' not found in local database.");
-            throw new Exception($"Package '{packageName}' not found in the local database.");
-        }
-
-        // 2. Initialize transaction
-        // Using 0 for flags for now, similar to InstallPackage
-        if (TransInit(_handle, flags) != 0)
-        {
-            Console.Error.WriteLine(
-                $"[ALPM_ERROR]Failed to initialize transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            throw new Exception($"Failed to initialize transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-        }
-
-        try
-        {
-            // 3. Add package to removal list
-            if (RemovePkg(_handle, pkgPtr) != 0)
-            {
-                Console.Error.WriteLine(
-                    $"[ALPM_ERROR]Failed to add package '{packageName}' to removal list: {GetErrorMessage(ErrorNumber(_handle))}");
-                throw new Exception(
-                    $"Failed to add package '{packageName}' to removal transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            }
-
-            // 4. Prepare transaction
-            if (TransPrepare(_handle, out var dataPtr) != 0)
-            {
-                Console.Error.WriteLine(
-                    $"[ALPM_ERROR]Failed to prepare transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-                throw new Exception($"Failed to prepare removal transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            }
-
-            // 5. Commit transaction
-            if (TransCommit(_handle, out dataPtr) != 0)
-            {
-                Console.Error.WriteLine(
-                    $"[ALPM_ERROR]Failed to commit removal transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-                throw new Exception($"Failed to commit removal transaction: {GetErrorMessage(ErrorNumber(_handle))}");
-            }
-        }
-        finally
-        {
-            // 6. Release transaction
-            TransRelease(_handle);
-        }
-    }
-
+    
     public async Task SyncSystemUpdate(AlpmTransFlag flags = AlpmTransFlag.None)
     {
         if (_handle == IntPtr.Zero) Initialize();

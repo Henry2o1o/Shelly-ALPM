@@ -281,60 +281,7 @@ public class AlpmManagerTests
         Assert.That(packagesNeedingUpdate, Is.Not.Null);
     }
 
-    [Test]
-    public void InstallPackage_ThrowsException_WhenPackageNotFound()
-    {
-        _manager.Initialize();
-        var nonExistentPackage = "this-package-does-not-exist-12345";
-        var ex = Assert.Throws<Exception>(() => _manager.InstallPackage(nonExistentPackage));
-        Assert.That(ex.Message, Does.Contain($"Package '{nonExistentPackage}' not found"));
-    }
-
-    [Test]
-    public void RemovePackage_ThrowsException_WhenPackageNotFound()
-    {
-        _manager.Initialize();
-        var nonExistentPackage = "this-package-should-not-be-installed-98765";
-        var ex = Assert.Throws<Exception>(() => _manager.RemovePackage(nonExistentPackage));
-        Assert.That(ex.Message, Does.Contain($"Package '{nonExistentPackage}' not found in the local database"));
-    }
-
-    // [Test]
-    // public void InstallAndRemove_Doctest_Succeeds()
-    // {
-    //     _manager.Initialize();
-    //     // We don't need to Sync() because we copied the DBs, 
-    //     // but the Server URLs must be valid for the download to work.
-    //
-    //     var packageName = "doctest";
-    //
-    //     // Ensure it's not installed before we start
-    //     try
-    //     {
-    //         _manager.RemovePackage(packageName);
-    //     }
-    //     catch
-    //     {
-    //         // Ignore if not found
-    //     }
-    //
-    //     // Install - Remove AlpmTransFlag.DbOnly if you had it. 
-    //     // We include NoPkgSig to bypass GPG errors while still downloading and "extracting".
-    //     Assert.DoesNotThrow(() => _manager.InstallPackage(packageName,
-    //         AlpmTransFlag.NoScriptlet | AlpmTransFlag.NoHooks | AlpmTransFlag.NoPkgSig));
-    //
-    //     // Verify installed
-    //     var installedPackages = _manager.GetInstalledPackages();
-    //     Assert.That(installedPackages.Any(p => p.Name == packageName), Is.True);
-    //
-    //     // Remove
-    //     Assert.DoesNotThrow(() => _manager.RemovePackage(packageName));
-    //
-    //     // Verify removed
-    //     installedPackages = _manager.GetInstalledPackages();
-    //     Assert.That(installedPackages.Any(p => p.Name == packageName), Is.False);
-    // }
-
+    
     [Test]
     public void UpdateAll_Succeeds()
     {
@@ -356,23 +303,4 @@ public class AlpmManagerTests
         Assert.That(ex.Message, Does.Contain("not found"));
     }
 
-    // [Test]
-    // public void InstallPackages_Multiple_Succeeds()
-    // {
-    //     _manager.Initialize();
-    //     var packages = new List<string> { "doctest", "valgrind" }; // Choosing common packages
-    //
-    //     // Use DbOnly to avoid actual downloads
-    //     Assert.DoesNotThrow(() => _manager.InstallPackages(packages,
-    //         AlpmTransFlag.DbOnly | AlpmTransFlag.NoScriptlet | AlpmTransFlag.NoHooks));
-    //
-    //     // Verify "installed" in local DB (since we used DbOnly)
-    //     var installedPackages = _manager.GetInstalledPackages();
-    //     Assert.That(installedPackages.Any(p => p.Name == "doctest"), Is.True);
-    //     Assert.That(installedPackages.Any(p => p.Name == "valgrind"), Is.True);
-    //
-    //     // Cleanup
-    //     _manager.RemovePackage("doctest", AlpmTransFlag.DbOnly);
-    //     _manager.RemovePackage("valgrind", AlpmTransFlag.DbOnly);
-    // }
 }
