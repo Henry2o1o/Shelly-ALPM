@@ -264,10 +264,11 @@ public class AurPackageManager(string? configPath = null)
             else
                 aurPackages.Add(dep);
         }
+
         if (alpmPackages.Count > 0)
         {
             _alpm.InstallPackages(alpmPackages);
-            _alpm.Refresh();  
+            _alpm.Refresh();
         }
 
         foreach (var pkg in aurPackages)
@@ -345,9 +346,10 @@ public class AurPackageManager(string? configPath = null)
                 else
                     aurPackages.Add(dep);
             }
+
             if (alpmPackages.Count > 0)
             {
-                _alpm.InstallPackages(alpmPackages);
+                _alpm.InstallPackages(alpmPackages, AlpmTransFlag.AllDeps).Wait();
             }
 
             foreach (var pkg in aurPackages)
@@ -450,7 +452,7 @@ public class AurPackageManager(string? configPath = null)
             try
             {
                 _alpm.InstallLocalPackage(pkgFiles[0]);
-                _alpm.Refresh();  
+                _alpm.Refresh();
             }
             catch (Exception ex)
             {
@@ -567,6 +569,7 @@ public class AurPackageManager(string? configPath = null)
             else
                 aurPackages.Add(dep);
         }
+
         if (alpmPackages.Count > 0)
         {
             _alpm.InstallPackages(alpmPackages);
@@ -1007,9 +1010,10 @@ public class AurPackageManager(string? configPath = null)
                 else
                     aurPackages.Add(dep);
             }
+
             if (alpmPackages.Count > 0)
             {
-                _alpm.InstallPackages(alpmPackages);
+                _alpm.InstallPackages(alpmPackages, AlpmTransFlag.AllDeps);
             }
 
             foreach (var pkg in aurPackages)
@@ -1066,7 +1070,7 @@ public class AurPackageManager(string? configPath = null)
                 return;
             }
 
-            _alpm.InstallLocalPackage(pkgFiles[0]);
+            _alpm.InstallLocalPackage(pkgFiles[0], AlpmTransFlag.AllDeps);
             _alpm.Refresh();
             _availablePackages = _alpm.GetAvailablePackages().Select(x => x.Name).ToList();
         }
@@ -1135,7 +1139,8 @@ public class AurPackageManager(string? configPath = null)
         File.Copy("/etc/makepkg.conf", destination, overwrite: true);
     }
 
-    private System.Diagnostics.Process CreateBuildProcess(string tempPath, string makepkgArgs = "-f -c --noconfirm --skippgpcheck")
+    private System.Diagnostics.Process CreateBuildProcess(string tempPath,
+        string makepkgArgs = "-f -c --noconfirm --skippgpcheck")
     {
         if (_useChroot)
         {
