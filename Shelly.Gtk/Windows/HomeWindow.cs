@@ -37,6 +37,7 @@ public class HomeWindow(
     private ListBox? _operationLogListBox;
     private Button _archNewsButton = null!;
     private Overlay _overlay = null!;
+    private uint _updateTimerId;
 
     public Widget CreateWindow()
     {
@@ -132,7 +133,7 @@ public class HomeWindow(
         _archNewsButton.OnRealize += (sender, args) => { _ = LoadArchNews(_cts.Token); };
 
         _ = LoadUpdatesPanel(_updatesListBox!, _cts.Token);
-        GLib.Functions.TimeoutAdd(200, 180000, () =>
+        _updateTimerId = GLib.Functions.TimeoutAdd(200, 180000, () =>
         {
             _ = LoadUpdatesPanel(_updatesListBox!, _cts.Token);
             return true;
@@ -830,6 +831,11 @@ public class HomeWindow(
 
     public void Dispose()
     {
+        if (_updateTimerId > 0)
+        {
+            GLib.Functions.SourceRemove(_updateTimerId);
+            _updateTimerId = 0;
+        }
         _cts.Cancel();
         _cts.Dispose();
     }
