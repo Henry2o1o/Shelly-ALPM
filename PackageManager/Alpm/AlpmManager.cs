@@ -1251,10 +1251,9 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         {
             _isPackageDownload = true;
             var updates = GetPackagesNeedingUpdate();
-            //TODO: Implement this with better handling across all levels of the project
-            var downloadTasks = updates.Select(pkg => Task.Run(() =>
+            var updateUrl = updates.Select(BuildPackageUrl).ToList();
+            var downloadTasks = updateUrl.Select(url => Task.Run(() =>
             {
-                var url = BuildPackageUrl(pkg);
                 var fileName = url.Split('/').Last();
                 var localPath = Path.Combine(_config.CacheDir, fileName);
                 if (!File.Exists(localPath))
