@@ -58,7 +58,7 @@
                 <property name="tooltip-text">Install App Image</property>
                 <child>
                   <object class="GtkBox">
-                    <property name="spacing">5</property>
+                    <property name="spacing">8</property>
                     <child>
                       <object class="GtkImage">
                         <property name="icon-name">folder-open-symbolic</property>
@@ -86,7 +86,6 @@
             </child>
             <child>
               <object class="GtkCheckButton" id="show_hidden_check">
-                <property name="halign">start</property>
                 <property name="label">Show Hidden</property>
                 <property name="tooltip-text">Show packages in the IgnorePkg list from pacman.conf</property>
                 <property name="active">false</property>
@@ -95,7 +94,7 @@
             <child>
               <object class="GtkSearchEntry" id="search_entry">
                 <property name="placeholder-text">Search packages...</property>
-                <property name="width-request">200</property>
+                <property name="width-request">250</property>
               </object>
             </child>
           </object>
@@ -105,11 +104,18 @@
             <property name="hexpand">true</property>
             <property name="orientation">horizontal</property>
             <property name="vexpand">true</property>
+            <property name="margin-start">12</property>
+            <property name="margin-end">12</property>
+            <property name="margin-bottom">12</property>
+            <property name="spacing">12</property>
             <child>
               <object class="GtkScrolledWindow">
                 <property name="hexpand">true</property>
                 <property name="overlay-scrolling">false</property>
                 <property name="vexpand">true</property>
+                <style>
+                  <class name="rounded-card"/>
+                </style>
                 <child>
                   <object class="GtkColumnView" id="package_column_view">
                     <property name="hexpand">true</property>
@@ -152,31 +158,30 @@
             <child>
               <object class="GtkRevealer" id="detail_revealer">
                 <property name="reveal-child">false</property>
-                
                 <property name="transition-type">slide-left</property>
                 <child>
                   <object class="GtkFrame">
-                    <property name="margin-bottom">5</property>
-                    <property name="margin-end">10</property>
-                    <property name="margin-start">0</property>
-                    <property name="margin-top">0</property>
-                    <property name="width-request">250</property>
+                    <property name="width-request">300</property>
+                    <style>
+                      <class name="rounded-card"/>
+                    </style>
                     <child>
                       <object class="GtkScrolledWindow">
                         <property name="hscrollbar-policy">never</property>
                         <property name="overlay-scrolling">false</property>
                         <property name="propagate-natural-height">True</property>
+                        <property name="propagate-natural-width">False</property>
                         <property name="vexpand">true</property>
-                        <property name="width-request">250</property>
                         <property name="window-placement">top-right</property>
                         <child>
                           <object class="GtkBox" id="detail_box">
-                            <property name="margin-bottom">4</property>
-                            <property name="margin-end">8</property>
-                            <property name="margin-start">8</property>
-                            <property name="margin-top">4</property>
+                            <property name="width-request">276</property>
+                            <property name="margin-bottom">12</property>
+                            <property name="margin-end">12</property>
+                            <property name="margin-start">12</property>
+                            <property name="margin-top">12</property>
                             <property name="orientation">vertical</property>
-                            <property name="spacing">1</property>
+                            <property name="spacing">8</property>
                           </object>
                         </child>
                       </object>

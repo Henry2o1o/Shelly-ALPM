@@ -1,8 +1,6 @@
 .rounded-card {
     border-radius: 12px;
     border: 1px solid alpha(currentColor, 0.15);
-    overflow: hidden;
-    clip-path: inset(0 round 12px);
 }
 
 .rounded-card viewport,
@@ -121,4 +119,50 @@ scrolledwindow > scrollbar {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     padding: 10px 16px;
     color: @theme_fg_color;
+}
+
+.package-detail-expander {
+    margin-top: 8px;
+    border: 1px solid alpha(currentColor, 0.1);
+    border-radius: 8px;
+    background-color: alpha(currentColor, 0.02);
+    overflow: hidden;
+}
+
+.package-detail-expander:hover {
+    background-color: alpha(currentColor, 0.05);
+}
+
+.package-detail-expander > box:first-child {
+    padding: 8px 12px;
+    font-weight: bold;
+    color: alpha(currentColor, 0.8);
+}
+
+.package-detail-expander > box {
+    padding: 8px 12px 12px 12px;
+}
+
+.package-chip {
+    background-color: alpha(currentColor, 0.05);
+    border: 1px solid alpha(currentColor, 0.1);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 0.9em;
+    font-weight: normal;
+}
+
+flowbox {
+    margin: 0;
+    padding: 0;
+}
+
+flowboxchild {
+    padding: 0;
+    border-radius: 6px;
+    max-width: 100%;
+}
+
+flowboxchild:hover {
+    background-color: alpha(currentColor, 0.1);
 }
