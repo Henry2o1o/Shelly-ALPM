@@ -19,27 +19,14 @@ try
     const string shellyNotificationsService = "org.shelly.Notifications";
     await connection.RequestNameAsync(shellyNotificationsService);
 
-    connection.AddMethodHandler(new ShellyUiReceiver(() =>
-    {
-        configReader.Refresh();
-        forceCheck = true;
-        try
-        {
-            delayCts?.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-    }));
-
-    var cts = new CancellationTokenSource();
-    var token = cts.Token;
-
-
-    var trayHandler = new StatusNotifierItemHandler();
+    var trayHandler = new StatusNotifierItemHandler(connection);
     connection.AddMethodHandler(trayHandler);
 
     var menuHandler = new DBusMenuHandler(connection);
+    menuHandler.OnUpdateStatusChanged += async (pending) =>
+    {
+        await trayHandler.SetUpdatesPending(pending);
+    };
     menuHandler.OnExitRequested += () =>
     {
         Console.WriteLine("Exit requested via tray menu.");
@@ -69,10 +56,37 @@ try
     };
     connection.AddMethodHandler(menuHandler);
 
+    connection.AddMethodHandler(new ShellyUiReceiver(() =>
+    {
+        configReader.Refresh();
+        forceCheck = true;
+        try
+        {
+            delayCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }, () =>
+    {
+        forceCheck = true;
+        try
+        {
+            delayCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }));
+
+    var cts = new CancellationTokenSource();
+    var token = cts.Token;
+
     _ = Task.Run(async () =>
     {
         var updates = new UpdateService(menuHandler);
         var update = await updates.CheckForUpdates();
+        await trayHandler.SetUpdatesPending(update > 0);
         if (update > 0)
         {
             _ = new NotificationHandler().SendNotif(connection, $"Updates available: {update}");
@@ -87,6 +101,7 @@ try
                 {
                     forceCheck = false;
                     update = await updates.CheckForUpdates();
+                    await trayHandler.SetUpdatesPending(update > 0);
                     if (update > 0)
                     {
                         _ = new NotificationHandler().SendNotif(connection, $"Updates available: {update}");

@@ -3,6 +3,7 @@ using Gtk;
 using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
+using Shelly.Gtk.Services.FlatHub;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 
@@ -14,7 +15,8 @@ public class FlatpakInstall(
     IUnprivilegedOperationService unprivilegedOperationService,
     ILockoutService lockoutService,
     IConfigService configService,
-    IGenericQuestionService genericQuestionService) : IShellyWindow
+    IGenericQuestionService genericQuestionService,
+    IFlatHubApiService flatHubApiService) : IShellyWindow
 {
     private GridView? _gridView;
     private readonly CancellationTokenSource _cts = new();
@@ -26,6 +28,10 @@ public class FlatpakInstall(
     private SignalHandler<Button>? _addonHistoryHandler;
     private ListBox? _categoryListBox;
     private List<AppstreamApp> _allPackages = [];
+    private HashSet<string> _trendingApps = [];
+    private HashSet<string> _popularApps = [];
+    private HashSet<string> _recentlyUpdatedApps = [];
+    private HashSet<string> _recentlyAddedApps = [];
     private string _searchText = string.Empty;
     private FlatpakCategories _selectedCategory = FlatpakCategories.AllApplications;
     private SignalListItemFactory? _factory;
@@ -236,6 +242,25 @@ public class FlatpakInstall(
                     image.IconName = "applications-other";
                     gtkBox.Append(image);
                     break;
+                case "Recommended":
+                    image.IconName = "emblem-favorite";
+                    gtkBox.Append(image);
+                    break;
+                case "MostWanted":
+                    label.SetText("Most Wanted");
+                    image.IconName = "starred";
+                    gtkBox.Append(image);
+                    break;
+                case "RecentlyAdded":
+                    label.SetText("Recently Added");
+                    image.IconName = "document-new";
+                    gtkBox.Append(image);
+                    break;
+                case "RecentlyUpdated":
+                    label.SetText("Recently Updated");
+                    image.IconName = "software-update-available";
+                    gtkBox.Append(image);
+                    break;
                 case "AudioVideo":
                     label.SetText("Audio & Video");
                     image.IconName = "applications-multimedia";
@@ -430,11 +455,39 @@ public class FlatpakInstall(
     {
         if (obj is not FlatpakGObject pkgObj || pkgObj.Package == null) return false;
 
-        if (_selectedCategory != FlatpakCategories.AllApplications)
+        switch (_selectedCategory)
         {
-            var categoryName = _selectedCategory.ToString();
-            var result = pkgObj.Package.Categories.Contains(categoryName, StringComparer.OrdinalIgnoreCase);
-            if (!result) return false;
+            case FlatpakCategories.AllApplications:
+                break;
+            case FlatpakCategories.Recommended:
+                if (!_trendingApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.MostWanted:
+                if (!_popularApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.RecentlyAdded:
+                if (!_recentlyAddedApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.RecentlyUpdated:
+                if (!_recentlyUpdatedApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.AudioVideo:
+            case FlatpakCategories.Development:
+            case FlatpakCategories.Education:
+            case FlatpakCategories.Game:
+            case FlatpakCategories.Graphics:
+            case FlatpakCategories.Network:
+            case FlatpakCategories.Office:
+            case FlatpakCategories.Science:
+            case FlatpakCategories.System:
+            case FlatpakCategories.Utility:
+            default:
+            {
+                var categoryName = _selectedCategory.ToString();
+                var result = pkgObj.Package.Categories.Contains(categoryName, StringComparer.OrdinalIgnoreCase);
+                if (!result) return false;
+                break;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(_searchText))
@@ -536,14 +589,12 @@ public class FlatpakInstall(
         var vbox = Box.New(Orientation.Vertical, 2);
         var nameBox = Box.New(Orientation.Horizontal, 4);
         nameBox.Halign = Align.Start;
-
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
-        nameLabel.AddCssClass("heading");
         nameBox.Append(nameLabel);
 
 
-        var verifiedIcon = Image.NewFromIconName("checkmark-symbolic");
+        var verifiedIcon = Image.NewFromIconName("security-high-symbolic");
         verifiedIcon.PixelSize = 14;
         verifiedIcon.Valign = Align.Center;
         verifiedIcon.TooltipText = "Verified";
@@ -562,6 +613,7 @@ public class FlatpakInstall(
 
         vbox.Append(nameBox);
         vbox.Append(idLabel);
+        vbox.Valign = Align.Center;
         hbox.Append(vbox);
 
         var frame = Frame.New(null);
@@ -617,6 +669,21 @@ public class FlatpakInstall(
             icon.SetFromIconName("application-x-executable");
     }
 
+    private async Task BuildAndStartFlatHubTasksAsync()
+    {
+        var trendingTask = flatHubApiService.GetCollectionTrendingAsync();
+        var popularTask = flatHubApiService.GetCollectionPopularAsync();
+        var recentlyUpdatedTask = flatHubApiService.GetCollectionRecentlyUpdatedAsync();
+        var recentlyAddedTask = flatHubApiService.GetCollectionRecentlyAddedAsync();
+
+        await Task.WhenAll(trendingTask, popularTask, recentlyUpdatedTask, recentlyAddedTask);
+
+        _trendingApps = (await trendingTask).ToHashSet();
+        _popularApps = (await popularTask).ToHashSet();
+        _recentlyUpdatedApps = (await recentlyUpdatedTask).ToHashSet();
+        _recentlyAddedApps = (await recentlyAddedTask).ToHashSet();
+    }
+
     private async Task LoadDataAsync(CancellationToken ct = default)
     {
         try
@@ -629,6 +696,7 @@ public class FlatpakInstall(
                 return false;
             });
 
+            var flathubTask = BuildAndStartFlatHubTasksAsync();
 
             await RefreshRemotesList(); //Refresh before getting for icons 
 
@@ -639,10 +707,13 @@ public class FlatpakInstall(
             _allPackages = await unprivilegedOperationService.ListAppstreamFlatpak(ct);
             ct.ThrowIfCancellationRequested();
 
+            await flathubTask;
+
             GLib.Functions.IdleAdd(0, () =>
             {
                 if (ct.IsCancellationRequested) return false;
                 _listStore!.RemoveAll();
+                ApplyFilter();
                 return false;
             });
 
