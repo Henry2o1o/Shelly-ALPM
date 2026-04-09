@@ -28,10 +28,10 @@ public class FlatpakInstall(
     private SignalHandler<Button>? _addonHistoryHandler;
     private ListBox? _categoryListBox;
     private List<AppstreamApp> _allPackages = [];
-    private List<string> _trendingApps = [];
-    private List<string> _popularApps = [];
-    private List<string> _recentlyUpdatedApps = [];
-    private List<string> _recentlyAddedApps = [];
+    private HashSet<string> _trendingApps = [];
+    private HashSet<string> _popularApps = [];
+    private HashSet<string> _recentlyUpdatedApps = [];
+    private HashSet<string> _recentlyAddedApps = [];
     private string _searchText = string.Empty;
     private FlatpakCategories _selectedCategory = FlatpakCategories.AllApplications;
     private SignalListItemFactory? _factory;
@@ -242,6 +242,25 @@ public class FlatpakInstall(
                     image.IconName = "applications-other";
                     gtkBox.Append(image);
                     break;
+                case "Recommended":
+                    image.IconName = "emblem-favorite";
+                    gtkBox.Append(image);
+                    break;
+                case "MostWanted":
+                    label.SetText("Most Wanted");
+                    image.IconName = "starred";
+                    gtkBox.Append(image);
+                    break;
+                case "RecentlyAdded":
+                    label.SetText("Recently Added");
+                    image.IconName = "document-new";
+                    gtkBox.Append(image);
+                    break;
+                case "RecentlyUpdated":
+                    label.SetText("Recently Updated");
+                    image.IconName = "software-update-available";
+                    gtkBox.Append(image);
+                    break;
                 case "AudioVideo":
                     label.SetText("Audio & Video");
                     image.IconName = "applications-multimedia";
@@ -436,11 +455,39 @@ public class FlatpakInstall(
     {
         if (obj is not FlatpakGObject pkgObj || pkgObj.Package == null) return false;
 
-        if (_selectedCategory != FlatpakCategories.AllApplications)
+        switch (_selectedCategory)
         {
-            var categoryName = _selectedCategory.ToString();
-            var result = pkgObj.Package.Categories.Contains(categoryName, StringComparer.OrdinalIgnoreCase);
-            if (!result) return false;
+            case FlatpakCategories.AllApplications:
+                break;
+            case FlatpakCategories.Recommended:
+                if (!_trendingApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.MostWanted:
+                if (!_popularApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.RecentlyAdded:
+                if (!_recentlyAddedApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.RecentlyUpdated:
+                if (!_recentlyUpdatedApps.Contains(pkgObj.Package.Id)) return false;
+                break;
+            case FlatpakCategories.AudioVideo:
+            case FlatpakCategories.Development:
+            case FlatpakCategories.Education:
+            case FlatpakCategories.Game:
+            case FlatpakCategories.Graphics:
+            case FlatpakCategories.Network:
+            case FlatpakCategories.Office:
+            case FlatpakCategories.Science:
+            case FlatpakCategories.System:
+            case FlatpakCategories.Utility:
+            default:
+            {
+                var categoryName = _selectedCategory.ToString();
+                var result = pkgObj.Package.Categories.Contains(categoryName, StringComparer.OrdinalIgnoreCase);
+                if (!result) return false;
+                break;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(_searchText))
@@ -631,10 +678,10 @@ public class FlatpakInstall(
 
         await Task.WhenAll(trendingTask, popularTask, recentlyUpdatedTask, recentlyAddedTask);
 
-        _trendingApps = await trendingTask;
-        _popularApps = await popularTask;
-        _recentlyUpdatedApps = await recentlyUpdatedTask;
-        _recentlyAddedApps = await recentlyAddedTask;
+        _trendingApps = (await trendingTask).ToHashSet();
+        _popularApps = (await popularTask).ToHashSet();
+        _recentlyUpdatedApps = (await recentlyUpdatedTask).ToHashSet();
+        _recentlyAddedApps = (await recentlyAddedTask).ToHashSet();
     }
 
     private async Task LoadDataAsync(CancellationToken ct = default)
@@ -666,6 +713,7 @@ public class FlatpakInstall(
             {
                 if (ct.IsCancellationRequested) return false;
                 _listStore!.RemoveAll();
+                ApplyFilter();
                 return false;
             });
 
