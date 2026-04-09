@@ -536,14 +536,12 @@ public class FlatpakInstall(
         var vbox = Box.New(Orientation.Vertical, 2);
         var nameBox = Box.New(Orientation.Horizontal, 4);
         nameBox.Halign = Align.Start;
-
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
-        nameLabel.AddCssClass("heading");
         nameBox.Append(nameLabel);
 
 
-        var verifiedIcon = Image.NewFromIconName("checkmark-symbolic");
+        var verifiedIcon = Image.NewFromIconName("security-high-symbolic");
         verifiedIcon.PixelSize = 14;
         verifiedIcon.Valign = Align.Center;
         verifiedIcon.TooltipText = "Verified";
@@ -562,6 +560,7 @@ public class FlatpakInstall(
 
         vbox.Append(nameBox);
         vbox.Append(idLabel);
+        vbox.Valign = Align.Center;
         hbox.Append(vbox);
 
         var frame = Frame.New(null);
