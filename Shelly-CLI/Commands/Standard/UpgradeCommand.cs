@@ -59,30 +59,22 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
         
         foreach (var pkg in packagesNeedingUpdate)
         {
-            
-            long oldInstalledSizeBytes = pkg.OldInstalledSize;
-            long newInstalledSizeBytes = pkg.InstalledSize;    
-            long netChangeBytes = newInstalledSizeBytes - oldInstalledSizeBytes;
+            long netChangeBytes = pkg.SizeDifference;
 
             totalDownloadSize += pkg.DownloadSize;
-            totalInstalledSize += newInstalledSizeBytes;
             totalNetChange += netChangeBytes;
 
             table.AddRow(
-                $"[green]{pkg.Name}[/]", 
-                $"[green]{pkg.CurrentVersion}[/]", 
-                $"[green]{pkg.NewVersion}[/]", 
+                $"[green]{Markup.Escape(pkg.Name)}[/]", 
+                $"[green]{Markup.Escape(pkg.CurrentVersion)}[/]", 
+                $"[green]{Markup.Escape(pkg.NewVersion)}[/]", 
                 $"[green]{FormatSize(parsed, netChangeBytes)}[/]", 
                 $"[green]{FormatSize(parsed, pkg.DownloadSize)}[/]" 
             );
         }
-        
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
-        
-        
         AnsiConsole.MarkupLine($"[bold green]Total Download Size:[/]  {FormatSize(parsed, totalDownloadSize),10}");
-        AnsiConsole.MarkupLine($"[bold green]Total Installed Size:[/] {FormatSize(parsed, totalInstalledSize),10}");
         AnsiConsole.MarkupLine($"[bold green]Net Upgrade Size:[/]     {FormatSize(parsed, totalNetChange),10}");
         AnsiConsole.WriteLine();
 

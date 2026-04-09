@@ -7,6 +7,4 @@ public record AlpmPackageUpdateDto
     public string NewVersion { get; init; } = string.Empty;
     public long DownloadSize { get; init; }
     public long SizeDifference { get; init; }
-    public long OldInstalledSize { get; set; }
-    public long InstalledSize { get; set; }
 }
