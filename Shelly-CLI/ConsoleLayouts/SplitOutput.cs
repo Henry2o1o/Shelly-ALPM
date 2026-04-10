@@ -57,7 +57,7 @@ public static class SplitOutput
 
             SplitOutputHelpers.UpdatePanel(layout, "Console", consoleLines, maxVisibleLines, renderLock, liveCtx);
         };
-
+        
         manager.ScriptletInfo += (sender, e) =>
         {
             lock (renderLock)

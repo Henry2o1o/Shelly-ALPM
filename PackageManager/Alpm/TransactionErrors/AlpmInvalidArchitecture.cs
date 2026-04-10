@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace PackageManager.Alpm.TransactionErrors;
 
-public static class AlpmInvalidArchitecture
+public static class AlpmInvalid
 {
     public static List<string> WalkDataTree(IntPtr dataPtr)
     {

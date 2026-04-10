@@ -18,6 +18,8 @@ public interface IAlpmManager
     event EventHandler<AlpmPacnewEventArgs>? PacnewInfo;
     event EventHandler<AlpmPacsaveEventArgs>? PacsaveInfo;
 
+    event EventHandler<AlpmErrorEventArgs>? ErrorEvent;
+
     void IntializeWithSync();
 
     void Initialize(bool root = false, int parallelDownloads = 1, bool useTempPath = false, string tempPath = "",

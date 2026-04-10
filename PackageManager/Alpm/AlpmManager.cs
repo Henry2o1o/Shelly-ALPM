@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using PackageManager.Alpm.Events;
 using PackageManager.Alpm.Events.EventArgs;
 using PackageManager.Alpm.Questions;
+using PackageManager.Alpm.TransactionErrors;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Utilities;
 using static PackageManager.Alpm.AlpmReference;
@@ -46,6 +47,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     public event EventHandler<AlpmHookEventArgs>? HookRun;
     public event EventHandler<AlpmPacnewEventArgs>? PacnewInfo;
     public event EventHandler<AlpmPacsaveEventArgs>? PacsaveInfo;
+
+    public event EventHandler<AlpmErrorEventArgs>? ErrorEvent;
 
     public void IntializeWithSync()
     {
@@ -2138,5 +2141,203 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     public static int VersionCompare(string a, string b)
     {
         return AlpmReference.PkgVerCmp(a, b);
+    }
+
+    private void HandleErrorMessage(IntPtr dataPtr, AlpmErrno error)
+    {
+        var errorMsg = GetErrorMessage(error);
+        List<string> details = [];
+
+        switch (error)
+        {
+            case AlpmErrno.UnsatisfiedDeps:
+                WalkList(dataPtr, details, ptr =>
+                {
+                    var miss = Marshal.PtrToStructure<AlpmDependencyMissing>(ptr);
+                    return miss.ToString();
+                });
+                break;
+            case AlpmErrno.ConflictingDeps:
+                WalkList(dataPtr, details, ptr =>
+                {
+                    var conflict = Marshal.PtrToStructure<AlpmConflict>(ptr);
+                    return conflict.ToString();
+                });
+                break;
+            case AlpmErrno.FileConflicts:
+                WalkList(dataPtr, details, ptr =>
+                {
+                    var fc = Marshal.PtrToStructure<AlpmFileConflict>(ptr);
+                    return fc.ToString();
+                });
+                break;
+            case AlpmErrno.PkgInvalidArch:
+            case AlpmErrno.DownloadFailed:
+            case AlpmErrno.PkgMissingSig:
+            case AlpmErrno.PkgOpen:
+            case AlpmErrno.PkgInvalid:
+            case AlpmErrno.PkgInvalidChecksum:
+            case AlpmErrno.PkgInvalidSig:
+                WalkList(dataPtr, details, ptr =>
+                    Marshal.PtrToStringUTF8(ptr) ?? "unknown");
+                break;
+            case AlpmErrno.Ok:
+                break;
+            case AlpmErrno.Memory:
+                details.Add("Memory allocation failed");
+                break;
+            case AlpmErrno.System:
+                details.Add("System error");
+                break;
+            case AlpmErrno.BadPerms:
+                details.Add("Inssufficient permissions");
+                break;
+            case AlpmErrno.NotAFile:
+                details.Add("Expected a file, did not receive a file. How did you mess this up?");
+                break;
+            case AlpmErrno.NotADir:
+                details.Add("Expected a directory, did not receive a directory. I'm sorry what?");
+                break;
+            case AlpmErrno.WrongArgs:
+                details.Add("Wrong or NULL arguments");
+                break;
+            case AlpmErrno.DiskSpace:
+                details.Add("Not enough disk space");
+                details.Add("Why is your disk so small?");
+                break;
+            case AlpmErrno.HandleNull:
+                details.Add("Lost the handle. Kinda like a plot but more important");
+                break;
+            case AlpmErrno.HandleNotNull:
+                details.Add("Handle is not null. Not sure how you pulled this off.");
+                break;
+            case AlpmErrno.HandleLock:
+                details.Add("You have a db.lck . It's at /var/lib/pacman/db.lck. You should probably delete that.");
+                break;
+            case AlpmErrno.DbOpen:
+                details.Add("Could not open database");
+                break;
+            case AlpmErrno.DbCreate:
+                details.Add("Could not create database");
+                break;
+            case AlpmErrno.DbNull:
+                details.Add("Database is null.");
+                break;
+            case AlpmErrno.DbNotNull:
+                details.Add("Database already registered. Don't do that!");
+                break;
+            case AlpmErrno.DbNotFound:
+                details.Add("Database not found");
+                details.Add("It must have gotten lost in the file forest");
+                break;
+            case AlpmErrno.DbInvalid:
+                details.Add("Database is invalid or corrupted");
+                details.Add("These aren't supposed to take bribes.");
+                break;
+            case AlpmErrno.DbInvalidSig:
+                details.Add("Database signature is invalid");
+                break;
+            case AlpmErrno.DbVersion:
+                details.Add("Database version is not supported");
+                break;
+            case AlpmErrno.DbWrite:
+                details.Add("Could not write to database");
+                break;
+            case AlpmErrno.DbRemove:
+                details.Add("Could not remove database entry");
+                break;
+            case AlpmErrno.ServerBadUrl:
+                details.Add("Server URL is invalid");
+                break;
+            case AlpmErrno.ServerNone:
+                details.Add("No server URL specified");
+                details.Add("The pacman.conf has no entries. I'm sorry what?");
+                break;
+            case AlpmErrno.TransNotNull:
+                details.Add("Transaction already started");
+                details.Add("I guess I'll just die.");
+                break;
+            case AlpmErrno.TransNull:
+                details.Add("Transaction not started");
+                details.Add("I swear this doesn't normally happen, you just made me so excited.");
+                break;
+            case AlpmErrno.TransDupTarget:
+                details.Add("Duplicate target in transaction");
+                details.Add("You can't add your favorite thing twice");
+                break;
+            case AlpmErrno.TransDupFilename:
+                details.Add("Duplicate filename in transaction");
+                break;
+            case AlpmErrno.TransNotInitialized:
+                details.Add("Transaction not initialized");
+                break;
+            case AlpmErrno.TransNotPrepared:
+                details.Add("Transaction not prepared");
+                details.Add("Think before you leap");
+                break;
+            case AlpmErrno.TransAbort:
+                details.Add("Transaction aborted");
+                details.Add("I decided I'm tired and just kinda gave up.");
+                break;
+            case AlpmErrno.TransType:
+                details.Add("Invalid transaction type");
+                details.Add("Choose the right option please.");
+                break;
+            case AlpmErrno.TransNotLocked:
+                details.Add("Transaction not locked");
+                break;
+            case AlpmErrno.TransHookFailed:
+                details.Add("Hook failed");
+                details.Add("I just couldn't hook into what was supposed to happen.");
+                break;
+            case AlpmErrno.PkgNotFound:
+                details.Add("Package not found");
+                details.Add("Why did you think this existed?");
+                break;
+            case AlpmErrno.PkgIgnored:
+                details.Add("Package is in ignored package.");
+                details.Add("Move along nothing to seee here");
+                break;
+            case AlpmErrno.PkgCantRemove:
+                details.Add("Can't remove this package try something else.");
+                break;
+            case AlpmErrno.PkgInvalidName:
+                details.Add("Invalid package name");
+                break;
+            case AlpmErrno.SigMissing:
+                details.Add("Signature missing");
+                break;
+            case AlpmErrno.SigInvalid:
+                details.Add("Invalid signature");
+                break;
+            case AlpmErrno.Gpgme:
+                details.Add("GPGME error");
+                break;
+            case AlpmErrno.ExternalDownload:
+                details.Add("External download failed to fire, give me a minute to pep them up and try again.");
+                break;
+            case AlpmErrno.SandboxFailed:
+                details.Add($"Sandbox failed");
+                break;
+            default:
+                details.Add($"Unknown error: {error}");
+                break;
+        }
+
+
+        var fullError = $"{errorMsg}\n{string.Join("\n", details)}";
+        ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(fullError));
+    }
+
+    private static void WalkList(IntPtr listPtr, List<string> details, Func<IntPtr, string> marshal)
+    {
+        var current = listPtr;
+        while (current != IntPtr.Zero)
+        {
+            var node = Marshal.PtrToStructure<AlpmList>(current);
+            if (node.Data != IntPtr.Zero)
+                details.Add(marshal(node.Data));
+            current = node.Next;
+        }
     }
 }
