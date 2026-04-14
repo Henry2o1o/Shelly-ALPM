@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using Shelly_CLI.Commands.AppImage;
 using Shelly_CLI.Commands.Aur;
 using Shelly_CLI.Commands.Config;
 using Shelly_CLI.Commands.Flatpak;
@@ -158,16 +159,6 @@ public class Program
                 .WithExample("install-local", "-l", "/path/to/package.pkg.tar.xz", "-n")
                 .WithExample("install-local", "--location", "/path/to/package.pkg.tar.gz", "--no-confirm")
                 .WithExample("install-local", "-l", "/path/to/package.pkg.tar.gz", "-n");
-
-            config.AddCommand<AppImageInstallCommand>("install-appimage")
-                .WithDescription("Install an appimage file")
-                .WithExample("install-local", "--location", "/path/to/package.pkg.tar.zst")
-                .WithExample("install-local", "-l", "/path/to/package.pkg.tar.zst");
-
-            config.AddCommand<AppImageRemoveCommand>("remove-appimage")
-                .WithDescription("Remove an appimage file")
-                .WithExample("remove-appimage", "--name", "firefox")
-                .WithExample("remove-appimage", "-n", "firefox");
 
             config.AddCommand<RemoveCommand>("remove")
                 .WithDescription("Remove one or more packages")
@@ -400,7 +391,6 @@ public class Program
                     .WithExample("utility", "cache-clean", "-r", "-k", "2")
                     .WithExample("utility", "cache-clean", "-r", "--uninstalled")
                     .WithExample("utility", "cache-clean", "-r", "-c", "/var/cache/pacman/pkg");
-
             });
 
             config.AddBranch("config", configure =>
@@ -409,6 +399,35 @@ public class Program
                 configure.AddCommand<SetParallelDownloads>("parallel")
                     .WithDescription("Sets parallel download count")
                     .WithExample("parallel", "10");
+            });
+
+            config.AddBranch("appimage", appImage =>
+            {
+                appImage.AddCommand<AppImageSearchCommand>("list")
+                    .WithDescription("list for installed")
+                    .WithExample("appimage", "search", "firefox");
+
+                appImage.AddCommand<AppImageInstallCommand>("install")
+                    .WithDescription("Install an appimage file")
+                    .WithExample("install-local", "--location", "/path/to/package.pkg.tar.zst")
+                    .WithExample("install-local", "-l", "/path/to/package.pkg.tar.zst");
+
+                appImage.AddCommand<AppImageRemoveCommand>("remove")
+                    .WithDescription("Remove an appimage file")
+                    .WithExample("remove-appimage", "--name", "firefox")
+                    .WithExample("remove-appimage", "-n", "firefox");
+
+                appImage.AddCommand<AppImageGetUpdates>("list-updates")
+                    .WithDescription("Find updates for appimages");
+
+                appImage.AddCommand<AppImageUpdateCommand>("upgrade")
+                    .WithDescription("Update an appimage file")
+                    .WithExample("appimage", "update", "firefox")
+                    .WithExample("appimage", "update", "--no-confirm");
+
+                appImage.AddCommand<AppImageConfigUpdates>("configure-updates")
+                    .WithDescription("Configure update settings for an AppImage")
+                    .WithExample("appimage", "configure-updates", "firefox", "--update-url", "https://github.com/mozilla/firefox-appimage", "--type", "GitHub");
             });
         });
 

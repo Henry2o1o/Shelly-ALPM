@@ -1,0 +1,877 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
+
+namespace PackageManager.AppImage;
+
+public class AppImageManager
+{
+    private const string InstallDirectory = "/opt/shelly";
+
+    public async Task<int> InstallAppImage(string location, string? updateUrlOverride = null)
+    {
+        var filePath = Path.GetFullPath(location);
+        var appName = Path.GetFileNameWithoutExtension(filePath);
+        var workingDir = Path.Combine(Path.GetTempPath(), "Shelly", appName);
+        var appImageVersion = "Unknown";
+        var desktopName = "";
+
+        if (Directory.Exists(workingDir)) Directory.Delete(workingDir, true);
+        Directory.CreateDirectory(workingDir);
+
+
+        Console.Error.WriteLine($"Extracting AppImage...");
+        SetFilePermissions(filePath, "a+x");
+
+        var extractProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = filePath,
+            Arguments = "--appimage-extract",
+            WorkingDirectory = workingDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        await extractProcess!.WaitForExitAsync();
+
+        var squashfsRoot = Path.Combine(workingDir, "squashfs-root");
+        if (!Directory.Exists(squashfsRoot))
+        {
+            Console.WriteLine("Error: Failed to extract AppImage.");
+            return 1;
+        }
+
+        var desktopFile = Directory.GetFiles(squashfsRoot, "*.desktop", SearchOption.TopDirectoryOnly).FirstOrDefault();
+        if (desktopFile == null)
+        {
+            Console.WriteLine("Warning: No .desktop file found in AppImage.");
+        }
+
+        string? iconName = null;
+        if (desktopFile != null)
+        {
+            var lines = await File.ReadAllLinesAsync(desktopFile);
+            var iconLine = lines.FirstOrDefault(l => l.StartsWith("Icon="));
+            if (iconLine != null)
+            {
+                iconName = iconLine.Split('=', 2)[1].Trim();
+            }
+        }
+
+        string? iconPath = null;
+        if (!string.IsNullOrEmpty(iconName))
+        {
+            iconPath = Directory.GetFiles(squashfsRoot, $"{iconName}.*", SearchOption.AllDirectories).FirstOrDefault();
+        }
+
+        if (iconPath == null)
+        {
+            iconPath = Path.Combine(squashfsRoot, ".DirIcon");
+            if (!File.Exists(iconPath)) iconPath = null;
+        }
+
+        var finalIconPath = "application-x-executable";
+        if (iconPath != null)
+        {
+            const string iconDir = "/usr/share/icons/hicolor/scalable/apps";
+            Directory.CreateDirectory(iconDir);
+
+            var extension = Path.GetExtension(iconPath);
+            if (string.IsNullOrEmpty(extension) || extension == ".DirIcon") extension = ".svg";
+
+            var destIconName = $"{CleanInvalidNames(appName).ToLower()}{extension}";
+            var destIconPath = Path.Combine(iconDir, destIconName);
+
+            try
+            {
+                File.Copy(iconPath, destIconPath, true);
+                finalIconPath = destIconName;
+                Console.WriteLine($"Exported icon");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not copy icon: {ex.Message}");
+            }
+        }
+
+        var destAppImagePath = Path.Combine(InstallDirectory, $"{appName}.AppImage");
+        File.Copy(filePath, destAppImagePath, true);
+        SetFilePermissions(destAppImagePath, "a+x");
+
+        if (desktopFile != null)
+        {
+            try
+            {
+                var desktopContent = await File.ReadAllLinesAsync(desktopFile);
+                var patchedContent = new StringBuilder();
+                foreach (var line in desktopContent)
+                {
+                    if (line.StartsWith("Exec="))
+                    {
+                        patchedContent.AppendLine($"Exec={destAppImagePath}");
+                    }
+                    else if (line.StartsWith("Icon="))
+                    {
+                        patchedContent.AppendLine($"Icon={finalIconPath}");
+                    }
+                    else if (line.StartsWith("X-AppImage-Version="))
+                    {
+                        appImageVersion = line.Split('=')[1];
+                        patchedContent.AppendLine(line);
+                    }
+                    else if (line.StartsWith("Name="))
+                    {
+                        if (string.IsNullOrEmpty(desktopName)) desktopName = line.Split('=')[1];
+                        patchedContent.AppendLine(line);
+                    }
+                    else
+                    {
+                        patchedContent.AppendLine(line);
+                    }
+                }
+
+                const string desktopDir = "/usr/share/applications";
+                Directory.CreateDirectory(desktopDir);
+                var cleanName = CleanInvalidNames(appName);
+                var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
+
+                await File.WriteAllTextAsync(desktopFilePath, patchedContent.ToString());
+                SetFilePermissions(desktopFilePath, "644");
+                UpdateDesktopDatabase(desktopDir);
+                Console.WriteLine($"Installed original desktop entry");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not install original desktop entry");
+                CreateDesktopEntry(appName, destAppImagePath, icon: finalIconPath);
+            }
+        }
+        else
+        {
+            CreateDesktopEntry(appName, destAppImagePath, icon: finalIconPath);
+        }
+
+        try
+        {
+            Directory.Delete(workingDir, true);
+        }
+        catch
+        {
+            /* ignore */
+        }
+
+        var updateInfo = await GetAppImageUpdateInfo(destAppImagePath);
+
+        var appImageDto = new AppImageDto
+        {
+            Name = appName,
+            Version = appImageVersion,
+            RawUpdateInfo = updateInfo,
+            DesktopName = string.IsNullOrEmpty(desktopName) ? appName : desktopName,
+        };
+
+        if (!string.IsNullOrEmpty(updateUrlOverride))
+        {
+            UpdateFromUrl(appImageDto, updateUrlOverride);
+        }
+
+        await AddAppImageToLocalDb(appImageDto);
+
+        return 0;
+    }
+
+    private async Task<string> GetAppImageUpdateInfo(string appImagePath)
+    {
+        try
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = appImagePath,
+                    Arguments = "--appimage-updateinfo",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.Start();
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                Console.Error.WriteLine($"Warning: Failed to get update info for {appImagePath}: {error}");
+                return string.Empty;
+            }
+
+            return output.Trim();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: Could not get update info for {appImagePath}: {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    public static async Task<int> RemoveAppImage(string appImagePath)
+    {
+        var appName = Path.GetFileNameWithoutExtension(appImagePath);
+        var cleanName = CleanInvalidNames(appName);
+        const string desktopDir = "/usr/share/applications";
+        var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
+
+        try
+        {
+            await RemoveAppImageFromLocalDb(new AppImageDto { Name = appName });
+
+            if (File.Exists(appImagePath))
+            {
+                File.Delete(appImagePath);
+                Console.Error.WriteLine($"[green]Removed AppImage: {appImagePath}[/]");
+            }
+
+            if (File.Exists(desktopFilePath))
+            {
+                File.Delete(desktopFilePath);
+                Console.Error.WriteLine($"[green]Removed desktop entry: {desktopFilePath}[/]");
+                UpdateDesktopDatabase(desktopDir);
+            }
+            else
+            {
+                var potentialDesktopFiles = Directory.GetFiles(desktopDir, "*.desktop")
+                    .Where(f => Path.GetFileName(f).Contains(cleanName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var df in potentialDesktopFiles)
+                {
+                    var content = await File.ReadAllLinesAsync(df);
+                    if (!content.Any(l => l.StartsWith("Exec=") && l.Contains(appImagePath))) continue;
+                    File.Delete(df);
+                    Console.WriteLine($"Removed desktop entry: {df}");
+                    UpdateDesktopDatabase(desktopDir);
+                    break;
+                }
+            }
+
+            const string iconDir = "/usr/share/icons/hicolor/scalable/apps";
+            if (Directory.Exists(iconDir))
+            {
+                var potentialIcons = Directory.GetFiles(iconDir, $"{cleanName}.*");
+                foreach (var icon in potentialIcons)
+                {
+                    File.Delete(icon);
+                    Console.WriteLine($"Removed icon: {icon}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error during removal: {ex.Message}");
+            return 1;
+        }
+
+        return 0;
+    }
+
+    public async Task<int> RunUpdate(AppImageUpdateDto update)
+    {
+        var appImages = await GetAppImagesFromLocalDb();
+        var appImage = appImages.FirstOrDefault(a => a.Name == update.Name);
+        if (appImage == null)
+        {
+            Console.WriteLine($"Error: AppImage '{update.Name}' not found in local database.");
+            return 1;
+        }
+
+        if (string.IsNullOrEmpty(update.DownloadUrl))
+        {
+            Console.WriteLine($"Error: No download URL found for {update.Name}.");
+            return 1;
+        }
+
+        var currentPath = Path.Combine(InstallDirectory, $"{appImage.Name}.AppImage");
+        if (!File.Exists(currentPath))
+        {
+            Console.WriteLine($"Error: Current AppImage not found at {currentPath}.");
+            return 1;
+        }
+        
+        var backupDir = Path.Combine(GetUserHomePath(), ".cache", "Shelly", update.Name);
+        Directory.CreateDirectory(backupDir);
+        var backupPath = Path.Combine(backupDir, $"{appImage.Name}-{appImage.Version}.AppImage.bak");
+        var downloadPath = currentPath + ".rep";
+
+        try
+        {
+            if (!Directory.Exists(backupDir)) Directory.CreateDirectory(backupDir);
+
+            Console.WriteLine($"Downloading update for {update.Name}...");
+            using (var client = new HttpClient())
+            {
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
+                var response = await client.GetAsync(update.DownloadUrl);
+                response.EnsureSuccessStatusCode();
+                await using var fs = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                await response.Content.CopyToAsync(fs);
+            }
+
+            SetFilePermissions(downloadPath, "a+x");
+
+            Console.WriteLine($"Backing up current version to {backupPath}...");
+            File.Copy(currentPath, backupPath, true);
+
+            try
+            {
+                Console.WriteLine("Installing new version...");
+                File.Move(downloadPath, currentPath, true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error installing new version: {ex.Message}. Rolling back...");
+                File.Copy(backupPath, currentPath, true);
+                return 1;
+            }
+
+            appImage.Version = update.Version;
+            appImage.UpdateVersion = update.Version;
+            await AddAppImageToLocalDb(appImage);
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error during update: {ex.Message}");
+            if (File.Exists(downloadPath)) File.Delete(downloadPath);
+            if (File.Exists(backupPath) && !File.Exists(currentPath))
+            {
+                File.Copy(backupPath, currentPath);
+            }
+
+            return 1;
+        }
+    }
+
+    public static async Task<List<AppImageUpdateDto>> CheckForAppImageUpdates()
+    {
+        var appImages = await GetAppImagesFromLocalDb();
+        var updates = new List<AppImageUpdateDto>();
+
+        foreach (var appImage in appImages)
+        {
+            var update = await CheckUpdate(appImage);
+            if (update is { IsUpdateAvailable: true })
+            {
+                updates.Add(update);
+            }
+        }
+
+        return updates;
+    }
+
+    public static async Task<bool> AppImageConfigureUpdates(string url, string name, UpdateType updateType)
+    {
+        Console.WriteLine($"Configuring updates for {name} {url}, type: {updateType}...");
+        var appImages = await GetAppImagesFromLocalDb();
+        var appImage = appImages.FirstOrDefault(a => a.Name == name);
+        if (appImage == null) return false;
+
+        appImage.UpdateURl = url;
+        appImage.UpdateType = updateType;
+        appImage.UpdateVersion = await CheckUpdate(appImage).ContinueWith(t => t.Result?.Version) ?? "";
+
+        return await AddAppImageToLocalDb(appImage);
+    }
+
+    private static async Task<AppImageUpdateDto?> CheckUpdate(AppImageDto appImage)
+    {
+        return appImage.UpdateType switch
+        {
+            UpdateType.GitHub => await CheckGitHubUpdate(appImage.UpdateURl, appImage.Name, appImage.UpdateVersion),
+            UpdateType.GitLab => await CheckGitLabUpdate(appImage.UpdateURl, appImage.Name, appImage.UpdateVersion),
+            UpdateType.Codeberg => await CheckCodebergUpdate(appImage.UpdateURl, appImage.Name, appImage.UpdateVersion),
+            UpdateType.Forgejo => await CheckForgejoUpdate(appImage.UpdateURl, appImage.Name, appImage.UpdateVersion),
+            UpdateType.StaticUrl => await CheckStaticUrlUpdate(appImage.UpdateURl, appImage.Name,
+                appImage.UpdateVersion),
+            _ => null
+        };
+    }
+
+    #region Github
+
+    private static string GithubToReleasesApi(string url)
+    {
+        if (url.Contains("github.com") && !url.Contains("api.github.com"))
+        {
+            url = url.Replace("https://github.com/", "https://api.github.com/repos/");
+        }
+
+        url = url.TrimEnd('/');
+
+        if (url.EndsWith("/releases"))
+            return url;
+
+        if (!url.Contains("/releases"))
+            return url + "/releases";
+
+        return url;
+    }
+
+    private static async Task<AppImageUpdateDto?> CheckGitHubUpdate(string repo, string appName, string currentVersion)
+    {
+        try
+        {
+            var url = GithubToReleasesApi(repo);
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
+            var response = await client.GetAsync(url + "/latest");
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var latestVersion = root.GetProperty("tag_name").GetString() ?? "";
+
+            string? downloadUrl = null;
+            if (root.TryGetProperty("assets", out var assets))
+            {
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    var assetName = asset.GetProperty("name").GetString() ?? "";
+                    if (assetName.EndsWith(".AppImage", StringComparison.OrdinalIgnoreCase))
+                    {
+                        downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                        break;
+                    }
+                }
+            }
+
+            return new AppImageUpdateDto
+            {
+                Name = appName,
+                Version = latestVersion,
+                DownloadUrl = downloadUrl ?? "",
+                IsUpdateAvailable = latestVersion != currentVersion
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    #endregion
+
+    #region GitLab
+
+    private static string GitLabToReleasesApi(string url)
+    {
+        if (url.Contains("gitlab.com") && !url.Contains("/api/v4/projects/"))
+        {
+            var uri = new Uri(url);
+            var path = uri.AbsolutePath.Trim('/');
+            if (path.EndsWith("/-/releases")) path = path.Substring(0, path.Length - 11);
+
+            var encodedPath = Uri.EscapeDataString(path);
+            url = $"https://gitlab.com/api/v4/projects/{encodedPath}/releases/permalink/latest";
+        }
+
+        return url;
+    }
+
+    private static async Task<AppImageUpdateDto?> CheckGitLabUpdate(string repo, string appName, string currentVersion)
+    {
+        try
+        {
+            var url = GitLabToReleasesApi(repo);
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var latestVersion = root.GetProperty("tag_name").GetString() ?? "";
+
+            string? downloadUrl = null;
+            if (root.TryGetProperty("assets", out var assets))
+            {
+                if (assets.TryGetProperty("links", out var links))
+                {
+                    foreach (var link in links.EnumerateArray())
+                    {
+                        var linkName = link.GetProperty("name").GetString() ?? "";
+                        if (linkName.EndsWith(".AppImage", StringComparison.OrdinalIgnoreCase))
+                        {
+                            downloadUrl = link.GetProperty("url").GetString();
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return new AppImageUpdateDto
+            {
+                Name = appName,
+                Version = latestVersion,
+                DownloadUrl = downloadUrl ?? "",
+                IsUpdateAvailable = latestVersion != currentVersion
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    #endregion
+
+    #region Codeberg / Forgejo
+
+    private static string GiteaToReleasesApi(string url, string domain)
+    {
+        if (url.Contains(domain) && !url.Contains("/api/v1/repos/"))
+        {
+            var uri = new Uri(url);
+            var path = uri.AbsolutePath.Trim('/');
+            if (path.EndsWith("/releases")) path = path.Substring(0, path.Length - 9);
+
+            url = $"https://{domain}/api/v1/repos/{path}/releases/latest";
+        }
+
+        return url;
+    }
+
+    private static async Task<AppImageUpdateDto?> CheckGiteaUpdate(string repo, string appName, string currentVersion,
+        string domain)
+    {
+        try
+        {
+            var url = GiteaToReleasesApi(repo, domain);
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var latestVersion = root.GetProperty("tag_name").GetString() ?? "";
+
+            string? downloadUrl = null;
+            if (root.TryGetProperty("assets", out var assets))
+            {
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    var assetName = asset.GetProperty("name").GetString() ?? "";
+                    if (assetName.EndsWith(".AppImage", StringComparison.OrdinalIgnoreCase))
+                    {
+                        downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                        break;
+                    }
+                }
+            }
+
+            return new AppImageUpdateDto
+            {
+                Name = appName,
+                Version = latestVersion,
+                DownloadUrl = downloadUrl ?? "",
+                IsUpdateAvailable = latestVersion != currentVersion
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<AppImageUpdateDto?> CheckCodebergUpdate(string repo, string appName,
+        string currentVersion)
+    {
+        return await CheckGiteaUpdate(repo, appName, currentVersion, "codeberg.org");
+    }
+
+    private static async Task<AppImageUpdateDto?> CheckForgejoUpdate(string repo, string appName, string currentVersion)
+    {
+        var uri = new Uri(repo);
+        return await CheckGiteaUpdate(repo, appName, currentVersion, uri.Host);
+    }
+
+    #endregion
+
+    private static async Task<AppImageUpdateDto?> CheckStaticUrlUpdate(string url, string appName,
+        string currentVersion)
+    {
+        try
+        {
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
+            var request = new HttpRequestMessage(HttpMethod.Head, url);
+            var response = await client.SendAsync(request);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var lastModified = response.Content.Headers.LastModified?.ToString() ?? "";
+            var etag = response.Headers.ETag?.Tag ?? "";
+            var version = !string.IsNullOrEmpty(etag) ? etag : lastModified;
+            version = version.Replace("\"", "");
+            //Console.WriteLine($"Version: {version}, Current: {currentVersion}, App: {appName}, URL: {url}");
+
+            return new AppImageUpdateDto
+            {
+                Name = appName,
+                Version = version,
+                DownloadUrl = url,
+                IsUpdateAvailable = version != currentVersion
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static Task<bool> IsAppImage(string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+        return Task.FromResult(string.Equals(extension, ".AppImage", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void SetFilePermissions(string filePath, string permissions)
+    {
+        try
+        {
+            var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "chmod",
+                Arguments = $"{permissions} \"{filePath}\"",
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            process?.WaitForExit();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: Could not set file permissions: {ex.Message}");
+        }
+    }
+
+    private static void CreateDesktopEntry(
+        string appName,
+        string executablePath,
+        string? comment = null,
+        string icon = "application-x-executable",
+        bool terminal = false,
+        string categories = "Utility;")
+    {
+        const string desktopDir = "/usr/share/applications";
+        var cleanName = CleanInvalidNames(appName);
+        var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
+
+        var content = new StringBuilder();
+        content.AppendLine("[Desktop Entry]");
+        content.AppendLine("Version=1.0");
+        content.AppendLine("Type=Application");
+        content.AppendLine($"Name={appName}");
+        content.AppendLine($"Comment={comment ?? $"{appName} application"}");
+        content.AppendLine($"Exec={executablePath}");
+        content.AppendLine($"Icon={icon}");
+        content.AppendLine($"Terminal={terminal.ToString().ToLower()}");
+        content.AppendLine($"Categories={categories}");
+        content.AppendLine("StartupNotify=true");
+
+        try
+        {
+            Directory.CreateDirectory(desktopDir);
+            File.WriteAllText(desktopFilePath, content.ToString());
+            SetFilePermissions(desktopFilePath, "644");
+            UpdateDesktopDatabase(desktopDir);
+
+            Console.Error.WriteLine($"[green]Desktop entry created: {desktopFilePath}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[yellow]Warning: Could not create desktop entry: {ex.Message}");
+        }
+    }
+
+    private static void UpdateFromUrl(AppImageDto appImage, string url)
+    {
+        var uri = new Uri(url);
+        var host = uri.Host.ToLower();
+        var path = uri.AbsolutePath.Trim('/');
+
+        if (host.Contains("github.com"))
+        {
+            appImage.UpdateType = UpdateType.GitHub;
+            var parts = path.Split('/');
+            if (parts.Length >= 2)
+            {
+                appImage.UpdateURl = $"{parts[0]}/{parts[1]}";
+            }
+        }
+        else if (host.Contains("gitlab.com"))
+        {
+            appImage.UpdateType = UpdateType.GitLab;
+            var parts = path.Split('/');
+            if (parts.Length >= 2)
+            {
+                appImage.UpdateURl = $"{parts[0]}/{parts[1]}";
+            }
+        }
+        else if (host.Contains("codeberg.org"))
+        {
+            appImage.UpdateType = UpdateType.Codeberg;
+            var parts = path.Split('/');
+            if (parts.Length >= 2)
+            {
+                appImage.UpdateURl = $"{parts[0]}/{parts[1]}";
+            }
+        }
+        else
+        {
+            appImage.UpdateType = UpdateType.StaticUrl;
+            appImage.UpdateURl = url;
+        }
+    }
+
+    private static string CleanInvalidNames(string name)
+    {
+        return name.ToLower()
+            .Replace(" ", "-")
+            .Replace("/", "-")
+            .Replace("\\", "-");
+    }
+
+    private static void UpdateDesktopDatabase(string desktopDir)
+    {
+        try
+        {
+            var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "update-desktop-database",
+                Arguments = $"\"{desktopDir}\"",
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            process?.WaitForExit();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: Could not set desktop database: {ex.Message}[/]");
+        }
+    }
+
+    private static string GetUserHomePath()
+    {
+        var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+        if (string.IsNullOrEmpty(sudoUser)) return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var userHome = $"/home/{sudoUser}";
+        return Directory.Exists(userHome) ? userHome : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    }
+
+    private static readonly string LocalDbPath = Path.Combine(
+        GetUserHomePath(),
+        ".cache", "Shelly", "appimage-local-meta-store", "appimage-metadata.db");
+
+    private static Task EnsureDbDirectoryExists()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(LocalDbPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            return Task.CompletedTask;
+        }
+        catch (Exception exception)
+        {
+            return Task.FromException(exception);
+        }
+    }
+
+    private static async Task<bool> AddAppImageToLocalDb(AppImageDto appImage)
+    {
+        try
+        {
+            var appImages = await GetAppImagesFromLocalDb();
+            if (appImages.Any(a => a.Name == appImage.Name))
+            {
+                appImages.RemoveAll(a => a.Name == appImage.Name);
+            }
+
+            appImages.Add(appImage);
+
+            await EnsureDbDirectoryExists();
+            var json = JsonSerializer.Serialize(appImages, AppImageJsonContext.Default.ListAppImageDto);
+            await File.WriteAllTextAsync(LocalDbPath, json);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error adding AppImage to local DB: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static async Task<bool> RemoveAppImageFromLocalDb(AppImageDto appImage)
+    {
+        try
+        {
+            var appImages = await GetAppImagesFromLocalDb();
+            var initialCount = appImages.Count;
+            appImages.RemoveAll(a => a.Name == appImage.Name);
+
+            if (appImages.Count != initialCount)
+            {
+                await EnsureDbDirectoryExists();
+                var json = JsonSerializer.Serialize(appImages, AppImageJsonContext.Default.ListAppImageDto);
+                await File.WriteAllTextAsync(LocalDbPath, json);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error removing AppImage from local DB: {ex.Message}");
+            return false;
+        }
+    }
+
+    public static async Task<List<AppImageDto>> GetAppImagesFromLocalDb()
+    {
+        try
+        {
+            if (!File.Exists(LocalDbPath))
+            {
+                return new List<AppImageDto>();
+            }
+
+            var json = await File.ReadAllTextAsync(LocalDbPath);
+            return JsonSerializer.Deserialize(json, AppImageJsonContext.Default.ListAppImageDto) ??
+                   [];
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading AppImage local DB: {ex.Message}");
+            return [];
+        }
+    }
+}
