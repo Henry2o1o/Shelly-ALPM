@@ -4,6 +4,13 @@ using PackageManager.AppImage;
 
 namespace Shelly_CLI.Commands.Standard;
 
+public class AppImageDefaultSettings : CommandSettings
+{
+    [CommandOption("-j|--json")]
+    [Description("Json output")]
+    public bool Json { get; set; }
+}
+
 public class AppImageSettings : CommandSettings 
 {
     [CommandOption("-l | --location")]
@@ -49,7 +56,7 @@ public class AppImageConfigUpdatesSettings : CommandSettings
     public UpdateType UpdateType { get; set; } = UpdateType.StaticUrl;
 }
 
-public class AppImageSearchSettings : CommandSettings
+public class AppImageSearchSettings : AppImageDefaultSettings
 {
     [CommandArgument(0, "[QUERY]")]
     [Description("The search query for the AppImage")]

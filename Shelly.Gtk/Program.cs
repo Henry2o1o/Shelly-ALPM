@@ -108,6 +108,8 @@ sealed class Program
                 (Widget)mainBuilder.GetObject("InstallFlatpakLabel")!,
                 (Widget)mainBuilder.GetObject("UpdateFlatpakLabel")!,
                 (Widget)mainBuilder.GetObject("RemoveFlatpakLabel")!,
+                (Widget)mainBuilder.GetObject("AppImageHeader")!,
+                (Widget)mainBuilder.GetObject("ManageAppImageLabel")!,
                 (Widget)mainBuilder.GetObject("SettingsLabel")!
             };
 
@@ -126,6 +128,7 @@ sealed class Program
                     "CollapseButton", "HomeButton", "InstallPackagesButton", "UpdatePackagesButton", "ManagePackagesButton",
                     "InstallAurButton", "UpdateAurButton", "RemoveAurButton",
                     "InstallFlatpakButton", "UpdateFlatpakButton", "RemoveFlatpakButton",
+                    "ManageAppImageButton",
                     "SettingsButton" 
                 })
                 {
@@ -153,12 +156,16 @@ sealed class Program
             var installFlatpakButton = (Button)mainBuilder.GetObject("InstallFlatpakButton")!;
             var updateFlatpakButton = (Button)mainBuilder.GetObject("UpdateFlatpakButton")!;
             var removeFlatpakButton = (Button)mainBuilder.GetObject("RemoveFlatpakButton")!;
+            
+            var appImageBox = (Box)mainBuilder.GetObject("AppImageBox")!;
+            var manageAppImageButton = (Button)mainBuilder.GetObject("ManageAppImageButton")!;
 
             var configService = serviceProvider.GetRequiredService<IConfigService>();
             var initialConfig = configService.LoadConfig();
 
             aurBox.Visible = initialConfig.AurEnabled;
             flatpakBox.Visible = initialConfig.FlatPackEnabled;
+            appImageBox.Visible = initialConfig.AppImageEnabled;
 
             //Setting window height
             window.DefaultHeight = double.ConvertToInteger<int>(initialConfig.WindowHeight);
@@ -190,6 +197,7 @@ sealed class Program
                 {
                     aurBox.Visible = updatedConfig.AurEnabled;
                     flatpakBox.Visible = updatedConfig.FlatPackEnabled;
+                    appImageBox.Visible = updatedConfig.AppImageEnabled;
 
                     horizontalActionBar.Visible = updatedConfig.UseOldMenu;
                     sidebarBox.Visible = !updatedConfig.UseOldMenu;
@@ -215,7 +223,8 @@ sealed class Program
                 { "RemoveAurButton", removeAurButton },
                 { "InstallFlatpakButton", installFlatpakButton },
                 { "UpdateFlatpakButton", updateFlatpakButton },
-                { "RemoveFlatpakButton", removeFlatpakButton }
+                { "RemoveFlatpakButton", removeFlatpakButton },
+                { "ManageAppImageButton", manageAppImageButton }
             };
 
             IShellyWindow? currentPage = null;
@@ -234,6 +243,8 @@ sealed class Program
             installFlatpakButton.OnClicked += (_, _) => NavigateTo<FlatpakInstall>("InstallFlatpakButton");
             updateFlatpakButton.OnClicked += (_, _) => NavigateTo<FlatpakUpdate>("UpdateFlatpakButton");
             removeFlatpakButton.OnClicked += (_, _) => NavigateTo<FlatpakRemove>("RemoveFlatpakButton");
+            
+            manageAppImageButton.OnClicked += (_, _) => NavigateTo<AppImage>("ManageAppImageButton");
 
             horizontalActionBar.Visible = initialConfig.UseOldMenu;
             sidebarBox.Visible = !initialConfig.UseOldMenu;

@@ -47,7 +47,6 @@ public class PackageInstall(
 
     private Button _installButton = null!;
     private Button _localInstallButton = null!;
-    private Button _appImageButton = null!;
     private SearchEntry _searchEntry = null!;
     private Builder _builder = null!;
     private ColumnViewColumn _checkColumn = null!;
@@ -82,7 +81,6 @@ public class PackageInstall(
         _installButton = (Button)_builder.GetObject("install_button")!;
         _installButton.SetSensitive(false);
         _localInstallButton = (Button)_builder.GetObject("install_local_button")!;
-        _appImageButton = (Button)_builder.GetObject("install_appimage_button")!;
         _searchEntry = (SearchEntry)_builder.GetObject("search_entry")!;
         _detailRevealer = (Revealer)_builder.GetObject("detail_revealer")!;
         _detailBox = (Box)_builder.GetObject("detail_box")!;
@@ -135,7 +133,6 @@ public class PackageInstall(
         };
         _installButton.OnClicked += (_, _) => { _ = InstallSelectedAsync(); };
         _localInstallButton.OnClicked += (_, _) => { _ = InstallLocalPackage(); };
-        _appImageButton.OnClicked += (_, _) => { _ = InstallAppImage(); };
         _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
 
         _groupDropDown.OnNotify += (sender, args) =>
@@ -776,51 +773,6 @@ public class PackageInstall(
                 $"Installed local package"
             );
             genericQuestionService.RaiseToastMessage(args);
-        }
-    }
-
-    private async Task InstallAppImage()
-    {
-        try
-        {
-            var dialog = FileDialog.New();
-            dialog.SetTitle("Install App Image");
-
-            var filter = FileFilter.New();
-            filter.SetName("Local AppImage files (\"*.AppImage\"");
-            filter.AddPattern("*.AppImage");
-
-            var filters = Gio.ListStore.New(FileFilter.GetGType());
-            filters.Append(filter);
-            dialog.SetFilters(filters);
-
-            var file = await dialog.OpenAsync((Window)_overlay.GetRoot()!);
-
-            if (file is not null)
-            {
-                lockoutService.Show($"Installing AppImage...");
-                var result = await privilegedOperationService.InstallAppImageAsync(file.GetPath()!);
-                if (!result.Success)
-                {
-                    Console.WriteLine($"Failed to install local package: {result.Error}");
-                }
-                else
-                {
-                    var args = new ToastMessageEventArgs(
-                        $"App Image installed"
-                    );
-
-                    genericQuestionService.RaiseToastMessage(args);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Failed to install local package: {ex.Message}");
-        }
-        finally
-        {
-            lockoutService.Hide();
         }
     }
 

@@ -10,15 +10,9 @@ public class AppImageSearchCommand : AsyncCommand<AppImageSearchSettings>
     public override async Task<int> ExecuteAsync(CommandContext context, AppImageSearchSettings settings)
     {
         var manager = new AppImageManager();
-        manager.ErrorEvent += (_, args) =>
-        {
-            AnsiConsole.MarkupLine($"[red]{args.Error.EscapeMarkup()}[/]");
-        };
+        manager.ErrorEvent += (_, args) => { AnsiConsole.MarkupLine($"[red]{args.Error.EscapeMarkup()}[/]"); };
 
-        manager.MessageEvent += (_, args) =>
-        {
-            AnsiConsole.MarkupLine($"[blue]{args.Message.EscapeMarkup()}[/]");
-        };
+        manager.MessageEvent += (_, args) => { AnsiConsole.MarkupLine($"[blue]{args.Message.EscapeMarkup()}[/]"); };
 
         var appImages = await manager.GetAppImagesFromLocalDb();
         List<AppImageDto> results;
@@ -37,29 +31,56 @@ public class AppImageSearchCommand : AsyncCommand<AppImageSearchSettings>
         }
 
 
-        if (results.Count == 0)
+        if (settings.Json)
         {
-            AnsiConsole.MarkupLine("[yellow]No matching AppImages found in local database.[/]");
-
-            return 0;
+            var json = System.Text.Json.JsonSerializer.Serialize(results, ShellyCLIJsonContext.Default.ListAppImageDto);
+            await using var stdout = System.Console.OpenStandardOutput();
+            await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
+            await writer.WriteLineAsync(json);
+            await writer.FlushAsync();
         }
-        
-        var table = new Table();
-        table.AddColumn("Name");
-        table.AddColumn("Version");
-        table.AddColumn("Update URL");
-
-        foreach (var app in results)
+        else
         {
-            table.AddRow(
-                app.Name,
-                app.Version,
-                app.UpdateURl
-            );
-        }
+            if (results.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No matching AppImages found in local database.[/]");
 
-        AnsiConsole.Write(table);
+                return 0;
+            }
+
+            var table = new Table();
+            table.AddColumn("Name");
+            table.AddColumn("Version");
+            table.AddColumn("Size");
+            table.AddColumn("Update URL");
+
+            foreach (var app in results)
+            {
+                table.AddRow(
+                    app.Name,
+                    app.Version,
+                    FormatSize(app.SizeOnDisk),
+                    app.UpdateURl
+                );
+            }
+
+            AnsiConsole.Write(table);
+        }
 
         return 0;
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        double size = bytes;
+        var unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.Length - 1)
+        {
+            size /= 1024;
+            unitIndex++;
+        }
+
+        return $"{size:N2} {units[unitIndex]}";
     }
 }

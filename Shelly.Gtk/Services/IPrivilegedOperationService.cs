@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Shelly.Gtk.Enums;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 
@@ -30,6 +31,11 @@ public interface IPrivilegedOperationService
     Task<List<AurPackageDto>> SearchAurPackagesAsync(string query);
     Task<bool> IsPackageInstalledOnMachine(string packageName);
     Task<OperationResult> RunCacheCleanAsync(int keep, bool uninstalledOnly);
+    Task<OperationResult> AppImageInstallAsync(string filePath, string updateUrl = "",
+        AppImageUpdateType updateType = AppImageUpdateType.None);
+    Task<OperationResult> AppImageUpgradeAsync();
+    Task<OperationResult> AppImageRemoveAsync(string name);
+    Task<OperationResult> AppImageConfigureUpdatesAsync(string url, string name, AppImageUpdateType updateType);
 }
 
 public class OperationResult

@@ -4,33 +4,39 @@ using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands.Standard;
 
-public class AppImageGetUpdates : AsyncCommand
+public class AppImageGetUpdates : AsyncCommand<AppImageDefaultSettings>
 {
-    public override async Task<int> ExecuteAsync(CommandContext context)
+    public override async Task<int> ExecuteAsync(CommandContext context, AppImageDefaultSettings settings)
     {
         var manager = new AppImageManager();
-        manager.ErrorEvent += (_, args) =>
-        {
-            AnsiConsole.MarkupLine($"[red]{args.Error.EscapeMarkup()}[/]");
-        };
+        manager.ErrorEvent += (_, args) => { AnsiConsole.MarkupLine($"[red]{args.Error.EscapeMarkup()}[/]"); };
 
-        manager.MessageEvent += (_, args) =>
-        {
-            AnsiConsole.MarkupLine($"[blue]{args.Message.EscapeMarkup()}[/]");
-        };
+        manager.MessageEvent += (_, args) => { AnsiConsole.MarkupLine($"[blue]{args.Message.EscapeMarkup()}[/]"); };
 
         var result = await manager.CheckForAppImageUpdates();
 
-        foreach (var update in result)
+        if (settings.Json)
         {
-            AnsiConsole.MarkupLine($"[green]{update.Name} {update.Version} is available[/]");
+            var json = System.Text.Json.JsonSerializer.Serialize(result,
+                ShellyCLIJsonContext.Default.ListAppImageUpdateDto);
+            await using var stdout = System.Console.OpenStandardOutput();
+            await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
+            await writer.WriteLineAsync(json);
+            await writer.FlushAsync();
         }
-        
-        if (result.Count == 0)
+        else
         {
-            AnsiConsole.MarkupLine("[yellow]No updates available[/]");
+            foreach (var update in result)
+            {
+                AnsiConsole.MarkupLine($"[green]{update.Name} {update.Version} is available[/]");
+            }
+
+            if (result.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No updates available[/]");
+            }
         }
-        
+
         return 0;
     }
 }

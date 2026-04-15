@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Shelly.Gtk.Enums;
 using Shelly.Gtk.Services.TrayServices;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
@@ -177,7 +178,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
 
     public async Task<OperationResult> UpgradeAllAsync()
     {
-        var result =  await ExecutePrivilegedWithNoConfirmCheck("Upgrade all", "upgrade", "-a");
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Upgrade all", "upgrade", "-a");
         SendDbusMessage(result);
         return result;
     }
@@ -197,13 +198,15 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         );
     }
 
-    public async Task<OperationResult> InstallAurPackagesAsync(IEnumerable<string> packages, bool useChroot = false, bool runChecks = false)
+    public async Task<OperationResult> InstallAurPackagesAsync(IEnumerable<string> packages, bool useChroot = false,
+        bool runChecks = false)
     {
         var packageArgs = string.Join(" ", packages);
         if (useChroot)
         {
             packageArgs += " -c";
         }
+
         if (runChecks)
         {
             packageArgs += " --check";
@@ -230,6 +233,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         {
             packageArgs += " --check";
         }
+
         var result = await ExecutePrivilegedWithNoConfirmCheck("Update AUR packages", "aur", "update", packageArgs);
         SendDbusMessage(result);
         return result;
@@ -482,6 +486,35 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         if (uninstalledOnly)
             args.Add("-u");
         return await ExecutePrivilegedCommandAsync("Clean package cache", args.ToArray());
+    }
+
+    public async Task<OperationResult> AppImageInstallAsync(string filePath, string updateUrl = "",
+        AppImageUpdateType updateType = AppImageUpdateType.None)
+    {
+        if (updateUrl != "" && updateType != AppImageUpdateType.None)
+        {
+            return await ExecutePrivilegedCommandAsync("Install AppImage", "appimage", "install", "-l", filePath, "-u",
+                updateUrl, "-t", updateType.ToString().ToLowerInvariant(), "-n");
+        }
+
+        return await ExecutePrivilegedCommandAsync("Install AppImage", "appimage", "install", "-l", filePath, "-n");
+    }
+
+    public async Task<OperationResult> AppImageUpgradeAsync()
+    {
+        return await ExecutePrivilegedCommandAsync("Upgrade AppImage's", "appimage", "upgrade", "-n");
+    }
+
+    public async Task<OperationResult> AppImageRemoveAsync(string name)
+    {
+        return await ExecutePrivilegedCommandAsync("Remove AppImage's", "appimage", "remove", name, "-n");
+    }
+
+    public async Task<OperationResult> AppImageConfigureUpdatesAsync(string url, string name,
+        AppImageUpdateType updateType)
+    {
+        return await ExecutePrivilegedCommandAsync("Set AppImage's Update Config", "appimage", "configure-updates",
+            name, "-u", url, "-t", updateType.ToString().ToLowerInvariant());
     }
 
     private void SendDbusMessage(OperationResult result)
@@ -1016,9 +1049,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             StartInfo = new ProcessStartInfo
             {
                 FileName = "sudo",
-                Arguments = isPasswordless
-                    ? $"-k {arguments}"
-                    : $"-S -k {arguments}",
+                Arguments = $"-S -k {arguments}",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

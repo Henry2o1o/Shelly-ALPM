@@ -26,6 +26,7 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.AurEnabled), config.AurEnabled.ToString());
         CallCliConfigSet(nameof(config.AurWarningConfirmed), config.AurWarningConfirmed.ToString());
         CallCliConfigSet(nameof(config.FlatPackEnabled), config.FlatPackEnabled.ToString());
+        CallCliConfigSet(nameof(config.AppImageEnabled), config.AppImageEnabled.ToString());
         CallCliConfigSet(nameof(config.ConsoleEnabled), config.ConsoleEnabled.ToString());
         CallCliConfigSet(nameof(config.WindowWidth), config.WindowWidth.ToString());
         CallCliConfigSet(nameof(config.WindowHeight), config.WindowHeight.ToString());

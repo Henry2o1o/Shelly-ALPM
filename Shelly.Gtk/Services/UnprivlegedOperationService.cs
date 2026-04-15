@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Shelly.Gtk.Enums;
 using Shelly.Gtk.Services.TrayServices;
 using Shelly.Gtk.UiModels;
+using Shelly.Gtk.UiModels.AppImage;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 
 
@@ -267,6 +269,61 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus) : IUnprivilegedOpe
         }
 
         return 0;
+    }
+
+    public async Task<List<AppImageDto>> GetInstallAppImagesAsync()
+    {
+        var result = await ExecuteUnprivilegedCommandAsync("Get Installed AppImages", "appimage list --json");
+        try
+        {
+            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var trimmedLine = StripBom(line.Trim());
+                if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
+                {
+                    var apps = System.Text.Json.JsonSerializer.Deserialize(trimmedLine, ShellyGtkJsonContext.Default.ListAppImageDto);
+                    return apps ?? [];
+                }
+            }
+            return [];
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to parse installed AppImages JSON: {ex.Message}");
+            return [];
+        }
+    }
+
+    public async Task<List<AppImageDto>> GetUpdatesAppImagesAsync()
+    {
+        var result = await ExecuteUnprivilegedCommandAsync("Get AppImage Updates", "appimage list-updates --json");
+        try
+        {
+            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var trimmedLine = StripBom(line.Trim());
+                if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
+                {
+                    var updates = System.Text.Json.JsonSerializer.Deserialize(trimmedLine, ShellyGtkJsonContext.Default.ListAppImageUpdateDto);
+                    return updates?.Select(u => new AppImageDto
+                    {
+                        Name = u.Name,
+                        Version = u.Version,
+                        UpdateVersion = u.Version,
+                        UpdateURl = u.DownloadUrl,
+                        UpdateType = AppImageUpdateType.StaticUrl // Default or map if possible
+                    }).ToList() ?? [];
+                }
+            }
+            return [];
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to parse AppImage updates JSON: {ex.Message}");
+            return [];
+        }
     }
 
     public async Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates(bool showHidden = false)

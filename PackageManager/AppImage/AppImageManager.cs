@@ -43,6 +43,8 @@ public class AppImageManager
         var workingDir = Path.Combine(Path.GetTempPath(), "Shelly", appName);
         var appImageVersion = "Unknown";
         var desktopName = "";
+        var destIconName = "";
+        var description = "";
 
         if (Directory.Exists(workingDir)) Directory.Delete(workingDir, true);
         Directory.CreateDirectory(workingDir);
@@ -56,8 +58,8 @@ public class AppImageManager
             FileName = filePath,
             Arguments = "--appimage-extract",
             WorkingDirectory = workingDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
             UseShellExecute = false,
             CreateNoWindow = true
         });
@@ -107,8 +109,7 @@ public class AppImageManager
 
             var extension = Path.GetExtension(iconPath);
             if (string.IsNullOrEmpty(extension) || extension == ".DirIcon") extension = ".svg";
-
-            var destIconName = $"{CleanInvalidNames(appName).ToLower()}{extension}";
+            destIconName = $"{CleanInvalidNames(appName).ToLower()}{extension}";
             var destIconPath = Path.Combine(iconDir, destIconName);
 
             try
@@ -151,6 +152,11 @@ public class AppImageManager
                     else if (line.StartsWith("Name="))
                     {
                         if (string.IsNullOrEmpty(desktopName)) desktopName = line.Split('=')[1];
+                        patchedContent.AppendLine(line);
+                    }
+                    else if (line.StartsWith("Comment="))
+                    {
+                        if (string.IsNullOrEmpty(description)) description = line.Split('=')[1];
                         patchedContent.AppendLine(line);
                     }
                     else
@@ -196,7 +202,10 @@ public class AppImageManager
             Name = appName,
             Version = appImageVersion,
             RawUpdateInfo = updateInfo,
+            IconName = Path.GetFileNameWithoutExtension(destIconName),
+            Description = description,
             DesktopName = string.IsNullOrEmpty(desktopName) ? appName : desktopName,
+            SizeOnDisk = new FileInfo(destAppImagePath).Length,
         };
 
         if (!string.IsNullOrEmpty(updateUrlOverride))
@@ -328,7 +337,7 @@ public class AppImageManager
             LogError($"Current AppImage not found at {currentPath}.");
             return 1;
         }
-        
+
         var backupDir = Path.Combine(GetUserHomePath(), ".cache", "Shelly", update.Name);
         Directory.CreateDirectory(backupDir);
         var backupPath = Path.Combine(backupDir, $"{appImage.Name}-{appImage.Version}.AppImage.bak");
