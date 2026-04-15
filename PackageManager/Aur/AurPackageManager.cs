@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using PackageManager.Alpm;
 using PackageManager.Alpm.Events.EventArgs;
@@ -66,6 +67,7 @@ public class AurPackageManager(string? configPath = null)
     private bool _useChroot = false;
     private bool _noCheck = true;
     private string _chrootPath;
+    private readonly VcsInfoStore _vcsInfoStore = new();
 
     public event EventHandler<PackageProgressEventArgs>? PackageProgress;
     public event EventHandler<PkgbuildDiffRequestEventArgs>? PkgbuildDiffRequest;
@@ -102,6 +104,7 @@ public class AurPackageManager(string? configPath = null)
         _noCheck = noCheck;
         // Import caches from other AUR helpers (paru, yay) for installed foreign packages
         await ImportOtherAurHelperCaches();
+        await _vcsInfoStore.Load();
     }
 
     public async Task<List<AurPackageDto>> GetInstalledPackages()
@@ -132,11 +135,14 @@ public class AurPackageManager(string? configPath = null)
         return infoResponse.Results ?? [];
     }
 
-    public async Task<List<AurUpdateDto>> GetPackagesNeedingUpdate()
+    public async Task<List<AurUpdateDto>> GetPackagesNeedingUpdate(bool checkDevel = true)
     {
         List<AurUpdateDto> packagesToUpdate = [];
         var packages = _alpm.GetForeignPackages();
         var response = await _aurSearchManager.GetInfoAsync(packages.Select(x => x.Name).ToList());
+
+        var aurUpdateNames = new HashSet<string>();
+
         foreach (var pkg in response.Results)
         {
             var installedPkg = packages.FirstOrDefault(x => x.Name == pkg.Name);
@@ -144,6 +150,7 @@ public class AurPackageManager(string? configPath = null)
             {
                 continue;
             }
+
             if (VersionComparer.IsNewer(pkg.Version, installedPkg.Version))
             {
                 packagesToUpdate.Add(new AurUpdateDto
@@ -155,9 +162,49 @@ public class AurPackageManager(string? configPath = null)
                     PackageBase = pkg.PackageBase,
                     Description = pkg.Description ?? string.Empty
                 });
+                aurUpdateNames.Add(pkg.Name);
             }
         }
 
+        if (!checkDevel)
+        {
+            return packagesToUpdate;
+        }
+
+        var vcsPackages = packages.Where(p => IsVcsPackage(p.Name) && !aurUpdateNames.Contains(p.Name)).ToList();
+        var semaphore = new SemaphoreSlim(15);
+        var vcsResults = await Task.WhenAll(vcsPackages.Select(async installedPkg =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                var needsUpdate = await CheckVcsPackageNeedsUpdate(installedPkg.Name);
+                if (!needsUpdate)
+                    return null;
+
+                var aurInfo = response.Results.FirstOrDefault(x => x.Name == installedPkg.Name);
+                return new AurUpdateDto
+                {
+                    Name = installedPkg.Name,
+                    Version = installedPkg.Version,
+                    NewVersion = "latest-commit",
+                    Url = aurInfo?.Url ?? string.Empty,
+                    PackageBase = aurInfo?.PackageBase ?? installedPkg.Name,
+                    Description = aurInfo?.Description ?? string.Empty
+                };
+            }
+            catch (Exception ex)
+            {
+                await Console.Error.WriteLineAsync($"Error checking version for {installedPkg.Name}: {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }));
+
+        packagesToUpdate.AddRange(vcsResults.Where(r => r != null)!);
         return packagesToUpdate;
     }
 
@@ -493,6 +540,7 @@ public class AurPackageManager(string? configPath = null)
                 {
                     return;
                 }
+
                 BuildOutput?.Invoke(this, new BuildOutputEventArgs
                 {
                     PackageName = packageName,
@@ -545,8 +593,11 @@ public class AurPackageManager(string? configPath = null)
 
             try
             {
-                _ =_alpm.InstallLocalPackage(pkgFiles[0]).Result;
+                _ = _alpm.InstallLocalPackage(pkgFiles[0]).Result;
                 _alpm.Refresh();
+
+                // Update VCS info store with current commit SHAs after successful install
+                await UpdateVcsStoreForPackage(packageName, System.IO.Path.Combine(tempPath, "PKGBUILD"));
             }
             catch (Exception ex)
             {
@@ -570,7 +621,8 @@ public class AurPackageManager(string? configPath = null)
                     CurrentIndex = i + 1,
                     TotalCount = totalCount,
                     Status = PackageProgressStatus.CleaningUp,
-                    Message = $"Removing {buildOnlyDeps.Count} build-only dependencies: {string.Join(", ", buildOnlyDeps)}"
+                    Message =
+                        $"Removing {buildOnlyDeps.Count} build-only dependencies: {string.Join(", ", buildOnlyDeps)}"
                 });
                 foreach (var dep in buildOnlyDeps)
                 {
@@ -581,6 +633,7 @@ public class AurPackageManager(string? configPath = null)
                         IsError = false
                     });
                 }
+
                 try
                 {
                     _alpm.RemovePackages(buildOnlyDeps, AlpmTransFlag.None);
@@ -614,6 +667,7 @@ public class AurPackageManager(string? configPath = null)
         _alpm.RemovePackages(packageNames, flags);
         foreach (var packageName in packageNames)
         {
+            _vcsInfoStore.RemovePackage(packageName);
             // Clean up cache folder
             var user = Environment.GetEnvironmentVariable("SUDO_USER") ?? Environment.UserName;
             var home = $"/home/{user}";
@@ -638,6 +692,8 @@ public class AurPackageManager(string? configPath = null)
                 await rmProcess.WaitForExitAsync();
             }
         }
+
+        await _vcsInfoStore.Save();
     }
 
     public void Dispose()
@@ -742,6 +798,7 @@ public class AurPackageManager(string? configPath = null)
             {
                 return;
             }
+
             BuildOutput?.Invoke(this, new BuildOutputEventArgs
             {
                 PackageName = packageName,
@@ -813,6 +870,7 @@ public class AurPackageManager(string? configPath = null)
                     IsError = false
                 });
             }
+
             try
             {
                 _alpm.RemovePackages(buildOnlyDeps, AlpmTransFlag.None);
@@ -1002,7 +1060,7 @@ public class AurPackageManager(string? configPath = null)
             return false;
         }
     }
-    
+
     /// <summary>
     /// Imports cached AUR package data from other AUR helpers (paru and yay) into Shelly's cache.
     /// This allows Shelly to show PKGBUILD diffs for packages that were originally installed via paru or yay.
@@ -1145,11 +1203,13 @@ public class AurPackageManager(string? configPath = null)
             .ToList();
         var depsToInstall = allDeps.Where(x => !_alpm.IsDependencySatisfiedByInstalled(x.ToString())).ToList();
         var satisfiedDeps = allDeps.Where(x => _alpm.IsDependencySatisfiedByInstalled(x.ToString())).ToList();
-        Console.Error.WriteLine($"[DEBUG] Total deps: {allDeps.Count}, Satisfied: {satisfiedDeps.Count}, To install: {depsToInstall.Count}");
+        Console.Error.WriteLine(
+            $"[DEBUG] Total deps: {allDeps.Count}, Satisfied: {satisfiedDeps.Count}, To install: {depsToInstall.Count}");
         foreach (var dep in satisfiedDeps)
         {
             Console.Error.WriteLine($"[DEBUG] Already satisfied: {dep}");
         }
+
         var alpmPackages = new List<string>();
         var aurPackages = new List<ParsedDependency>();
 
@@ -1339,7 +1399,8 @@ public class AurPackageManager(string? configPath = null)
         List<ParsedDependency> orderedAurPackages,
         AlpmTransFlag flags = AlpmTransFlag.None)
     {
-        Console.Error.WriteLine($"[Shelly] Installing collected dependencies: {allRepoPackages.Count} repo, {orderedAurPackages.Count} AUR");
+        Console.Error.WriteLine(
+            $"[Shelly] Installing collected dependencies: {allRepoPackages.Count} repo, {orderedAurPackages.Count} AUR");
         if (allRepoPackages.Count > 0)
         {
             _alpm.Refresh();
@@ -1574,7 +1635,8 @@ public class AurPackageManager(string? configPath = null)
         }
 
         var user = Environment.GetEnvironmentVariable("SUDO_USER") ?? Environment.UserName;
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin";
+        var path = Environment.GetEnvironmentVariable("PATH") ??
+                   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin";
         if (!path.Contains("core_perl"))
             path = $"/usr/bin/core_perl:/usr/bin/vendor_perl:/usr/bin/site_perl:{path}";
 
@@ -1593,5 +1655,159 @@ public class AurPackageManager(string? configPath = null)
         };
         process.StartInfo.Environment["PATH"] = path;
         return process;
+    }
+
+    /// <summary>
+    /// Checks if a VCS package needs an update by comparing stored commit SHAs
+    /// with remote SHAs via git ls-remote (matching yay/paru behavior).
+    /// </summary>
+    private async Task<bool> CheckVcsPackageNeedsUpdate(string packageName)
+    {
+        var storedEntries = _vcsInfoStore.GetEntries(packageName);
+
+        // If we have no stored entries, we need to populate them first from the PKGBUILD
+        if (storedEntries == null || storedEntries.Count == 0)
+        {
+            var entries = await GetVcsSourceEntriesForPackage(packageName);
+            if (entries == null || entries.Count == 0)
+                return false;
+
+            // Populate the store with current remote SHAs so next check can compare
+            foreach (var entry in entries)
+            {
+                var sha = await GetRemoteCommitSha(entry.Url, entry.Branch);
+                if (sha != null)
+                    entry.CommitSha = sha;
+            }
+
+            _vcsInfoStore.SetEntries(packageName, entries);
+            await _vcsInfoStore.Save();
+            return false; // First time seeing this package, don't flag as update
+        }
+
+        // Compare stored SHAs with remote SHAs
+        foreach (var entry in storedEntries)
+        {
+            if (string.IsNullOrEmpty(entry.CommitSha))
+                continue;
+
+            var remoteSha = await GetRemoteCommitSha(entry.Url, entry.Branch);
+            if (remoteSha != null && remoteSha != entry.CommitSha)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Parses the PKGBUILD for a package and returns its trackable git source entries.
+    /// </summary>
+    private async Task<List<VcsSourceEntry>?> GetVcsSourceEntriesForPackage(string packageName)
+    {
+        var user = Environment.GetEnvironmentVariable("SUDO_USER") ?? Environment.UserName;
+        var home = $"/home/{user}";
+        var cachePath = Path.Combine(home, ".cache", "Shelly", packageName);
+        var pkgbuildPath = Path.Combine(cachePath, "PKGBUILD");
+
+        if (!File.Exists(pkgbuildPath))
+        {
+            var success = await DownloadPackage(packageName);
+            if (!success)
+                return null;
+        }
+
+        var pkgbuildContent = await File.ReadAllTextAsync(pkgbuildPath);
+        var pkgbuildInfo = PkgbuildParser.ParseContent(pkgbuildContent);
+        var entries = VcsSourceParser.ParseSources(pkgbuildInfo.Source);
+        return entries.Count > 0 ? entries : null;
+    }
+
+    /// <summary>
+    /// Runs git ls-remote to get the current commit SHA for a given URL and branch.
+    /// Uses a 15-second timeout matching yay's behavior.
+    /// </summary>
+    private static async Task<string?> GetRemoteCommitSha(string url, string branch, int timeoutSeconds = 15)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        try
+        {
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = $"ls-remote {url} {branch}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+
+            var output = await process.StandardOutput.ReadToEndAsync(cts.Token);
+            await process.WaitForExitAsync(cts.Token);
+
+            if (process.ExitCode != 0)
+                return null;
+
+            // Output format: "<sha>\t<ref>\n"
+            var line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (line == null)
+                return null;
+
+            var sha = line.Split('\t', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            return string.IsNullOrWhiteSpace(sha) ? null : sha.Trim();
+        }
+        catch (OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync($"Timeout checking git remote: {url}");
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Updates the VCS info store after a successful package build/install.
+    /// Parses sources and captures current remote commit SHAs.
+    /// </summary>
+    private async Task UpdateVcsStoreForPackage(string packageName, string pkgbuildPath)
+    {
+        if (!IsVcsPackage(packageName))
+            return;
+
+        try
+        {
+            var pkgbuildContent = await File.ReadAllTextAsync(pkgbuildPath);
+            var pkgbuildInfo = PkgbuildParser.ParseContent(pkgbuildContent);
+            var entries = VcsSourceParser.ParseSources(pkgbuildInfo.Source);
+
+            if (entries.Count == 0)
+                return;
+
+            foreach (var entry in entries)
+            {
+                var sha = await GetRemoteCommitSha(entry.Url, entry.Branch);
+                if (sha != null)
+                    entry.CommitSha = sha;
+            }
+
+            _vcsInfoStore.SetEntries(packageName, entries);
+            await _vcsInfoStore.Save();
+        }
+        catch (Exception ex)
+        {
+            await Console.Error.WriteLineAsync($"Warning: Failed to update VCS store for {packageName}: {ex.Message}");
+        }
+    }
+
+    private static readonly string[] VcsSuffixes = ["-git"];
+
+    private static bool IsVcsPackage(string packageName)
+    {
+        return VcsSuffixes.Any(suffix => packageName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
     }
 }
