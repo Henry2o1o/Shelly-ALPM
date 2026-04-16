@@ -880,7 +880,7 @@ public class HomeWindow(
                 foreach (var entry in entries)
                 {
                     var row = new ListBoxRow();
-                    row.SetActivatable(false);
+                    row.SetActivatable(true);
 
                     var hbox = Box.New(Orientation.Horizontal, 10);
                     hbox.MarginStart = 5;
@@ -919,7 +919,13 @@ public class HomeWindow(
                     row.SetChild(hbox);
                     _operationLogListBox.Append(row);
                 }
+                
+                if (_logRowActivatedHandler is not null)
+                    _operationLogListBox.OnRowActivated -= _logRowActivatedHandler;
 
+                _logRowActivatedHandler = (sender, args) => OnLogRowActivated(args.Row, entries);
+                _operationLogListBox.OnRowActivated += _logRowActivatedHandler;
+                
                 return false;
             });
         }
@@ -928,7 +934,18 @@ public class HomeWindow(
             Console.WriteLine($"Failed to load operation log: {e.Message}");
         }
     }
+    
+    private GObject.SignalHandler<ListBox, ListBox.RowActivatedSignalArgs>? _logRowActivatedHandler;
 
+    private void OnLogRowActivated(ListBoxRow row, List<OperationLogEntry> entries)
+    {
+        var index = row.GetIndex();
+        if (index < 0 || index >= entries.Count) return;
+
+        SessionLogDialog.ShowSessionLogDialog(_overlay, entries[index]);
+    }
+
+    
     private static string GetIconForCommand(string command)
     {
         if (command.Contains("sync", StringComparison.OrdinalIgnoreCase))

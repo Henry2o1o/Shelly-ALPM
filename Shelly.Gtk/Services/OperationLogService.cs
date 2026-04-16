@@ -20,6 +20,20 @@ public partial class OperationLogService : IOperationLogService
     [GeneratedRegex(@"SESSION END — exit code: (\d+)")]
     private static partial Regex SessionEndRegex();
 
+    public async Task<List<string>> GetSessionExcerptAsync(string sessionId)
+    {
+        foreach (var logPath in new[] { LogPath, RotatedLogPath })
+        {
+            var entries = await ParseLogFileAsync(logPath);
+            var match = entries.FirstOrDefault(e => e.SessionId == sessionId);
+            if (match != null)
+            {
+                return match.RawLines;
+            }
+        }
+        return [];
+    }
+
     public async Task<List<OperationLogEntry>> GetRecentOperationsAsync(int count = 10)
     {
         var entries = new List<OperationLogEntry>();
@@ -62,12 +76,16 @@ public partial class OperationLogService : IOperationLogService
             if (startMatch.Success)
             {
                 current = new OperationLogEntry();
+                current.RawLines.Add(line);
+                
                 if (DateTime.TryParse(startMatch.Groups[1].Value, out var ts))
                     current.Timestamp = ts;
                 continue;
             }
 
             if (current == null) continue;
+            
+            current.RawLines.Add(line);
 
             var cmdMatch = CommandRegex().Match(line);
             if (cmdMatch.Success)

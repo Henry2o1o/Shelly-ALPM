@@ -7,4 +7,9 @@ public class OperationLogEntry
     public string User { get; set; } = string.Empty;
     public bool IsSudo { get; set; }
     public int? ExitCode { get; set; }
+
+    public List<string> RawLines { get; set; } = [];
+
+    public string SessionId => Timestamp.ToString("yyyyMMdd_HHmmss");
+
 }
