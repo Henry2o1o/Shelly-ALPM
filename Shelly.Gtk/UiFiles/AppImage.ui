@@ -29,8 +29,30 @@
                     </object>
                 </child>
                 <child>
+                    <object class="GtkButton" id="SyncAllButton">
+                        <property name="valign">center</property>
+                        <property name="tooltip-text">Sync metadata for all AppImages. Useful if AppImage self updated.</property>
+                        <child>
+                            <object class="GtkBox">
+                                <property name="spacing">6</property>
+                                <child>
+                                    <object class="GtkImage">
+                                        <property name="icon-name">emblem-synchronizing-symbolic</property>
+                                    </object>
+                                </child>
+                                <child>
+                                    <object class="GtkLabel">
+                                        <property name="label">Sync All</property>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+                    </object>
+                </child>
+                <child>
                     <object class="GtkButton" id="UpgradeAllButton">
                         <property name="valign">center</property>
+                        <property name="tooltip-text">Upgrade all AppImages to their latest versions</property>
                         <child>
                             <object class="GtkBox">
                                 <property name="spacing">6</property>
@@ -51,6 +73,7 @@
                 <child>
                     <object class="GtkButton" id="InstallAppImageButton">
                         <property name="valign">center</property>
+                        <property name="tooltip-text">Install a new AppImage from a file or URL</property>
                         <style>
                             <class name="suggested-action"/>
                         </style>
@@ -307,7 +330,6 @@
                                     <object class="GtkButton" id="SaveConfigButton">
                                         <style>
                                             <class name="suggested-action"/>
-                                            <class name="pill"/>
                                         </style>
                                         <child>
                                             <object class="GtkBox">
@@ -332,10 +354,33 @@
                                     </object>
                                 </child>
                                 <child>
+                                    <object class="GtkButton" id="SyncButton">
+                                        <property name="valign">center</property>
+                                        <property name="tooltip-text">Sync metadata for all AppImages. Useful if AppImage self updated.</property>
+                                        <child>
+                                            <object class="GtkBox">
+                                                <style>
+                                                    <class name="suggested-action"/>
+                                                </style>
+                                                <property name="spacing">6</property>
+                                                <child>
+                                                    <object class="GtkImage">
+                                                        <property name="icon-name">emblem-synchronizing-symbolic</property>
+                                                    </object>
+                                                </child>
+                                                <child>
+                                                    <object class="GtkLabel">
+                                                        <property name="label">Sync</property>
+                                                    </object>
+                                                </child>
+                                            </object>
+                                        </child>
+                                    </object>
+                                </child>
+                                <child>
                                     <object class="GtkButton" id="RemoveAppImageButton">
                                         <style>
                                             <class name="destructive-action"/>
-                                            <class name="pill"/>
                                         </style>
                                         <child>
                                             <object class="GtkBox">

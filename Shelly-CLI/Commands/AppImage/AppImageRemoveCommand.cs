@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using PackageManager.AppImage;
 using Spectre.Console;
 using Spectre.Console.Cli;

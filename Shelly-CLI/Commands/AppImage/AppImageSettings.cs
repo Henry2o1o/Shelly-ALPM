@@ -36,7 +36,7 @@ public class AppImageRemoveSettings : CommandSettings
     [Description("Name of the AppImage to be removed")]
     public string? Name { get; set; }
 
-    [CommandOption("-c|--no-confirm")]
+    [CommandOption("-n|--no-confirm")]
     [Description("Proceed without asking for user confirmation")]
     public bool NoConfirm { get; set; }
 }
@@ -61,6 +61,17 @@ public class AppImageSearchSettings : AppImageDefaultSettings
     [CommandArgument(0, "[QUERY]")]
     [Description("The search query for the AppImage")]
     public string? Query { get; set; }
+}
+
+public class AppImageSyncMetaSettings : AppImageDefaultSettings
+{
+    [CommandArgument(0, "[QUERY]")]
+    [Description("The search query for the AppImage")]
+    public string? Query { get; set; } = "";
+    
+    [CommandOption("-n|--no-confirm")]
+    [Description("Proceed without asking for user confirmation")]
+    public bool NoConfirm { get; set; }
 }
 
 public class AppImageUpdateSettings : CommandSettings

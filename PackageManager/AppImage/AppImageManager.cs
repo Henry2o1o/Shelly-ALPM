@@ -40,173 +40,18 @@ public class AppImageManager
     {
         var filePath = Path.GetFullPath(location);
         var appName = Path.GetFileNameWithoutExtension(filePath);
-        var workingDir = Path.Combine(Path.GetTempPath(), "Shelly", appName);
-        var appImageVersion = "Unknown";
-        var desktopName = "";
-        var destIconName = "";
-        var description = "";
-
-        if (Directory.Exists(workingDir)) Directory.Delete(workingDir, true);
-        Directory.CreateDirectory(workingDir);
-
-
-        LogMessage($"Extracting AppImage...");
-        SetFilePermissions(filePath, "a+x");
-
-        var extractProcess = Process.Start(new ProcessStartInfo
-        {
-            FileName = filePath,
-            Arguments = "--appimage-extract",
-            WorkingDirectory = workingDir,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        });
-        await extractProcess!.WaitForExitAsync();
-
-        var squashfsRoot = Path.Combine(workingDir, "squashfs-root");
-        if (!Directory.Exists(squashfsRoot))
-        {
-            LogError("Failed to extract AppImage.");
-            return 1;
-        }
-
-        var desktopFile = Directory.GetFiles(squashfsRoot, "*.desktop", SearchOption.TopDirectoryOnly).FirstOrDefault();
-        if (desktopFile == null)
-        {
-            LogWarning("No .desktop file found in AppImage.");
-        }
-
-        string? iconName = null;
-        if (desktopFile != null)
-        {
-            var lines = await File.ReadAllLinesAsync(desktopFile);
-            var iconLine = lines.FirstOrDefault(l => l.StartsWith("Icon="));
-            if (iconLine != null)
-            {
-                iconName = iconLine.Split('=', 2)[1].Trim();
-            }
-        }
-
-        string? iconPath = null;
-        if (!string.IsNullOrEmpty(iconName))
-        {
-            iconPath = Directory.GetFiles(squashfsRoot, $"{iconName}.*", SearchOption.AllDirectories).FirstOrDefault();
-        }
-
-        if (iconPath == null)
-        {
-            iconPath = Path.Combine(squashfsRoot, ".DirIcon");
-            if (!File.Exists(iconPath)) iconPath = null;
-        }
-
-        var finalIconPath = "application-x-executable";
-        if (iconPath != null)
-        {
-            const string iconDir = "/usr/share/icons/hicolor/scalable/apps";
-            Directory.CreateDirectory(iconDir);
-
-            var extension = Path.GetExtension(iconPath);
-            if (string.IsNullOrEmpty(extension) || extension == ".DirIcon") extension = ".svg";
-            destIconName = $"{CleanInvalidNames(appName).ToLower()}{extension}";
-            var destIconPath = Path.Combine(iconDir, destIconName);
-
-            try
-            {
-                File.Copy(iconPath, destIconPath, true);
-                finalIconPath = destIconName;
-                LogMessage($"Exported icon");
-            }
-            catch (Exception ex)
-            {
-                LogWarning($"Could not copy icon: {ex.Message}");
-            }
-        }
-
         var destAppImagePath = Path.Combine(InstallDirectory, $"{appName}.AppImage");
+
+        LogMessage($"Installing AppImage {appName}...");
         File.Copy(filePath, destAppImagePath, true);
         SetFilePermissions(destAppImagePath, "a+x");
 
-        if (desktopFile != null)
+        var appImageDto = await ExtractMetadata(destAppImagePath);
+        if (appImageDto == null)
         {
-            try
-            {
-                var desktopContent = await File.ReadAllLinesAsync(desktopFile);
-                var patchedContent = new StringBuilder();
-                foreach (var line in desktopContent)
-                {
-                    if (line.StartsWith("Exec="))
-                    {
-                        patchedContent.AppendLine($"Exec={destAppImagePath}");
-                    }
-                    else if (line.StartsWith("Icon="))
-                    {
-                        patchedContent.AppendLine($"Icon={finalIconPath}");
-                    }
-                    else if (line.StartsWith("X-AppImage-Version="))
-                    {
-                        appImageVersion = line.Split('=')[1];
-                        patchedContent.AppendLine(line);
-                    }
-                    else if (line.StartsWith("Name="))
-                    {
-                        if (string.IsNullOrEmpty(desktopName)) desktopName = line.Split('=')[1];
-                        patchedContent.AppendLine(line);
-                    }
-                    else if (line.StartsWith("Comment="))
-                    {
-                        if (string.IsNullOrEmpty(description)) description = line.Split('=')[1];
-                        patchedContent.AppendLine(line);
-                    }
-                    else
-                    {
-                        patchedContent.AppendLine(line);
-                    }
-                }
-
-                const string desktopDir = "/usr/share/applications";
-                Directory.CreateDirectory(desktopDir);
-                var cleanName = CleanInvalidNames(appName);
-                var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
-
-                await File.WriteAllTextAsync(desktopFilePath, patchedContent.ToString());
-                SetFilePermissions(desktopFilePath, "644");
-                UpdateDesktopDatabase(desktopDir);
-                LogMessage($"Installed original desktop entry");
-            }
-            catch (Exception ex)
-            {
-                LogWarning($"Could not install original desktop entry");
-                CreateDesktopEntry(appName, destAppImagePath, icon: finalIconPath);
-            }
+            LogError("Failed to extract metadata during installation.");
+            return 1;
         }
-        else
-        {
-            CreateDesktopEntry(appName, destAppImagePath, icon: finalIconPath);
-        }
-
-        try
-        {
-            Directory.Delete(workingDir, true);
-        }
-        catch
-        {
-            /* ignore */
-        }
-
-        var updateInfo = await GetAppImageUpdateInfo(destAppImagePath);
-
-        var appImageDto = new AppImageDto
-        {
-            Name = appName,
-            Version = appImageVersion,
-            RawUpdateInfo = updateInfo,
-            IconName = Path.GetFileNameWithoutExtension(destIconName),
-            Description = description,
-            DesktopName = string.IsNullOrEmpty(desktopName) ? appName : desktopName,
-            SizeOnDisk = new FileInfo(destAppImagePath).Length,
-        };
 
         if (!string.IsNullOrEmpty(updateUrlOverride))
         {
@@ -318,7 +163,7 @@ public class AppImageManager
     public async Task<int> RunUpdate(AppImageUpdateDto update)
     {
         var appImages = await GetAppImagesFromLocalDb();
-        var appImage = appImages.FirstOrDefault(a => a.Name == update.Name);
+        var appImage = appImages.FirstOrDefault(a => string.Equals(a.Name, update.Name, StringComparison.OrdinalIgnoreCase));
         if (appImage == null)
         {
             LogError($"AppImage '{update.Name}' not found in local database.");
@@ -414,7 +259,7 @@ public class AppImageManager
     {
         LogMessage($"Configuring updates for {name} {url}, type: {updateType}...");
         var appImages = await GetAppImagesFromLocalDb();
-        var appImage = appImages.FirstOrDefault(a => a.Name == name);
+        var appImage = appImages.FirstOrDefault(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase));
         if (appImage == null) return false;
 
         appImage.UpdateURl = url;
@@ -642,6 +487,242 @@ public class AppImageManager
 
     #endregion
 
+    public async Task<bool> SyncAppImageMeta(List<string> appImageNames)
+    {
+        try
+        {
+            var appImagesInDb = await GetAppImagesFromLocalDb();
+            var success = true;
+
+            foreach (var appName in appImageNames)
+            {
+                var appImagePath = Path.Combine(InstallDirectory, $"{appName}.AppImage");
+                if (!File.Exists(appImagePath))
+                {
+                    LogWarning($"AppImage not found at {appImagePath}");
+                    success = false;
+                    continue;
+                }
+
+                LogMessage($"Syncing metadata for {appName}...");
+                var appImageDto = await ExtractMetadata(appImagePath);
+                if (appImageDto == null)
+                {
+                    LogError($"Failed to extract metadata for {appName}");
+                    success = false;
+                    continue;
+                }
+
+                var existing = appImagesInDb.FirstOrDefault(a => string.Equals(a.Name, appName, StringComparison.OrdinalIgnoreCase));
+                if (existing != null)
+                {
+                    if (!string.IsNullOrEmpty(existing.UpdateURl))
+                    {
+                        appImageDto.UpdateURl = existing.UpdateURl;
+                        appImageDto.UpdateType = existing.UpdateType;
+                    }
+
+                    if (!string.IsNullOrEmpty(existing.RawUpdateInfo) && string.IsNullOrEmpty(appImageDto.RawUpdateInfo))
+                    {
+                        appImageDto.RawUpdateInfo = existing.RawUpdateInfo;
+                    }
+
+                    if (!string.IsNullOrEmpty(existing.UpdateVersion))
+                    {
+                        appImageDto.UpdateVersion = existing.UpdateVersion;
+                    }
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(appImageDto.RawUpdateInfo) && string.IsNullOrEmpty(appImageDto.UpdateURl))
+                    {
+                        appImageDto.UpdateType = UpdateType.StaticUrl;
+                    }
+                }
+
+                await AddAppImageToLocalDb(appImageDto);
+            }
+
+            return success;
+        }
+        catch (Exception ex)
+        {
+            LogError($"Error syncing AppImage metadata: {ex.Message}");
+            return false;
+        }
+    }
+
+    private async Task<AppImageDto?> ExtractMetadata(string filePath)
+    {
+        var appName = Path.GetFileNameWithoutExtension(filePath);
+        var workingDir = Path.Combine(Path.GetTempPath(), "Shelly", $"sync-{appName}");
+        var appImageVersion = "Unknown";
+        var desktopName = "";
+        var destIconName = "";
+        var description = "";
+
+        try
+        {
+            if (Directory.Exists(workingDir)) Directory.Delete(workingDir, true);
+            Directory.CreateDirectory(workingDir);
+
+            SetFilePermissions(filePath, "a+x");
+
+            var extractProcess = Process.Start(new ProcessStartInfo
+            {
+                FileName = filePath,
+                Arguments = "--appimage-extract",
+                WorkingDirectory = workingDir,
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            await extractProcess!.WaitForExitAsync();
+
+            var squashfsRoot = Path.Combine(workingDir, "squashfs-root");
+            if (!Directory.Exists(squashfsRoot))
+            {
+                LogError("Failed to extract AppImage.");
+                return null;
+            }
+
+            var desktopFile = Directory.GetFiles(squashfsRoot, "*.desktop", SearchOption.TopDirectoryOnly).FirstOrDefault();
+            string? iconName = null;
+            if (desktopFile != null)
+            {
+                var lines = await File.ReadAllLinesAsync(desktopFile);
+                var iconLine = lines.FirstOrDefault(l => l.StartsWith("Icon="));
+                if (iconLine != null)
+                {
+                    iconName = iconLine.Split('=', 2)[1].Trim();
+                }
+            }
+
+            string? iconPath = null;
+            if (!string.IsNullOrEmpty(iconName))
+            {
+                iconPath = Directory.GetFiles(squashfsRoot, $"{iconName}.*", SearchOption.AllDirectories).FirstOrDefault();
+            }
+
+            if (iconPath == null)
+            {
+                iconPath = Path.Combine(squashfsRoot, ".DirIcon");
+                if (!File.Exists(iconPath)) iconPath = null;
+            }
+
+            var finalIconPath = "application-x-executable";
+            if (iconPath != null)
+            {
+                const string iconDir = "/usr/share/icons/hicolor/scalable/apps";
+                Directory.CreateDirectory(iconDir);
+
+                var extension = Path.GetExtension(iconPath);
+                if (string.IsNullOrEmpty(extension) || extension == ".DirIcon") extension = ".svg";
+                destIconName = $"{CleanInvalidNames(appName).ToLower()}{extension}";
+                var destIconPath = Path.Combine(iconDir, destIconName);
+
+                try
+                {
+                    File.Copy(iconPath, destIconPath, true);
+                    finalIconPath = destIconName;
+                    LogMessage($"Updated icon: {destIconPath}");
+                }
+                catch (Exception ex)
+                {
+                    LogWarning($"Could not copy icon: {ex.Message}");
+                }
+            }
+
+            if (desktopFile != null)
+            {
+                try
+                {
+                    var desktopContent = await File.ReadAllLinesAsync(desktopFile);
+                    var patchedContent = new StringBuilder();
+                    foreach (var line in desktopContent)
+                    {
+                        if (line.StartsWith("Exec="))
+                        {
+                            patchedContent.AppendLine($"Exec={filePath}");
+                        }
+                        else if (line.StartsWith("Icon="))
+                        {
+                            patchedContent.AppendLine($"Icon={finalIconPath}");
+                        }
+                        else if (line.StartsWith("X-AppImage-Version="))
+                        {
+                            appImageVersion = line.Split('=')[1];
+                            patchedContent.AppendLine(line);
+                        }
+                        else if (line.StartsWith("Name="))
+                        {
+                            if (string.IsNullOrEmpty(desktopName)) desktopName = line.Split('=')[1];
+                            patchedContent.AppendLine(line);
+                        }
+                        else if (line.StartsWith("Comment="))
+                        {
+                            if (string.IsNullOrEmpty(description)) description = line.Split('=')[1];
+                            patchedContent.AppendLine(line);
+                        }
+                        else
+                        {
+                            patchedContent.AppendLine(line);
+                        }
+                    }
+
+                    const string desktopDir = "/usr/share/applications";
+                    Directory.CreateDirectory(desktopDir);
+                    var cleanName = CleanInvalidNames(appName);
+                    var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
+
+                    await File.WriteAllTextAsync(desktopFilePath, patchedContent.ToString());
+                    SetFilePermissions(desktopFilePath, "644");
+                    UpdateDesktopDatabase(desktopDir);
+                    LogMessage($"Updated desktop entry: {desktopFilePath}");
+                }
+                catch (Exception ex)
+                {
+                    LogWarning($"Could not update desktop entry: {ex.Message}");
+                    CreateDesktopEntry(appName, filePath, icon: finalIconPath);
+                }
+            }
+            else
+            {
+                LogMessage($"No desktop file found in AppImage, creating default one.");
+                CreateDesktopEntry(appName, filePath, icon: finalIconPath);
+            }
+
+            var updateInfo = await GetAppImageUpdateInfo(filePath);
+
+            var appImageDto = new AppImageDto
+            {
+                Name = appName,
+                Version = appImageVersion,
+                RawUpdateInfo = updateInfo,
+                IconName = Path.GetFileNameWithoutExtension(destIconName),
+                Description = description,
+                DesktopName = string.IsNullOrEmpty(desktopName) ? appName : desktopName,
+                SizeOnDisk = new FileInfo(filePath).Length,
+            };
+            
+            return appImageDto;
+        }
+        catch (Exception ex)
+        {
+            LogError($"Error extracting metadata for {appName}: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(workingDir)) Directory.Delete(workingDir, true);
+            }
+            catch { /* ignore */ }
+        }
+    }
+    
     private static async Task<AppImageUpdateDto?> CheckStaticUrlUpdate(string url, string appName,
         string currentVersion)
     {
@@ -843,9 +924,9 @@ public class AppImageManager
         try
         {
             var appImages = await GetAppImagesFromLocalDb();
-            if (appImages.Any(a => a.Name == appImage.Name))
+            if (appImages.Any(a => string.Equals(a.Name, appImage.Name, StringComparison.OrdinalIgnoreCase)))
             {
-                appImages.RemoveAll(a => a.Name == appImage.Name);
+                appImages.RemoveAll(a => string.Equals(a.Name, appImage.Name, StringComparison.OrdinalIgnoreCase));
             }
 
             appImages.Add(appImage);
@@ -868,7 +949,7 @@ public class AppImageManager
         {
             var appImages = await GetAppImagesFromLocalDb();
             var initialCount = appImages.Count;
-            appImages.RemoveAll(a => a.Name == appImage.Name);
+            appImages.RemoveAll(a => string.Equals(a.Name, appImage.Name, StringComparison.OrdinalIgnoreCase));
 
             if (appImages.Count != initialCount)
             {

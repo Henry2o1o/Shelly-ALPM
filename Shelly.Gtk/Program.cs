@@ -206,6 +206,8 @@ sealed class Program
                         aurMenuButton.Visible = updatedConfig.AurEnabled;
                     if (mainBuilder.GetObject("FlatpakMenuButton") is MenuButton flatpakMenuButton)
                         flatpakMenuButton.Visible = updatedConfig.FlatPackEnabled;
+                    if (mainBuilder.GetObject("AppImageMenuButton") is MenuButton appImageMenuButton)
+                        appImageMenuButton.Visible = updatedConfig.AppImageEnabled;
 
                     return false;
                 });
@@ -254,9 +256,11 @@ sealed class Program
             var settingsButtonHoriz = (Button)mainBuilder.GetObject("SettingsButtonHorizontal")!;
             var aurMenuButton = (MenuButton)mainBuilder.GetObject("AurMenuButton")!;
             var flatpakMenuButton = (MenuButton)mainBuilder.GetObject("FlatpakMenuButton")!;
+            var appImageMenuButton = (MenuButton)mainBuilder.GetObject("AppImageMenuButton")!;
 
             aurMenuButton.Visible = initialConfig.AurEnabled;
             flatpakMenuButton.Visible = initialConfig.FlatPackEnabled;
+            appImageMenuButton.Visible = initialConfig.AppImageEnabled;
 
             homeButtonHoriz.OnClicked += (_, _) => NavigateTo<HomeWindow>("HomeButton");
             settingsButtonHoriz.OnClicked += (_, _) => NavigateTo<Settings>("SettingsButton");
@@ -270,6 +274,7 @@ sealed class Program
             AddAction("install-flatpak", () => NavigateTo<FlatpakInstall>("InstallFlatpakButton"));
             AddAction("update-flatpak", () => NavigateTo<FlatpakUpdate>("UpdateFlatpakButton"));
             AddAction("remove-flatpak", () => NavigateTo<FlatpakRemove>("RemoveFlatpakButton"));
+            AddAction("manage-appimage", () => NavigateTo<AppImage>("ManageAppImageButton"));
 
             var initialHomeWindow = serviceProvider.GetRequiredService<HomeWindow>();
             contentArea.Append(initialHomeWindow.CreateWindow());

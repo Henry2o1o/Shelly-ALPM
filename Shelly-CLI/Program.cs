@@ -187,6 +187,12 @@ public class Program
                 .WithDescription("Shows Arch news you haven't seen before")
                 .WithExample("news", "--all");
 
+            config.AddCommand<CorruptedPackages>("purify")
+                .WithDescription("Find and remove corrupted packages")
+                .WithExample("purify")
+                .WithExample("purify", "--dry-run")
+                .WithExample("purify", "--no-confirm");
+
             config.AddBranch("keyring", keyring =>
             {
                 keyring.SetDescription("Manage pacman keyring");
@@ -428,6 +434,10 @@ public class Program
                 appImage.AddCommand<AppImageConfigUpdates>("configure-updates")
                     .WithDescription("Configure update settings for an AppImage")
                     .WithExample("appimage", "configure-updates", "firefox", "--update-url", "https://github.com/mozilla/firefox-appimage", "--type", "GitHub");
+                
+                appImage.AddCommand<AppImageSyncMeta>("sync-meta")
+                    .WithDescription("Syncs meta data for an AppImage")
+                    .WithExample("appimage", "sync-meta", "firefox");
             });
         });
 

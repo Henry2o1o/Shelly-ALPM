@@ -35,7 +35,8 @@ public class AppImage(
     private Button _removeButton = null!;
     private Button _installButton = null!;
     private Button _upgradeAllButton = null!;
-
+    private Button _syncButton = null!;
+    private Button _syncAllButton = null!;
 
     public Widget CreateWindow()
     {
@@ -52,6 +53,9 @@ public class AppImage(
         _detailDescriptionLabel = (Label)builder.GetObject("DetailDescriptionLabel")!;
         _detailSizeLabel = (Label)builder.GetObject("DetailSizeLabel")!;
         _detailIcon = (Image)builder.GetObject("DetailIcon")!;
+
+        _syncButton = (Button)builder.GetObject("SyncButton")!;
+        _syncAllButton = (Button)builder.GetObject("SyncAllButton")!;
 
         _backButton = (Button)builder.GetObject("BackToListButton")!;
         _saveButton = (Button)builder.GetObject("SaveConfigButton")!;
@@ -86,6 +90,8 @@ public class AppImage(
         _removeButton.OnClicked += (_, _) => RemoveAppImage();
         _installButton.OnClicked += (_, _) => InstallAppImage();
         _upgradeAllButton.OnClicked += (_, _) => UpgradeAll();
+        _syncButton.OnClicked += (_, _) => SyncAppImage();
+        _syncAllButton.OnClicked += (_, _) => SyncAllAppImages();
 
         _ = LoadDataAsync();
 
@@ -315,6 +321,70 @@ public class AppImage(
         catch (Exception ex)
         {
             Console.WriteLine($"Failed to save AppImage configuration: {ex.Message}");
+        }
+    }
+
+    private async void SyncAppImage()
+    {
+        try
+        {
+            if (_selectedApp == null) return;
+
+            lockoutService.Show($"Syncing {_selectedApp.Name}...");
+
+            var result =
+                await privilegedOperationService.AppImageSyncApp(_selectedApp.Name);
+
+            if (result.Success)
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs($"Synced {_selectedApp.Name}"));
+                await LoadDataAsync();
+            }
+            else
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs($"Failed to sync: {result.Error}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to save AppImage configuration: {ex.Message}");
+        }
+        finally
+        {
+            lockoutService.Hide();
+        }
+    }
+    
+    private async void SyncAllAppImages()
+    {
+        try
+        {
+            lockoutService.Show($"Syncing all AppImages ...");
+
+            var result =
+                await privilegedOperationService.AppImageSyncAll();
+
+            if (result.Success)
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs($"Synced"));
+                await LoadDataAsync();
+            }
+            else
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs($"Failed to sync: {result.Error}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to save AppImage configuration: {ex.Message}");
+        }
+        finally
+        {
+            lockoutService.Hide();
         }
     }
 
