@@ -404,7 +404,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         var result = showHidden
             ? await ExecuteCommandAsync("aur list-updates", "--json", "--show-hidden")
             : await ExecuteCommandAsync("aur list-updates", "--json");
-        SendDbusMessage(result);       
+        SendDbusMessage(result);
         if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
         {
             return [];
@@ -515,6 +515,16 @@ public class PrivilegedOperationService : IPrivilegedOperationService
     {
         return await ExecutePrivilegedCommandAsync("Set AppImage's Update Config", "appimage", "configure-updates",
             name, "-u", url, "-t", updateType.ToString().ToLowerInvariant());
+    }
+
+    public async Task<OperationResult> AppImageSyncApp(string name)
+    {
+        return await ExecutePrivilegedCommandAsync("Set AppImage's Update Config", "appimage", "sync-meta", name, "-n");
+    }
+
+    public async Task<OperationResult> AppImageSyncAll()
+    {
+        return await ExecutePrivilegedCommandAsync("Set AppImage's Update Config", "appimage", "sync-meta");
     }
 
     public async Task<OperationResult> PurifyCorruptionAsync()
@@ -800,6 +810,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
                                     if ((args.Response & (1 << i)) != 0)
                                         selected.Add(optDepsOptions[i]);
                                 }
+
                                 await SafeWriteAsync(string.Join(" ", selected));
                             }
 

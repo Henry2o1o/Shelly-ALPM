@@ -49,6 +49,14 @@
             </item>
         </section>
     </menu>
+    <menu id="AppImageMenu">
+        <section>
+            <item>
+                <attribute name="label">Manage AppImage(s)</attribute>
+                <attribute name="action">app.manage-appimage</attribute>
+            </item>
+        </section>
+    </menu>
     <object class="GtkApplicationWindow" id="MainWindow">
    <property name="default-height">600</property>
                           <property name="default-width">800</property>
@@ -574,6 +582,34 @@
                                                                 <child>
                                                                     <object class="GtkLabel">
                                                                         <property name="label">Flatpak</property>
+                                                                    </object>
+                                                                </child>
+                                                                <child>
+                                                                    <object class="GtkImage">
+                                                                        <property name="icon-name">pan-down-symbolic</property>
+                                                                        <property name="pixel-size">12</property>
+                                                                    </object>
+                                                                </child>
+                                                            </object>
+                                                        </child>
+                                                    </object>
+                                                </child>
+                                                <child>
+                                                    <object class="GtkMenuButton" id="AppImageMenuButton">
+                                                        <property name="menu-model">AppImageMenu</property>
+                                                        <child>
+                                                            <object class="GtkBox">
+                                                                <property name="orientation">horizontal</property>
+                                                                <property name="spacing">8</property>
+                                                                <child>
+                                                                    <object class="GtkImage">
+                                                                        <property name="icon-name">application-x-executable-symbolic</property>
+                                                                        <property name="pixel-size">16</property>
+                                                                    </object>
+                                                                </child>
+                                                                <child>
+                                                                    <object class="GtkLabel">
+                                                                        <property name="label">AppImage</property>
                                                                     </object>
                                                                 </child>
                                                                 <child>

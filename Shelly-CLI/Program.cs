@@ -434,6 +434,10 @@ public class Program
                 appImage.AddCommand<AppImageConfigUpdates>("configure-updates")
                     .WithDescription("Configure update settings for an AppImage")
                     .WithExample("appimage", "configure-updates", "firefox", "--update-url", "https://github.com/mozilla/firefox-appimage", "--type", "GitHub");
+                
+                appImage.AddCommand<AppImageSyncMeta>("sync-meta")
+                    .WithDescription("Syncs meta data for an AppImage")
+                    .WithExample("appimage", "sync-meta", "firefox");
             });
         });
 

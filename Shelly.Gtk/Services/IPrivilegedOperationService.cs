@@ -19,7 +19,8 @@ public interface IPrivilegedOperationService
     Task<OperationResult> UpgradeAllAsync();
     Task<OperationResult> ForceSyncDatabaseAsync();
     Task<OperationResult> RemoveDbLockAsync();
-    Task<OperationResult> InstallAurPackagesAsync(IEnumerable<string> packages, bool useChroot = false, bool runChecks = false);
+    Task<OperationResult> InstallAurPackagesAsync(IEnumerable<string> packages, bool useChroot = false,
+        bool runChecks = false);
     Task<OperationResult> RemoveAurPackagesAsync(IEnumerable<string> packages, bool isCascade = false);
     Task<OperationResult> UpdateAurPackagesAsync(IEnumerable<string> packages, bool runChecks = false);
     Task<List<PackageBuild>> GetAurPackageBuild(IEnumerable<string> packages);
@@ -36,6 +37,8 @@ public interface IPrivilegedOperationService
     Task<OperationResult> AppImageUpgradeAsync();
     Task<OperationResult> AppImageRemoveAsync(string name);
     Task<OperationResult> AppImageConfigureUpdatesAsync(string url, string name, AppImageUpdateType updateType);
+    Task<OperationResult> AppImageSyncApp(string name);
+    Task<OperationResult> AppImageSyncAll();
     Task<OperationResult> PurifyCorruptionAsync();
 }
 
