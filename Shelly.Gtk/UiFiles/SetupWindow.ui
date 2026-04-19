@@ -34,8 +34,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">Let's get you set up with some basic configurations.
-                                        </property>
+                                        <property name="label">Let's get you set up with some basic configurations.</property>
                                         <property name="wrap">true</property>
                                         <property name="justify">center</property>
                                         <style>
@@ -71,11 +70,7 @@
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Access the Arch User Repository for a
-                                                            vast collection of community-maintained packages. AUR
-                                                            packages can contain malicous software, so please use
-                                                            caution when using the AUR.
-                                                        </property>
+                                                        <property name="label">Access the Arch User Repository for a vast collection of community-maintained packages. AUR packages can contain malicous software, so please use caution when using the AUR.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -107,9 +102,7 @@
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Enable support for Flatpak applications
-                                                            from Flathub and other repositories.
-                                                        </property>
+                                                        <property name="label">Enable support for Flatpak applications from Flathub and other repositories.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -141,9 +134,7 @@
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Manage and configure updates for AppImage
-                                                            applications easily within Shelly.
-                                                        </property>
+                                                        <property name="label">Manage and configure updates for AppImage applications easily.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -175,9 +166,7 @@
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Show a status icon in your system tray
-                                                            for quick access and notifications.
-                                                        </property>
+                                                        <property name="label">Show a status icon in your system tray for quick access and notifications.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -207,9 +196,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">Any required installations will run after the Finish
-                                            button has been accepted.
-                                        </property>
+                                        <property name="label">Any required installations will run after the Finish button has been accepted.</property>
                                         <property name="wrap">true</property>
                                         <property name="justify">center</property>
                                         <style>
@@ -220,9 +207,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">These options and others can be configured later in
-                                            settings.
-                                        </property>
+                                        <property name="label">These options and others can be configured later in settings.</property>
                                         <property name="wrap">true</property>
                                         <property name="justify">center</property>
                                         <style>
