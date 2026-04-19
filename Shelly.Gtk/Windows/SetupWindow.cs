@@ -24,7 +24,13 @@ public class SetupWindow(
         var appimageCheck = (CheckButton)builder.GetObject("appimage_check")!;
         var trayCheck = (CheckButton)builder.GetObject("tray_check")!;
         var finishButton = (Button)builder.GetObject("finish_button")!;
-
+        
+        var currentConfig = configService.LoadConfig();
+        aurCheck.Active = currentConfig.AurEnabled;
+        flatpakCheck.Active = currentConfig.FlatPackEnabled;
+        appimageCheck.Active = currentConfig.AppImageEnabled;
+        trayCheck.Active = currentConfig.TrayEnabled;
+        
         finishButton.OnClicked += (_, _) =>
         {
             var config = configService.LoadConfig();
