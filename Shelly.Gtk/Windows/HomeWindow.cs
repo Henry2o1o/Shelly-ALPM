@@ -26,10 +26,12 @@ public class HomeWindow(
     MetaSearch metaSearch) : IShellyWindow
 {
     private Box _box = null!;
+    private Box _logBox = null!;
     private readonly CancellationTokenSource _cts = new();
     private ListBox? _updatesListBox;
     private List<RssModel> _archNewsItems = [];
     private List<RssModel> _newArchNewsItems = [];
+    private List<OperationLogEntry>? _logEntries = [];
     private Label? _totalAurLabel;
     private Label? _percentAurLabel;
     private Label? _totalPackageLabel;
@@ -40,6 +42,7 @@ public class HomeWindow(
     private Button _archNewsButton = null!;
     private Widget? _activeSessionLogOverlay;
     private Overlay _overlay = null!;
+    private GenericDialogEventArgs _args;
     private uint _updateTimerId;
     private const int MaxRawLineBytes = 50 * 1024 * 1024; // 50 MB
     private GObject.SignalHandler<ListBox, ListBox.RowActivatedSignalArgs>? _logRowActivatedHandler;
@@ -857,7 +860,7 @@ public class HomeWindow(
     {
         try
         {
-            var entries = await operationLogService.GetRecentOperationsAsync(8);
+            _logEntries  = await operationLogService.GetRecentOperationsAsync(8);
             ct.ThrowIfCancellationRequested();
 
             GLib.Functions.IdleAdd(0, () =>
@@ -867,7 +870,7 @@ public class HomeWindow(
                 while (_operationLogListBox.GetFirstChild() is { } child)
                     _operationLogListBox.Remove(child);
 
-                if (entries.Count == 0)
+                if (_logEntries.Count == 0)
                 {
                     var placeholder = Label.New("No recent activity");
                     placeholder.AddCssClass("dim-label");
@@ -880,7 +883,7 @@ public class HomeWindow(
                     return false;
                 }
 
-                foreach (var entry in entries)
+                foreach (var entry in _logEntries)
                 {
                     var row = new ListBoxRow();
                     row.SetActivatable(true);
@@ -926,7 +929,7 @@ public class HomeWindow(
                 if (_logRowActivatedHandler is not null)
                     _operationLogListBox.OnRowActivated -= _logRowActivatedHandler;
 
-                _logRowActivatedHandler = (sender, args) => OnLogRowActivated(args.Row, entries);
+                _logRowActivatedHandler = (sender, args) => OnLogRowActivated(args.Row, _logEntries);
                 _operationLogListBox.OnRowActivated += _logRowActivatedHandler;
                 
                 return false;
@@ -938,7 +941,7 @@ public class HomeWindow(
         }
     }
     
-    private async void OnLogRowActivated(ListBoxRow row, List<OperationLogEntry> entries)
+    private async Task OnLogRowActivated(ListBoxRow row, List<OperationLogEntry> entries) 
     {
         var index = row.GetIndex();
         if (index < 0 || index >= entries.Count) return;
@@ -963,18 +966,18 @@ public class HomeWindow(
             return;
         }
 
-        var container = new Box();
-        container.SetOrientation(Orientation.Vertical);
-        container.SetSpacing(10);
-        container.SetMarginTop(10);
-        container.SetMarginBottom(10);
-        container.SetMarginStart(10);
-        container.SetMarginEnd(10);
+        _logBox = new Box();
+        _logBox.SetOrientation(Orientation.Vertical);
+        _logBox.SetSpacing(10);
+        _logBox.SetMarginTop(10);
+        _logBox.SetMarginBottom(10);
+        _logBox.SetMarginStart(10);
+        _logBox.SetMarginEnd(10);
 
         var titleLabel = Label.New("Session Log");
         titleLabel.AddCssClass("title-1");
         titleLabel.Xalign = 0;
-        container.Append(titleLabel);
+        _logBox.Append(titleLabel);
 
         var listBox = new ListBox();
         listBox.SetSelectionMode(SelectionMode.Multiple);
@@ -984,7 +987,7 @@ public class HomeWindow(
         scrolledWindow.HscrollbarPolicy = PolicyType.Automatic;
         scrolledWindow.SetChild(listBox);
 
-        container.Append(scrolledWindow);
+        _logBox.Append(scrolledWindow);
         
         int batchSize = 200;
         int currentIndex = 0;
@@ -1038,12 +1041,13 @@ public class HomeWindow(
             );
         };
 
-        container.Append(copyButton);
+        _logBox.Append(copyButton);
 
-        var args = new GenericDialogEventArgs(container);
-        GenericOverlay.ShowGenericOverlay(_overlay, container, args, 700, 500);
+        _args = new GenericDialogEventArgs(_logBox);
+        GenericOverlay.ShowGenericOverlay(_overlay, _logBox, _args, 700, 500);
 
-        _activeSessionLogOverlay = container;
+        _activeSessionLogOverlay = _logBox;
+        
     }    
     private static string GetIconForCommand(string command)
     {
@@ -1080,5 +1084,10 @@ public class HomeWindow(
 
         _cts.Cancel();
         _cts.Dispose();
+        _logEntries?.Clear();
+        _logEntries = null;
+        _logBox.Dispose();
+        _args = null!;
+
     }
 }
