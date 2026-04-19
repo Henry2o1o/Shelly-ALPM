@@ -127,13 +127,13 @@ public class FlatpakUpdate(
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.remote ?? "",
+                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote ?? "",
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
         {
             path =
-                $"/var/lib/flatpak/appstream/{package.remote}/x86_64/active/icons/64x64/{package.Id}.png";
+                $"/var/lib/flatpak/appstream/{package.Remote}/x86_64/active/icons/64x64/{package.Id}.png";
         }
 
         if (File.Exists(path))

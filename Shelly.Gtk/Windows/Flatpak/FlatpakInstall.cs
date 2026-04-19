@@ -132,7 +132,7 @@ public class FlatpakInstall(
         _remoteSelectionModel = new SingleSelection { Model = _remoteListStore };
         _listRemotes = (ListView)builder.GetObject("list_remotes")!;
         _listRemotes.SetModel(_remoteSelectionModel);
-        
+
         _overlayInstallButton.OnClicked += (_, _) => { _ = InstallSelectedAsync(); };
         _remoteRefButton.OnClicked += (_, _) => { _ = BuildAndShowRemoteRef(); };
         _remoteRefBackButton.OnClicked += (_, _) => { _remoteRefOverlay.Hide(); };
@@ -648,12 +648,12 @@ public class FlatpakInstall(
         verifiedIcon.SetVisible(app.IsVerified);
 
         var remotes = app.Remotes.FirstOrDefault() ?? new FlatpakRemoteDto();
-        
+
         var path = "";
         if (remotes.Scope == "user")
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            path = 
+            path =
                 Path.Combine(userHome, $".local/share/flatpak/appstream", app.Remotes.FirstOrDefault()?.Name ?? "",
                     "x86_64/active/icons/64x64", $"{app.Id}.png");
         }
@@ -829,8 +829,25 @@ public class FlatpakInstall(
                 }
                 else
                 {
-                    var result =
-                        await unprivilegedOperationService.FlatpakInstallFromBundle(file.GetPath()!, _selectedRefScope);
+                    var remotes = await unprivilegedOperationService.FlatpakListRemotes();
+                    var hasSystem = remotes.Any(r => r is { Scope: "system", Name: "flathub" });
+                    
+                    UnprivilegedOperationResult result;
+                    
+                    //This hoopla is because bundles require resolving their respective deps from the remotes config'd so we must use a flathub that is configured for the right level's.
+                    //ex: user level only user trys to install at system level, we must install at user level because that is what their flathub is configured for.
+                    if (hasSystem && _selectedRefScope == "system")
+                    {
+                        result =
+                            await unprivilegedOperationService.FlatpakInstallFromBundle(file.GetPath()!,
+                                _selectedRefScope);
+                    }
+                    else
+                    {
+                        result =
+                            await unprivilegedOperationService.FlatpakInstallFromBundle(file.GetPath()!, "user");
+                    }
+                    
                     if (!result.Success)
                     {
                         var args = new ToastMessageEventArgs(
@@ -1218,7 +1235,6 @@ public class FlatpakInstall(
 
     private async Task BuildAndShowRemoteRef()
     {
-
         if (_remoteFactory == null)
         {
             _remoteFactory = new SignalListItemFactory();

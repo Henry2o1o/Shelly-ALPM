@@ -241,12 +241,6 @@ internal static partial class FlatpakReference
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool TransactionAddInstallFlatpakref(IntPtr transaction, IntPtr remote, out IntPtr error);
 
-    [LibraryImport(LibName, EntryPoint = "flatpak_transaction_operation_get_operation_type")]
-    public static partial int TransactionOperationGetOperationType(IntPtr operation);
-
-    [LibraryImport(LibName, EntryPoint = "flatpak_transaction_operation_get_ref", StringMarshalling = StringMarshalling.Utf8)]
-    public static partial IntPtr TransactionOperationGetRef(IntPtr operation);
-
     [LibraryImport(LibName, EntryPoint = "flatpak_transaction_operation_get_metadata")]
     public static partial IntPtr TransactionOperationGetMetadata(IntPtr operation);
 
