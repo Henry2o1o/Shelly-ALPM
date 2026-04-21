@@ -19,7 +19,7 @@ try
     const string shellyNotificationsService = "org.shelly.Notifications";
     await connection.RequestNameAsync(shellyNotificationsService);
 
-    var trayHandler = new StatusNotifierItemHandler(connection);
+    var trayHandler = new StatusNotifierItemHandler(connection, configReader);
     connection.AddMethodHandler(trayHandler);
 
     var menuHandler = new DBusMenuHandler(connection);
@@ -58,14 +58,23 @@ try
 
     connection.AddMethodHandler(new ShellyUiReceiver(() =>
     {
-        configReader.Refresh();
-        forceCheck = true;
         try
         {
-            delayCts?.Cancel();
+            configReader.Refresh();
+            forceCheck = true;
+            try
+            {
+                delayCts?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            return Task.CompletedTask;
         }
-        catch (ObjectDisposedException)
+        catch (Exception exception)
         {
+            return Task.FromException(exception);
         }
     }, () =>
     {

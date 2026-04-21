@@ -4,7 +4,7 @@ using Tmds.DBus.Protocol;
 
 namespace Shelly_Notifications.DbusHandlers;
 
-class ShellyUiReceiver(Action? onRefreshRequested = null, Action? onUpdatesMadeRequested = null) : IPathMethodHandler
+class ShellyUiReceiver(Func<Task>? onRefreshRequested = null, Action? onUpdatesMadeRequested = null) : IPathMethodHandler
 {
     public string Path => ShellyConstants.Path;
     public bool HandlesChildPaths => false; 
@@ -18,8 +18,7 @@ class ShellyUiReceiver(Action? onRefreshRequested = null, Action? onUpdatesMadeR
             switch (request.MemberAsString)
             {
                 case "RefreshSettings":
-                    HandleSettingsRefresh(context);
-                    return default;
+                    return HandleSettingsRefreshAsync(context);
                 case "UpdatesMadeInUi":
                     HandleUpdatesMadeInUi(context);
                     return default;
@@ -31,11 +30,14 @@ class ShellyUiReceiver(Action? onRefreshRequested = null, Action? onUpdatesMadeR
         return default;
     }
 
-    private void HandleSettingsRefresh(MethodContext context)
+    private async ValueTask HandleSettingsRefreshAsync(MethodContext context)
     {
         Console.WriteLine($"RefreshSettings called");
 
-        onRefreshRequested?.Invoke();
+        if (onRefreshRequested != null)
+        {
+            await onRefreshRequested.Invoke();
+        }
 
         using var writer = context.CreateReplyWriter(null);
         context.Reply(writer.CreateMessage());

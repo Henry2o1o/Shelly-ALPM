@@ -13,6 +13,7 @@ public class ShellyConfig
     public List<DayOfWeek> DaysOfWeek { get; set; } = [];
 
     public TimeOnly? Time { get; set; } = null;
+    public bool UseSymbolicTray { get; set; } = true;
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }

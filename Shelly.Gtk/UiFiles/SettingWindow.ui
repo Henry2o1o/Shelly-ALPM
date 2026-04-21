@@ -103,6 +103,21 @@
                       </object>
                     </child>
                     <child>
+                      <object class="GtkBox" id="symbolic_tray_box">
+                        <property name="orientation">horizontal</property>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">Use Symbolic Tray Icon</property>
+                            <property name="hexpand">true</property>
+                            <property name="halign">start</property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkSwitch" id="symbolic_tray_switch"/>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
                       <object class="GtkBox" id="weekly_schedule_switch_box">
                         <property name="orientation">horizontal</property>
                         <child>

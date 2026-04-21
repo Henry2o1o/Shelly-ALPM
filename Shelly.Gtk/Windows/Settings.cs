@@ -52,6 +52,7 @@ public class Settings(
         SetupSwitch("shelly_icons_switch", _config.ShellyIconsEnabled, (v) => _config.ShellyIconsEnabled = v, builder);
         SetupSwitch("menu_navigation", _config.UseOldMenu, (v) => _config.UseOldMenu = v, builder);
         SetupSwitch("appimage_switch", _config.AppImageEnabled, (v) => _config.AppImageEnabled = v, builder);
+        SetupSwitch("symbolic_tray_switch", _config.UseSymbolicTray, (v) => _config.UseSymbolicTray = v, builder);
 
         var parallelDownloadsSpin = (SpinButton)builder.GetObject("parallel_downloads_spin")!;
         parallelDownloadsSpin.Value = _config.ParallelDownloadCount;
@@ -155,6 +156,7 @@ public class Settings(
     {
         var sw = (Switch)builder.GetObject(id)!;
         var trayIntervalBox = (Box)builder.GetObject("tray_interval_box")!;
+        var symbolicTrayBox = (Box)builder.GetObject("symbolic_tray_box")!;
         var weeklyScheduleSwitchBox = (Box)builder.GetObject("weekly_schedule_switch_box")!;
         var weeklyScheduleBox = (Box)builder.GetObject("weekly_schedule_box")!;
         var weeklyScheduleSwitch = (Switch)builder.GetObject("daily_schedule")!;
@@ -163,6 +165,7 @@ public class Settings(
 
         // Set initial visibility - tray interval is visible only if tray enabled AND weekly schedule disabled
         weeklyScheduleSwitchBox.Visible = initialValue;
+        symbolicTrayBox.Visible = initialValue;
         trayIntervalBox.Visible = initialValue && !weeklyScheduleSwitch.Active;
         weeklyScheduleBox.Visible = initialValue && weeklyScheduleSwitch.Active;
 
@@ -178,6 +181,7 @@ public class Settings(
             }
 
             weeklyScheduleSwitchBox.Visible = e.State;
+            symbolicTrayBox.Visible = e.State;
             trayIntervalBox.Visible = e.State && !weeklyScheduleSwitch.Active;
             weeklyScheduleBox.Visible = e.State && weeklyScheduleSwitch.Active;
 

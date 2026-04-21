@@ -55,6 +55,12 @@
         <Content Include="Assets\svg\arch-symbolic.svg">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </Content>
+        <Content Include="Assets\svg\shelly-updates-symbolic.svg">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </Content>
+        <Content Include="Assets\svg\shelly-shell-symbolic.svg">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
   
 </Project>

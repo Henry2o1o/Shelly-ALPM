@@ -89,6 +89,9 @@ EOF
   install -Dm644 "$srcdir/Assets/shellylogo.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly.png"
   install -Dm644 "$srcdir/Assets/svg/flatpak-symbolic.svg" "$pkgdir/usr/share/icons/hicolor/symbolic/apps/flatpak-symbolic.svg"
   install -Dm644 "$srcdir/Assets/svg/arch-symbolic.svg" "$pkgdir/usr/share/icons/hicolor/symbolic/apps/arch-symbolic.svg"
+  install -Dm644 "$srcdir/Assets/svg/shelly-updates-symbolic.svg" "$pkgdir/usr/share/icons/hicolor/symbolic/apps/shelly-updates-symbolic.svg"
+  install -Dm644 "$srcdir/Assets/svg/shelly-shell-symbolic.svg" "$pkgdir/usr/share/icons/hicolor/symbolic/apps/shelly-shell-symbolic.svg"
+
   install -Dm644 "$srcdir/Assets/shellylogo-tray.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly-tray.png"
   install -Dm644 "$srcdir/Assets/shellylogo-update.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly-update.png"
 

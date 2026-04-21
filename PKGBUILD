@@ -101,6 +101,8 @@ EOF
   install -Dm644 Shelly.Gtk/Assets/shellylogo-update.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/shelly-update.png"
   install -Dm644 Shelly.Gtk/Assets/svg/flatpak-symbolic.svg "$pkgdir/usr/share/icons/hicolor/symbolic/apps/flatpak-symbolic.svg"
   install -Dm644 Shelly.Gtk/Assets/svg/arch-symbolic.svg "$pkgdir/usr/share/icons/hicolor/symbolic/apps/arch-symbolic.svg"
+  install -Dm644 Shelly.Gtk/Assets/svg/shelly-updates-symbolic.svg "$pkgdir/usr/share/icons/hicolor/symbolic/apps/shelly-updates-symbolic.svg"
+  install -Dm644 Shelly.Gtk/Assets/svg/shelly-shell-symbolic.svg "$pkgdir/usr/share/icons/hicolor/symbolic/apps/shelly-shell-symbolic.svg"
 
   # Install fish shell completions
   install -Dm644 shelly.fish "$pkgdir/usr/share/fish/vendor_completions.d/shelly.fish"
