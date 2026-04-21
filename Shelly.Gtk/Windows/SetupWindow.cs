@@ -24,6 +24,22 @@ public class SetupWindow(
         var appimageCheck = (CheckButton)builder.GetObject("appimage_check")!;
         var trayCheck = (CheckButton)builder.GetObject("tray_check")!;
         var finishButton = (Button)builder.GetObject("finish_button")!;
+        var introImage = (Image)builder.GetObject("intro_image")!;
+
+        try
+        {
+            using var stream = ResourceHelper.GetResourceStream("Assets/chel-intro.png");
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            var gioStream = Gio.MemoryInputStream.NewFromBytes(GLib.Bytes.New(ms.ToArray()));
+            var pixbuf = GdkPixbuf.Pixbuf.NewFromStream(gioStream, null)!;
+            var texture = Gdk.Texture.NewForPixbuf(pixbuf);
+            introImage.SetFromPaintable(texture);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading intro image: {ex.Message}");
+        }
         
         var currentConfig = configService.LoadConfig();
         aurCheck.Active = currentConfig.AurEnabled;

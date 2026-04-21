@@ -19,4 +19,11 @@ public static class ResourceHelper
     {
         return LoadUiFile(relativePath);
     }
+
+    public static Stream GetResourceStream(string relativePath)
+    {
+        var resourceName = "Shelly.Gtk." + relativePath.Replace('/', '.').Replace('\\', '.');
+        return Assembly.GetManifestResourceStream(resourceName)
+               ?? throw new FileNotFoundException($"Embedded resource not found: {resourceName}");
+    }
 }
