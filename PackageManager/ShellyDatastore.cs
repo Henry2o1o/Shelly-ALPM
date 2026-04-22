@@ -12,13 +12,12 @@ namespace PackageManager;
 /// </summary>
 public static class ShellyDatastore
 {
-    private const string PacfileStoragePath = "pacfiles.d";
+    private const string PacfileStoreFile = "pacfiles.tar";
     private const string ConfigPath = "/var/lib/shelly";
 
     public static string GetPacfileStoragePath()
     {
-        var path = Path.Combine(ConfigPath, PacfileStoragePath);
-        Directory.CreateDirectory(path);
-        return path;
+        Directory.CreateDirectory(ConfigPath);
+        return Path.Combine(ConfigPath, PacfileStoreFile);
     }
 }

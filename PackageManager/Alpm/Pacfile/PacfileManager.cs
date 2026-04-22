@@ -11,6 +11,7 @@ public class PacfileManager : IPacfileManager, IAsyncDisposable
 {
     private readonly string _pacfileStore;
     private readonly MemoryStream _tarBuffer;
+    private bool _dirty;
 
     public PacfileManager(string pacfileStore)
     {
@@ -50,6 +51,7 @@ public class PacfileManager : IPacfileManager, IAsyncDisposable
 
         entries.Add((pacfile.Name, Encoding.UTF8.GetBytes(pacfile.Text)));
 
+        _dirty = true;
         _tarBuffer.SetLength(0);
         await using (var writer = new TarWriter(_tarBuffer, TarEntryFormat.Pax, leaveOpen: true))
         {
@@ -131,7 +133,10 @@ public class PacfileManager : IPacfileManager, IAsyncDisposable
     {
         try
         {
-            await FlushAsync();
+            if (_dirty)
+            {
+                await FlushAsync();
+            }
         }
         finally
         {

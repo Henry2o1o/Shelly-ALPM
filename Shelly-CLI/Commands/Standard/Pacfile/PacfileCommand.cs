@@ -17,7 +17,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
 
         RootElevator.EnsureRootExectuion();
         var pacfileStoragePath = ShellyDatastore.GetPacfileStoragePath();
-        await using PacfileManager manager = new(Path.Combine(pacfileStoragePath, ".pacfiles"));
+        await using PacfileManager manager = new(pacfileStoragePath);
         if (settings.Pacfiles.Length == 0)
         {
             //Running for all
@@ -93,7 +93,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
     private async Task<int> HandleUiMode(CommandContext context, PacfileSettings settings)
     {
         var pacfileStoragePath = ShellyDatastore.GetPacfileStoragePath();
-        await using PacfileManager manager = new(Path.Combine(pacfileStoragePath, ".pacfiles"));
+        await using PacfileManager manager = new(pacfileStoragePath);
         if (settings.Pacfiles.Length == 0)
         {
             if (settings.Delete)
