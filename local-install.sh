@@ -78,10 +78,17 @@ ln -sf "$INSTALL_DIR/shelly-ui" /usr/bin/shelly-ui
 ln -sf "$INSTALL_DIR/shelly" /usr/bin/shelly
 ln -sf "$INSTALL_DIR/shelly-notifications" /usr/bin/shelly-notifications
 
-# Install icon to standard location
-echo "Installing icon to standard location..."
+# Install icons to standard location
+echo "Installing icons to standard location..."
 mkdir -p /usr/share/icons/hicolor/256x256/apps
-cp "$INSTALL_DIR/shellylogo.png" /usr/share/icons/hicolor/256x256/apps/shelly.png
+mkdir -p /usr/share/icons/hicolor/symbolic/apps
+cp "$SCRIPT_DIR/Shelly.Gtk/Assets/shellylogo.png" /usr/share/icons/hicolor/256x256/apps/shelly.png
+cp "$SCRIPT_DIR/Shelly.Gtk/Assets/shellylogo-tray.png" /usr/share/icons/hicolor/256x256/apps/shelly-tray.png
+cp "$SCRIPT_DIR/Shelly.Gtk/Assets/shellylogo-update.png" /usr/share/icons/hicolor/256x256/apps/shelly-update.png
+cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/flatpak-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/flatpak-symbolic.svg
+cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/arch-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/arch-symbolic.svg
+cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/shelly-updates-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/shelly-updates-symbolic.svg
+cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/shelly-shell-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/shelly-shell-symbolic.svg
 
 # Create desktop entry
 echo "Creating desktop entry"

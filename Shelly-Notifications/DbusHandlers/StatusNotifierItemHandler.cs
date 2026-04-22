@@ -3,17 +3,24 @@ using Tmds.DBus.Protocol;
 
 namespace Shelly_Notifications.DbusHandlers;
 
-internal class StatusNotifierItemHandler(Connection connection) : IPathMethodHandler
+internal class StatusNotifierItemHandler(Connection connection, ConfigReader configReader) : IPathMethodHandler
 {
     public string Path => "/StatusNotifierItem";
     
     public bool HandlesChildPaths => false;
 
-    private string _iconName = "shelly-tray";
+    private string _iconName = "shelly-shell-symbolic";
 
     public async Task SetUpdatesPending(bool pending)
     {
         var newIcon = pending ? "shelly-update" : "shelly-tray";
+        if (configReader.LoadConfig().TrayEnabled)
+        {
+            newIcon = pending ? "shelly-updates-symbolic" : "shelly-shell-symbolic";
+        }
+        
+        Console.WriteLine($"[DEBUG_LOG] SetUpdatesPending: pending={pending}, newIcon={newIcon}");
+        
         if (_iconName != newIcon)
         {
             _iconName = newIcon;
@@ -36,6 +43,14 @@ internal class StatusNotifierItemHandler(Connection connection) : IPathMethodHan
             path: Path,
             @interface: "org.freedesktop.StatusNotifierItem",
             member: "NewIcon"
+        );
+        connection.TrySendMessage(writer.CreateMessage());
+        
+        writer = connection.GetMessageWriter();
+        writer.WriteSignalHeader(
+            path: Path,
+            @interface: "org.freedesktop.StatusNotifierItem",
+            member: "NewStatus"
         );
         connection.TrySendMessage(writer.CreateMessage());
     }
@@ -81,7 +96,7 @@ internal class StatusNotifierItemHandler(Connection connection) : IPathMethodHan
                                 { "Title", (VariantValue)"Shelly Notifications" },
                                 { "Status", (VariantValue)"Active" },
                                 { "IconName", (VariantValue)_iconName },
-                                { "IconThemePath", (VariantValue)string.Empty },
+                                { "IconThemePath", (VariantValue)"/usr/share/icons/hicolor" },
                                 { "ItemIsMenu", (VariantValue)false },
                                 { "Menu", (VariantValue)new ObjectPath("/MenuBar") }
                             };
@@ -110,7 +125,7 @@ internal class StatusNotifierItemHandler(Connection connection) : IPathMethodHan
                                 case "Title": writer.WriteVariant("Shelly Notifications"); break;
                                 case "Status": writer.WriteVariant("Active"); break;
                                 case "IconName": writer.WriteVariant(_iconName); break;
-                                case "IconThemePath": writer.WriteVariant(string.Empty); break;
+                                case "IconThemePath": writer.WriteVariant("/usr/share/icons/hicolor"); break;
                                 case "ItemIsMenu": writer.WriteVariant(false); break;
                                 case "Menu": writer.WriteVariant(new ObjectPath("/MenuBar")); break;
                                 default:

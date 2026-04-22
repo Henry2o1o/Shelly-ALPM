@@ -55,6 +55,8 @@ public class ShellyConfig
     
     public bool NewInstallInitSettings { get; set; } = false;
     
+    public bool UseSymbolicTray { get; set; } = true;
+    
     // Existing CLI settings (included for unified config compatibility)
     public string FileSizeDisplay { get; set; } = "Bytes";
     public string DefaultExecution { get; set; } = "UpgradeAll";
