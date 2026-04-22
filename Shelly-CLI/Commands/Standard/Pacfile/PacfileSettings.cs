@@ -9,7 +9,9 @@ public class PacfileSettings : CommandSettings
     [Description("One or more pacfiles to interact with (space-separated). If empty uses all pacfiles")]
     public string[] Pacfiles { get; set; } = [];
 
-    [CommandOption("-d|--delete")] public bool Delete { get; set; }
+    [CommandOption("-d|--delete")]
+    [Description("Deletes a pacfile however this is still not supported and is here as a placeholder.")]
+    public bool Delete { get; set; }
 
     [CommandOption("-j|--json")] public bool Json { get; set; }
 }
