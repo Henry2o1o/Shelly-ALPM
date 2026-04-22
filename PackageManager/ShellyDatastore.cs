@@ -10,15 +10,15 @@ namespace PackageManager;
 /// Manages storage locations for Shelly only storage. This is to be used to support features that don't exist
 /// inside pacman.
 /// </summary>
-/// <param name="configPath"></param>
-public class ShellyDatastore(string configPath = "/var/lib/shelly")
+public static class ShellyDatastore
 {
     private const string PacfileStoragePath = "pacfiles.d";
+    private const string ConfigPath = "/var/lib/shelly";
 
-    public Task<string> GetPacfileStoragePath()
+    public static string GetPacfileStoragePath()
     {
-        var path = Path.Combine(configPath, PacfileStoragePath);
+        var path = Path.Combine(ConfigPath, PacfileStoragePath);
         Directory.CreateDirectory(path);
-        return Task.FromResult(path);
+        return path;
     }
 }
