@@ -7,10 +7,10 @@ namespace PackageManager.Alpm.Package;
 
 public static class AlpmPackageFileTreeBuilder
 {
-    public static AlpmPackageFileDto BuildTree(IEnumerable<AlpmFile> files)
+    public static AlpmPackageTreeDto BuildTree(IEnumerable<AlpmFile> files)
     {
-        var root = new AlpmPackageFileDto("");
-        var dirs = new Dictionary<string, AlpmPackageFileDto>(StringComparer.Ordinal)
+        var root = new AlpmPackageTreeDto("");
+        var dirs = new Dictionary<string, AlpmPackageTreeDto>(StringComparer.Ordinal)
         {
             [""] = root,
         };
@@ -31,7 +31,7 @@ public static class AlpmPackageFileTreeBuilder
             var parent = EnsureDirectory(GetParent(path), dirs, root);
 
             var leaf = GetLeaf(path);
-            var node = new AlpmPackageFileDto(leaf);
+            var node = new AlpmPackageTreeDto(leaf);
             parent.Files.Add(node);
 
             if (isDir)
@@ -41,16 +41,16 @@ public static class AlpmPackageFileTreeBuilder
         return root;
     }
 
-    private static AlpmPackageFileDto EnsureDirectory(
+    private static AlpmPackageTreeDto EnsureDirectory(
         string path,
-        Dictionary<string, AlpmPackageFileDto> dirs,
-        AlpmPackageFileDto root)
+        Dictionary<string, AlpmPackageTreeDto> dirs,
+        AlpmPackageTreeDto root)
     {
         if (path.Length == 0) return root;
         if (dirs.TryGetValue(path, out var existing)) return existing;
 
         var parent = EnsureDirectory(GetParent(path), dirs, root);
-        var node = new AlpmPackageFileDto(GetLeaf(path));
+        var node = new AlpmPackageTreeDto(GetLeaf(path));
         parent.Files.Add(node);
         dirs[path] = node;
         return node;
