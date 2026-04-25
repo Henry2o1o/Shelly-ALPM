@@ -71,13 +71,7 @@ public class ListAvailableCommand : Command<ListSettings>
 
             if (settings.JsonOutput)
             {
-                var sortedList = sortedPackages.ToList();
-                var json = JsonSerializer.Serialize(sortedList, ShellyCLIJsonContext.Default.ListAlpmPackageDto);
-                // Write directly to stdout stream to bypass Spectre.Console redirection
-                using var stdout = Console.OpenStandardOutput();
-                using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                writer.WriteLine(json);
-                writer.Flush();
+                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAlpmPackageDto);
                 return 0;
             }
 
@@ -153,12 +147,7 @@ public class ListAvailableCommand : Command<ListSettings>
 
             if (settings.JsonOutput)
             {
-                var sortedList = sortedPackages.ToList();
-                var json = JsonSerializer.Serialize(sortedList, ShellyCLIJsonContext.Default.ListAlpmPackageDto);
-                using var stdout = Console.OpenStandardOutput();
-                using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                writer.WriteLine(json);
-                writer.Flush();
+                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAlpmPackageDto);
                 return 0;
             }
 

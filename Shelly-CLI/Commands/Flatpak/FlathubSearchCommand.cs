@@ -80,10 +80,7 @@ public class FlathubSearchCommand : AsyncCommand<FlathubSearchSettings>
                 var results = await manager.SearchFlathubJsonAsync(
                     settings.Query, page: settings.Page,
                     limit: settings.Limit, ct: CancellationToken.None);
-                await using var stdout = System.Console.OpenStandardOutput();
-                await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                await writer.WriteLineAsync(results);
-                await writer.FlushAsync();
+                await JsonOutput.WriteRawAsync(results);
                 return 0;
             }
             else

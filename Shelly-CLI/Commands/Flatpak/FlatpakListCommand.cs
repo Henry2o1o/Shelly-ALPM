@@ -22,11 +22,7 @@ public class FlatpakListCommand : Command<DefaultSettings>
         
         if (settings.JsonOutput)
         {
-            var json = JsonSerializer.Serialize(packages, FlatpakDtoJsonContext.Default.ListFlatpakPackageDto);
-            using var stdout = Console.OpenStandardOutput();
-            using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-            writer.WriteLine(json);
-            writer.Flush();
+            JsonOutput.WriteJson(packages, FlatpakDtoJsonContext.Default.ListFlatpakPackageDto);
             return 0;
         }
         
@@ -65,11 +61,7 @@ public class FlatpakListCommand : Command<DefaultSettings>
         
         if (settings.JsonOutput)
         {
-            var json = JsonSerializer.Serialize(packages, FlatpakDtoJsonContext.Default.ListFlatpakPackageDto);
-            using var stdout = Console.OpenStandardOutput();
-            using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-            writer.WriteLine(json);
-            writer.Flush();
+            JsonOutput.WriteJson(packages, FlatpakDtoJsonContext.Default.ListFlatpakPackageDto);
             return 0;
         }
 

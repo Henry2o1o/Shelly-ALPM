@@ -46,12 +46,7 @@ public class AurListInstalledCommand : AsyncCommand<ListSettings>
 
             if (settings.JsonOutput)
             {
-                var sortedList = sortedPackages.ToList();
-                var json = JsonSerializer.Serialize(sortedList, ShellyCLIJsonContext.Default.ListAurPackageDto);
-                using var stdout = System.Console.OpenStandardOutput();
-                using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                writer.WriteLine(json);
-                writer.Flush();
+                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAurPackageDto);
                 return 0;
             }
 
@@ -120,12 +115,7 @@ public class AurListInstalledCommand : AsyncCommand<ListSettings>
 
             if (settings.JsonOutput)
             {
-                var sortedList = sortedPackages.ToList();
-                var json = JsonSerializer.Serialize(sortedList, ShellyCLIJsonContext.Default.ListAurPackageDto);
-                using var stdout = Console.OpenStandardOutput();
-                using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                writer.WriteLine(json);
-                writer.Flush();
+                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAurPackageDto);
                 return 0;
             }
 
