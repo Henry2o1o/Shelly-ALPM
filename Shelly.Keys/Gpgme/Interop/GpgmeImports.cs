@@ -63,6 +63,20 @@ internal static partial class GpgmeImports
 
     [LibraryImport(LibraryName)]
     public static partial uint gpgme_op_decrypt(GpgmeContextHandle ctx, GpgmeDataHandle ciph, GpgmeDataHandle plain);
+
+    // Key generation
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial uint gpgme_op_createkey(
+        GpgmeContextHandle ctx,
+        string userid,
+        string? algo,
+        ulong reserved,
+        ulong expires,
+        IntPtr extrakey,
+        uint flags);
+
+    [LibraryImport(LibraryName)]
+    public static partial IntPtr gpgme_op_genkey_result(GpgmeContextHandle ctx);
     
     // Error handling from libgpg-error (often linked implicitly or explicitly)
     [LibraryImport(LibraryName)]

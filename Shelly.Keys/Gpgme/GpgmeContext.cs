@@ -36,6 +36,38 @@ public sealed class GpgmeContext : IDisposable
     }
     
     // Additional wrappers for Key operations will go here if needed
+    
+    // gpg-error code for "end of list"
+    private const uint GPG_ERR_EOF = 16383;
+
+    public static bool HasSecretKey(GpgmeContext ctx)
+    {
+        var err = GpgmeImports.gpgme_op_keylist_start(ctx.Handle, pattern: null, secret_only: 1);
+        GpgmeHelpers.ThrowIfError(err);
+
+        try
+        {
+            err = GpgmeImports.gpgme_op_keylist_next(ctx.Handle, out IntPtr key);
+
+            if (err == 0)
+            {
+                // Found one — release it and report true.
+                GpgmeImports.gpgme_key_unref(key);
+                return true;
+            }
+
+            // EOF means no secret keys present.
+            if ((err & 0xFFFF) == GPG_ERR_EOF)
+                return false;
+
+            GpgmeHelpers.ThrowIfError(err); // any other error
+            return false;
+        }
+        finally
+        {
+            GpgmeImports.gpgme_op_keylist_end(ctx.Handle);
+        }
+    }
 
     private void Dispose(bool disposing)
     {
