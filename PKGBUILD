@@ -5,7 +5,7 @@ pkgver=2.1.1
 pkgrel=1
 pkgdesc="Shelly: A Modern Arch Package Manager"
 arch=('x86_64')
-url="https://github.com/ZoeyErinBauer/Shelly-ALPM"
+url="https://github.com/Seafoam-Labs/Shelly-ALPM"
 license=('GPL-3.0-only')
 provides=('shelly')
 conflicts=('shelly-git' 'shelly-bin')
@@ -30,7 +30,7 @@ optdepends=(
 makedepends=('dotnet-sdk-10.0' 'clang')
 
 # Source tarball from GitHub release
-source=("${pkgname}-${pkgver}.tar.gz::https://github.com/ZoeyErinBauer/Shelly-ALPM/archive/v${pkgver}.tar.gz")
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Seafoam-Labs/Shelly-ALPM/archive/v${pkgver}.tar.gz")
 
 sha256sums=('a00b159faa548a37663a552ab24159788cd2201ce7c717218e21567744b6a3a1')
 
