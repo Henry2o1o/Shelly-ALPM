@@ -280,6 +280,9 @@ sealed class Program
 
             if (!initialConfig.NewInstallInitSettings)
             {
+                sidebarBox.Visible = false;
+                horizontalActionBar.Visible = false;
+
                 var setupWindow = serviceProvider.GetRequiredService<SetupWindow>();
                 var setupWidget = setupWindow.CreateWindow();
                 
@@ -290,6 +293,10 @@ sealed class Program
                 {
                     GLib.Functions.IdleAdd(0, () =>
                     {
+                        var updatedConfig = configService.LoadConfig();
+                        sidebarBox.Visible = !updatedConfig.UseOldMenu;
+                        horizontalActionBar.Visible = updatedConfig.UseOldMenu;
+
                         contentArea.Remove(setupWidget);
                         setupWindow.Dispose();
 
