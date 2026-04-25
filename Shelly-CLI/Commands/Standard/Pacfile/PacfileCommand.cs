@@ -1,6 +1,7 @@
 using System.Text.Json;
 using PackageManager;
 using PackageManager.Alpm.Pacfile;
+using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -30,8 +31,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
             var result = await manager.GetPacfiles();
             if (settings.Json)
             {
-                var serializedResult = JsonSerializer.Serialize(result, ShellyCLIJsonContext.Default.ListPacfileRecord);
-                Console.WriteLine(serializedResult);
+                await JsonOutput.WriteJsonAsync(result, ShellyCLIJsonContext.Default.ListPacfileRecord);
                 return 0;
             }
 
@@ -56,11 +56,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
 
         if (settings.Json)
         {
-            var json = JsonSerializer.Serialize(records, ShellyCLIJsonContext.Default.ListPacfileRecord);
-            await using var stdout = Console.OpenStandardOutput();
-            await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-            await writer.WriteLineAsync(json);
-            await writer.FlushAsync();
+            await JsonOutput.WriteJsonAsync(records, ShellyCLIJsonContext.Default.ListPacfileRecord);
             return 0;
         }
 
@@ -105,8 +101,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
             var result = await manager.GetPacfiles();
             if (settings.Json)
             {
-                var serializedResult = JsonSerializer.Serialize(result, ShellyCLIJsonContext.Default.ListPacfileRecord);
-                Console.WriteLine(serializedResult);
+                await JsonOutput.WriteJsonAsync(result, ShellyCLIJsonContext.Default.ListPacfileRecord);
                 return 0;
             }
 
@@ -143,11 +138,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
             records.Add(await manager.GetPacfile(file));
         }
 
-        var json = JsonSerializer.Serialize(records, ShellyCLIJsonContext.Default.ListPacfileRecord);
-        await using var stdout = Console.OpenStandardOutput();
-        await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-        await writer.WriteLineAsync(json);
-        await writer.FlushAsync();
+        await JsonOutput.WriteJsonAsync(records, ShellyCLIJsonContext.Default.ListPacfileRecord);
         return 0;
     }
 }

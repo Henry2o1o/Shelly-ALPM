@@ -4,6 +4,7 @@ using PackageManager.Aur;
 using PackageManager.Utilities;
 using PackageManager.Aur.Models;
 using PackageManager.Flatpak;
+using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -61,12 +62,7 @@ public class CheckPackageUpdatesNonRootCommand : AsyncCommand<CheckPackageUpdate
                 syncModel.Flatpaks = flatpakPackageModels;
             }
 
-            var json = JsonSerializer.Serialize(syncModel, ShellyCLIJsonContext.Default.SyncModel);
-            // Write directly to stdout stream to bypass Spectre.Console redirection
-            await using var stdout = Console.OpenStandardOutput();
-            await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-            await writer.WriteLineAsync(json);
-            await writer.FlushAsync();
+            await JsonOutput.WriteJsonAsync(syncModel, ShellyCLIJsonContext.Default.SyncModel);
             return 0;
         }
 
@@ -183,11 +179,7 @@ public class CheckPackageUpdatesNonRootCommand : AsyncCommand<CheckPackageUpdate
                 syncModel.Flatpaks = flatpakPackageModels;
             }
 
-            var json = JsonSerializer.Serialize(syncModel, ShellyCLIJsonContext.Default.SyncModel);
-            await using var stdout = Console.OpenStandardOutput();
-            await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-            await writer.WriteLineAsync(json);
-            await writer.FlushAsync();
+            await JsonOutput.WriteJsonAsync(syncModel, ShellyCLIJsonContext.Default.SyncModel);
             return 0;
         }
 

@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using PackageManager.Alpm;
 using PackageManager.Utilities;
+using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -25,12 +26,7 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
                 var feed = await GetRssFeedAsync("https://archlinux.org/feeds/news/");
                 if (settings.Json)
                 {
-                    var json = JsonSerializer.Serialize(feed, ShellyCLIJsonContext.Default.ListRssModel);
-                    await using var stdout = System.Console.OpenStandardOutput();
-                    await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                    await writer.WriteLineAsync(json);
-                    await writer.FlushAsync();
-                    CacheFeed(feed);
+                    await JsonOutput.WriteJsonAsync(feed, ShellyCLIJsonContext.Default.ListRssModel);
                 }
                 else
                 {
@@ -41,9 +37,9 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
                         AnsiConsole.MarkupLine($"[blue]{item.Link.EscapeMarkup()}[/]");
                         AnsiConsole.MarkupLine($"[white]{item.Description.EscapeMarkup()}[/]");
                     }
-
-                    CacheFeed(feed);
                 }
+
+                CacheFeed(feed);
             }
             catch (Exception e)
             {
@@ -60,11 +56,7 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
 
             if (settings.Json)
             {
-                var json = JsonSerializer.Serialize(newFeed, ShellyCLIJsonContext.Default.ListRssModel);
-                await using var stdout = System.Console.OpenStandardOutput();
-                await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                await writer.WriteLineAsync(json);
-                await writer.FlushAsync();
+                await JsonOutput.WriteJsonAsync(newFeed, ShellyCLIJsonContext.Default.ListRssModel);
                 if (newFeed.Count > 0) CacheFeed(feed);
                 return 0;
             }

@@ -43,12 +43,7 @@ public class ListUpdatesCommand : Command<ListSettings>
 
         if (settings.JsonOutput)
         {
-            var json = JsonSerializer.Serialize(updates, ShellyCLIJsonContext.Default.ListAlpmPackageUpdateDto);
-            // Write directly to stdout stream to bypass Spectre.Console redirection
-            using var stdout = Console.OpenStandardOutput();
-            using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-            writer.WriteLine(json);
-            writer.Flush();
+            JsonOutput.WriteJson(updates, ShellyCLIJsonContext.Default.ListAlpmPackageUpdateDto);
             return 0;
         }
 
@@ -106,11 +101,7 @@ public class ListUpdatesCommand : Command<ListSettings>
 
         if (settings.JsonOutput)
         {
-            var json = JsonSerializer.Serialize(updates, ShellyCLIJsonContext.Default.ListAlpmPackageUpdateDto);
-            using var stdout = Console.OpenStandardOutput();
-            using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-            writer.WriteLine(json);
-            writer.Flush();
+            JsonOutput.WriteJson(updates, ShellyCLIJsonContext.Default.ListAlpmPackageUpdateDto);
             return 0;
         }
 

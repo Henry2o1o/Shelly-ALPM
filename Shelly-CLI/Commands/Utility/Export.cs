@@ -6,6 +6,7 @@ using PackageManager.Alpm;
 using PackageManager.Aur;
 using PackageManager.Flatpak;
 using PackageManager.Utilities;
+using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -49,11 +50,9 @@ public class Export : AsyncCommand<ExportSettings>
             Flatpaks = flatpaks.Select(x => new SyncFlatpakModel { Id = x.Id, Version = x.Version }).ToList()
         };
 
-        var json = JsonSerializer.Serialize(syncModel, ShellyCLIJsonContext.Default.SyncModel);
+        await JsonOutput.WriteJsonAsync(syncModel, ShellyCLIJsonContext.Default.SyncModel);
 
-        Console.WriteLine(json);
-
-        await File.WriteAllTextAsync(path, json);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(syncModel, ShellyCLIJsonContext.Default.SyncModel));
 
         AnsiConsole.MarkupLine($"[blue]Sync file exported to: {path.EscapeMarkup()}[/]");
 

@@ -47,12 +47,7 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
 
             if (settings.JsonOutput)
             {
-                var sortedList = sortedUpdates.ToList();
-                var json = JsonSerializer.Serialize(sortedList, ShellyCLIJsonContext.Default.ListAurUpdateDto);
-                await using var stdout = System.Console.OpenStandardOutput();
-                await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                await writer.WriteLineAsync(json);
-                await writer.FlushAsync();
+                await JsonOutput.WriteJsonAsync(sortedUpdates.ToList(), ShellyCLIJsonContext.Default.ListAurUpdateDto);
                 return 0;
             }
 
@@ -130,12 +125,7 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
 
             if (settings.JsonOutput)
             {
-                var sortedList = sortedUpdates.ToList();
-                var json = JsonSerializer.Serialize(sortedList, ShellyCLIJsonContext.Default.ListAurUpdateDto);
-                await using var stdout = Console.OpenStandardOutput();
-                await using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-                await writer.WriteLineAsync(json);
-                await writer.FlushAsync();
+                await JsonOutput.WriteJsonAsync(sortedUpdates.ToList(), ShellyCLIJsonContext.Default.ListAurUpdateDto);
                 return 0;
             }
 

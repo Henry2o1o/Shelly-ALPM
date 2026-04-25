@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using PackageManager.Aur;
+using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -68,11 +69,7 @@ public class AurSearchPackageBuild : AsyncCommand<AurPackageSettings>
                 let pkgbuild = manager.FetchPkgbuildAsync(package).GetAwaiter().GetResult()
                 select new PackageBuild(package, pkgbuild)).ToList();
             
-            var json = JsonSerializer.Serialize(packageBuild, ShellyCLIJsonContext.Default.ListPackageBuild);
-            await using var stdout = Console.OpenStandardOutput();
-            await using var writer = new StreamWriter(stdout, System.Text.Encoding.UTF8);
-            await writer.WriteLineAsync(json);
-            await writer.FlushAsync();
+            await JsonOutput.WriteJsonAsync(packageBuild, ShellyCLIJsonContext.Default.ListPackageBuild);
             
             return 0;
         }

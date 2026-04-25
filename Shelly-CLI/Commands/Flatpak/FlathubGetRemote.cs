@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using PackageManager.Flatpak;
+using Shelly_CLI.Utility;
 using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands.Flatpak;
@@ -10,10 +11,7 @@ public class FlathubGetRemote : Command<FlatpakListRemoteAppStreamSettings>
     {
         var result = settings.AppStreamName == "all" ? new FlatpakManager().GetAvailableAppsFromAppstreamJson("all", getAll: true) : new FlatpakManager().GetAvailableAppsFromAppstreamJson(settings.AppStreamName);
         
-        using var stdout = Console.OpenStandardOutput();
-        using var writer = new System.IO.StreamWriter(stdout, System.Text.Encoding.UTF8);
-        writer.WriteLine(result);
-        writer.Flush();
+        JsonOutput.WriteRaw(result);
         return 0;
     }
 }
