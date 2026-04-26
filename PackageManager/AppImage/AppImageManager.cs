@@ -678,7 +678,16 @@ public class AppImageManager
                     {
                         if (line.StartsWith("Exec="))
                         {
-                            patchedContent.AppendLine($"Exec=\"{filePath}\"");
+                            // Preserve %u, %U, %f, %F and other field codes from the original Exec line
+                            var execValue = line["Exec=".Length..].Trim();
+                            var fieldCodes = "";
+                            foreach (var token in execValue.Split(' ').Skip(1))
+                            {
+                                if (!token.StartsWith('%')) continue;
+                                fieldCodes = $" {token}";
+                                break;
+                            }
+                            patchedContent.AppendLine($"Exec=\"{filePath}\"{fieldCodes}");
                         }
                         else if (line.StartsWith("Icon="))
                         {
