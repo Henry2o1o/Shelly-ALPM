@@ -43,6 +43,8 @@ public class MetaSearch(
 
     private ColumnViewSorter _columnSorter = null!;
     private SortType _primarySort;
+    private PackageSortColumn? _lastColumn;
+    private SortType _lastOrder;
 
     private Dictionary<ColumnViewCell, EventHandler> _checkBinding = [];
     private Dictionary<ColumnViewCell, EventHandler> _installedBinding = [];
@@ -86,18 +88,29 @@ public class MetaSearch(
         _columnSorter.OnChanged += (_, _) =>
         {
             var primaryColumn = _columnSorter.GetPrimarySortColumn()!;
-            _primarySort = _columnSorter.GetPrimarySortOrder();
-
             var sortColumn = GetSortColumn(primaryColumn);
 
             if (sortColumn is null)
                 return;
-
+            
+            if (_lastColumn == sortColumn.Value)
+            {
+                _lastOrder =
+                    _lastOrder == SortType.Ascending
+                        ? SortType.Descending
+                        : SortType.Ascending;
+            }
+            else
+            {
+                _lastColumn = sortColumn.Value;
+                _lastOrder = SortType.Ascending;
+            }
+            
             Sort(
                 _listStore,
                 _packageGObjectRefs,
                 sortColumn.Value,
-                _primarySort
+                _lastOrder
             );
         };
         
@@ -392,7 +405,11 @@ public class MetaSearch(
                     _packageGObjectRefs.Add(pkgObj);
                     _listStore.Append(pkgObj);
                 }
-
+                
+                // Adding an initial sort to stop repo column from being loaded twice in the same state
+                _lastColumn = PackageSortColumn.Repo;
+                _lastOrder = SortType.Ascending;
+                
                 return false;
             });
         }
