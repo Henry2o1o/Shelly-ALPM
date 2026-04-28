@@ -8,5 +8,9 @@
         <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
         <Nullable>enable</Nullable>
     </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Nerdbank.MessagePack" Version="1.1.25" />
+    </ItemGroup>
     
 </Project>

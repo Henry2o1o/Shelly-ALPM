@@ -36,6 +36,7 @@
         <PackageReference Include="GirCore.GObject-2.0.Integration" Version="0.7.0"/>
         <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.6" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.6" />
+        <PackageReference Include="Nerdbank.MessagePack" Version="1.1.25" />
         <PackageReference Include="Tmds.DBus.Protocol" Version="0.92.0" />
     </ItemGroup>
     <ItemGroup>

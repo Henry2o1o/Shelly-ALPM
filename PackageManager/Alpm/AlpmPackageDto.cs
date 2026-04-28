@@ -1,18 +1,20 @@
 using System;
 using System.Collections.Generic;
 using PackageManager.Alpm.Package;
+using PolyType;
 
 namespace PackageManager.Alpm;
 
-public record AlpmPackageDto
+[GenerateShape]
+public partial record AlpmPackageDto
 {
     public string Name { get; init; } = string.Empty;
     public string Version { get; init; } = string.Empty;
     public long Size { get; init; }
 
-    public string Description { get; init; } = string.Empty;
+    public string? Description { get; init; } = string.Empty;
 
-    public string Url { get; init; } = string.Empty;
+    public string? Url { get; init; } = string.Empty;
 
     public string Repository { get; init; } = string.Empty;
 
@@ -32,7 +34,7 @@ public record AlpmPackageDto
 
     public AlpmPackageTreeDto? PackageFile { get; init; } = null;
 
-    public string InstallReason { get; init; } = string.Empty;
+    public string? InstallReason { get; init; } = string.Empty;
 
     public DateTime? InstallDate { get; init; } = null;
 

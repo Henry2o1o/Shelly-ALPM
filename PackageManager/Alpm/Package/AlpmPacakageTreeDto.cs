@@ -1,8 +1,10 @@
 using System.Collections.Generic;
+using PolyType;
 
 namespace PackageManager.Alpm.Package;
 
-public record AlpmPackageTreeDto(string Name)
+[GenerateShape]
+public partial record AlpmPackageTreeDto(string Name)
 {
-    public List<AlpmPackageTreeDto> Files { get; } = [];
+    public List<AlpmPackageTreeDto> Files { get; init; } = [];
 }

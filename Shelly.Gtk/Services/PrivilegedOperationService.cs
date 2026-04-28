@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Nerdbank.MessagePack;
 using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services.TrayServices;
@@ -232,7 +233,12 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             ? await ExecuteCommandAsync("list-available", "--json", "--show-hidden")
             : await ExecuteCommandAsync("list-available", "--json");
 
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAlpmPackageDto);
+        if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
+            return [];
+
+        MessagePackSerializer serializer = new();
+        var msgpackBytes = Convert.FromBase64String(result.Output.Trim());
+        return serializer.Deserialize<List<AlpmPackageDto>, MessagePackWitness>(msgpackBytes) ?? new List<AlpmPackageDto>();
     }
 
     public async Task<List<AlpmPackageDto>> GetInstalledPackagesAsync(bool showHidden = false)
@@ -258,36 +264,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         var result = showHidden
             ? await ExecuteCommandAsync("aur list-updates", "--json", "--show-hidden")
             : await ExecuteCommandAsync("aur list-updates", "--json");
-        SendDbusMessage(result);
-        if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
-        {
-            return [];
-        }
-
-        try
-        {
-            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            foreach (var line in lines)
-            {
-                var trimmedLine = StripBom(line.Trim());
-                if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
-                {
-                    var packages = System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
-                        ShellyGtkJsonContext.Default.ListAurUpdateDto);
-                    return packages ?? [];
-                }
-            }
-
-            // If no JSON array found, try parsing the whole output
-            var allPackages = System.Text.Json.JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
-                ShellyGtkJsonContext.Default.ListAurUpdateDto);
-            return allPackages ?? [];
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Failed to parse installed packages JSON: {ex.Message}");
-            return [];
-        }
+        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAurUpdateDto);
     }
 
     public async Task<List<AurPackageDto>> SearchAurPackagesAsync(string query)

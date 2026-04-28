@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text.Json;
+using Nerdbank.MessagePack;
 using PackageManager.Alpm;
 using Shelly_CLI.Utility;
 using Spectre.Console;
@@ -17,6 +18,7 @@ public class ListAvailableCommand : Command<ListSettings>
         {
             return HandleUiModeListAvailable(settings);
         }
+
         try
         {
             using var manager = new AlpmManager();
@@ -33,7 +35,8 @@ public class ListAvailableCommand : Command<ListSettings>
                 {
                     AnsiConsole.Status()
                         .Spinner(Spinner.Known.Dots)
-                        .Start("Initializing ALPM...", ctx => { manager.Initialize(showHiddenPackages: settings.ShowHidden); });
+                        .Start("Initializing ALPM...",
+                            ctx => { manager.Initialize(showHiddenPackages: settings.ShowHidden); });
                 }
             }
             else if (settings.Sync)
@@ -51,7 +54,8 @@ public class ListAvailableCommand : Command<ListSettings>
             // Apply filter if specified
             if (!string.IsNullOrWhiteSpace(settings.Filter))
             {
-                packages = packages.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase)).ToList();
+                packages = packages.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
             }
 
             // Apply sorting based on settings
@@ -71,7 +75,10 @@ public class ListAvailableCommand : Command<ListSettings>
 
             if (settings.JsonOutput)
             {
-                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAlpmPackageDto);
+                MessagePackSerializer serializer = new();
+
+                byte[] msgpack = serializer.Serialize<List<AlpmPackageDto>, MessagePackWitness>(sortedPackages.ToList());
+                Console.Write(Convert.ToBase64String(msgpack));
                 return 0;
             }
 
@@ -80,7 +87,7 @@ public class ListAvailableCommand : Command<ListSettings>
             table.AddColumn("Version");
             table.AddColumn("Repository");
             table.AddColumn("Description");
-            
+
             var skip = (settings.Page - 1) * settings.Take;
             var displayPackages = sortedPackages.Skip(skip).Take(settings.Take).ToList();
 
@@ -126,8 +133,10 @@ public class ListAvailableCommand : Command<ListSettings>
             // Apply filter if specified
             if (!string.IsNullOrWhiteSpace(settings.Filter))
             {
-                var nameRes = packages.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase)).ToList();
-                var descRes= packages.Where(p => p.Description.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase)).ToList();
+                var nameRes = packages.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                var descRes = packages
+                    .Where(p => p.Description.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase)).ToList();
                 packages = nameRes.Concat(descRes).DistinctBy(p => p.Name).ToList();
             }
 
@@ -147,7 +156,10 @@ public class ListAvailableCommand : Command<ListSettings>
 
             if (settings.JsonOutput)
             {
-                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAlpmPackageDto);
+                MessagePackSerializer serializer = new();
+
+                byte[] msgpack = serializer.Serialize<List<AlpmPackageDto>, MessagePackWitness>(sortedPackages.ToList());
+                Console.Write(Convert.ToBase64String(msgpack));
                 return 0;
             }
 
