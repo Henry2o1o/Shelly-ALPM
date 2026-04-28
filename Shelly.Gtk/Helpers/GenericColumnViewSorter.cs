@@ -1,4 +1,5 @@
 using Gtk;
+using Shelly.Gtk.Enums;
 using Gio;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 
@@ -6,49 +7,54 @@ namespace Shelly.Gtk.Helpers;
 
 public static class GenericColumnViewSorter
 {
-    public static void SortColumnByName(
-        SortType order,
-        Gio.ListStore listStore)
+    public static void Sort(
+        Gio.ListStore listStore,
+        List<MetaPackageGObject> items,
+        PackageSortColumn column,
+        SortType order)
     {
-        var items = new List<MetaPackageGObject>();
-
-        for (uint i = 0; i < listStore.GetNItems(); i++)
+        Comparison<MetaPackageGObject> comparison = column switch
         {
-            if (listStore.GetObject(i) is MetaPackageGObject item)
-                items.Add(item);
+            PackageSortColumn.Name =>
+                (a, b) => Compare(a.Package?.Name, b.Package?.Name),
+
+            PackageSortColumn.Repo =>
+                (a, b) => Compare(a.Package?.Repository, b.Package?.Repository),
+
+            PackageSortColumn.Version =>
+                (a, b) => Compare(a.Package?.Version, b.Package?.Version),
+
+            _ => (_, _) => 0
+        };
+
+        if (order == SortType.Descending)
+        {
+            var baseComp = comparison;
+            comparison = (a, b) => -baseComp(a, b);
         }
 
-        items.Sort((a, b) =>
-        {
-            return order switch
-            {
-                SortType.Ascending =>
-                    string.Compare(
-                        a.Package?.Name,
-                        b.Package?.Name,
-                        StringComparison.OrdinalIgnoreCase),
+        items.Sort(comparison);
 
-                SortType.Descending =>
-                    string.Compare(
-                        b.Package?.Name,
-                        a.Package?.Name,
-                        StringComparison.OrdinalIgnoreCase),
+        SpliceReplace(listStore, items);
+    }
 
-                _ => 0
-            };
-        });
-        
-        var objects = new GObject.Object[items.Count];
+    private static int Compare(string? a, string? b)
+        => string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+
+    private static void SpliceReplace(
+        Gio.ListStore listStore,
+        List<MetaPackageGObject> items)
+    {
+        var array = new GObject.Object[items.Count];
 
         for (int i = 0; i < items.Count; i++)
-            objects[i] = items[i];
-        
+            array[i] = items[i];
+
         listStore.Splice(
             0,
             listStore.GetNItems(),
-            objects,
-            (uint)items.Count
-        );    
-        
+            array,
+            (uint)array.Length
+        );
     }
-}    
+}

@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using GObject.Internal;
 using Gtk;
 using Shelly.Gtk.Helpers;
+using Shelly.Gtk.Enums;
+using static Shelly.Gtk.Helpers.GenericColumnViewSorter;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
@@ -40,6 +42,7 @@ public class MetaSearch(
     private ColumnViewColumn _descriptionColumn = null!;
 
     private ColumnViewSorter _columnSorter = null!;
+    private SortType _primarySort;
 
     private Dictionary<ColumnViewCell, EventHandler> _checkBinding = [];
     private Dictionary<ColumnViewCell, EventHandler> _installedBinding = [];
@@ -76,18 +79,26 @@ public class MetaSearch(
         SetupColumns(_checkColumn, _nameColumn, _repoColumn, _versionColumn, _descriptionColumn);
 
         // Create sorters
+        _repoColumn.Sorter = new CustomSorter();
+        _versionColumn.Sorter = new CustomSorter();
         _nameColumn.Sorter = new CustomSorter();
         _columnSorter = (ColumnViewSorter)_columnView.GetSorter()!;
         _columnSorter.OnChanged += (_, _) =>
         {
-            var primaryColumn = _columnSorter.GetPrimarySortColumn();
+            var primaryColumn = _columnSorter.GetPrimarySortColumn()!;
+            _primarySort = _columnSorter.GetPrimarySortOrder();
 
-            if (primaryColumn == _nameColumn)
-            {
-                var order = _columnSorter.GetPrimarySortOrder();
-                GenericColumnViewSorter.SortColumnByName(order, _listStore);
-            }
-            
+            var sortColumn = GetSortColumn(primaryColumn);
+
+            if (sortColumn is null)
+                return;
+
+            Sort(
+                _listStore,
+                _packageGObjectRefs,
+                sortColumn.Value,
+                _primarySort
+            );
         };
         
         ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.End);
@@ -131,8 +142,22 @@ public class MetaSearch(
                 pkgObj.ToggleSelection();
             }
         };
-
+        
         return _box;
+    }
+    
+    private PackageSortColumn? GetSortColumn(ColumnViewColumn column)
+    {
+        if (column == _nameColumn)
+            return PackageSortColumn.Name;
+
+        if (column == _repoColumn)
+            return PackageSortColumn.Repo;
+
+        if (column == _versionColumn)
+            return PackageSortColumn.Version;
+
+        return null;
     }
 
     private void SetupColumns(ColumnViewColumn checkColumn, ColumnViewColumn nameColumn, ColumnViewColumn repoColumn,
