@@ -34,7 +34,7 @@ public class AppImageSearchCommand : AsyncCommand<AppImageSearchSettings>
 
         if (settings.Json)
         {
-            await JsonOutput.WriteJsonAsync(results, ShellyCLIJsonContext.Default.ListAppImageDto);
+            await JsonOutput.WriteMessagePackAsync(results);
         }
         else
         {

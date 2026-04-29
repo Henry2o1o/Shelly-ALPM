@@ -53,15 +53,13 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus) : IUnprivilegedOpe
     public async Task<List<FlatpakPackageDto>> ListFlatpakPackages()
     {
         var result = await ExecuteUnprivilegedCommandAsync("List packages", "flatpak list", "--json");
-        return ResultDeserializers.DeserializeCliResult<FlatpakPackageDto>(result,
-            ShellyGtkJsonContext.Default.ListFlatpakPackageDto);
+        return ResultDeserializers.DeserializeCliResult<FlatpakPackageDto>(result);
     }
 
     public async Task<List<FlatpakPackageDto>> ListFlatpakUpdates()
     {
         var result = await ExecuteUnprivilegedCommandAsync("List packages", "flatpak list-updates", "--json");
-        return ResultDeserializers.DeserializeCliResult<FlatpakPackageDto>(result,
-            ShellyGtkJsonContext.Default.ListFlatpakPackageDto);
+        return ResultDeserializers.DeserializeCliResult<FlatpakPackageDto>(result);
     }
 
     public async Task<OperationResult> RemoveFlatpakPackage(IEnumerable<string> packages)
@@ -77,8 +75,7 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus) : IUnprivilegedOpe
                 "--json");
 
         return await Task.Run(
-            () => ResultDeserializers.DeserializeCliResult<AppstreamApp>(result,
-                ShellyGtkJsonContext.Default.ListAppstreamApp), ct);
+            () => ResultDeserializers.DeserializeCliResult<AppstreamApp>(result), ct);
     }
 
 
@@ -120,9 +117,7 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus) : IUnprivilegedOpe
     public async Task<List<FlatpakRemoteDto>> FlatpakListRemotes()
     {
         var result = await ExecuteUnprivilegedCommandAsync("flatpak list remotes", "flatpak list-remotes", "-j");
-        var json = StripBom(result.Output.Trim());
-        return JsonSerializer.Deserialize<List<FlatpakRemoteDto>>(json,
-            ShellyGtkJsonContext.Default.ListFlatpakRemoteDto) ?? [];
+        return ResultDeserializers.DeserializeCliResult<FlatpakRemoteDto>(result);
     }
 
     public async Task<OperationResult> FlatpakSyncRemoteAppstream()
@@ -184,11 +179,8 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus) : IUnprivilegedOpe
             var result =
                 await ExecuteUnprivilegedCommandAsync("Sync remote", "flatpak app-remote-info", remote, app, arch,
                     "-j");
-            var json = StripBom(result.Output.Trim());
-            var remoteInfo =
-                JsonSerializer.Deserialize<FlatpakRemoteRefInfo>(json,
-                    ShellyGtkJsonContext.Default.FlatpakRemoteRefInfo);
-            return remoteInfo!.DownloadSize;
+            var remoteInfo = ResultDeserializers.DeserializeCliResultSingle<FlatpakRemoteRefInfo>(result);
+            return remoteInfo?.DownloadSize ?? 0;
         }
         catch (Exception ex)
         {
@@ -201,38 +193,34 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus) : IUnprivilegedOpe
     public async Task<List<AppImageDto>> GetInstallAppImagesAsync()
     {
         var result = await ExecuteUnprivilegedCommandAsync("Get Installed AppImages", "appimage list --json");
-        return ResultDeserializers.DeserializeCliResult<AppImageDto>(result,
-            ShellyGtkJsonContext.Default.ListAppImageDto);
+        return ResultDeserializers.DeserializeCliResult<AppImageDto>(result);
     }
 
     public async Task<List<RssModel>> GetArchNewsAsync(bool all = false)
     {
         var args = all ? "news" + " --json" + " --all" : "news" + " --json";
         var result = await ExecuteUnprivilegedCommandAsync("Fetch Arch News", args, "--ui-mode");
-        return ResultDeserializers.DeserializeCliResult<RssModel>(result, ShellyGtkJsonContext.Default.ListRssModel);
+        return ResultDeserializers.DeserializeCliResult<RssModel>(result);
     }
 
     public async Task<List<PacfileRecord>> GetPacFiles()
     {
         var result = await ExecuteUnprivilegedCommandAsync("Fetch Pac files", "pacfile --json");
-        return ResultDeserializers.DeserializeCliResult<PacfileRecord>(result,
-            ShellyGtkJsonContext.Default.ListPacfileRecord);
+        return ResultDeserializers.DeserializeCliResult<PacfileRecord>(result);
     }
 
 
     public async Task<List<AppImageDto>> GetUpdatesAppImagesAsync()
     {
         var result = await ExecuteUnprivilegedCommandAsync("Get AppImage Updates", "appimage list-updates --json");
-        return ResultDeserializers.DeserializeCliResult<AppImageDto>(result,
-            ShellyGtkJsonContext.Default.ListAppImageDto);
+        return ResultDeserializers.DeserializeCliResult<AppImageDto>(result);
     }
 
     public async Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates(bool showHidden = false)
     {
         var args = showHidden ? "list-updates --json --show-hidden" : "list-updates --json";
         var result = await ExecuteUnprivilegedCommandAsync("Get Available Updates", args);
-        return ResultDeserializers.DeserializeCliResult<AlpmPackageUpdateDto>(result,
-            ShellyGtkJsonContext.Default.ListAlpmPackageUpdateDto);
+        return ResultDeserializers.DeserializeCliResult<AlpmPackageUpdateDto>(result);
     }
 
     public async Task<OperationResult> ExportSyncFile(string filePath, string name)

@@ -9,9 +9,10 @@ public class FlathubGetRemote : Command<FlatpakListRemoteAppStreamSettings>
 {
     public override int Execute([NotNull] CommandContext context, [NotNull] FlatpakListRemoteAppStreamSettings settings)
     {
-        var result = settings.AppStreamName == "all" ? new FlatpakManager().GetAvailableAppsFromAppstreamJson("all", getAll: true) : new FlatpakManager().GetAvailableAppsFromAppstreamJson(settings.AppStreamName);
+        var manager = new FlatpakManager();
+        var result = manager.GetAvailableApps(settings.AppStreamName == "all" ? "all" : settings.AppStreamName, getAll: settings.AppStreamName == "all");
         
-        JsonOutput.WriteRaw(result);
+        JsonOutput.WriteMessagePack(result);
         return 0;
     }
 }

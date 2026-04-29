@@ -1,3 +1,6 @@
+using PolyType;
+
 namespace PackageManager.Alpm.Pacfile;
 
-public record PacfileRecord(string Name,string Text);
+[GenerateShape]
+public partial record PacfileRecord(string Name,string Text);

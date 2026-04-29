@@ -46,7 +46,7 @@ public class AurListInstalledCommand : AsyncCommand<ListSettings>
 
             if (settings.JsonOutput)
             {
-                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAurPackageDto);
+                JsonOutput.WriteMessagePack(sortedPackages.ToList());
                 return 0;
             }
 
@@ -115,7 +115,7 @@ public class AurListInstalledCommand : AsyncCommand<ListSettings>
 
             if (settings.JsonOutput)
             {
-                JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAurPackageDto);
+                JsonOutput.WriteMessagePack(sortedPackages.ToList());
                 return 0;
             }
 

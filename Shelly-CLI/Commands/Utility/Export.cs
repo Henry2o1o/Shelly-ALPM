@@ -50,7 +50,7 @@ public class Export : AsyncCommand<ExportSettings>
             Flatpaks = flatpaks.Select(x => new SyncFlatpakModel { Id = x.Id, Version = x.Version }).ToList()
         };
 
-        await JsonOutput.WriteJsonAsync(syncModel, ShellyCLIJsonContext.Default.SyncModel);
+        await JsonOutput.WriteMessagePackAsync(syncModel);
 
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(syncModel, ShellyCLIJsonContext.Default.SyncModel));
 

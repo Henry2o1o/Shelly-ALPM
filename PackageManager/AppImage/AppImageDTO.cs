@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using PolyType;
 
 namespace PackageManager.AppImage;
 
-public record AppImageDto
+[GenerateShape]
+public partial record AppImageDto
 {
     public string Name { get; set; } = string.Empty;
     public string DesktopName { get; set; } = string.Empty;

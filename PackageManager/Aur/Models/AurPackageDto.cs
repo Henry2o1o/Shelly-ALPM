@@ -1,9 +1,11 @@
 using System.Text.Json.Serialization;
 using System.Collections.Generic;
+using PolyType;
 
 namespace PackageManager.Aur.Models;
 
-public class AurPackageDto
+[GenerateShape]
+public partial class AurPackageDto
 {
     [JsonPropertyName("ID")]
     public int Id { get; set; }

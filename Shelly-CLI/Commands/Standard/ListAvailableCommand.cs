@@ -75,10 +75,7 @@ public class ListAvailableCommand : Command<ListSettings>
 
             if (settings.JsonOutput)
             {
-                MessagePackSerializer serializer = new();
-
-                byte[] msgpack = serializer.Serialize<List<AlpmPackageDto>, MessagePackWitness>(sortedPackages.ToList());
-                Console.Write(Convert.ToBase64String(msgpack));
+                JsonOutput.WriteMessagePack(sortedPackages.ToList());
                 return 0;
             }
 
@@ -156,10 +153,7 @@ public class ListAvailableCommand : Command<ListSettings>
 
             if (settings.JsonOutput)
             {
-                MessagePackSerializer serializer = new();
-
-                byte[] msgpack = serializer.Serialize<List<AlpmPackageDto>, MessagePackWitness>(sortedPackages.ToList());
-                Console.Write(Convert.ToBase64String(msgpack));
+                JsonOutput.WriteMessagePack(sortedPackages.ToList());
                 return 0;
             }
 

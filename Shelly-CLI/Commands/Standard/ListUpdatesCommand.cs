@@ -43,7 +43,7 @@ public class ListUpdatesCommand : Command<ListSettings>
 
         if (settings.JsonOutput)
         {
-            JsonOutput.WriteJson(updates, ShellyCLIJsonContext.Default.ListAlpmPackageUpdateDto);
+            JsonOutput.WriteMessagePack(updates);
             return 0;
         }
 
@@ -101,7 +101,7 @@ public class ListUpdatesCommand : Command<ListSettings>
 
         if (settings.JsonOutput)
         {
-            JsonOutput.WriteJson(updates, ShellyCLIJsonContext.Default.ListAlpmPackageUpdateDto);
+            JsonOutput.WriteMessagePack(updates);
             return 0;
         }
 

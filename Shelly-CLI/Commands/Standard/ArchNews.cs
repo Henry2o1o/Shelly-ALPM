@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using PolyType;
 using PackageManager.Alpm;
 using PackageManager.Utilities;
 using Shelly_CLI.Utility;
@@ -11,7 +12,7 @@ using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands.Standard;
 
-public class ArchNews : AsyncCommand<ArchNewsSettings>
+public partial class ArchNews : AsyncCommand<ArchNewsSettings>
 {
     private static readonly string FeedFolder = XdgPaths.ShellyCache("archNewsFeed");
 
@@ -26,7 +27,7 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
                 var feed = await GetRssFeedAsync("https://archlinux.org/feeds/news/");
                 if (settings.Json)
                 {
-                    await JsonOutput.WriteJsonAsync(feed, ShellyCLIJsonContext.Default.ListRssModel);
+                    await JsonOutput.WriteMessagePackAsync(feed);
                 }
                 else
                 {
@@ -56,7 +57,7 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
 
             if (settings.Json)
             {
-                await JsonOutput.WriteJsonAsync(newFeed, ShellyCLIJsonContext.Default.ListRssModel);
+                await JsonOutput.WriteMessagePackAsync(newFeed);
                 if (newFeed.Count > 0) CacheFeed(feed);
                 return 0;
             }
@@ -114,7 +115,8 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
         }).Reverse().ToList();
     }
 
-    public record RssModel
+    [GenerateShape]
+    public partial record RssModel
     {
         public string? Title { get; init; }
         public string? Link { get; init; }

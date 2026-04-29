@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Nerdbank.MessagePack;
+using PackageManager.Alpm;
 
 namespace Shelly_CLI.Utility;
 
@@ -21,6 +23,26 @@ public static class JsonOutput
         using var writer = new StreamWriter(stdout, System.Text.Encoding.UTF8);
         writer.WriteLine(json);
         writer.Flush();
+    }
+
+
+    public static async Task WriteMessagePackAsync<T>(T value)
+    {
+        var serializer = new MessagePackSerializer();
+#pragma warning disable NBMsgPack051
+        var msgpack = serializer.Serialize<T, MessagePackWitness>(value);
+#pragma warning restore NBMsgPack051
+        await Console.Out.WriteAsync(Convert.ToBase64String(msgpack));
+    }
+
+
+    public static void WriteMessagePack<T>(T value)
+    {
+        var serializer = new MessagePackSerializer();
+#pragma warning disable NBMsgPack051
+        var msgpack = serializer.Serialize<T, MessagePackWitness>(value);
+#pragma warning restore NBMsgPack051
+        Console.Out.Write(Convert.ToBase64String(msgpack));
     }
 
     public static async Task WriteRawAsync(string value)

@@ -1,6 +1,9 @@
+using PolyType;
+
 namespace Shelly.Gtk.UiModels;
 
-public class PackageBuild
+[GenerateShape]
+public partial class PackageBuild
 {
     public string? Name { get; set; }
     

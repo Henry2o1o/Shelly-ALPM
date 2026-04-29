@@ -40,7 +40,7 @@ public class AurSearchCommand : AsyncCommand<AurSearchSettings>
 
             if (settings.JsonOutput)
             {
-                await JsonOutput.WriteJsonAsync(results, ShellyCLIJsonContext.Default.ListAurPackageDto);
+                await JsonOutput.WriteMessagePackAsync(results);
                 return 0;
             }
 
@@ -99,7 +99,7 @@ public class AurSearchCommand : AsyncCommand<AurSearchSettings>
 
             if (settings.JsonOutput)
             {
-                await JsonOutput.WriteJsonAsync(results, ShellyCLIJsonContext.Default.ListAurPackageDto);
+                await JsonOutput.WriteMessagePackAsync(results);
                 return 0;
             }
 

@@ -1,8 +1,10 @@
+using PolyType;
 using Shelly.Gtk.Enums;
 
 namespace Shelly.Gtk.UiModels.AppImage;
 
-public class AppImageDto
+[GenerateShape]
+public partial class AppImageDto
 {
     public string Name { get; set; } = string.Empty;
     public string DesktopName { get; set; } = string.Empty;

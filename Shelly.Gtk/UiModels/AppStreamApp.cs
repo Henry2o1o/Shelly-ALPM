@@ -2,11 +2,13 @@ namespace Shelly.Gtk.UiModels;
 
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using PolyType;
 
 /// <summary>
 /// Represents an application from Flatpak appstream metadata
 /// </summary>
-public class AppstreamApp
+[GenerateShape]
+public partial class AppstreamApp
 {
     public string Id { get; set; } = string.Empty;
 
@@ -58,7 +60,8 @@ public class AppstreamApp
 /// <summary>
 /// Represents an icon for an appstream application
 /// </summary>
-public class AppstreamIcon
+[GenerateShape]
+public partial class AppstreamIcon
 {
  
     public string Type { get; set; } = string.Empty;
@@ -78,7 +81,8 @@ public class AppstreamIcon
 /// <summary>
 /// Represents a screenshot for an appstream application
 /// </summary>
-public class AppstreamScreenshot
+[GenerateShape]
+public partial class AppstreamScreenshot
 {
     
     public string Caption { get; set; } = string.Empty;
@@ -92,7 +96,8 @@ public class AppstreamScreenshot
 /// <summary>
 /// Represents an image in a screenshot
 /// </summary>
-public class AppstreamImage
+[GenerateShape]
+public partial class AppstreamImage
 {
    
     public string Type { get; set; } = string.Empty;
@@ -108,7 +113,8 @@ public class AppstreamImage
 /// <summary>
 /// Represents a release/version entry for an appstream application
 /// </summary>
-public class AppstreamRelease
+[GenerateShape]
+public partial class AppstreamRelease
 {
     
     public string Version { get; set; } = string.Empty;

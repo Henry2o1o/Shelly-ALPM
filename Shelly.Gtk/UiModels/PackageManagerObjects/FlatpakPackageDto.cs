@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using PolyType;
 
 namespace Shelly.Gtk.UiModels.PackageManagerObjects;
 
-public record FlatpakPackageDto
+[GenerateShape]
+public partial record FlatpakPackageDto
 {
     [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty;

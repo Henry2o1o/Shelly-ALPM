@@ -1,8 +1,10 @@
 using System.Text.Json.Serialization;
+using PolyType;
 
 namespace Shelly_CLI;
 
-public class SyncModel
+[GenerateShape]
+public partial class SyncModel
 {
     public SyncMetaData MetaData { get; set; } = new();
     public List<SyncPackageModel> Packages { get; set; } = [];

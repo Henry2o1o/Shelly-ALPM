@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using PolyType;
 
 namespace PackageManager.Flatpak;
 
-public class FlatpakPackageDto
+[GenerateShape]
+public partial class FlatpakPackageDto
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;

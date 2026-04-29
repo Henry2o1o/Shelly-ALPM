@@ -55,7 +55,7 @@ public class ListInstalledCommand : Command<ListSettings>
 
         if (settings.JsonOutput)
         {
-            JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAlpmPackageDto);
+            JsonOutput.WriteMessagePack(sortedPackages.ToList());
             return 0;
         }
 
@@ -127,7 +127,7 @@ public class ListInstalledCommand : Command<ListSettings>
 
         if (settings.JsonOutput)
         {
-            JsonOutput.WriteJson(sortedPackages.ToList(), ShellyCLIJsonContext.Default.ListAlpmPackageDto);
+            JsonOutput.WriteMessagePack(sortedPackages.ToList());
             return 0;
         }
 

@@ -1,6 +1,9 @@
+using PolyType;
+
 namespace PackageManager.Flatpak;
 
-public class FlatpakRemoteDto
+[GenerateShape]
+public partial class FlatpakRemoteDto
 {
     public string Name { get; set; } = string.Empty;
  

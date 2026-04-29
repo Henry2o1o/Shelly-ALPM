@@ -1,13 +1,14 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using PackageManager.Aur;
+using PolyType;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Shelly_CLI.Commands.Aur;
 
-public class AurSearchPackageBuild : AsyncCommand<AurPackageSettings>
+public partial class AurSearchPackageBuild : AsyncCommand<AurPackageSettings>
 {
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context,
         [NotNull] AurPackageSettings settings)
@@ -69,7 +70,7 @@ public class AurSearchPackageBuild : AsyncCommand<AurPackageSettings>
                 let pkgbuild = manager.FetchPkgbuildAsync(package).GetAwaiter().GetResult()
                 select new PackageBuild(package, pkgbuild)).ToList();
             
-            await JsonOutput.WriteJsonAsync(packageBuild, ShellyCLIJsonContext.Default.ListPackageBuild);
+            await JsonOutput.WriteMessagePackAsync(packageBuild);
             
             return 0;
         }
@@ -84,5 +85,6 @@ public class AurSearchPackageBuild : AsyncCommand<AurPackageSettings>
         }
     }
 
-    public record PackageBuild(string Name, string? PkgBuild);
+    [GenerateShape]
+    public partial record PackageBuild(string Name, string? PkgBuild);
 }

@@ -16,7 +16,7 @@ public class GetAppRemoteInfo : Command<FlatpakInstallSize>
 
         if (settings.Json)
         {
-            JsonOutput.WriteJson(result, AppstreamJsonContext.Default.FlatpakRemoteRefInfo);
+            JsonOutput.WriteMessagePack(result);
         }
         else
             Console.Write("Download Size:" + FormatSize(result.DownloadSize) +

@@ -18,7 +18,7 @@ public class AppImageGetUpdates : AsyncCommand<AppImageDefaultSettings>
 
         if (settings.Json)
         {
-            await JsonOutput.WriteJsonAsync(result, ShellyCLIJsonContext.Default.ListAppImageUpdateDto);
+            await JsonOutput.WriteMessagePackAsync(result);
         }
         else
         {

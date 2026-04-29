@@ -22,7 +22,7 @@ public class FlatpakListUpdatesCommand : Command<DefaultSettings>
 
         if (settings.JsonOutput)
         {
-            JsonOutput.WriteJson(packages, FlatpakDtoJsonContext.Default.ListFlatpakPackageDto);
+            JsonOutput.WriteMessagePack(packages);
             return 0;
         }
         
@@ -59,7 +59,7 @@ public class FlatpakListUpdatesCommand : Command<DefaultSettings>
 
         if (settings.JsonOutput)
         {
-            JsonOutput.WriteJson(packages, ShellyCLIJsonContext.Default.ListFlatpakPackageDto);
+            JsonOutput.WriteMessagePack(packages);
             return 0;
         }
 

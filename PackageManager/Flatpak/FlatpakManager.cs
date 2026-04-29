@@ -2073,7 +2073,7 @@ public class FlatpakManager : IDisposable
     /// <param name="remoteName">The remote name (e.g., "flathub"). If null, uses the first remote.</param>
     /// <param name="arch">The architecture (e.g., "x86_64"). If null, uses current system architecture.</param>
     /// <returns>JSON string of available applications</returns>
-    public string GetAvailableAppsFromAppstreamJson(string remoteName, string? arch = null, bool getAll = false)
+    public List<AppstreamApp> GetAvailableApps(string remoteName, string? arch = null, bool getAll = false)
     {
         var apps = new List<AppstreamApp>();
         if (getAll)
@@ -2107,7 +2107,18 @@ public class FlatpakManager : IDisposable
             apps = GetAvailableAppsFromAppstream(remoteName, arch);
         }
 
-        return JsonSerializer.Serialize(apps, AppstreamJsonContext.Default.ListAppstreamApp);
+        return apps;
+    }
+
+    /// <summary>
+    /// Gets all available apps from appstream and serializes to JSON (AOT-compatible)
+    /// </summary>
+    /// <param name="remoteName">The remote name (e.g., "flathub"). If null, uses the first remote.</param>
+    /// <param name="arch">The architecture (e.g., "x86_64"). If null, uses current system architecture.</param>
+    /// <returns>JSON string of available applications</returns>
+    public string GetAvailableAppsFromAppstreamJson(string remoteName, string? arch = null, bool getAll = false)
+    {
+        return JsonSerializer.Serialize(GetAvailableApps(remoteName, arch, getAll), AppstreamJsonContext.Default.ListAppstreamApp);
     }
 
     /// <summary>

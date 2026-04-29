@@ -91,7 +91,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
     {
         var result = await ExecuteCommandAsync("list-available", $"--filter {query}",
             "--no-confirm", "--json");
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAlpmPackageDto);
+        return ResultDeserializers.DeserializeCliResult<AlpmPackageDto>(result);
     }
 
     public async Task<OperationResult> InstallPackagesAsync(IEnumerable<string> packages, bool upgrade = false)
@@ -217,14 +217,14 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         var packageArgs = string.Join(" ", packages);
         var result =
             await ExecutePrivilegedWithNoConfirmCheck("Get Package Builds", "aur", "get-package-build", packageArgs);
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListPackageBuild);
+        return ResultDeserializers.DeserializeCliResult<PackageBuild>(result);
     }
 
     public async Task<List<AlpmPackageUpdateDto>> GetPackagesNeedingUpdateAsync()
     {
         // Use privileged execution to sync databases and get updates
         var result = await ExecutePrivilegedCommandAsync("Check for Updates", "list-updates", "--json");
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAlpmPackageUpdateDto);
+        return ResultDeserializers.DeserializeCliResult<AlpmPackageUpdateDto>(result);
     }
 
     public async Task<List<AlpmPackageDto>> GetAvailablePackagesAsync(bool showHidden = false)
@@ -233,12 +233,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             ? await ExecuteCommandAsync("list-available", "--json", "--show-hidden")
             : await ExecuteCommandAsync("list-available", "--json");
 
-        if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
-            return [];
-
-        MessagePackSerializer serializer = new();
-        var msgpackBytes = Convert.FromBase64String(result.Output.Trim());
-        return serializer.Deserialize<List<AlpmPackageDto>, MessagePackWitness>(msgpackBytes) ?? new List<AlpmPackageDto>();
+        return ResultDeserializers.DeserializeCliResult<AlpmPackageDto>(result);
     }
 
     public async Task<List<AlpmPackageDto>> GetInstalledPackagesAsync(bool showHidden = false)
@@ -247,7 +242,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             ? await ExecuteCommandAsync("list-installed", "--json", "--show-hidden")
             : await ExecuteCommandAsync("list-installed", "--json");
 
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAlpmPackageDto);
+        return ResultDeserializers.DeserializeCliResult<AlpmPackageDto>(result);
     }
 
     public async Task<List<AurPackageDto>> GetAurInstalledPackagesAsync(bool showHidden = false)
@@ -256,7 +251,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             ? await ExecuteCommandAsync("aur list-installed", "--json", "--show-hidden")
             : await ExecuteCommandAsync("aur list-installed", "--json");
 
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAurPackageDto);
+        return ResultDeserializers.DeserializeCliResult<AurPackageDto>(result);
     }
 
     public async Task<List<AurUpdateDto>> GetAurUpdatePackagesAsync(bool showHidden = false)
@@ -264,13 +259,13 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         var result = showHidden
             ? await ExecuteCommandAsync("aur list-updates", "--json", "--show-hidden")
             : await ExecuteCommandAsync("aur list-updates", "--json");
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAurUpdateDto);
+        return ResultDeserializers.DeserializeCliResult<AurUpdateDto>(result);
     }
 
     public async Task<List<AurPackageDto>> SearchAurPackagesAsync(string query)
     {
         var result = await ExecuteCommandAsync("aur search", query, "--json");
-        return ResultDeserializers.DeserializeCliResult(result, ShellyGtkJsonContext.Default.ListAurPackageDto);
+        return ResultDeserializers.DeserializeCliResult<AurPackageDto>(result);
     }
 
     public async Task<bool> IsPackageInstalledOnMachine(string packageName)

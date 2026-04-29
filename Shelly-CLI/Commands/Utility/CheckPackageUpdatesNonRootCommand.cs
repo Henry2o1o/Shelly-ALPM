@@ -62,7 +62,7 @@ public class CheckPackageUpdatesNonRootCommand : AsyncCommand<CheckPackageUpdate
                 syncModel.Flatpaks = flatpakPackageModels;
             }
 
-            await JsonOutput.WriteJsonAsync(syncModel, ShellyCLIJsonContext.Default.SyncModel);
+            await JsonOutput.WriteMessagePackAsync(syncModel);
             return 0;
         }
 
@@ -179,7 +179,7 @@ public class CheckPackageUpdatesNonRootCommand : AsyncCommand<CheckPackageUpdate
                 syncModel.Flatpaks = flatpakPackageModels;
             }
 
-            await JsonOutput.WriteJsonAsync(syncModel, ShellyCLIJsonContext.Default.SyncModel);
+            await JsonOutput.WriteMessagePackAsync(syncModel);
             return 0;
         }
 

@@ -31,7 +31,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
             var result = await manager.GetPacfiles();
             if (settings.Json)
             {
-                await JsonOutput.WriteJsonAsync(result, ShellyCLIJsonContext.Default.ListPacfileRecord);
+                await JsonOutput.WriteMessagePackAsync(result);
                 return 0;
             }
 
@@ -56,7 +56,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
 
         if (settings.Json)
         {
-            await JsonOutput.WriteJsonAsync(records, ShellyCLIJsonContext.Default.ListPacfileRecord);
+            await JsonOutput.WriteMessagePackAsync(records);
             return 0;
         }
 
@@ -101,7 +101,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
             var result = await manager.GetPacfiles();
             if (settings.Json)
             {
-                await JsonOutput.WriteJsonAsync(result, ShellyCLIJsonContext.Default.ListPacfileRecord);
+                await JsonOutput.WriteMessagePackAsync(result);
                 return 0;
             }
 
@@ -138,7 +138,7 @@ public class PacfileCommand : AsyncCommand<PacfileSettings>
             records.Add(await manager.GetPacfile(file));
         }
 
-        await JsonOutput.WriteJsonAsync(records, ShellyCLIJsonContext.Default.ListPacfileRecord);
+        await JsonOutput.WriteMessagePackAsync(records);
         return 0;
     }
 }

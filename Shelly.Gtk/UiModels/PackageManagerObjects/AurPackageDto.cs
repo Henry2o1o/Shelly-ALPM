@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using PolyType;
 
 namespace Shelly.Gtk.UiModels.PackageManagerObjects;
 
-public record AurPackageDto()
+[GenerateShape]
+public partial record AurPackageDto()
 {
     [JsonPropertyName("ID")]
     public int Id { get; set; }

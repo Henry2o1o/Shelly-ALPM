@@ -17,7 +17,7 @@ public class FlatpakListRemotes : Command<DefaultSettings>
         
         if (settings.JsonOutput)
         {
-            JsonOutput.WriteJson(remotes, ShellyCLIJsonContext.Default.ListFlatpakRemoteDto);
+            JsonOutput.WriteMessagePack(remotes);
             return 0;
         }
 
