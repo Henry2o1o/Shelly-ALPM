@@ -47,6 +47,10 @@ public class LockoutDialog
             _descriptionLabel = Label.New(description);
             _descriptionLabel.SetWrap(true);
             _descriptionLabel.SetHalign(Align.Center);
+            _descriptionLabel.SetWrap(true);
+            _descriptionLabel.SetWrapMode(Pango.WrapMode.WordChar);
+            _descriptionLabel.SetEllipsize(Pango.EllipsizeMode.None);
+            _descriptionLabel.MaxWidthChars = 35;
             box.Append(_descriptionLabel);
 
             _progressBar = ProgressBar.New();

@@ -80,7 +80,7 @@
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Update</property>
+                                                        <property name="label">Updates</property>
                                                         <property name="halign">start</property>
                                                     </object>
                                                 </child>

@@ -191,23 +191,8 @@ sealed class Program
             var flatpakPageBox = (Box)mainBuilder.GetObject("flatpak_page_box")!;
             var appImagePageBox = (Box)mainBuilder.GetObject("appimage_page_box")!;
             var settingsPageBox = (Box)mainBuilder.GetObject("settings_page_box")!;
-            var packagesStatusLabel = (Label)mainBuilder.GetObject("packages_status_label")!;
-            packagesStatusLabel.OnRealize += (_, _) =>
-            {
-                var privilegedOps = serviceProvider.GetRequiredService<IPrivilegedOperationService>();
-                var unprivilegedOps = serviceProvider.GetRequiredService<IUnprivilegedOperationService>();
-                Task.Run(async () =>
-                {
-                    var packages = await privilegedOps.GetInstalledPackagesAsync();
-                    var updates = await unprivilegedOps.CheckForApplicationUpdates();
-                    var upToDate = packages.Count - updates.Packages.Count;
-                    GLib.Functions.IdleAdd(0, () =>
-                    {
-                        packagesStatusLabel.SetText($"{upToDate}/{packages.Count} Packages up to date");
-                        return false;
-                    });
-                });
-            };
+
+            var mainOverlay = (Overlay)mainBuilder.GetObject("MainOverlay")!;
 
             var quitAction = Gio.SimpleAction.New("quit", null);
             quitAction.OnActivate += (_, _) => application.Quit();
@@ -217,54 +202,98 @@ sealed class Program
             preferencesAction.OnActivate += (_, _) => settingsStack.SetVisibleChildName("settings_page");
             application.AddAction(preferencesAction);
 
+            var archNews = Gio.SimpleAction.New("news", null);
+            archNews.OnActivate += (_, _) =>
+            {
+                new ArchNewsDialog(serviceProvider.GetRequiredService<IArchNewsService>(), mainOverlay)
+                    .OpenArchNewsOverlay();
+            };
+            application.AddAction(archNews);
+
+            var cacheCleaner = Gio.SimpleAction.New("cacheclean", null);
+            cacheCleaner.OnActivate += (_, _) =>
+            {
+                new CacheCleanerDialog(serviceProvider.GetRequiredService<IGenericQuestionService>(),
+                    serviceProvider.GetRequiredService<IPrivilegedOperationService>(),
+                    serviceProvider.GetRequiredService<ILockoutService>(), mainOverlay).OpenCacheCleanDialog();
+            };
+            application.AddAction(cacheCleaner);
+
             var aboutAction = Gio.SimpleAction.New("about", null);
             aboutAction.OnActivate += (_, _) => Console.WriteLine("About clicked");
             application.AddAction(aboutAction);
 
-           
-
             var configService = serviceProvider.GetRequiredService<IConfigService>();
             var initialConfig = configService.LoadConfig();
-            
-            var packagesNotebook = Notebook.New();
-            packagesNotebook.Hexpand = true;
-            packagesNotebook.Vexpand = true;
 
-            var packagesInstallWindow = serviceProvider.GetRequiredService<PackageInstall>();
-            packagesNotebook.AppendPage(packagesInstallWindow.CreateWindow(), Label.New("Install"));
+            List<IShellyWindow> currentPackagesWindows;
+            List<IShellyWindow> currentAurWindows = [];
+            IShellyWindow? currentFlatpakWindow = null;
+            IShellyWindow? currentAppImageWindow = null;
 
-            var packagesUpdateWindow = serviceProvider.GetRequiredService<PackageUpdate>();
-            packagesNotebook.AppendPage(packagesUpdateWindow.CreateWindow(), Label.New("Update"));
+            void UnloadPage(Box pageBox, IEnumerable<IShellyWindow> windows)
+            {
+                while (pageBox.GetFirstChild() is { } child)
+                {
+                    pageBox.Remove(child);
+                    child.Unparent();
+                }
 
-            var packagesManageWindow = serviceProvider.GetRequiredService<PackageManagement>();
-            packagesNotebook.AppendPage(packagesManageWindow.CreateWindow(), Label.New("Manage"));
+                foreach (var w in windows)
+                    w.Dispose();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
 
-            packagesPageBox.Append(packagesNotebook);
-            
-            var aurNotebook = Notebook.New();
-            aurNotebook.Hexpand = true;
-            aurNotebook.Vexpand = true;
+            void LoadPackagesPage()
+            {
+                var nb = Notebook.New();
+                nb.Hexpand = true;
+                nb.Vexpand = true;
+                var w1 = serviceProvider.GetRequiredService<PackageInstall>();
+                nb.AppendPage(w1.CreateWindow(), Label.New("Install"));
+                var w2 = serviceProvider.GetRequiredService<PackageUpdate>();
+                nb.AppendPage(w2.CreateWindow(), Label.New("Updates"));
+                var w3 = serviceProvider.GetRequiredService<PackageManagement>();
+                nb.AppendPage(w3.CreateWindow(), Label.New("Manage"));
+                packagesPageBox.Append(nb);
+                currentPackagesWindows = [w1, w2, w3];
+            }
 
-            var aurInstallWindow = serviceProvider.GetRequiredService<AurInstall>();
-            aurNotebook.AppendPage(aurInstallWindow.CreateWindow(), Label.New("Install"));
+            void LoadAurPage()
+            {
+                var nb = Notebook.New();
+                nb.Hexpand = true;
+                nb.Vexpand = true;
+                var w1 = serviceProvider.GetRequiredService<AurInstall>();
+                nb.AppendPage(w1.CreateWindow(), Label.New("Install"));
+                var w2 = serviceProvider.GetRequiredService<AurUpdate>();
+                nb.AppendPage(w2.CreateWindow(), Label.New("Updates"));
+                var w3 = serviceProvider.GetRequiredService<AurRemove>();
+                nb.AppendPage(w3.CreateWindow(), Label.New("Remove"));
+                aurPageBox.Append(nb);
+                currentAurWindows = [w1, w2, w3];
+            }
 
-            var aurUpdateWindow = serviceProvider.GetRequiredService<AurUpdate>();
-            aurNotebook.AppendPage(aurUpdateWindow.CreateWindow(), Label.New("Update"));
+            void LoadFlatpakPage()
+            {
+                var w = serviceProvider.GetRequiredService<FlatpakInstall>();
+                flatpakPageBox.Append(w.CreateWindow());
+                currentFlatpakWindow = w;
+            }
 
-            var aurRemoveWindow = serviceProvider.GetRequiredService<AurRemove>();
-            aurNotebook.AppendPage(aurRemoveWindow.CreateWindow(), Label.New("Remove"));
+            void LoadAppImagePage()
+            {
+                var w = serviceProvider.GetRequiredService<AppImage>();
+                appImagePageBox.Append(w.CreateWindow());
+                currentAppImageWindow = w;
+            }
 
-            aurPageBox.Append(aurNotebook);
-
-            var flatpakWindow = serviceProvider.GetRequiredService<FlatpakInstall>();
-            flatpakPageBox.Append(flatpakWindow.CreateWindow());
-
-            var appImageWindow = serviceProvider.GetRequiredService<AppImage>();
-            appImagePageBox.Append(appImageWindow.CreateWindow());
+            LoadPackagesPage();
 
             var settingsWindow = serviceProvider.GetRequiredService<Settings>();
             settingsPageBox.Append(settingsWindow.CreateWindow());
-            
+
             settingsStack.GetPage(aurPageBox).Visible = initialConfig.AurEnabled;
             settingsStack.GetPage(flatpakPageBox).Visible = initialConfig.FlatPackEnabled;
             settingsStack.GetPage(appImagePageBox).Visible = initialConfig.AppImageEnabled;
@@ -275,6 +304,54 @@ sealed class Program
                 settingsStack.GetPage(flatpakPageBox).Visible = config.FlatPackEnabled;
                 settingsStack.GetPage(appImagePageBox).Visible = config.AppImageEnabled;
             };
+
+            var previousPage = settingsStack.GetVisibleChildName();
+
+            settingsStack.OnNotify += (_, notifySignalArgs) =>
+            {
+                if (notifySignalArgs.Pspec.GetName() != "visible-child-name") return;
+                var currentPage = settingsStack.GetVisibleChildName();
+                if (currentPage == previousPage) return;
+
+                switch (previousPage)
+                {
+                    case "packages_page":
+                        UnloadPage(packagesPageBox, currentPackagesWindows);
+                        currentPackagesWindows = [];
+                        break;
+                    case "aur_page":
+                        UnloadPage(aurPageBox, currentAurWindows);
+                        currentAurWindows = [];
+                        break;
+                    case "flatpak_page":
+                        if (currentFlatpakWindow != null)
+                        {
+                            UnloadPage(flatpakPageBox, [currentFlatpakWindow]);
+                            currentFlatpakWindow = null;
+                        }
+
+                        break;
+                    case "appimage_page":
+                        if (currentAppImageWindow != null)
+                        {
+                            UnloadPage(appImagePageBox, [currentAppImageWindow]);
+                            currentAppImageWindow = null;
+                        }
+
+                        break;
+                }
+
+                switch (currentPage)
+                {
+                    case "packages_page": LoadPackagesPage(); break;
+                    case "aur_page": LoadAurPage(); break;
+                    case "flatpak_page": LoadFlatpakPage(); break;
+                    case "appimage_page": LoadAppImagePage(); break;
+                }
+
+                previousPage = currentPage;
+            };
+
 
             //Setting window height
             window.DefaultHeight = double.ConvertToInteger<int>(initialConfig.WindowHeight);
@@ -298,13 +375,7 @@ sealed class Program
                 });
             };
 
-            var mainOverlay = (Overlay)mainBuilder.GetObject("MainOverlay")!;
-
-       
-
             var lockoutDialog = serviceProvider.GetRequiredService<LockoutDialog>();
-
-      
 
             //Subscribing to credential required to trigger the password dialog
             var credentialManager = serviceProvider.GetRequiredService<ICredentialManager>();
@@ -319,7 +390,7 @@ sealed class Program
             };
 
             var alpmEventService = serviceProvider.GetRequiredService<IAlpmEventService>();
-            
+
             alpmEventService.Question += (s, e) =>
             {
                 GLib.Functions.IdleAdd(0, () =>
@@ -348,7 +419,7 @@ sealed class Program
                     return false;
                 });
             };
-            
+
             genericQuestionService.ToastMessageRequested += (s, e) =>
             {
                 GLib.Functions.IdleAdd(0, () =>
@@ -357,7 +428,7 @@ sealed class Program
                     return false;
                 });
             };
-            
+
             genericQuestionService.Dialog += (s, e) =>
             {
                 GLib.Functions.IdleAdd(0, () =>
@@ -377,7 +448,7 @@ sealed class Program
                 {
                     var notes = new GitHubUpdateService().PullReleaseNotesAsync();
                     ReleaseNotesDialog.ShowReleaseNotesDialog(mainOverlay, notes.Result);
-                    
+
                     var config = configService.LoadConfig();
                     config.CurrentVersion = assemblyVersion;
                     configService.SaveConfig(config);
@@ -414,6 +485,7 @@ sealed class Program
                     {
                         lockoutDialog.ShowCloseButton();
                     }
+
                     return false;
                 });
             };
@@ -427,10 +499,116 @@ sealed class Program
                 });
             };
 
+            var updatesMenuButton = (MenuButton)mainBuilder.GetObject("updates_menu_button")!;
+            var updatesListBox = (ListBox)mainBuilder.GetObject("updates_list_box")!;
+            var updatesPopoverTitle = (Label)mainBuilder.GetObject("updates_popover_title")!;
+
+            LoadUpdates();
+            updatesMenuButton.OnActivate += (_, _) => LoadUpdates();
+            var updateTimer = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(5));
+                    GLib.Functions.IdleAdd(0, () =>
+                    {
+                        LoadUpdates();
+                        return false;
+                    });
+                }
+            });
+            GC.KeepAlive(updateTimer);
+
             var upgradeAllButton = (Button)mainBuilder.GetObject("upgrade_all_button")!;
             upgradeAllButton.OnClicked += async (_, _) => { await UpgradeAllAsync(); };
 
             return;
+
+            void LoadUpdates()
+            {
+                while (updatesListBox.GetFirstChild() is { } ch)
+                    updatesListBox.Remove(ch);
+                var loadingRow = new ListBoxRow();
+                var loadingLabel = Label.New("Loading...");
+                loadingLabel.Halign = Align.Center;
+                loadingLabel.AddCssClass("dim-label");
+                loadingLabel.MarginTop = 8;
+                loadingLabel.MarginBottom = 8;
+                loadingRow.SetActivatable(false);
+                loadingRow.SetChild(loadingLabel);
+                updatesListBox.Append(loadingRow);
+
+                Task.Run(async () =>
+                {
+                    var unprivilegedOps = serviceProvider.GetRequiredService<IUnprivilegedOperationService>();
+                    var updates = await unprivilegedOps.CheckForApplicationUpdates();
+                    var count = updates.Packages.Count + updates.Aur.Count + updates.Flatpaks.Count;
+                    GLib.Functions.IdleAdd(0, () =>
+                    {
+                        updatesPopoverTitle.SetText($"Available Updates ({count})");
+                        updatesMenuButton.SetLabel($"Updates ({count})");
+
+                        while (updatesListBox.GetFirstChild() is { } child)
+                            updatesListBox.Remove(child);
+
+                        foreach (var pkg in updates.Packages)
+                        {
+                            var row = new ListBoxRow();
+                            var label = Label.New($"{pkg.Name}: {pkg.OldVersion} → {pkg.Version}");
+                            label.Halign = Align.Start;
+                            label.Wrap = true;
+                            label.MarginStart = 8;
+                            label.MarginEnd = 8;
+                            label.MarginTop = 4;
+                            label.MarginBottom = 4;
+                            row.SetChild(label);
+                            updatesListBox.Append(row);
+                        }
+
+                        foreach (var pkg in updates.Aur)
+                        {
+                            var row = new ListBoxRow();
+                            var label = Label.New($"[AUR] {pkg.Name}: {pkg.OldVersion} → {pkg.Version}");
+                            label.Halign = Align.Start;
+                            label.Wrap = true;
+                            label.MarginStart = 8;
+                            label.MarginEnd = 8;
+                            label.MarginTop = 4;
+                            label.MarginBottom = 4;
+                            row.SetChild(label);
+                            updatesListBox.Append(row);
+                        }
+
+                        foreach (var pkg in updates.Flatpaks)
+                        {
+                            var row = new ListBoxRow();
+                            var label = Label.New($"[Flatpak] {pkg.Name ?? pkg.Id}: {pkg.Version}");
+                            label.Halign = Align.Start;
+                            label.Wrap = true;
+                            label.MarginStart = 8;
+                            label.MarginEnd = 8;
+                            label.MarginTop = 4;
+                            label.MarginBottom = 4;
+                            row.SetChild(label);
+                            updatesListBox.Append(row);
+                        }
+
+                        if (count != 0) return false;
+                        {
+                            var row = new ListBoxRow();
+                            var label = Label.New("All packages are up to date");
+                            label.Halign = Align.Center;
+                            label.AddCssClass("dim-label");
+                            label.MarginTop = 8;
+                            label.MarginBottom = 8;
+                            row.SetChild(label);
+                            updatesListBox.Append(row);
+                        }
+
+                        return false;
+                    });
+                });
+            }
 
             async Task UpgradeAllAsync()
             {
@@ -454,6 +632,7 @@ sealed class Program
                         var toastArgs = new ToastMessageEventArgs("Standard Packages is already up to date");
                         genericQuestionService.RaiseToastMessage(toastArgs);
                     }
+
                     if (!configService.LoadConfig().NoConfirm)
                     {
                         var confirmArgs = new GenericQuestionEventArgs(
@@ -468,6 +647,7 @@ sealed class Program
                             return;
                         }
                     }
+
                     lockoutService.Show("Upgrading all packages...");
                     var aurUpdates = packagesNeedingUpdate.Aur;
                     if (aurUpdates.Count != 0)
@@ -486,6 +666,7 @@ sealed class Program
                             }
                         }
                     }
+
                     var upgradeResult = await privilegedOperationService.UpgradeAllAsync();
                     if (upgradeResult.NeedsReboot)
                     {
@@ -576,7 +757,7 @@ sealed class Program
                 return false;
             }
 
-            
+
             static bool IsEditableWidget(Widget? widget)
             {
                 while (widget != null)
@@ -611,7 +792,7 @@ sealed class Program
 
         return application.Run(args);
     }
-    
+
     private static string BuildUpgradeConfirmationMessage(IEnumerable<SyncPackageModel> packages)
     {
         var packageList = packages.ToList();
@@ -640,5 +821,3 @@ sealed class Program
         return packageName.PadRight(width);
     }
 }
-
-
