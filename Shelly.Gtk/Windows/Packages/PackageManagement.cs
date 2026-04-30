@@ -500,7 +500,7 @@ public class PackageManagement(
             listItem.SetChild(null);
         };
         checkColumn.SetFactory(_checkFactory);
-
+        
         _nameFactory = SignalListItemFactory.New();
         _nameFactory.OnSetup += (_, args) =>
         {
@@ -528,8 +528,7 @@ public class PackageManagement(
             var iconPath = iconResolverService.GetIconPath(pkg.Name);
             if (!string.IsNullOrEmpty(iconPath) && iconPath != "Unavailable" && File.Exists(iconPath))
             {
-                var texture = Gdk.Texture.NewFromFilename(iconPath);
-                packageIcon.SetFromPaintable(texture);
+                packageIcon.SetFromFile(iconPath);
                 packageIcon.Visible = true;
             }
             else
@@ -584,7 +583,7 @@ public class PackageManagement(
 
     private bool FilterPackage(GObject.Object obj)
     {
-        if (obj is AlpmPackageGObject pkgObj && pkgObj.Package != null)
+        if (obj is AlpmPackageGObject { Package: not null } pkgObj)
         {
             if (_selectedGroup != "Any" && !(pkgObj.Package.Groups?.Contains(_selectedGroup) ?? false))
             {
