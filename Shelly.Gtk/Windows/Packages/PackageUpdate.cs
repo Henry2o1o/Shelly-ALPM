@@ -89,6 +89,7 @@ public class PackageUpdate(
         ColumnViewHelper.AlignColumnHeader(_columnView, 1, Align.Start);
         ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.End);
         ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
+        ColumnViewHelper.AlignColumnHeader(_columnView, 4, Align.End);
 
         _columnView.OnRealize += (_, _) => { _ = LoadDataAsync(); };
         _columnView.OnActivate += (_, _) =>
@@ -518,6 +519,7 @@ public class PackageUpdate(
                 listItem.GetChild() is not Label label) return;
             label.SetText(pkg.NewVersion);
             label.Halign = Align.End;
+            label.SetMarginEnd(10);
         };
         versionColumn.SetFactory(_versionFactory);
     }

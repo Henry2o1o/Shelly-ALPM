@@ -98,6 +98,7 @@ public class PackageInstall(
         ColumnViewHelper.AlignColumnHeader(_columnView, 1, Align.Start);
         ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.End);
         ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
+        ColumnViewHelper.AlignColumnHeader(_columnView, 4, Align.End);
 
         _columnView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         _columnView.OnActivate += (_, _) =>
@@ -537,8 +538,10 @@ public class PackageInstall(
             if (args.Object is not ColumnViewCell listItem) return;
             if (listItem.GetItem() is not AlpmPackageGObject { Package: { } pkg } ||
                 listItem.GetChild() is not Label label) return;
+            
             label.SetText(pkg.Repository);
             label.Halign = Align.End;
+            label.SetMarginEnd(10);
         };
         repositoryColumn.SetFactory(_repositoryFactory);
     }

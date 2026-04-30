@@ -95,6 +95,7 @@ public class PackageManagement(
 
         ColumnViewHelper.AlignColumnHeader(_columnView, 1, Align.Start);
         ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.End);
+        ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
 
         _columnView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         _columnView.OnActivate += (_, _) =>
@@ -575,6 +576,7 @@ public class PackageManagement(
                 listItem.GetChild() is not Label label) return;
             label.SetText(pkg.Version);
             label.Halign = Align.End;
+            label.SetMarginEnd(10);
         };
 
         versionColumn.SetFactory(_versionFactory);
