@@ -12,8 +12,11 @@ public class FlatpakUpdate(
     IUnprivilegedOperationService unprivilegedOperationService,
     ILockoutService lockoutService,
     IConfigService configService,
-    IGenericQuestionService genericQuestionService) : IShellyWindow
+    IGenericQuestionService genericQuestionService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.FlatpakUpdates, DirtyScopes.FlatpakInstalled];
     private ListView? _listView;
     private readonly CancellationTokenSource _cts = new();
     private Gio.ListStore? _listStore;
@@ -44,8 +47,11 @@ public class FlatpakUpdate(
         _listView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         removeButton.OnClicked += (_, _) => { _ = UpdateAllCommand(); };
 
+        _sub = DirtySubscription.Attach(dirtyService, this);
         return box;
     }
+
+    public void Reload() => _ = LoadDataAsync(_cts.Token);
 
     private static void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
     {
@@ -259,6 +265,7 @@ public class FlatpakUpdate(
 
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _listStore?.RemoveAll();

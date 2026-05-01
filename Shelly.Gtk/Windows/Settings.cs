@@ -16,10 +16,13 @@ public class Settings(
     IPrivilegedOperationService privilegedOperationService,
     IUnprivilegedOperationService unprivilegedOperationService,
     ILockoutService lockoutService,
-    IGenericQuestionService genericQuestionService) : IShellyWindow
+    IGenericQuestionService genericQuestionService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
     private Box _box = null!;
     private ShellyConfig _config = null!;
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.Config];
     private Overlay? _parentOverlay;
     private static List<ReleaseNotesDialog.ReleaseItem>? _cachedReleaseList;
     private static string? _cachedLatestVersion;
@@ -107,6 +110,8 @@ public class Settings(
 
         var removeLockButton = (Button)builder.GetObject("rm_db_lock_button")!;
         removeLockButton.OnClicked += (_,_) => { _ = RemoveDbLockAsync(); };
+
+        _sub = DirtySubscription.Attach(dirtyService, this);
 
         var viewChangelogButton = (Button)builder.GetObject("changelog_button")!;
         viewChangelogButton.OnClicked += async (_,_) => { await ShowAppChangelogAsync(); };
@@ -634,7 +639,15 @@ public class Settings(
         }
     }
     
+    public void Reload()
+    {
+        // Refresh internal config snapshot. Visible switches retain their current
+        // state to avoid re-entrant SaveConfig loops; navigating away/back rebuilds the page.
+        _config = configService.LoadConfig();
+    }
+
     public void Dispose()
     {
+        _sub?.Dispose();
     }
 }

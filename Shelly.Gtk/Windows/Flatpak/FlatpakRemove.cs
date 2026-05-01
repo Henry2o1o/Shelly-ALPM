@@ -12,8 +12,11 @@ namespace Shelly.Gtk.Windows.Flatpak;
 public class FlatpakRemove(
     IUnprivilegedOperationService unprivilegedOperationService,
     ILockoutService lockoutService,
-    IGenericQuestionService genericQuestionService) : IShellyWindow
+    IGenericQuestionService genericQuestionService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.FlatpakInstalled];
     private ListView? _listView;
     private readonly CancellationTokenSource _cts = new();
     private Gio.ListStore? _listStore;
@@ -44,8 +47,11 @@ public class FlatpakRemove(
         _listView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         removeButton.OnClicked += (_, _) => { _ = RemoveSelectedAsync(); };
 
+        _sub = DirtySubscription.Attach(dirtyService, this);
         return box;
     }
+
+    public void Reload() => _ = LoadDataAsync(_cts.Token);
 
     private static void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
     {
@@ -313,6 +319,7 @@ public class FlatpakRemove(
 
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _listStore?.RemoveAll();

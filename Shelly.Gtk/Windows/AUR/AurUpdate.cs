@@ -14,8 +14,11 @@ public class AurUpdate(
     IPrivilegedOperationService privilegedOperationService,
     ILockoutService lockoutService,
     IConfigService configService,
-    IGenericQuestionService genericQuestionService) : IShellyWindow
+    IGenericQuestionService genericQuestionService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.AurUpdates, DirtyScopes.AurInstalled];
     private Box _box = null!;
     private readonly CancellationTokenSource _cts = new();
     private ColumnView _columnView = null!;
@@ -98,6 +101,7 @@ public class AurUpdate(
         };
         _updateButton.OnClicked += (_, _) => { _ = RemovePackagesAsync(); };
         _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
+        _sub = DirtySubscription.Attach(dirtyService, this);
 
         _selectionModel.OnSelectionChanged += (_, _) =>
         {
@@ -454,8 +458,11 @@ public class AurUpdate(
         _detailRevealer.SetRevealChild(true);
     }
 
+    public void Reload() => _ = LoadDataAsync(_cts.Token);
+
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _listStore.RemoveAll();

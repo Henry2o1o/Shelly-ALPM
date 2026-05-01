@@ -17,8 +17,11 @@ public class AurInstall(
     IPrivilegedOperationService privilegedOperationService,
     ILockoutService lockoutService,
     IConfigService configService,
-    IGenericQuestionService genericQuestionService) : IShellyWindow
+    IGenericQuestionService genericQuestionService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.AurInstalled, DirtyScopes.Config];
     private Box _box = null!;
     private readonly CancellationTokenSource _cts = new();
     private ColumnView _columnView = null!;
@@ -128,6 +131,7 @@ public class AurInstall(
         _box.AddController(shortcutController);
 
         _searchEntry.OnActivate += (_, _) => { _ = SearchAsync(_cts.Token); };
+        _sub = DirtySubscription.Attach(dirtyService, this);
 
         _selectionModel.OnSelectionChanged += (_, _) =>
         {
@@ -685,8 +689,15 @@ public class AurInstall(
         }
     }
 
+    public void Reload()
+    {
+        if (!string.IsNullOrEmpty(_searchText))
+            _ = SearchAsync(_cts.Token);
+    }
+
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _listStore.RemoveAll();
