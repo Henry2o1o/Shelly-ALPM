@@ -21,6 +21,7 @@ public static class ServiceBuilder
         collection.AddSingleton<IAlpmEventService, AlpmEventService>();
         collection.AddSingleton<IConfigService, ConfigService>();
         collection.AddSingleton<IGenericQuestionService, GenericQuestionService>();
+        collection.AddSingleton<IDirtyService, DirtyService>();
         collection.AddSingleton<ILockoutService, LockoutService>();
         collection.AddSingleton<IIconResolverService, IconResolverService>();
         collection.AddSingleton<IArchNewsService, ArchNewsService>();
