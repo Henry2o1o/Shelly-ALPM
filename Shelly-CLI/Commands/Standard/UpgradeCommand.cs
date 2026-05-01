@@ -37,7 +37,6 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
         if (packagesNeedingUpdate.Count == 0)
         {
             AnsiConsole.MarkupLine("[green]Standard Packages are up to date![/]");
-            return 0;
         }
 
         var config = ConfigManager.ReadConfig();
