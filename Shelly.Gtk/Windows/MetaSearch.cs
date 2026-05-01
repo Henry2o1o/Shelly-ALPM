@@ -276,11 +276,11 @@ public class MetaSearch(
             {
                 var standardInstalled = await privilegedOperationService.GetInstalledPackagesAsync().ContinueWith(x =>
                     x.Result.Select(y => new MetaPackageModel(y.Name, y.Name, y.Version, y.Description,
-                        PackageType.STANDARD, y.Description, y.Repository, true)).ToList());
+                        PackageType.Standard, y.Description, y.Repository, true)).ToList());
                 var standardAvailable = await privilegedOperationService.SearchPackagesAsync(_initialQuery)
                     .ContinueWith(x =>
                         x.Result.Select(y => new MetaPackageModel(y.Name, y.Name, y.Version, y.Description,
-                            PackageType.STANDARD, y.Description, y.Repository,
+                            PackageType.Standard, y.Description, y.Repository,
                             standardInstalled.Any(z => z.Name == y.Name))).ToList());
                 return standardAvailable;
             });
@@ -313,7 +313,7 @@ public class MetaSearch(
                             app.Name,
                             app.Releases.FirstOrDefault()?.Version ?? string.Empty,
                             app.Description,
-                            PackageType.FLATPAK,
+                            PackageType.Flatpak,
                             app.Summary,
                             app.Remotes.FirstOrDefault()?.Name ?? "Flatpak",
                             flatPakInstalled.Contains(app.Id)))
@@ -331,10 +331,10 @@ public class MetaSearch(
                     var aurInstalled = await privilegedOperationService.GetAurInstalledPackagesAsync()
                         .ContinueWith(x =>
                             x.Result.Select(y => new MetaPackageModel(y.Name, y.Name, y.Version, y.Description ?? "",
-                                PackageType.AUR, y.Url ?? "", "AUR", true)).ToList());
+                                PackageType.Aur, y.Url ?? "", "AUR", true)).ToList());
                     var aurAvailable = await privilegedOperationService.SearchAurPackagesAsync(_initialQuery)
                         .ContinueWith(x => x.Result.Select(y =>
-                            new MetaPackageModel(y.Name, y.Name, y.Version, y.Description ?? "", PackageType.AUR,
+                            new MetaPackageModel(y.Name, y.Name, y.Version, y.Description ?? "", PackageType.Aur,
                                 y.Url ?? "", "AUR", aurInstalled.Any(z => z.Name == y.Name))).ToList());
                     return aurAvailable;
                 });
@@ -406,9 +406,9 @@ public class MetaSearch(
         try
         {
             lockoutService.Show($"Installing...");
-            var standard = selected.Where(x => x.PackageType == PackageType.STANDARD).Select(x => x.Name).ToList();
-            var aur = selected.Where(x => x.PackageType == PackageType.AUR).Select(x => x.Name).ToList();
-            var flatpak = selected.Where(x => x.PackageType == PackageType.FLATPAK).Select(x => x.Id).ToList();
+            var standard = selected.Where(x => x.PackageType == PackageType.Standard).Select(x => x.Name).ToList();
+            var aur = selected.Where(x => x.PackageType == PackageType.Aur).Select(x => x.Name).ToList();
+            var flatpak = selected.Where(x => x.PackageType == PackageType.Flatpak).Select(x => x.Id).ToList();
 
             if (standard.Count > 0)
             {
@@ -424,7 +424,7 @@ public class MetaSearch(
 
             if (flatpak.Count > 0)
             {
-                foreach (var pkg in selected.Where(x => x.PackageType == PackageType.FLATPAK))
+                foreach (var pkg in selected.Where(x => x.PackageType == PackageType.Flatpak))
                 {
                     var optResult =
                         await unprivilegedOperationService.InstallFlatpakPackage(pkg.Id, false, pkg.Repository,
@@ -507,9 +507,9 @@ public class MetaSearch(
         {
             lockoutService.Show("Removing...");
 
-            var standard = selected.Where(x => x.PackageType == PackageType.STANDARD).Select(x => x.Name).ToList();
-            var aur = selected.Where(x => x.PackageType == PackageType.AUR).Select(x => x.Name).ToList();
-            var flatpak = selected.Where(x => x.PackageType == PackageType.FLATPAK).Select(x => x.Id).ToList();
+            var standard = selected.Where(x => x.PackageType == PackageType.Standard).Select(x => x.Name).ToList();
+            var aur = selected.Where(x => x.PackageType == PackageType.Aur).Select(x => x.Name).ToList();
+            var flatpak = selected.Where(x => x.PackageType == PackageType.Flatpak).Select(x => x.Id).ToList();
 
             if (standard.Count > 0) await privilegedOperationService.RemovePackagesAsync(standard, false, false);
             if (aur.Count > 0) await privilegedOperationService.RemoveAurPackagesAsync(aur);

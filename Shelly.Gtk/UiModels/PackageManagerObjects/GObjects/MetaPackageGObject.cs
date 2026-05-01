@@ -1,5 +1,4 @@
 using GObject;
-using Shelly.Gtk.UiModels;
 
 namespace Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 
