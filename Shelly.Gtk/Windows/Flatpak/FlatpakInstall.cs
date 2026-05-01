@@ -1346,7 +1346,7 @@ public class FlatpakInstall(
     {
         if (_remoteFactory == null)
         {
-            _remoteFactory = new SignalListItemFactory();
+            _remoteFactory = SignalListItemFactory.New();
             _remoteFactory.OnSetup += OnSetupRemote;
             _remoteFactory.OnBind += OnBindRemote;
             _listRemotes.SetFactory(_remoteFactory);
