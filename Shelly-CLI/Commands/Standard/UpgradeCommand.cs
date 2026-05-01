@@ -36,7 +36,7 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
         var packagesNeedingUpdate = manager.GetPackagesNeedingUpdate();
         if (packagesNeedingUpdate.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]System is up to date![/]");
+            AnsiConsole.MarkupLine("[green]Standard Packages are up to date![/]");
             return 0;
         }
 
@@ -188,8 +188,7 @@ public class UpgradeCommand : AsyncCommand<UpgradeSettings>
         var packagesNeedingUpdate = manager.GetPackagesNeedingUpdate();
         if (packagesNeedingUpdate.Count == 0)
         {
-            await Console.Error.WriteLineAsync("System is up to date!");
-            return 0;
+            await Console.Error.WriteLineAsync("Standard Packages are up to date!");
         }
 
         await Console.Error.WriteLineAsync($"{packagesNeedingUpdate.Count} packages need updates:");
