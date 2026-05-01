@@ -1,31 +1,25 @@
 using Gtk;
 using Gio;
 using Shelly.Gtk.Enums;
-using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
+using Shelly.Gtk.UiModels.AUR.GObjects;
 
 namespace Shelly.Gtk.Helpers;
 
-public static class GenericColumnViewSorter
+public static class AurColumnViewSorter
 {
     public static void Sort(
         Gio.ListStore listStore,
-        List<AlpmPackageGObject> items,
+        List<AurPackageGObject> items,
         PackageSortColumn column,
         SortType order)
     {
-        Comparison<AlpmPackageGObject> comparison =
+        Comparison<AurPackageGObject> comparison =
             column switch
             {
                 PackageSortColumn.Name =>
                     (a, b) => Compare(
                         a.Package?.Name,
                         b.Package?.Name
-                    ),
-
-                PackageSortColumn.Repo =>
-                    (a, b) => Compare(
-                        a.Package?.Repository,
-                        b.Package?.Repository
                     ),
 
                 PackageSortColumn.Version =>
@@ -44,50 +38,16 @@ public static class GenericColumnViewSorter
             order
         );
     }
-    
-    // Adding this because package windows use AlpmUpdateGobjects
-    public static void Sort(
-        Gio.ListStore listStore,
-        List<AlpmUpdateGObject> items,
-        PackageSortColumn column,
-        SortType order)
-    {
-        Comparison<AlpmUpdateGObject> comparison =
-            column switch
-            {
-                PackageSortColumn.Name =>
-                    (a, b) => Compare(
-                        a.Package?.Name,
-                        b.Package?.Name
-                    ),
-
-                PackageSortColumn.Repo =>
-                    (a, b) => Compare(
-                        a.Package?.Repository,
-                        b.Package?.Repository
-                    ),
-
-                _ => (_, _) => 0
-            };
-
-        SortInternal(
-            listStore,
-            items,
-            comparison,
-            order
-        );
-    }
 
     /*
      * Shared implementation
      */
 
-    private static void SortInternal<T>(
+    private static void SortInternal(
         Gio.ListStore listStore,
-        List<T> items,
-        Comparison<T> comparison,
+        List<AurPackageGObject> items,
+        Comparison<AurPackageGObject> comparison,
         SortType order)
-        where T : GObject.Object
     {
         if (order == SortType.Descending)
         {
@@ -116,10 +76,9 @@ public static class GenericColumnViewSorter
         );
     }
 
-    private static void SpliceReplace<T>(
+    private static void SpliceReplace(
         Gio.ListStore listStore,
-        List<T> items)
-        where T : GObject.Object
+        List<AurPackageGObject> items)
     {
         var array = new GObject.Object[items.Count];
 

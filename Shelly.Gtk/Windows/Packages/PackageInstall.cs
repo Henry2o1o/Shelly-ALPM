@@ -2,7 +2,7 @@ using GLib;
 using Gtk;
 using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Enums;
-using static Shelly.Gtk.Helpers.GenericColumnViewSorter;
+using static Shelly.Gtk.Helpers.PackageColumnViewSorter;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.Icons;
 using Shelly.Gtk.UiModels;
