@@ -7,6 +7,8 @@ using Shelly.Gtk.Services.FlatHub;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 
+// ReSharper disable NotAccessedField.Local
+
 // ReSharper disable CollectionNeverQueried.Local
 
 namespace Shelly.Gtk.Windows.Flatpak;
@@ -168,7 +170,7 @@ public class FlatpakInstall(
         };
 
         _remoteListStore = Gio.ListStore.New(FlatpakRemoteGObject.GetGType());
-        _remoteSelectionModel = new SingleSelection { Model = _remoteListStore };
+        _remoteSelectionModel = SingleSelection.New(_remoteListStore);
         _listRemotes = (ListView)builder.GetObject("list_remotes")!;
         _listRemotes.SetModel(_remoteSelectionModel);
 
@@ -313,15 +315,12 @@ public class FlatpakInstall(
         var categories = Enum.GetNames<FlatpakCategories>();
         foreach (var category in categories)
         {
-            var gtkBox = new Box();
-            gtkBox.SetOrientation(Orientation.Horizontal);
-            gtkBox.Spacing = 8;
+            var gtkBox = Box.New(Orientation.Horizontal, 8);
 
-            var image = new Image();
+            var image = Image.New();
             image.PixelSize = 16;
 
-            var label = new Label();
-            label.SetText(category);
+            var label = Label.New(category);
 
             switch (category)
             {
@@ -451,11 +450,7 @@ public class FlatpakInstall(
             NavigateToInstallPage(args.Row.GetIndex());
         };
 
-        _categoryListBox.OnRowActivated += (_, args) =>
-        {
-            if (args.Row is null) return;
-            NavigateToInstallPage(args.Row.GetIndex());
-        };
+        _categoryListBox.OnRowActivated += (_, args) => { NavigateToInstallPage(args.Row.GetIndex()); };
 
         _gridView.OnActivate += (_, _) =>
         {
@@ -767,7 +762,7 @@ public class FlatpakInstall(
 
         var remotes = app.Remotes.FirstOrDefault() ?? new FlatpakRemoteDto();
 
-        var path = "";
+        string path;
         if (remotes.Scope == "user")
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -1120,26 +1115,21 @@ public class FlatpakInstall(
 
     private void ShowVersionHistory(List<AppstreamRelease> releases)
     {
-        _overlayBoxRoot = new Box();
-        _overlayBoxRoot.SetOrientation(Orientation.Vertical);
-        _overlayBoxRoot.SetSpacing(12);
+        _overlayBoxRoot = Box.New(Orientation.Vertical, 12);
         _overlayBoxRoot.SetSizeRequest(500, -1);
 
-        var title = new Label();
-        title.SetText("Version History");
+        var title = Label.New("Version History");
         title.AddCssClass("title-2");
         title.SetHalign(Align.Start);
         _overlayBoxRoot.Append(title);
 
-        var scroll = new ScrolledWindow();
+        var scroll = ScrolledWindow.New();
         scroll.HscrollbarPolicy = PolicyType.Never;
         scroll.VscrollbarPolicy = PolicyType.Automatic;
         scroll.SetOverlayScrolling(false);
         scroll.SetSizeRequest(-1, 400);
 
-        var list = new Box();
-        list.SetOrientation(Orientation.Vertical);
-        list.SetSpacing(8);
+        var list = Box.New(Orientation.Vertical, 8);
 
         foreach (var release in releases)
             list.Append(BuildReleaseCard(release.Version,
@@ -1153,26 +1143,21 @@ public class FlatpakInstall(
 
     private void ShowAddons(List<AppstreamApp> addons)
     {
-        _overlayBoxRoot = new Box();
-        _overlayBoxRoot.SetOrientation(Orientation.Vertical);
-        _overlayBoxRoot.SetSpacing(12);
+        _overlayBoxRoot = Box.New(Orientation.Vertical, 12);
         _overlayBoxRoot.SetSizeRequest(500, -1);
 
-        var title = new Label();
-        title.SetText("Available Addons");
+        var title = Label.New("Available Addons");
         title.AddCssClass("title-2");
         title.SetHalign(Align.Start);
         _overlayBoxRoot.Append(title);
 
-        var scroll = new ScrolledWindow();
+        var scroll = ScrolledWindow.New();
         scroll.HscrollbarPolicy = PolicyType.Never;
         scroll.VscrollbarPolicy = PolicyType.Automatic;
         scroll.SetOverlayScrolling(false);
         scroll.SetSizeRequest(-1, 400);
 
-        var list = new Box();
-        list.SetOrientation(Orientation.Vertical);
-        list.SetSpacing(8);
+        var list = Box.New(Orientation.Vertical, 8);
 
         foreach (var addon in addons)
             list.Append(BuildAddonCard(addon.Name, addon.Summary, addon.Id));
@@ -1185,30 +1170,24 @@ public class FlatpakInstall(
 
     protected virtual Widget BuildReleaseCard(string version, string date, string description)
     {
-        var card = new Box();
-        card.SetOrientation(Orientation.Vertical);
-        card.SetSpacing(4);
+        var card = Box.New(Orientation.Vertical, 4);
         card.AddCssClass("card");
         card.SetMarginBottom(4);
         card.SetMarginStart(2);
         card.SetMarginEnd(2);
 
-        var row = new Box();
-        row.SetOrientation(Orientation.Horizontal);
-        row.SetSpacing(8);
+        var row = Box.New(Orientation.Horizontal, 8);
         row.SetMarginTop(8);
         row.SetMarginBottom(8);
         row.SetMarginStart(8);
         row.SetMarginEnd(8);
 
-        var versionLabel = new Label();
-        versionLabel.SetText($"Version {version}");
+        var versionLabel = Label.New($"Version {version}");
         versionLabel.AddCssClass("heading");
         versionLabel.SetHalign(Align.Start);
         versionLabel.Hexpand = true;
 
-        var dateLabel = new Label();
-        dateLabel.SetText(date);
+        var dateLabel = Label.New(date);
         dateLabel.AddCssClass("dim-label");
         dateLabel.SetHalign(Align.End);
         dateLabel.SetValign(Align.Center);
@@ -1221,7 +1200,7 @@ public class FlatpakInstall(
         {
             foreach (var line in description.Split('\n'))
             {
-                var desc = new Label();
+                var desc = Label.New(line);
                 desc.SetText(line);
                 desc.SetWrap(true);
                 desc.SetXalign(0);
@@ -1234,8 +1213,7 @@ public class FlatpakInstall(
         }
         else
         {
-            var noDetails = new Label();
-            noDetails.SetText("No details for this release");
+            var noDetails = Label.New("No details available");
             noDetails.AddCssClass("dim-label");
             noDetails.SetXalign(0);
             noDetails.SetMarginBottom(4);
@@ -1249,29 +1227,22 @@ public class FlatpakInstall(
 
     protected virtual Widget BuildAddonCard(string name, string summary, string id)
     {
-        var card = new Box();
-        card.SetOrientation(Orientation.Vertical);
-        card.SetSpacing(4);
+        var card = Box.New(Orientation.Vertical, 4);
         card.AddCssClass("card");
         card.SetMarginBottom(4);
         card.SetMarginStart(2);
         card.SetMarginEnd(2);
 
-        var row = new Box();
-        row.SetOrientation(Orientation.Horizontal);
-        row.SetSpacing(8);
+        var row = Box.New(Orientation.Horizontal, 8);
         row.SetMarginTop(8);
         row.SetMarginBottom(8);
         row.SetMarginStart(8);
         row.SetMarginEnd(8);
 
-        var textBox = new Box();
-        textBox.SetOrientation(Orientation.Vertical);
-        textBox.SetSpacing(4);
+        var textBox = Box.New(Orientation.Vertical, 4);
         textBox.Hexpand = true;
 
-        var nameLabel = new Label();
-        nameLabel.SetText(name);
+        var nameLabel = Label.New(name);
         nameLabel.AddCssClass("heading");
         nameLabel.SetHalign(Align.Start);
 
@@ -1279,15 +1250,14 @@ public class FlatpakInstall(
 
         if (!string.IsNullOrWhiteSpace(summary))
         {
-            var summaryLabel = new Label();
-            summaryLabel.SetText(summary);
+            var summaryLabel = Label.New(summary);
             summaryLabel.SetWrap(true);
             summaryLabel.SetXalign(0);
             summaryLabel.SetHalign(Align.Fill);
             textBox.Append(summaryLabel);
         }
 
-        var button = new Button();
+        var button = Button.New();
         button.SetIconName("folder-download-symbolic");
         button.SetValign(Align.Center);
         button.SetHalign(Align.End);

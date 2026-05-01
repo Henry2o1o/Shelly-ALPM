@@ -12,7 +12,6 @@ namespace Shelly.Gtk.Windows.Flatpak;
 public class FlatpakRemove(
     IUnprivilegedOperationService unprivilegedOperationService,
     ILockoutService lockoutService,
-    IConfigService configService,
     IGenericQuestionService genericQuestionService) : IShellyWindow
 {
     private ListView? _listView;
@@ -96,12 +95,12 @@ public class FlatpakRemove(
         var idLabel = (Label)nameLabel.GetNextSibling()!;
         var versionLabel = (Label)vbox.GetNextSibling()!;
 
-        var path = "";
+        string path;
         if (_userOnly)
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote ?? "",
+                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote,
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
@@ -291,7 +290,7 @@ public class FlatpakRemove(
 
         try
         {
-            lockoutService.Show($"Removing {packageId}...", 0, true);
+            lockoutService.Show($"Removing {packageId}...");
             var result = await unprivilegedOperationService.RemoveFlatpakPackage(packageId, removeConfig);
 
             if (!result.Success)

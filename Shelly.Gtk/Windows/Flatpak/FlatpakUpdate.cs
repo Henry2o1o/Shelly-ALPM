@@ -114,12 +114,12 @@ public class FlatpakUpdate(
         var permissionExpander = (Expander)hbox.GetNextSibling()!;
         var permissionVbox = (Box)permissionExpander.GetChild()!;
 
-        var path = "";
+        string path;
         if (_userOnly)
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote ?? "",
+                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote,
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
@@ -235,7 +235,7 @@ public class FlatpakUpdate(
 
         try
         {
-            lockoutService.Show("Updating Flatpak packages...", 0, true);
+            lockoutService.Show("Updating Flatpak packages...");
             var result = await unprivilegedOperationService.FlatpakUpgrade();
 
             if (!result.Success)
