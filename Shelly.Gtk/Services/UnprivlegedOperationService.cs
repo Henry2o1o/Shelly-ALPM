@@ -6,6 +6,9 @@ using Shelly.Gtk.Services.TrayServices;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.AppImage;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
+// ReSharper disable UnusedParameter.Local
+// ReSharper disable AccessToModifiedClosure
+// ReSharper disable ConditionalAccessQualifierIsNonNullableAccordingToAPIContract
 
 
 namespace Shelly.Gtk.Services;
@@ -66,13 +69,13 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                 var trimmedLine = StripBom(line.Trim());
                 if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
                 {
-                    var updates = System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                    var updates = JsonSerializer.Deserialize(trimmedLine,
                         ShellyGtkJsonContext.Default.ListFlatpakPackageDto);
                     return updates ?? [];
                 }
             }
 
-            var allUpdates = System.Text.Json.JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
+            var allUpdates = JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
                 ShellyGtkJsonContext.Default.ListFlatpakPackageDto);
             return allUpdates ?? [];
         }
@@ -100,13 +103,13 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                 var trimmedLine = StripBom(line.Trim());
                 if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
                 {
-                    var updates = System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                    var updates = JsonSerializer.Deserialize(trimmedLine,
                         ShellyGtkJsonContext.Default.ListFlatpakPackageDto);
                     return updates ?? [];
                 }
             }
 
-            var allUpdates = System.Text.Json.JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
+            var allUpdates = JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
                 ShellyGtkJsonContext.Default.ListFlatpakPackageDto);
             return allUpdates ?? [];
         }
@@ -144,13 +147,13 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                     var trimmedLine = StripBom(line.Trim());
                     if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
                     {
-                        var updates = System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                        var updates = JsonSerializer.Deserialize(trimmedLine,
                             ShellyGtkJsonContext.Default.ListAppstreamApp);
                         return updates ?? [];
                     }
                 }
 
-                var allUpdates = System.Text.Json.JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
+                var allUpdates = JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
                     ShellyGtkJsonContext.Default.ListAppstreamApp);
                 return allUpdates ?? [];
             }
@@ -290,7 +293,7 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                 var trimmedLine = StripBom(line.Trim());
                 if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
                 {
-                    var apps = System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                    var apps = JsonSerializer.Deserialize(trimmedLine,
                         ShellyGtkJsonContext.Default.ListAppImageDto);
                     return apps ?? [];
                 }
@@ -322,7 +325,7 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                 var trimmedLine = StripBom(line.Trim());
                 if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
                 {
-                    var apps = System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                    var apps = JsonSerializer.Deserialize(trimmedLine,
                         ShellyGtkJsonContext.Default.ListRssModel);
                     return apps ?? [];
                 }
@@ -378,7 +381,7 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                 var trimmedLine = StripBom(line.Trim());
                 if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
                 {
-                    var updates = System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                    var updates = JsonSerializer.Deserialize(trimmedLine,
                         ShellyGtkJsonContext.Default.ListAppImageUpdateDto);
                     return updates?.Select(u => new AppImageDto
                     {
@@ -414,13 +417,13 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                 if (trimmedLine.StartsWith("{") && trimmedLine.EndsWith("}"))
                 {
                     var updates =
-                        System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                        JsonSerializer.Deserialize(trimmedLine,
                             ShellyGtkJsonContext.Default.ListAlpmPackageUpdateDto);
                     return updates ?? [];
                 }
             }
 
-            var allUpdates = System.Text.Json.JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
+            var allUpdates = JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
                 ShellyGtkJsonContext.Default.ListAlpmPackageUpdateDto);
             return allUpdates ?? [];
         }
@@ -454,13 +457,13 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
                 if (trimmedLine.StartsWith("{") && trimmedLine.EndsWith("}"))
                 {
                     var updates =
-                        System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
+                        JsonSerializer.Deserialize(trimmedLine,
                             ShellyGtkJsonContext.Default.SyncModel);
                     return updates ?? new SyncModel();
                 }
             }
 
-            var allUpdates = System.Text.Json.JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
+            var allUpdates = JsonSerializer.Deserialize(StripBom(result.Output.Trim()),
                 ShellyGtkJsonContext.Default.SyncModel);
             return allUpdates ?? new SyncModel();
         }
@@ -488,7 +491,7 @@ public class UnprivilegedOperationService(ITrayDbus trayDbus, IPackageUpdateNoti
 
             if (trimmedOutput.StartsWith("{"))
             {
-                var response = System.Text.Json.JsonSerializer.Deserialize(trimmedOutput,
+                var response = JsonSerializer.Deserialize(trimmedOutput,
                     ShellyGtkJsonContext.Default.FlathubSearchResponse);
 
                 if (response?.Hits == null) return [];
