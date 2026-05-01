@@ -192,7 +192,10 @@ public class PackageUpdate(
         headerBox.MarginBottom = 16;
         headerBox.MarginTop = 8;
 
-        var iconImage = new Image { PixelSize = 64, Halign = Align.Center, MarginBottom = 8 };
+        var iconImage = Image.New();
+        iconImage.PixelSize = 64;
+        iconImage.Halign = Align.Center;
+        iconImage.MarginBottom = 8;
         var iconPath = iconResolverService.GetIconPath(pkg.Name);
         if (!string.IsNullOrEmpty(iconPath) && iconPath != "Unavailable" && File.Exists(iconPath))
         {
@@ -302,20 +305,18 @@ public class PackageUpdate(
 
         void AddChipList(string label, IReadOnlyList<string> items, bool isOptional = false)
         {
-            var expander = new Expander { Label = $"{label} ({items.Count})" };
+            var expander = Expander.New($"{label} ({items.Count})");
             expander.AddCssClass("package-detail-expander");
             expander.Hexpand = false;
 
-            var flowBox = new FlowBox
-            {
-                SelectionMode = SelectionMode.None,
-                ColumnSpacing = 6,
-                RowSpacing = 6,
-                Halign = Align.Start,
-                Valign = Align.Start,
-                MaxChildrenPerLine = isOptional ? 1u : 10u,
-                MinChildrenPerLine = 1
-            };
+            var flowBox = FlowBox.New();
+            flowBox.SelectionMode = SelectionMode.None;
+            flowBox.ColumnSpacing = 6;
+            flowBox.RowSpacing = 6;
+            flowBox.Halign = Align.Start;
+            flowBox.Valign = Align.Start;
+            flowBox.MaxChildrenPerLine = isOptional ? 1u : 10u;
+            flowBox.MinChildrenPerLine = 1;
 
             foreach (var item in items)
             {
@@ -370,7 +371,9 @@ public class PackageUpdate(
         _checkFactory.OnSetup += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            var check = new CheckButton { MarginStart = 10, MarginEnd = 10 };
+            var check = CheckButton.New();
+            check.MarginStart = 10;
+            check.MarginEnd = 10;
             listItem.SetChild(check);
 
             check.OnToggled += (s, _) =>
@@ -438,7 +441,8 @@ public class PackageUpdate(
         {
             if (args.Object is not ColumnViewCell listItem) return;
             var box = Box.New(Orientation.Horizontal, 6);
-            var packageIcon = new Image { PixelSize = 24 };
+            var packageIcon = Image.New();
+            packageIcon.PixelSize = 24;
             var label = Label.New(string.Empty);
 
             box.Append(packageIcon);
@@ -533,7 +537,7 @@ public class PackageUpdate(
         if (string.IsNullOrWhiteSpace(_searchText))
             return true;
 
-        return pkgObj.Package.Name?.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ?? false;
+        return pkgObj.Package?.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ?? false;
     }
 
     private async Task LoadDataAsync()
@@ -543,7 +547,7 @@ public class PackageUpdate(
             var packages =
                 await unprivilegedOperationService.CheckForStandardApplicationUpdates(_showHiddenCheck.Active);
             var installedPackages = await privilegedOperationService.GetInstalledPackagesAsync();
-            _installedPackageNames = new HashSet<string>(installedPackages?.Select(x => x.Name) ?? []);
+            _installedPackageNames = new HashSet<string>(installedPackages.Select(x => x.Name));
             GLib.Functions.IdleAdd(0, () =>
             {
                 _listStore.RemoveAll();
@@ -662,9 +666,7 @@ public class PackageUpdate(
                         .Select(f => $"  • {f.Service}: {f.Error}"));
                     var failArgs = new GenericQuestionEventArgs(
                         "Service Restart Failures",
-                        $"The following services failed to restart automatically:\n{failureList}",
-                        false
-                    );
+                        $"The following services failed to restart automatically:\n{failureList}");
                     genericQuestionService.RaiseQuestion(failArgs);
                     await failArgs.ResponseTask;
                 }
