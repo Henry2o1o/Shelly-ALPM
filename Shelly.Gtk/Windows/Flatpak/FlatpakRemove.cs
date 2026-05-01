@@ -12,7 +12,6 @@ namespace Shelly.Gtk.Windows.Flatpak;
 public class FlatpakRemove(
     IUnprivilegedOperationService unprivilegedOperationService,
     ILockoutService lockoutService,
-    IConfigService configService,
     IGenericQuestionService genericQuestionService) : IShellyWindow
 {
     private ListView? _listView;
@@ -32,8 +31,6 @@ public class FlatpakRemove(
 
         _listView = (ListView)builder.GetObject("installed_flatpaks")!;
         var removeButton = (Button)builder.GetObject("remove_button")!;
-        var reloadButton = (Button)builder.GetObject("reload_button")!;
-        var searchEntry = (SearchEntry)builder.GetObject("search_entry")!;
 
         _listStore = Gio.ListStore.New(StringObject.GetGType());
         _selectionModel = SingleSelection.New(_listStore);
@@ -46,12 +43,6 @@ public class FlatpakRemove(
 
         _listView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         removeButton.OnClicked += (_, _) => { _ = RemoveSelectedAsync(); };
-        reloadButton.OnClicked += (_, _) => { _ = LoadDataAsync(); };
-        searchEntry.OnSearchChanged += (_, _) =>
-        {
-            _searchText = searchEntry.GetText();
-            ApplyFilter();
-        };
 
         return box;
     }
@@ -104,12 +95,12 @@ public class FlatpakRemove(
         var idLabel = (Label)nameLabel.GetNextSibling()!;
         var versionLabel = (Label)vbox.GetNextSibling()!;
 
-        var path = "";
+        string path;
         if (_userOnly)
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote ?? "",
+                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote,
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
@@ -148,6 +139,12 @@ public class FlatpakRemove(
         {
             Console.WriteLine($"Failed to load installed packages: {e.Message}");
         }
+    }
+
+    public void SetSearch(string text)
+    {
+        _searchText = text;
+        ApplyFilter();
     }
 
     private void ApplyFilter()
@@ -293,7 +290,7 @@ public class FlatpakRemove(
 
         try
         {
-            lockoutService.Show($"Removing {packageId}...", 0, true);
+            lockoutService.Show($"Removing {packageId}...");
             var result = await unprivilegedOperationService.RemoveFlatpakPackage(packageId, removeConfig);
 
             if (!result.Success)

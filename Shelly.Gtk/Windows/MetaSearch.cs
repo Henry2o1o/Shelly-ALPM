@@ -1,13 +1,10 @@
-using System.Security.Cryptography;
-using GObject.Internal;
 using Gtk;
 using Shelly.Gtk.Helpers;
-using Shelly.Gtk.Enums;
-using static Shelly.Gtk.Helpers.GenericColumnViewSorter;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
-using Shelly.Gtk.Windows.Dialog;
+
+// ReSharper disable RedundantAssignment
 
 // ReSharper disable CollectionNeverQueried.Local
 
@@ -41,15 +38,10 @@ public class MetaSearch(
     private ColumnViewColumn _versionColumn = null!;
     private ColumnViewColumn _descriptionColumn = null!;
 
-    private ColumnViewSorter _columnSorter = null!;
-    private SortType _primarySort;
-    private PackageSortColumn? _lastColumn;
-    private SortType _lastOrder;
-
     private Dictionary<ColumnViewCell, EventHandler> _checkBinding = [];
     private Dictionary<ColumnViewCell, EventHandler> _installedBinding = [];
     private readonly List<MetaPackageGObject> _packageGObjectRefs = [];
-    
+
     private Stack _searchStack = null!;
     private Spinner _searchSpinner = null!;
 
@@ -80,40 +72,6 @@ public class MetaSearch(
 
         SetupColumns(_checkColumn, _nameColumn, _repoColumn, _versionColumn, _descriptionColumn);
 
-        // Create sorters
-        _repoColumn.Sorter = new CustomSorter();
-        _versionColumn.Sorter = new CustomSorter();
-        _nameColumn.Sorter = new CustomSorter();
-        _columnSorter = (ColumnViewSorter)_columnView.GetSorter()!;
-        _columnSorter.OnChanged += (_, _) =>
-        {
-            var primaryColumn = _columnSorter.GetPrimarySortColumn()!;
-            var sortColumn = GetSortColumn(primaryColumn);
-
-            if (sortColumn is null)
-                return;
-            
-            if (_lastColumn == sortColumn.Value)
-            {
-                _lastOrder =
-                    _lastOrder == SortType.Ascending
-                        ? SortType.Descending
-                        : SortType.Ascending;
-            }
-            else
-            {
-                _lastColumn = sortColumn.Value;
-                _lastOrder = SortType.Ascending;
-            }
-            
-            Sort(
-                _listStore,
-                _packageGObjectRefs,
-                sortColumn.Value,
-                _lastOrder
-            );
-        };
-        
         ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.End);
         ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
 
@@ -134,9 +92,9 @@ public class MetaSearch(
         _searchStack = Stack.New();
         _searchStack.SetVexpand(true);
         _searchStack.AddNamed(spinnerBox, "loading");
-        
+
         // Move the ScrolledWindow (parent of _columnView) into the stack
-        var scrolledWindow = (Widget)_columnView.GetParent()!;
+        var scrolledWindow = _columnView.GetParent()!;
         _box.Remove(scrolledWindow);
         _searchStack.AddNamed(scrolledWindow, "results");
         _box.Append(_searchStack);
@@ -155,22 +113,8 @@ public class MetaSearch(
                 pkgObj.ToggleSelection();
             }
         };
-        
+
         return _box;
-    }
-    
-    private PackageSortColumn? GetSortColumn(ColumnViewColumn column)
-    {
-        if (column == _nameColumn)
-            return PackageSortColumn.Name;
-
-        if (column == _repoColumn)
-            return PackageSortColumn.Repo;
-
-        if (column == _versionColumn)
-            return PackageSortColumn.Version;
-
-        return null;
     }
 
     private void SetupColumns(ColumnViewColumn checkColumn, ColumnViewColumn nameColumn, ColumnViewColumn repoColumn,
@@ -180,7 +124,9 @@ public class MetaSearch(
         _checkFactory.OnSetup += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            var check = new CheckButton { MarginStart = 10, MarginEnd = 10 };
+            var check = CheckButton.New();
+            check.MarginStart = 10;
+            check.MarginEnd = 10;
             listItem.SetChild(check);
             check.OnToggled += (s, _) =>
             {
@@ -217,7 +163,9 @@ public class MetaSearch(
         {
             if (args.Object is not ColumnViewCell listItem) return;
             var box = Box.New(Orientation.Horizontal, 6);
-            var label = new Label { Halign = Align.Start, MarginStart = 6 };
+            var label = Label.New(null);
+            label.Halign = Align.Start;
+            label.MarginStart = 6;
             var installedIcon = Image.NewFromIconName("object-select-symbolic");
             box.Append(label);
             box.Append(installedIcon);
@@ -250,12 +198,15 @@ public class MetaSearch(
             if (_installedBinding.Remove(listItem, out var handler)) pkgObj.OnIsInstalledChanged -= handler;
         };
         nameColumn.SetFactory(_nameFactory);
-        
+
         _repoFactory = SignalListItemFactory.New();
         _repoFactory.OnSetup += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            listItem.SetChild(new Label { Halign = Align.End, MarginStart = 6 });
+            var label = Label.New(null);
+            label.Halign = Align.End;
+            label.MarginStart = 6;
+            listItem.SetChild(label);
         };
         _repoFactory.OnBind += (_, args) =>
         {
@@ -269,7 +220,10 @@ public class MetaSearch(
         _versionFactory.OnSetup += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            listItem.SetChild(new Label { Halign = Align.End, MarginStart = 6 });
+            var label = Label.New(null);
+            label.Halign = Align.End;
+            label.MarginStart = 6;
+            listItem.SetChild(label);
         };
         _versionFactory.OnBind += (_, args) =>
         {
@@ -283,7 +237,10 @@ public class MetaSearch(
         _descriptionFactory.OnSetup += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            listItem.SetChild(new Label { Halign = Align.Start, MarginStart = 6 });
+            var label = Label.New(null);
+            label.Halign = Align.End;
+            label.MarginStart = 6;
+            listItem.SetChild(label);
         };
         _descriptionFactory.OnBind += (_, args) =>
         {
@@ -319,20 +276,19 @@ public class MetaSearch(
             {
                 var standardInstalled = await privilegedOperationService.GetInstalledPackagesAsync().ContinueWith(x =>
                     x.Result.Select(y => new MetaPackageModel(y.Name, y.Name, y.Version, y.Description,
-                        PackageType.STANDARD, y.Description, y.Repository, true)).ToList());
+                        PackageType.Standard, y.Description, y.Repository, true)).ToList());
                 var standardAvailable = await privilegedOperationService.SearchPackagesAsync(_initialQuery)
                     .ContinueWith(x =>
                         x.Result.Select(y => new MetaPackageModel(y.Name, y.Name, y.Version, y.Description,
-                            PackageType.STANDARD, y.Description, y.Repository,
+                            PackageType.Standard, y.Description, y.Repository,
                             standardInstalled.Any(z => z.Name == y.Name))).ToList());
                 return standardAvailable;
             });
             groupList.Add(standardTask);
 
-            Task<List<MetaPackageModel>>? flatpakGroup = null;
             if (configService.LoadConfig().FlatPackEnabled)
             {
-                flatpakGroup = Task.Run(async () =>
+                var flatpakGroup = Task.Run(async () =>
                 {
                     // Sync appstream cache (with timeout so it doesn't block forever)
                     var syncTask = unprivilegedOperationService.FlatpakSyncRemoteAppstream();
@@ -357,7 +313,7 @@ public class MetaSearch(
                             app.Name,
                             app.Releases.FirstOrDefault()?.Version ?? string.Empty,
                             app.Description,
-                            PackageType.FLATPAK,
+                            PackageType.Flatpak,
                             app.Summary,
                             app.Remotes.FirstOrDefault()?.Name ?? "Flatpak",
                             flatPakInstalled.Contains(app.Id)))
@@ -368,18 +324,17 @@ public class MetaSearch(
                 groupList.Add(flatpakGroup);
             }
 
-            Task<List<MetaPackageModel>>? aurGroup = null;
             if (configService.LoadConfig().AurEnabled)
             {
-                aurGroup = Task.Run(async () =>
+                var aurGroup = Task.Run(async () =>
                 {
                     var aurInstalled = await privilegedOperationService.GetAurInstalledPackagesAsync()
                         .ContinueWith(x =>
                             x.Result.Select(y => new MetaPackageModel(y.Name, y.Name, y.Version, y.Description ?? "",
-                                PackageType.AUR, y.Url ?? "", "AUR", true)).ToList());
+                                PackageType.Aur, y.Url ?? "", "AUR", true)).ToList());
                     var aurAvailable = await privilegedOperationService.SearchAurPackagesAsync(_initialQuery)
                         .ContinueWith(x => x.Result.Select(y =>
-                            new MetaPackageModel(y.Name, y.Name, y.Version, y.Description ?? "", PackageType.AUR,
+                            new MetaPackageModel(y.Name, y.Name, y.Version, y.Description ?? "", PackageType.Aur,
                                 y.Url ?? "", "AUR", aurInstalled.Any(z => z.Name == y.Name))).ToList());
                     return aurAvailable;
                 });
@@ -400,16 +355,17 @@ public class MetaSearch(
             {
                 _listStore.RemoveAll();
                 _packageGObjectRefs.Clear();
-                foreach (var pkgObj in models.Select(model => new MetaPackageGObject { Package = model }))
+                foreach (var pkgObj in models.Select(model =>
+                         {
+                             var o = MetaPackageGObject.NewWithProperties([]);
+                             o.Package = model;
+                             return o;
+                         }))
                 {
                     _packageGObjectRefs.Add(pkgObj);
                     _listStore.Append(pkgObj);
                 }
-                
-                // Adding an initial sort to stop repo column from being loaded twice in the same state
-                _lastColumn = PackageSortColumn.Repo;
-                _lastOrder = SortType.Ascending;
-                
+
                 return false;
             });
         }
@@ -450,9 +406,9 @@ public class MetaSearch(
         try
         {
             lockoutService.Show($"Installing...");
-            var standard = selected.Where(x => x.PackageType == PackageType.STANDARD).Select(x => x.Name).ToList();
-            var aur = selected.Where(x => x.PackageType == PackageType.AUR).Select(x => x.Name).ToList();
-            var flatpak = selected.Where(x => x.PackageType == PackageType.FLATPAK).Select(x => x.Id).ToList();
+            var standard = selected.Where(x => x.PackageType == PackageType.Standard).Select(x => x.Name).ToList();
+            var aur = selected.Where(x => x.PackageType == PackageType.Aur).Select(x => x.Name).ToList();
+            var flatpak = selected.Where(x => x.PackageType == PackageType.Flatpak).Select(x => x.Id).ToList();
 
             if (standard.Count > 0)
             {
@@ -468,7 +424,7 @@ public class MetaSearch(
 
             if (flatpak.Count > 0)
             {
-                foreach (var pkg in selected.Where(x => x.PackageType == PackageType.FLATPAK))
+                foreach (var pkg in selected.Where(x => x.PackageType == PackageType.Flatpak))
                 {
                     var optResult =
                         await unprivilegedOperationService.InstallFlatpakPackage(pkg.Id, false, pkg.Repository,
@@ -514,20 +470,16 @@ public class MetaSearch(
 
     private void UpdateButtonSensitivity()
     {
-        var anySelected = false;
         var anyInstalledSelected = false;
         var anyNotInstalledSelected = false;
         for (uint i = 0; i < _listStore.GetNItems(); i++)
         {
             var item = _listStore.GetObject(i);
-            if (item is MetaPackageGObject { IsSelected: true, Package: not null } pkgObj)
-            {
-                anySelected = true;
-                if (pkgObj.Package.IsInstalled)
-                    anyInstalledSelected = true;
-                else
-                    anyNotInstalledSelected = true;
-            }
+            if (item is not MetaPackageGObject { IsSelected: true, Package: not null } pkgObj) continue;
+            if (pkgObj.Package.IsInstalled)
+                anyInstalledSelected = true;
+            else
+                anyNotInstalledSelected = true;
         }
 
         _installButton.SetSensitive(anyNotInstalledSelected);
@@ -555,9 +507,9 @@ public class MetaSearch(
         {
             lockoutService.Show("Removing...");
 
-            var standard = selected.Where(x => x.PackageType == PackageType.STANDARD).Select(x => x.Name).ToList();
-            var aur = selected.Where(x => x.PackageType == PackageType.AUR).Select(x => x.Name).ToList();
-            var flatpak = selected.Where(x => x.PackageType == PackageType.FLATPAK).Select(x => x.Id).ToList();
+            var standard = selected.Where(x => x.PackageType == PackageType.Standard).Select(x => x.Name).ToList();
+            var aur = selected.Where(x => x.PackageType == PackageType.Aur).Select(x => x.Name).ToList();
+            var flatpak = selected.Where(x => x.PackageType == PackageType.Flatpak).Select(x => x.Id).ToList();
 
             if (standard.Count > 0) await privilegedOperationService.RemovePackagesAsync(standard, false, false);
             if (aur.Count > 0) await privilegedOperationService.RemoveAurPackagesAsync(aur);
@@ -587,13 +539,11 @@ public class MetaSearch(
             UpdateButtonSensitivity();
         }
     }
-    
+
     public void Dispose()
     {
         _cts.Cancel();
         _cts.Dispose();
-        _columnSorter.Dispose();
-        _columnSorter = null!;
         _listStore.RemoveAll();
         _packageGObjectRefs.Clear();
         _checkBinding.Clear();

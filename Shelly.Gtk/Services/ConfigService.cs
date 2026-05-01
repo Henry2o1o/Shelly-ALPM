@@ -4,7 +4,7 @@ using Shelly.Gtk.UiModels;
 
 namespace Shelly.Gtk.Services;
 
-public class ConfigService : IConfigService
+public class ConfigService(IDirtyService dirtyService) : IConfigService
 {
     private static readonly string ConfigFolder = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -50,6 +50,7 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.UseSymbolicTray), config.UseSymbolicTray.ToString());
 
         ConfigSaved?.Invoke(this, config);
+        dirtyService.MarkDirty(DirtyScopes.Config);
     }
 
     public ShellyConfig LoadConfig()

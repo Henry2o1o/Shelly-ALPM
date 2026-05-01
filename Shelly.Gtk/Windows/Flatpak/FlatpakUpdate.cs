@@ -31,8 +31,6 @@ public class FlatpakUpdate(
 
         _listView = (ListView)builder.GetObject("installed_flatpaks")!;
         var removeButton = (Button)builder.GetObject("update_button")!;
-        var reloadButton = (Button)builder.GetObject("reload_button")!;
-        var searchEntry = (SearchEntry)builder.GetObject("search_entry")!;
 
         _listStore = Gio.ListStore.New(StringObject.GetGType());
         _selectionModel = SingleSelection.New(_listStore);
@@ -45,12 +43,6 @@ public class FlatpakUpdate(
 
         _listView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         removeButton.OnClicked += (_, _) => { _ = UpdateAllCommand(); };
-        reloadButton.OnClicked += (_, _) => { _ = LoadDataAsync(); };
-        searchEntry.OnSearchChanged += (_, _) =>
-        {
-            _searchText = searchEntry.GetText();
-            ApplyFilter();
-        };
 
         return box;
     }
@@ -122,12 +114,12 @@ public class FlatpakUpdate(
         var permissionExpander = (Expander)hbox.GetNextSibling()!;
         var permissionVbox = (Box)permissionExpander.GetChild()!;
 
-        var path = "";
+        string path;
         if (_userOnly)
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote ?? "",
+                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote,
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
@@ -199,6 +191,12 @@ public class FlatpakUpdate(
         }
     }
 
+    public void SetSearch(string text)
+    {
+        _searchText = text;
+        ApplyFilter();
+    }
+
     private void ApplyFilter()
     {
         if (_listStore == null) return;
@@ -237,7 +235,7 @@ public class FlatpakUpdate(
 
         try
         {
-            lockoutService.Show("Updating Flatpak packages...", 0, true);
+            lockoutService.Show("Updating Flatpak packages...");
             var result = await unprivilegedOperationService.FlatpakUpgrade();
 
             if (!result.Success)
