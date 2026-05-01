@@ -21,8 +21,11 @@ public class FlatpakInstall(
     IGenericQuestionService genericQuestionService,
     IFlatHubApiService flatHubApiService,
     FlatpakUpdate flatpakUpdate,
-    FlatpakRemove flatpakRemove) : IShellyWindow
+    FlatpakRemove flatpakRemove,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.FlatpakInstalled, DirtyScopes.Config];
     private GridView? _gridView;
     private readonly CancellationTokenSource _cts = new();
     private Gio.ListStore? _listStore;
@@ -560,8 +563,11 @@ public class FlatpakInstall(
             _overlay.SetVisible(true);
         };
 
+        _sub = DirtySubscription.Attach(dirtyService, this);
         return box;
     }
+
+    public void Reload() => _ = LoadDataAsync(_cts.Token);
 
     private bool FilterPackage(GObject.Object obj)
     {
@@ -1360,6 +1366,7 @@ public class FlatpakInstall(
 
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _searchDebounce.Cancel();

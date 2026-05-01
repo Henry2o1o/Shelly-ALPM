@@ -16,8 +16,11 @@ public class PackageUpdate(
     ILockoutService lockoutService,
     IConfigService configService,
     IGenericQuestionService genericQuestionService,
-    IIconResolverService iconResolverService) : IShellyWindow
+    IIconResolverService iconResolverService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.NativeUpdates, DirtyScopes.NativeInstalled, DirtyScopes.News];
     private readonly CancellationTokenSource _cts = new();
     private bool _suppressToggleConfirmation;
     private Box _box = null!;
@@ -135,8 +138,11 @@ public class PackageUpdate(
         _refreshButton.OnClicked += (_, _) => { _ = LoadDataAsync(); };
         _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(); };
 
+        _sub = DirtySubscription.Attach(dirtyService, this);
         return _box;
     }
+
+    public void Reload() => _ = LoadDataAsync();
 
     private void ShowPackageDetails(AlpmUpdateGObject pkgObj)
     {
@@ -731,6 +737,7 @@ public class PackageUpdate(
 
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _listStore.RemoveAll();

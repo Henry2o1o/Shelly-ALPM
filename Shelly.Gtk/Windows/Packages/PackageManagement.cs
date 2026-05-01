@@ -19,8 +19,11 @@ public class PackageManagement(
     ILockoutService lockoutService,
     IConfigService configService,
     IGenericQuestionService genericQuestionService,
-    IIconResolverService iconResolverService) : IShellyWindow
+    IIconResolverService iconResolverService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.Native, DirtyScopes.NativeInstalled];
     private Box _box = null!;
     private readonly CancellationTokenSource _cts = new();
     private ColumnView _columnView = null!;
@@ -142,8 +145,11 @@ public class PackageManagement(
             }
         };
 
+        _sub = DirtySubscription.Attach(dirtyService, this);
         return _box;
     }
+
+    public void Reload() => _ = LoadDataAsync(_cts.Token);
 
     private void ShowPackageDetails(AlpmPackageGObject pkgObj)
     {
@@ -714,6 +720,7 @@ public class PackageManagement(
 
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
 

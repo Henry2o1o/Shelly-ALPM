@@ -11,8 +11,11 @@ public class AppImage(
     IPrivilegedOperationService privilegedOperationService,
     IUnprivilegedOperationService unprivilegedOperationService,
     IGenericQuestionService genericQuestionService,
-    ILockoutService lockoutService) : IShellyWindow
+    ILockoutService lockoutService,
+    IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.AppImage, DirtyScopes.Config];
     private Box _mainBox = null!;
     private Box _listPage = null!;
     private ScrolledWindow _detailPage = null!;
@@ -94,9 +97,12 @@ public class AppImage(
         _syncAllButton.OnClicked += (_, _) => SyncAllAppImages();
 
         _ = LoadDataAsync();
+        _sub = DirtySubscription.Attach(dirtyService, this);
 
         return _mainBox;
     }
+
+    public void Reload() => _ = LoadDataAsync();
 
     private async Task LoadDataAsync()
     {
@@ -481,6 +487,7 @@ public class AppImage(
 
     public void Dispose()
     {
+        _sub?.Dispose();
         _appListBox.RemoveAll();
     }
 }

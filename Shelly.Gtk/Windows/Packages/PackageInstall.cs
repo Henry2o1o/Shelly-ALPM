@@ -19,9 +19,12 @@ public class PackageInstall(
     ILockoutService lockoutService,
     IConfigService configService,
     IGenericQuestionService genericQuestionService,
-    IIconResolverService iconResolverService)
-    : IShellyWindow
+    IIconResolverService iconResolverService,
+    IDirtyService dirtyService)
+    : IShellyWindow, IReloadable
 {
+    private DirtySubscription? _sub;
+    public string[] ListensTo => [DirtyScopes.NativeInstalled];
     private Overlay _overlay = null!;
     private readonly CancellationTokenSource _cts = new();
     private ColumnView _columnView = null!;
@@ -168,8 +171,11 @@ public class PackageInstall(
                 }
             }
         };
+        _sub = DirtySubscription.Attach(dirtyService, this);
         return _overlay;
     }
+
+    public void Reload() => _ = LoadDataAsync(_cts.Token);
 
     private void ShowPackageDetails(AlpmPackageGObject pkgObj)
     {
@@ -818,6 +824,7 @@ public class PackageInstall(
 
     public void Dispose()
     {
+        _sub?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _listStore.RemoveAll();
