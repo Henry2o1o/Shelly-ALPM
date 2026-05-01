@@ -23,7 +23,7 @@ public partial class CacheCleanerDialog(
                 return;
             }
 
-            var dialogEventArgs = new GenericDialogEventArgs(new Box());
+            var dialogEventArgs = new GenericDialogEventArgs(Box.NewWithProperties([]));
 
             var content = CacheCleanDialog.BuildContent(
                 cacheDir,
@@ -53,7 +53,7 @@ public partial class CacheCleanerDialog(
             string message;
             if (result.Success)
             {
-                var output = StripAnsiAndMarkup(result.Output ?? "");
+                var output = StripAnsiAndMarkup(result.Output);
                 message = string.IsNullOrWhiteSpace(output)
                     ? "Package cache cleaned successfully"
                     : output;
