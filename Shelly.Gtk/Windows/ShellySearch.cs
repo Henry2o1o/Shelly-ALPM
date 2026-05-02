@@ -83,7 +83,7 @@ public class ShellySearch(
 
         SetupColumns(_checkColumn, _nameColumn, _repoColumn, _versionColumn, _descriptionColumn);
 
-        ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.End);
+        ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.Start);
         ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
 
         _installButton.OnClicked += (_, _) => { _ = InstallSelectedAsync(); };
@@ -177,6 +177,9 @@ public class ShellySearch(
             var label = Label.New(null);
             label.Halign = Align.Start;
             label.MarginStart = 6;
+            label.Wrap = true;
+            label.WrapMode = Pango.WrapMode.WordChar;
+            label.Xalign = 0;
             var installedIcon = Image.NewFromIconName("object-select-symbolic");
             box.Append(label);
             box.Append(installedIcon);
@@ -217,6 +220,8 @@ public class ShellySearch(
             var label = Label.New(null);
             label.Halign = Align.End;
             label.MarginStart = 6;
+            //label.Wrap = true;
+            //label.WrapMode = Pango.WrapMode.WordChar;
             listItem.SetChild(label);
         };
         _repoFactory.OnBind += (_, args) =>
@@ -234,6 +239,8 @@ public class ShellySearch(
             var label = Label.New(null);
             label.Halign = Align.End;
             label.MarginStart = 6;
+            label.Wrap = true;
+            label.WrapMode = Pango.WrapMode.WordChar;
             listItem.SetChild(label);
         };
         _versionFactory.OnBind += (_, args) =>
@@ -249,16 +256,19 @@ public class ShellySearch(
         {
             if (args.Object is not ColumnViewCell listItem) return;
             var label = Label.New(null);
-            label.Halign = Align.End;
+            label.Halign = Align.Start;
             label.MarginStart = 6;
+            label.Wrap = true;
+            label.WrapMode = Pango.WrapMode.Word;
+            label.NaturalWrapMode = 
+            label.Xalign = 0;
             listItem.SetChild(label);
         };
         _descriptionFactory.OnBind += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
             if (listItem.GetItem() is MetaPackageGObject { Package: { } pkg } && listItem.GetChild() is Label label)
-                label.SetText(pkg.Description.Substring(0,
-                    pkg.Description.Length > 100 ? 100 : pkg.Description.Length));
+                label.SetText(pkg.Description);
         };
         descriptionColumn.SetFactory(_descriptionFactory);
     }

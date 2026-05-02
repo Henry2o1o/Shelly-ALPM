@@ -50,13 +50,14 @@
             </child>
             <child>
               <object class="GtkColumnViewColumn" id="name_column">
-                <property name="expand">true</property>
                 <property name="title">Name</property>
+                <property name="fixed-width">220</property>
               </object>
             </child>
             <child>
               <object class="GtkColumnViewColumn" id="description_column">
-               <property name="title">Description</property>
+                <property name="expand">true</property>
+                <property name="title">Description</property>
               </object>
             </child>
             <child>
