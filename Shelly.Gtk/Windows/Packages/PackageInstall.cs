@@ -26,14 +26,14 @@ public class PackageInstall(
     private DirtySubscription? _sub;
     public string[] ListensTo => [DirtyScopes.NativeInstalled];
     private Overlay _overlay = null!;
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts = new();
+    private int _loadGeneration;
     private ColumnView _columnView = null!;
     private SingleSelection _selectionModel = null!;
     private Gio.ListStore _listStore = null!;
     private FilterListModel _filterListModel = null!;
     private CustomFilter _filter = null!;
     private string _searchText = string.Empty;
-    private List<AlpmPackageDto> _packages = [];
     private List<string> _groups = [];
     private StringList _groupsStringList = null!;
     private string _selectedGroup = "Any";
@@ -44,6 +44,7 @@ public class PackageInstall(
     private SignalListItemFactory _versionFactory = null!;
     private SignalListItemFactory _repositoryFactory = null!;
     private readonly List<AlpmPackageGObject> _packageGObjectRefs = [];
+    private readonly List<AlpmPackageDto> _packageData = [];
 
     private Button _installButton = null!;
     private Button _localInstallButton = null!;
@@ -104,7 +105,7 @@ public class PackageInstall(
         ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
         ColumnViewHelper.AlignColumnHeader(_columnView, 4, Align.End);
 
-        _columnView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
+        _columnView.OnRealize += (_, _) => { Reload(); };
         _columnView.OnActivate += (_, _) =>
         {
             var item = _selectionModel.GetSelectedItem();
@@ -157,7 +158,7 @@ public class PackageInstall(
         _overlay.AddController(shortcutController);
 
         _localInstallButton.OnClicked += (_, _) => { _ = InstallLocalPackage(); };
-        _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
+        _showHiddenCheck.OnToggled += (_, _) => { Reload(); };
 
         _groupDropDown.OnNotify += (_, args) =>
         {
@@ -175,14 +176,21 @@ public class PackageInstall(
         return _overlay;
     }
 
-    public void Reload() => _ = LoadDataAsync(_cts.Token);
+    public void Reload()
+    {
+        var old = Interlocked.Exchange(ref _cts, new CancellationTokenSource());
+        old.Cancel();
+        old.Dispose();
+        Interlocked.Increment(ref _loadGeneration);
+        _ = LoadDataAsync(_cts.Token, _loadGeneration);
+    }
 
     private void ShowPackageDetails(AlpmPackageGObject pkgObj)
     {
-        if (pkgObj.Package == null) return;
+        if (pkgObj.Index < 0 || pkgObj.Index >= _packageData.Count) return;
 
         _currentDetailPkg = pkgObj;
-        var pkg = pkgObj.Package;
+        var pkg = _packageData[pkgObj.Index];
 
         while (_detailBox.GetFirstChild() is { } child)
         {
@@ -326,9 +334,11 @@ public class PackageInstall(
                     for (uint i = 0; i < _listStore.GetNItems(); i++)
                     {
                         var obj = _listStore.GetObject(i);
-                        if (obj is not AlpmPackageGObject depObj || depObj.Package == null) continue;
-                        if (depObj.Package.Name.Contains(dep))
-                            dictionary.TryAdd(depObj.Package.Name, depObj.Package.Depends);
+                        if (obj is not AlpmPackageGObject depObj) continue;
+                        if (depObj.Index < 0 || depObj.Index >= _packageData.Count) continue;
+                        var depPkg = _packageData[depObj.Index];
+                        if (depPkg.Name.Contains(dep))
+                            dictionary.TryAdd(depPkg.Name, depPkg.Depends);
                     }
                 }
 
@@ -472,8 +482,10 @@ public class PackageInstall(
         _nameFactory.OnBind += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            if (listItem.GetItem() is not AlpmPackageGObject { Package: { } pkg } pkgObj ||
+            if (listItem.GetItem() is not AlpmPackageGObject pkgObj ||
                 listItem.GetChild() is not Box box) return;
+            if (pkgObj.Index < 0 || pkgObj.Index >= _packageData.Count) return;
+            var pkg = _packageData[pkgObj.Index];
 
             var packageIcon = (Image)box.GetFirstChild()!;
             var label = (Label)packageIcon.GetNextSibling()!;
@@ -508,9 +520,10 @@ public class PackageInstall(
         _sizeFactory.OnBind += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            if (listItem.GetItem() is not AlpmPackageGObject { Package: { } pkg } ||
+            if (listItem.GetItem() is not AlpmPackageGObject pkgObj ||
                 listItem.GetChild() is not Label label) return;
-            label.SetText(SizeHelpers.FormatSize(pkg.InstalledSize));
+            if (pkgObj.Index < 0 || pkgObj.Index >= _packageData.Count) return;
+            label.SetText(SizeHelpers.FormatSize(_packageData[pkgObj.Index].InstalledSize));
             label.Halign = Align.End;
         };
         sizeColumn.SetFactory(_sizeFactory);
@@ -525,9 +538,10 @@ public class PackageInstall(
         _versionFactory.OnBind += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            if (listItem.GetItem() is not AlpmPackageGObject { Package: { } pkg } ||
+            if (listItem.GetItem() is not AlpmPackageGObject pkgObj ||
                 listItem.GetChild() is not Label label) return;
-            label.SetText(pkg.Version);
+            if (pkgObj.Index < 0 || pkgObj.Index >= _packageData.Count) return;
+            label.SetText(_packageData[pkgObj.Index].Version);
             label.Halign = Align.End;
         };
         versionColumn.SetFactory(_versionFactory);
@@ -543,60 +557,88 @@ public class PackageInstall(
         _repositoryFactory.OnBind += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
-            if (listItem.GetItem() is not AlpmPackageGObject { Package: { } pkg } ||
+            if (listItem.GetItem() is not AlpmPackageGObject pkgObj ||
                 listItem.GetChild() is not Label label) return;
+            if (pkgObj.Index < 0 || pkgObj.Index >= _packageData.Count) return;
 
-            label.SetText(pkg.Repository);
+            label.SetText(_packageData[pkgObj.Index].Repository);
             label.Halign = Align.End;
             label.SetMarginEnd(10);
         };
         repositoryColumn.SetFactory(_repositoryFactory);
     }
 
-    private async Task LoadDataAsync(CancellationToken ct = default)
+    private async Task LoadDataAsync(CancellationToken ct = default, int generation = 0)
     {
         try
         {
-            _packages = await privilegedOperationService.GetAvailablePackagesAsync(_showHiddenCheck.Active);
-            _groups = _packages.SelectMany(x => x.Groups).Distinct().ToList();
+            var cleared = new TaskCompletionSource();
+            GLib.Functions.IdleAdd(0, () =>
+            {
+                if (ct.IsCancellationRequested || _loadGeneration != generation)
+                {
+                    cleared.TrySetResult();
+                    return false;
+                }
+                _filterListModel.SetFilter(null);
+                _listStore.RemoveAll();
+                _filterListModel.SetFilter(_filter);
+                foreach (var r in _packageGObjectRefs) { r.Index = -1; r.Dispose(); }
+                _packageGObjectRefs.Clear();
+                _packageGObjectRefs.TrimExcess();
+                _packageData.Clear();
+                _packageData.TrimExcess();
+                _currentDetailPkg = null;
+                while (_detailBox.GetFirstChild() is { } child) _detailBox.Remove(child);
+                cleared.TrySetResult();
+                return false;
+            });
+            await cleared.Task;
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            ct.ThrowIfCancellationRequested();
+
+            var packages = await privilegedOperationService.GetAvailablePackagesAsync(_showHiddenCheck.Active);
+            _groups = packages.SelectMany(x => x.Groups).Distinct().ToList();
             _groups.Insert(0, "Any");
 
             ct.ThrowIfCancellationRequested();
             var installedPackages = await privilegedOperationService.GetInstalledPackagesAsync();
             _installedPackageNames = new HashSet<string>(installedPackages.Select(x => x.Name));
-            var queue = new Queue<AlpmPackageDto>(_packages);
-            var firstBatch = true;
+            installedPackages.Clear();
+            installedPackages.TrimExcess();
+            var index = 0;
 
             GLib.Functions.IdleAdd(0, () =>
             {
-                if (ct.IsCancellationRequested) return false;
-
-                if (firstBatch)
+                if (ct.IsCancellationRequested || _loadGeneration != generation)
                 {
-                    firstBatch = false;
-                    _filterListModel.SetFilter(null);
-                    _listStore.RemoveAll();
-                    _packageGObjectRefs.Clear();
-                    _filterListModel.SetFilter(_filter);
-                    _detailRevealer.SetRevealChild(false);
-                    _currentDetailPkg = null;
+                    packages.Clear();
+                    packages.TrimExcess();
+                    return false;
+                }
 
+                if (index == 0)
+                {
                     _groupsStringList = StringList.New(_groups.ToArray());
                     _groupDropDown.SetModel(_groupsStringList);
                 }
 
                 const int batchSize = 1000;
-                var count = 0;
                 var batch = new List<AlpmPackageGObject>();
-                while (queue.Count > 0 && count < batchSize)
+                while (index < packages.Count && batch.Count < batchSize)
                 {
-                    var dequeued = queue.Dequeue();
+                    var pkg = packages[index];
+                    index++;
+                    var dataIndex = _packageData.Count;
+                    _packageData.Add(pkg);
                     var pkgObj = AlpmPackageGObject.NewWithProperties([]);
-                    pkgObj.Package = dequeued;
-                    pkgObj.IsInstalled = _installedPackageNames.Contains(dequeued.Name);
+                    pkgObj.Index = dataIndex;
+                    pkgObj.IsInstalled = _installedPackageNames.Contains(pkg.Name);
                     _packageGObjectRefs.Add(pkgObj);
                     batch.Add(pkgObj);
-                    count++;
                 }
 
                 // ReSharper disable once CoVariantArrayConversion
@@ -605,7 +647,11 @@ public class PackageInstall(
                 if (_listStore.GetNItems() > 0 && _selectionModel.GetSelected() == uint.MaxValue)
                     _selectionModel.SetSelected(0);
 
-                return queue.Count > 0;
+                if (index < packages.Count) return true;
+                packages.Clear();
+                packages.TrimExcess();
+                return false;
+
             });
         }
         catch (OperationCanceledException)
@@ -624,13 +670,11 @@ public class PackageInstall(
 
     private bool FilterPackage(GObject.Object obj)
     {
-        if (obj is not AlpmPackageGObject { Package: { } pkg })
-            return false;
+        if (obj is not AlpmPackageGObject pkgObj) return false;
+        if (pkgObj.Index < 0 || pkgObj.Index >= _packageData.Count) return false;
+        var pkg = _packageData[pkgObj.Index];
 
-        if (!PackageSearch.MatchesGroup(pkg.Groups, _selectedGroup))
-            return false;
-
-        return PackageSearch.MatchesNameOrDescription(pkg.Name, pkg.Description, _searchText);
+        return PackageSearch.MatchesGroup(pkg.Groups, _selectedGroup) && PackageSearch.MatchesNameOrDescription(pkg.Name, pkg.Description, _searchText);
     }
 
 
@@ -640,9 +684,10 @@ public class PackageInstall(
         for (uint i = 0; i < _listStore.GetNItems(); i++)
         {
             var item = _listStore.GetObject(i);
-            if (item is AlpmPackageGObject { IsSelected: true, Package: not null } pkgObj)
+            if (item is AlpmPackageGObject { IsSelected: true } pkgObj &&
+                pkgObj.Index >= 0 && pkgObj.Index < _packageData.Count)
             {
-                selectedPackages.Add(pkgObj.Package.Name);
+                selectedPackages.Add(_packageData[pkgObj.Index].Name);
             }
         }
 
@@ -682,7 +727,7 @@ public class PackageInstall(
                 lockoutService.Show($"Installing...");
                 var performUpgrade = _upgradeCheck.GetActive();
                 result = await privilegedOperationService.InstallPackagesAsync(selectedPackages, performUpgrade);
-                await LoadDataAsync();
+                Reload();
             }
             catch (Exception e)
             {
@@ -825,8 +870,9 @@ public class PackageInstall(
         _cts.Cancel();
         _cts.Dispose();
         _listStore.RemoveAll();
+        foreach (var r in _packageGObjectRefs) { r.Index = -1; r.Dispose(); }
         _packageGObjectRefs.Clear();
-        _packages.Clear();
+        _packageData.Clear();
         _groups.Clear();
         _installedPackageNames.Clear();
         _currentDetailPkg = null;
