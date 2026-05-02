@@ -10,7 +10,7 @@ using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 
 namespace Shelly.Gtk.Windows;
 
-public class MetaSearch(
+public class ShellySearch(
     IPrivilegedOperationService privilegedOperationService,
     IUnprivilegedOperationService unprivilegedOperationService,
     IConfigService configService,
@@ -44,15 +44,16 @@ public class MetaSearch(
 
     private Stack _searchStack = null!;
     private Spinner _searchSpinner = null!;
+    private SearchEntry _searchEntry = null!;
 
     public Widget CreateWindow() => CreateWindow(null);
 
     public Widget CreateWindow(string? initialQuery)
     {
         _initialQuery = initialQuery;
-        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/MetaSearchWindow.ui"), -1);
+        var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/ShellySearchWindow.ui"), -1);
 
-        _box = (Box)builder.GetObject("MetaSearchWindow")!;
+        _box = (Box)builder.GetObject("ShellySearchWindow")!;
         _columnView = (ColumnView)builder.GetObject("package_grid")!;
         _installButton = (Button)builder.GetObject("install_button")!;
         _installButton.SetSensitive(false);
@@ -64,6 +65,16 @@ public class MetaSearch(
         _repoColumn = (ColumnViewColumn)builder.GetObject("repo_column")!;
         _versionColumn = (ColumnViewColumn)builder.GetObject("version_column")!;
         _descriptionColumn = (ColumnViewColumn)builder.GetObject("description_column")!;
+        _searchEntry = (SearchEntry)builder.GetObject("search_entry")!;
+
+        if (!string.IsNullOrEmpty(_initialQuery))
+            _searchEntry.SetText(_initialQuery);
+
+        _searchEntry.OnActivate += (_, _) =>
+        {
+            _initialQuery = _searchEntry.GetText();
+            _ = LoadDataAsync();
+        };
 
         _listStore = Gio.ListStore.New(MetaPackageGObject.GetGType());
         _selectionModel = SingleSelection.New(_listStore);
@@ -72,7 +83,7 @@ public class MetaSearch(
 
         SetupColumns(_checkColumn, _nameColumn, _repoColumn, _versionColumn, _descriptionColumn);
 
-        ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.End);
+        ColumnViewHelper.AlignColumnHeader(_columnView, 2, Align.Start);
         ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
 
         _installButton.OnClicked += (_, _) => { _ = InstallSelectedAsync(); };
@@ -166,6 +177,8 @@ public class MetaSearch(
             var label = Label.New(null);
             label.Halign = Align.Start;
             label.MarginStart = 6;
+            label.Ellipsize = Pango.EllipsizeMode.End;
+            label.Xalign = 0;
             var installedIcon = Image.NewFromIconName("object-select-symbolic");
             box.Append(label);
             box.Append(installedIcon);
@@ -206,6 +219,8 @@ public class MetaSearch(
             var label = Label.New(null);
             label.Halign = Align.End;
             label.MarginStart = 6;
+            //label.Wrap = true;
+            //label.WrapMode = Pango.WrapMode.WordChar;
             listItem.SetChild(label);
         };
         _repoFactory.OnBind += (_, args) =>
@@ -223,6 +238,8 @@ public class MetaSearch(
             var label = Label.New(null);
             label.Halign = Align.End;
             label.MarginStart = 6;
+            label.Ellipsize = Pango.EllipsizeMode.End;
+            label.Xalign = 1;
             listItem.SetChild(label);
         };
         _versionFactory.OnBind += (_, args) =>
@@ -238,16 +255,23 @@ public class MetaSearch(
         {
             if (args.Object is not ColumnViewCell listItem) return;
             var label = Label.New(null);
-            label.Halign = Align.End;
+            label.Halign = Align.Fill;
+            label.Hexpand = true;
             label.MarginStart = 6;
+            label.Wrap = true;
+            label.WrapMode = Pango.WrapMode.WordChar;
+            label.NaturalWrapMode = NaturalWrapMode.Word;
+            label.MaxWidthChars = 1;
+            label.WidthChars = 0;
+            label.Xalign = 0;
+            label.WidthRequest = 1;
             listItem.SetChild(label);
         };
         _descriptionFactory.OnBind += (_, args) =>
         {
             if (args.Object is not ColumnViewCell listItem) return;
             if (listItem.GetItem() is MetaPackageGObject { Package: { } pkg } && listItem.GetChild() is Label label)
-                label.SetText(pkg.Description.Substring(0,
-                    pkg.Description.Length > 100 ? 100 : pkg.Description.Length));
+                label.SetText(pkg.Description);
         };
         descriptionColumn.SetFactory(_descriptionFactory);
     }
