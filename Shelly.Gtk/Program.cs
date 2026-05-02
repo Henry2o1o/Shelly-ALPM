@@ -190,6 +190,7 @@ sealed class Program
             var aurPageBox = (Box)mainBuilder.GetObject("aur_page_box")!;
             var flatpakPageBox = (Box)mainBuilder.GetObject("flatpak_page_box")!;
             var appImagePageBox = (Box)mainBuilder.GetObject("appimage_page_box")!;
+            var metaSearchPageBox = (Box)mainBuilder.GetObject("metasearch_page_box")!;
             var settingsPageBox = (Box)mainBuilder.GetObject("settings_page_box")!;
 
             var mainOverlay = (Overlay)mainBuilder.GetObject("MainOverlay")!;
@@ -230,6 +231,7 @@ sealed class Program
             List<IShellyWindow> currentAurWindows = [];
             IShellyWindow? currentFlatpakWindow = null;
             IShellyWindow? currentAppImageWindow = null;
+            IShellyWindow? currentMetaSearchWindow = null;
 
             void UnloadPage(Box pageBox, IEnumerable<IShellyWindow> windows)
             {
@@ -289,6 +291,13 @@ sealed class Program
                 currentAppImageWindow = w;
             }
 
+            void LoadMetaSearchPage()
+            {
+                var w = serviceProvider.GetRequiredService<MetaSearch>();
+                metaSearchPageBox.Append(w.CreateWindow());
+                currentMetaSearchWindow = w;
+            }
+
             LoadPackagesPage();
 
             var settingsWindow = serviceProvider.GetRequiredService<Settings>();
@@ -297,12 +306,14 @@ sealed class Program
             settingsStack.GetPage(aurPageBox).Visible = initialConfig.AurEnabled;
             settingsStack.GetPage(flatpakPageBox).Visible = initialConfig.FlatPackEnabled;
             settingsStack.GetPage(appImagePageBox).Visible = initialConfig.AppImageEnabled;
+            settingsStack.GetPage(metaSearchPageBox).Visible = initialConfig.MetaSearchEnabled;
 
             settingsWindow.ConfigChanged += (config) =>
             {
                 settingsStack.GetPage(aurPageBox).Visible = config.AurEnabled;
                 settingsStack.GetPage(flatpakPageBox).Visible = config.FlatPackEnabled;
                 settingsStack.GetPage(appImagePageBox).Visible = config.AppImageEnabled;
+                settingsStack.GetPage(metaSearchPageBox).Visible = config.MetaSearchEnabled;
             };
             settingsWindow.NavigationToPackages += () =>
             {
@@ -323,6 +334,7 @@ sealed class Program
                     settingsStack.GetPage(aurPageBox).Visible = c.AurEnabled;
                     settingsStack.GetPage(flatpakPageBox).Visible = c.FlatPackEnabled;
                     settingsStack.GetPage(appImagePageBox).Visible = c.AppImageEnabled;
+                    settingsStack.GetPage(metaSearchPageBox).Visible = c.MetaSearchEnabled;
                     dirtyService.Clear(DirtyScopes.Config);
                     return false;
                 });
@@ -362,6 +374,14 @@ sealed class Program
                         }
 
                         break;
+                    case "metasearch_page":
+                        if (currentMetaSearchWindow != null)
+                        {
+                            UnloadPage(metaSearchPageBox, [currentMetaSearchWindow]);
+                            currentMetaSearchWindow = null;
+                        }
+
+                        break;
                 }
 
                 switch (currentPage)
@@ -370,6 +390,7 @@ sealed class Program
                     case "aur_page": LoadAurPage(); break;
                     case "flatpak_page": LoadFlatpakPage(); break;
                     case "appimage_page": LoadAppImagePage(); break;
+                    case "metasearch_page": LoadMetaSearchPage(); break;
                 }
 
                 previousPage = currentPage;

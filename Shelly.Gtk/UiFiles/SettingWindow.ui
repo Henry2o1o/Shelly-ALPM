@@ -335,6 +335,21 @@
                                 <property name="orientation">horizontal</property>
                                 <child>
                                   <object class="GtkLabel">
+                                    <property name="label">Enable MetaSearch</property>
+                                    <property name="hexpand">true</property>
+                                    <property name="halign">start</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkSwitch" id="metasearch_switch"/>
+                                </child>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">horizontal</property>
+                                <child>
+                                  <object class="GtkLabel">
                                     <property name="label">Enable Webview Visualization (experimental)</property>
                                     <property name="hexpand">true</property>
                                     <property name="halign">start</property>

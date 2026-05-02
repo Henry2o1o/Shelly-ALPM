@@ -267,6 +267,11 @@ public static class ConfigManager
                 config.AurEnabled = aurEnabled.GetBoolean();
             }
 
+            if (root.TryGetProperty("MetaSearchEnabled", out var metaSearchEnabled))
+            {
+                config.MetaSearchEnabled = metaSearchEnabled.GetBoolean();
+            }
+
             if (root.TryGetProperty("AurWarningConfirmed", out var aurWarning))
             {
                 config.AurWarningConfirmed = aurWarning.GetBoolean();
