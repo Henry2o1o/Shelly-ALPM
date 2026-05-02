@@ -1,15 +1,16 @@
 using Gtk;
 using Gio;
 using Shelly.Gtk.Enums;
+using Shelly.Gtk.UiModels.PackageManagerObjects;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 
 namespace Shelly.Gtk.Helpers;
 
 public static class PackageColumnViewSorter
 {
-    
     public static void Sort(
         Gio.ListStore listStore,
+        List<AlpmPackageDto> packageData,
         List<AlpmPackageGObject> items,
         PackageSortColumn column,
         SortType order)
@@ -19,20 +20,20 @@ public static class PackageColumnViewSorter
             {
                 PackageSortColumn.Name =>
                     (a, b) => Compare(
-                        a.Package?.Name,
-                        b.Package?.Name
+                        packageData[a.Index].Name,
+                        packageData[b.Index].Name
                     ),
 
                 PackageSortColumn.Repo =>
                     (a, b) => Compare(
-                        a.Package?.Repository,
-                        b.Package?.Repository
+                        packageData[a.Index].Repository,
+                        packageData[b.Index].Repository
                     ),
 
                 PackageSortColumn.Version =>
                     (a, b) => Compare(
-                        a.Package?.Version,
-                        b.Package?.Version
+                        packageData[a.Index].Version,
+                        packageData[b.Index].Version
                     ),
 
                 _ => (_, _) => 0
@@ -45,8 +46,11 @@ public static class PackageColumnViewSorter
             order
         );
     }
-    
-    // Adding this because package windows use AlpmUpdateGobjects
+
+    /*
+     * Legacy path for AlpmUpdateGObject
+     */
+
     public static void Sort(
         Gio.ListStore listStore,
         List<AlpmUpdateGObject> items,
@@ -77,11 +81,9 @@ public static class PackageColumnViewSorter
             comparison,
             order
         );
+        
     }
 
-    
-    
-    
     /*
      * Shared implementation
      */
@@ -102,13 +104,13 @@ public static class PackageColumnViewSorter
         }
 
         items.Sort(comparison);
-
+        
         SpliceReplace(
             listStore,
             items
         );
     }
-
+    
     private static int Compare(
         string? a,
         string? b)

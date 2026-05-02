@@ -24,6 +24,7 @@ public class PackageUpdate(
     private DirtySubscription? _sub;
     public string[] ListensTo => [DirtyScopes.NativeUpdates, DirtyScopes.NativeInstalled, DirtyScopes.News];
     private CancellationTokenSource _cts = new();
+    private int _loadGeneration;
     private bool _suppressToggleConfirmation;
     private Box _box = null!;
     private ColumnView _columnView = null!;
@@ -131,7 +132,7 @@ public class PackageUpdate(
         ColumnViewHelper.AlignColumnHeader(_columnView, 3, Align.End);
         ColumnViewHelper.AlignColumnHeader(_columnView, 4, Align.End);
 
-        _columnView.OnRealize += (_, _) => { _ = LoadDataAsync(); };
+        _columnView.OnRealize += (_, _) => { Reload(); };
         _columnView.OnActivate += (_, _) =>
         {
             var item = _selectionModel.GetSelectedItem();
@@ -193,7 +194,8 @@ public class PackageUpdate(
         var old = Interlocked.Exchange(ref _cts, new CancellationTokenSource());
         old.Cancel();
         old.Dispose();
-        _ = LoadDataAsync(_cts.Token);
+        Interlocked.Increment(ref _loadGeneration);
+        _ = LoadDataAsync(_cts.Token, _loadGeneration);
     }
 
     private void ShowPackageDetails(AlpmUpdateGObject pkgObj)
@@ -595,7 +597,7 @@ public class PackageUpdate(
         return PackageSearch.MatchesName(pkg.Name, _searchText);
     }
 
-    private async Task LoadDataAsync(CancellationToken ct = default)
+    private async Task LoadDataAsync(CancellationToken ct = default, int generation = 0)
     {
         try
         {
@@ -606,7 +608,7 @@ public class PackageUpdate(
             ct.ThrowIfCancellationRequested();
             GLib.Functions.IdleAdd(0, () =>
             {
-                if (ct.IsCancellationRequested) return false;
+                if (ct.IsCancellationRequested || _loadGeneration != generation) return false;
 
                 _filterListModel.SetFilter(null);
                 _listStore.RemoveAll();
@@ -711,7 +713,7 @@ public class PackageUpdate(
                 else
                     upgradeResult = await privilegedOperationService.UpdatePackagesAsync(selectedPackages);
 
-                await LoadDataAsync(_cts.Token);
+                await LoadDataAsync(_cts.Token, _loadGeneration);
 
                 if (upgradeResult.NeedsReboot)
                 {

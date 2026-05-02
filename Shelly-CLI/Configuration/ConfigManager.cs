@@ -267,6 +267,16 @@ public static class ConfigManager
                 config.AurEnabled = aurEnabled.GetBoolean();
             }
 
+            if (root.TryGetProperty("ShellySearchEnabled", out var shellySearchEnabled))
+            {
+                config.ShellySearchEnabled = shellySearchEnabled.GetBoolean();
+            }
+            else if (root.TryGetProperty("MetaSearchEnabled", out var metaSearchEnabled))
+            {
+                // Backward compatibility: previously named MetaSearchEnabled
+                config.ShellySearchEnabled = metaSearchEnabled.GetBoolean();
+            }
+
             if (root.TryGetProperty("AurWarningConfirmed", out var aurWarning))
             {
                 config.AurWarningConfirmed = aurWarning.GetBoolean();

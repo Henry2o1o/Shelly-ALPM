@@ -23,6 +23,7 @@ public class AurUpdate(
     public string[] ListensTo => [DirtyScopes.AurUpdates, DirtyScopes.AurInstalled];
     private Box _box = null!;
     private CancellationTokenSource _cts = new();
+    private int _loadGeneration;
     private ColumnView _columnView = null!;
     private SingleSelection _selectionModel = null!;
     private Gio.ListStore _listStore = null!;
@@ -119,7 +120,7 @@ public class AurUpdate(
 
         ColumnViewHelper.AlignColumnHeader(_columnView, 1, Align.Start);
 
-        _columnView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
+        _columnView.OnRealize += (_, _) => { Reload(); };
         _columnView.OnActivate += (_, _) =>
         {
             var item = _selectionModel.GetSelectedItem();
@@ -134,7 +135,7 @@ public class AurUpdate(
             ApplyFilter();
         };
         _updateButton.OnClicked += (_, _) => { _ = RemovePackagesAsync(); };
-        _showHiddenCheck.OnToggled += (_, _) => { _ = LoadDataAsync(_cts.Token); };
+        _showHiddenCheck.OnToggled += (_, _) => { Reload(); };
         _sub = DirtySubscription.Attach(dirtyService, this);
 
         _selectionModel.OnSelectionChanged += (_, _) =>
@@ -271,7 +272,7 @@ public class AurUpdate(
         versionColumn.SetFactory(_versionFactory);
     }
 
-    private async Task LoadDataAsync(CancellationToken ct = default)
+    private async Task LoadDataAsync(CancellationToken ct = default, int generation = 0)
     {
         try
         {
@@ -281,10 +282,11 @@ public class AurUpdate(
 
             GLib.Functions.IdleAdd(0, () =>
             {
-                if (ct.IsCancellationRequested) return false;
+                if (ct.IsCancellationRequested || _loadGeneration != generation) return false;
 
                 _filterListModel.SetFilter(null);
                 _listStore.RemoveAll();
+                foreach (var r in _packageGObjectRefs) r.Dispose();
                 _packageGObjectRefs.Clear();
                 _filterListModel.SetFilter(_filter);
                 _detailRevealer.SetRevealChild(false);
@@ -373,7 +375,7 @@ public class AurUpdate(
                 else
                     Console.WriteLine($"Failed to remove packages: {result.Error}");
 
-                await LoadDataAsync(_cts.Token);
+                Reload();
             }
             catch (Exception e)
             {
@@ -515,7 +517,8 @@ public class AurUpdate(
         var old = Interlocked.Exchange(ref _cts, new CancellationTokenSource());
         old.Cancel();
         old.Dispose();
-        _ = LoadDataAsync(_cts.Token);
+        Interlocked.Increment(ref _loadGeneration);
+        _ = LoadDataAsync(_cts.Token, _loadGeneration);
     }
 
     public void Dispose()
@@ -524,6 +527,7 @@ public class AurUpdate(
         _cts.Cancel();
         _cts.Dispose();
         _listStore.RemoveAll();
+        foreach (var r in _packageGObjectRefs) r.Dispose();
         _packageGObjectRefs.Clear();
         _checkBinding.Clear();
     }
