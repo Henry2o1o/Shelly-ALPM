@@ -24,6 +24,7 @@ public class AurInstall(
     public string[] ListensTo => [DirtyScopes.AurInstalled, DirtyScopes.Config];
     private Box _box = null!;
     private CancellationTokenSource _cts = new();
+    private int _loadGeneration;
     private ColumnView _columnView = null!;
     private SingleSelection _selectionModel = null!;
     private Gio.ListStore _listStore = null!;
@@ -130,7 +131,7 @@ public class AurInstall(
 
         _box.AddController(shortcutController);
 
-        _searchEntry.OnActivate += (_, _) => { _ = SearchAsync(_cts.Token); };
+        _searchEntry.OnActivate += (_, _) => { Interlocked.Increment(ref _loadGeneration); _ = SearchAsync(_cts.Token, _loadGeneration); };
         _sub = DirtySubscription.Attach(dirtyService, this);
 
         _selectionModel.OnSelectionChanged += (_, _) =>
@@ -277,7 +278,7 @@ public class AurInstall(
         versionColumn.SetFactory(versionFactory);
     }
 
-    private async Task SearchAsync(CancellationToken ct)
+    private async Task SearchAsync(CancellationToken ct, int generation = 0)
     {
         _searchText = _searchEntry.GetText();
 
@@ -292,9 +293,10 @@ public class AurInstall(
             result = result.OrderByDescending(x => x.NumVotes).ToList();
             GLib.Functions.IdleAdd(0, () =>
             {
-                if (ct.IsCancellationRequested) return false;
+                if (ct.IsCancellationRequested || _loadGeneration != generation) return false;
 
                 _listStore.RemoveAll();
+                foreach (var r in _packageGObjectRefs) r.Dispose();
                 _packageGObjectRefs.Clear();
                 foreach (var gobject in result.Select(dto =>
                          {
@@ -696,8 +698,9 @@ public class AurInstall(
         var old = Interlocked.Exchange(ref _cts, new CancellationTokenSource());
         old.Cancel();
         old.Dispose();
+        Interlocked.Increment(ref _loadGeneration);
         if (!string.IsNullOrEmpty(_searchText))
-            _ = SearchAsync(_cts.Token);
+            _ = SearchAsync(_cts.Token, _loadGeneration);
     }
 
     public void Dispose()
@@ -706,6 +709,7 @@ public class AurInstall(
         _cts.Cancel();
         _cts.Dispose();
         _listStore.RemoveAll();
+        foreach (var r in _packageGObjectRefs) r.Dispose();
         _packageGObjectRefs.Clear();
         _checkBinding.Clear();
     }
