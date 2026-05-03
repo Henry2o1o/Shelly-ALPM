@@ -22,7 +22,7 @@ public class ListInstalledCommand : Command<ListSettings>
         {
             AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
-                .Start("Initializing ALPM...", ctx => { manager.Initialize(true, showHiddenPackages: settings.ShowHidden); });
+                .Start("Initializing ALPM …", ctx => { manager.Initialize(true, showHiddenPackages: settings.ShowHidden); });
         }
         else
         {

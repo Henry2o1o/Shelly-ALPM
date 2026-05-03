@@ -15,7 +15,7 @@ public class KeyringInitCommand : Command
         }
 
         RootElevator.EnsureRootExectuion();
-        AnsiConsole.MarkupLine("[yellow]Initializing pacman keyring...[/]");
+        AnsiConsole.MarkupLine("[yellow]Initializing pacman keyring …[/]");
         var result = PacmanKeyRunner.Run("--init");
         if (result == 0)
         {
@@ -31,7 +31,7 @@ public class KeyringInitCommand : Command
 
     private static int HandleUiModeInit()
     {
-        Console.Error.WriteLine("Initializing pacman keyring...");
+        Console.Error.WriteLine("Initializing pacman keyring …");
         var result = PacmanKeyRunner.Run("--init");
         if (result == 0)
         {

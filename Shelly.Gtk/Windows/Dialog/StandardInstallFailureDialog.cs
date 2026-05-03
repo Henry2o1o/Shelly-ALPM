@@ -36,7 +36,7 @@ public static class StandardInstallFailureDialog
 
         if (!string.IsNullOrWhiteSpace(failureSummary))
         {
-            var summaryHeading = Label.New("Recent output");
+            var summaryHeading = Label.New("Aktuelle Veröffentlichungen");
             summaryHeading.AddCssClass("heading");
             summaryHeading.SetHalign(Align.Start);
             summaryHeading.SetXalign(0);
@@ -62,7 +62,7 @@ public static class StandardInstallFailureDialog
         var buttonBox = Box.New(Orientation.Horizontal, 8);
         buttonBox.SetHalign(Align.End);
 
-        var closeButton = Button.NewWithLabel("Close");
+        var closeButton = Button.NewWithLabel("Schließen");
         closeButton.OnClicked += (_, _) => dialogArgs.SetResponse(false);
 
         var exportButton = Button.NewWithLabel("Export Logs");

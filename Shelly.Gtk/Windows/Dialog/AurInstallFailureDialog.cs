@@ -62,7 +62,7 @@ public static class AurInstallFailureDialog
         var buttonBox = Box.New(Orientation.Horizontal, 8);
         buttonBox.SetHalign(Align.End);
 
-        var closeButton = Button.NewWithLabel("Close");
+        var closeButton = Button.NewWithLabel("Schließen");
         closeButton.OnClicked += (_, _) => dialogArgs.SetResponse(false);
 
         var exportButton = Button.NewWithLabel("Export Logs");

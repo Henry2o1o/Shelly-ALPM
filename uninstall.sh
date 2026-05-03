@@ -11,7 +11,7 @@ fi
 
 INSTALL_DIR="/opt/shelly"
 
-echo "Removing Shelly installation..."
+echo "Shelly-Installation entfernen …"
 
 # Remove shelly-ui from /usr/bin (symlink from install.sh/local-install.sh OR binary from web-install.sh)
 if [ -L /usr/bin/shelly-ui ] || [ -f /usr/bin/shelly-ui ]; then

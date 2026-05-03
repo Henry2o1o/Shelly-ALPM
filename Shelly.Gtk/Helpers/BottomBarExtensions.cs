@@ -25,7 +25,7 @@ public static class BottomBarExtensions
             while (historyListBox.GetFirstChild() is { } ch)
                 historyListBox.Remove(ch);
             var loadingRow = new ListBoxRow();
-            var loadingLabel = Label.New("Loading...");
+            var loadingLabel = Label.New("Laden …");
             loadingLabel.Halign = Align.Center;
             loadingLabel.AddCssClass("dim-label");
             loadingLabel.MarginTop = 8;
@@ -40,8 +40,8 @@ public static class BottomBarExtensions
                 var entries = await opLogService.GetRecentOperationsAsync(8);
                 GLib.Functions.IdleAdd(0, () =>
                 {
-                    historyPopoverTitle.SetText("Recent Operations");
-                    historyMenuButton.SetLabel("History");
+                    historyPopoverTitle.SetText("Aktuelle Operationen");
+                    historyMenuButton.SetLabel("Verlauf");
 
                     while (historyListBox.GetFirstChild() is { } child)
                         historyListBox.Remove(child);
@@ -49,7 +49,7 @@ public static class BottomBarExtensions
                     if (entries.Count == 0)
                     {
                         var row = new ListBoxRow();
-                        var lbl = Label.New("No recent activity");
+                        var lbl = Label.New("Keine aktuelle Aktivität");
                         lbl.Halign = Align.Center;
                         lbl.AddCssClass("dim-label");
                         lbl.MarginTop = 8;
@@ -205,7 +205,7 @@ public static class BottomBarExtensions
                 while (updatesListBox.GetFirstChild() is { } ch)
                     updatesListBox.Remove(ch);
                 var loadingRow = new ListBoxRow();
-                var loadingLabel = Label.New("Loading...");
+                var loadingLabel = Label.New("Laden …");
                 loadingLabel.Halign = Align.Center;
                 loadingLabel.AddCssClass("dim-label");
                 loadingLabel.MarginTop = 8;
@@ -222,7 +222,7 @@ public static class BottomBarExtensions
                 var count = updates.Packages.Count + updates.Aur.Count + updates.Flatpaks.Count;
                 GLib.Functions.IdleAdd(0, () =>
                 {
-                    updatesPopoverTitle.SetText($"Available Updates ({count})");
+                    updatesPopoverTitle.SetText($"Updates verfügbar ({count})");
                     updatesMenuButton.SetLabel($"Updates ({count})");
 
                     while (updatesListBox.GetFirstChild() is { } child)
@@ -273,7 +273,7 @@ public static class BottomBarExtensions
                     if (count != 0) return false;
                     {
                         var row = new ListBoxRow();
-                        var label = Label.New("All packages are up to date");
+                        var label = Label.New("Alle Pakete sind aktuell");
                         label.Halign = Align.Center;
                         label.AddCssClass("dim-label");
                         label.MarginTop = 8;

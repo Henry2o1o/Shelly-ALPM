@@ -22,10 +22,10 @@ public class SyncCommand : Command<SyncSettings>
 
         AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
-            .Start("Initializing ALPM...", ctx => { manager.Initialize(true); });
+            .Start("Initializing ALPM …", ctx => { manager.Initialize(true); });
 
-        AnsiConsole.MarkupLine("[yellow]Synchronizing package databases...[/]");
-        var progressTable = new Table().AddColumns("Package", "Progress", "Status", "Stage");
+        AnsiConsole.MarkupLine("[yellow]Paketdatenbanken synchronisieren …[/]");
+        var progressTable = new Table().AddColumns("Paket", "Fortschritt", "Status", "Abschnitt");
         AnsiConsole.Live(progressTable).AutoClear(false)
             .Start(ctx =>
             {
@@ -70,7 +70,7 @@ public class SyncCommand : Command<SyncSettings>
     private static int HandleUiMode(SyncSettings settings)
     {
         using var manager = new AlpmManager();
-        Console.WriteLine("Synchronizing package databases...");
+        Console.WriteLine("Paketdatenbanken synchronisieren …");
         manager.Progress += (sender, args) => { Console.WriteLine($"{args.PackageName}: {args.Percent}%"); };
         manager.Sync(settings.Force);
         Console.WriteLine("Package databases synchronized successfully");

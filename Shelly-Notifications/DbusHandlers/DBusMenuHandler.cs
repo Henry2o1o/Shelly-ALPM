@@ -18,13 +18,13 @@ public class DBusMenuHandler(Connection connection) : IPathMethodHandler
         Dictionary<int, (string Label, string Type, bool Enabled, string icon, string subMenu, MenuEnum action, bool visible)> Items =
             new()
             {
-                [1] = ("Open Shelly", "standard", true, "shelly", "", MenuEnum.OpenShelly, true),
-                [2] = ("Update Packages", "standard", true, "", "", MenuEnum.UpdatePackages, true),
-                [3] = ("Check for Updates", "standard", true, "", "", MenuEnum.CheckForUpdates, true),
-                [4] = ("Last check: Never", "standard", false, "", "", MenuEnum.LastTime, true),
+                [1] = ("Shelly öffnen", "standard", true, "shelly", "", MenuEnum.OpenShelly, true),
+                [2] = ("Pakete aktualisieren", "standard", true, "", "", MenuEnum.UpdatePackages, true),
+                [3] = ("Auf Updates prüfen", "standard", true, "", "", MenuEnum.CheckForUpdates, true),
+                [4] = ("Letzte Überprüfung: Nie", "standard", false, "", "", MenuEnum.LastTime, true),
                 [5] = ("", "separator", false, "", "", MenuEnum.None, true),
                 [98] = ("", "separator", false, "", "", MenuEnum.None, true),
-                [99] = ("Exit", "standard", true, "", "", action: MenuEnum.Exit, true),
+                [99] = ("BEENDEN", "standard", true, "", "", action: MenuEnum.Exit, true),
             };
 
     private const int SubmenuId = 6;
@@ -258,7 +258,7 @@ public class DBusMenuHandler(Connection connection) : IPathMethodHandler
             case MenuEnum.CheckForUpdates:
                 var updates = await new UpdateService(this).CheckForUpdates();
                 new NotificationHandler().SendNotif(connection,
-                    updates > 0 ? $"Updates available: {updates}" : "No updates available.");
+                    updates > 0 ? $"Verfügbare Updates: {updates}" : "Keine Updates verfügbar");
                 if (OnUpdateStatusChanged != null)
                 {
                     await OnUpdateStatusChanged(updates > 0);
@@ -419,7 +419,7 @@ public class DBusMenuHandler(Connection connection) : IPathMethodHandler
         }
 
         var time = GetIndexByAction(MenuEnum.LastTime);
-        Items[time!.Value] = ($"Last check: {DateTime.Now:HH:mm MM/dd}", "standard", false, "", "", MenuEnum.LastTime, true);
+        Items[time!.Value] = ($"Letzte Überprüfung: {DateTime.Now: d.MM. H:mm}", "standard", false, "", "", MenuEnum.LastTime, true);
 
         using var writer = connection.GetMessageWriter();
 

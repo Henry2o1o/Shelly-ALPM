@@ -26,7 +26,7 @@ public static class CacheCleanDialog
         var entries = ScanCache(cacheDir);
         var totalCacheSize = entries.Sum(e => e.FileSize);
 
-        var infoLabel = Label.New($"Cache directory: {cacheDir}\nTotal cached files: {entries.Count} ({FormatSize(totalCacheSize)})");
+        var infoLabel = Label.New($"Cache-Verzeichnis: {cacheDir}\nCache-Dateien gesamt: {entries.Count} ({FormatSize(totalCacheSize)})");
         infoLabel.Xalign = 0;
         infoLabel.Wrap = true;
         container.Append(infoLabel);
@@ -34,14 +34,14 @@ public static class CacheCleanDialog
         var controlsBox = Box.New(Orientation.Horizontal, 10);
         controlsBox.SetValign(Align.Center);
 
-        var keepLabel = Label.New("Keep versions:");
+        var keepLabel = Label.New("Versionen behalten:");
         controlsBox.Append(keepLabel);
 
         var keepSpin = SpinButton.NewWithRange(0, 10, 1);
         keepSpin.Value = 3;
         controlsBox.Append(keepSpin);
 
-        var uninstalledCheck = CheckButton.NewWithLabel("Uninstalled only");
+        var uninstalledCheck = CheckButton.NewWithLabel("Nur Deinstallierte");
         controlsBox.Append(uninstalledCheck);
 
         container.Append(controlsBox);
@@ -77,11 +77,11 @@ public static class CacheCleanDialog
         var buttonBox = Box.New(Orientation.Horizontal, 10);
         buttonBox.SetHalign(Align.End);
 
-        var cancelButton = Button.NewWithLabel("Cancel");
+        var cancelButton = Button.NewWithLabel("Abbrechen");
         cancelButton.OnClicked += (_, _) => onCancel();
         buttonBox.Append(cancelButton);
 
-        var cleanButton = Button.NewWithLabel("Clean");
+        var cleanButton = Button.NewWithLabel("Bereinigen");
         cleanButton.AddCssClass("destructive-action");
         cleanButton.OnClicked += (_, _) => onClean((int)keepSpin.Value, uninstalledCheck.Active);
         buttonBox.Append(cleanButton);
@@ -105,7 +105,7 @@ public static class CacheCleanDialog
 
         if (candidates.Count == 0)
         {
-            summaryLabel.SetText("No candidates for removal.");
+            summaryLabel.SetText("Es gibt nichts zu bereinigen");
             return;
         }
 
@@ -133,7 +133,7 @@ public static class CacheCleanDialog
         }
 
         var totalSize = candidates.Sum(c => c.FileSize);
-        summaryLabel.SetText($"{candidates.Count} files, {FormatSize(totalSize)} would be freed");
+        summaryLabel.SetText($"{candidates.Count} Datei(n), {FormatSize(totalSize)} würden frei werden");
     }
 
     private static List<CacheFileEntry> ComputeCandidates(
@@ -238,9 +238,9 @@ public static class CacheCleanDialog
 
     private static string FormatSize(long bytes) => bytes switch
     {
-        >= 1L << 30 => $"{bytes / (1024.0 * 1024.0 * 1024.0):F2} GiB",
-        >= 1L << 20 => $"{bytes / (1024.0 * 1024.0):F2} MiB",
-        >= 1L << 10 => $"{bytes / 1024.0:F2} KiB",
+        >= 1L << 30 => $"{bytes / (1024.0 * 1024.0 * 1024.0):F2} GB",
+        >= 1L << 20 => $"{bytes / (1024.0 * 1024.0):F2} MB",
+        >= 1L << 10 => $"{bytes / 1024.0:F2} KB",
         _ => $"{bytes} B"
     };
 

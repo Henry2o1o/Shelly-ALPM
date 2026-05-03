@@ -175,7 +175,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
                     AnsiConsole.MarkupLine($"[yellow]No icon found for {binaryName.EscapeMarkup()}, using default[/]");
                 }
 
-                Console.WriteLine("Creating desktop entry...");
+                Console.WriteLine("Creating desktop entry …");
                 CreateDesktopEntry(
                     appName: binaryName,
                     executablePath: binaryName,
@@ -230,7 +230,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
     private static async Task<bool> InitializeAndInstallLocalAlpmPackage(InstallLocalPackageSettings settings)
     {
         var manager = new AlpmManager();
-        AnsiConsole.MarkupLine("[yellow]Initializing ALPM...[/]");
+        AnsiConsole.MarkupLine("[yellow]Initializing ALPM …[/]");
         manager.Initialize();
         var result = await SplitOutput.Output(manager, x => x.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation!)));
         manager.Dispose();
@@ -260,7 +260,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
             hadError = true;
         };
 
-        Console.Error.WriteLine("Initializing ALPM...");
+        Console.Error.WriteLine("Initializing ALPM …");
         manager.Initialize();
 
         Console.Error.WriteLine($"Installing local package: {settings.PackageLocation}");

@@ -25,7 +25,8 @@ public static class SplitOutputHelpers
         lock (renderLock)
         {
             consoleLines.Add($"[yellow bold]{e.QuestionText.EscapeMarkup()}[/]");
-            consoleLines.Add("[green]Y[/] = Yes  |  [red]N[/] = No");
+            consoleLines.Add("[green]Y[/] = Ja  |  [red]N[/] = Nein");
+
             UpdatePanelUnlocked(layout, "Console", consoleLines, maxVisibleLines, ctx);
         }
 
@@ -36,7 +37,8 @@ public static class SplitOutputHelpers
             {
                 lock (renderLock)
                 {
-                    consoleLines.Add("[green]> Yes[/]");
+                    consoleLines.Add("[green]> Ja[/]");
+
                     UpdatePanelUnlocked(layout, "Console", consoleLines, maxVisibleLines, ctx);
                 }
 

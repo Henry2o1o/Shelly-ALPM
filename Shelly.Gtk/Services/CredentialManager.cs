@@ -210,20 +210,20 @@ public class CredentialManager : ICredentialManager
 
             if (process.ExitCode == 0)
             {
-                Console.WriteLine("Credentials verified successfully via su.");
+                Console.WriteLine("Anmeldeinformationen wurden erfolgreich über su verifiziert.");
                 MarkAsValidated();
                 return true;
             }
             else
             {
-                Console.Error.WriteLine("Authentication failed via su. Clearing credentials.");
+                Console.Error.WriteLine("Authentifizierung über su fehlgeschlagen!\nAnmeldeinformationen werden gelöscht!");
                 MarkAsInvalid();
                 return false;
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error during authentication check: {ex.Message}");
+            Console.Error.WriteLine($"Fehler bei der Authentifizierungsprüfung: {ex.Message}");
         }
 
         return false;

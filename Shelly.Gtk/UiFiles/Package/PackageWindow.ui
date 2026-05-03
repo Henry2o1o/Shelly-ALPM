@@ -20,7 +20,7 @@
                         <child>
                             <object class="GtkButton" id="install_button">
                                 <property name="halign">start</property>
-                                <property name="label">Install Selected</property>
+                                <property name="label">Ausgewählte installieren</property>
                                 <style>
                                     <class name="suggested-action"/>
                                 </style>
@@ -33,7 +33,7 @@
                         </child>
                         <child>
                             <object class="GtkButton" id="install_local_button">
-                                <property name="tooltip-text">Install Local Packages</property>
+                                <property name="tooltip-text">Lokale Pakete installieren</property>
                                 <child>
                                     <object class="GtkBox">
                                         <property name="spacing">5</property>
@@ -44,7 +44,7 @@
                                         </child>
                                         <child>
                                             <object class="GtkLabel">
-                                                <property name="label">Install Local</property>
+                                                <property name="label">Lokal installieren</property>
                                             </object>
                                         </child>
                                     </object>
@@ -58,13 +58,13 @@
                         </child>
                         <child>
                             <object class="GtkCheckButton" id="upgrade_check">
-                                <property name="label">Perform Upgrade</property>
+                                <property name="label">Upgrade durchführen</property>
                                 <property name="tooltip-text">Perform a full system upgrade with install (-u)</property>
                             </object>
                         </child>
                         <child>
                             <object class="GtkCheckButton" id="show_hidden_check">
-                                <property name="label">Show Hidden</property>
+                                <property name="label">Ausgeblendete anzeigen</property>
                                 <property name="tooltip-text">Show packages in the IgnorePkg list from pacman.conf
                                 </property>
                                 <property name="active">false</property>
@@ -72,7 +72,7 @@
                         </child>
                         <child>
                             <object class="GtkSearchEntry" id="search_entry">
-                                <property name="placeholder-text">Search packages...</property>
+                                <property name="placeholder-text">Pakete suchen …</property>
                                 <property name="width-request">250</property>
                             </object>
                         </child>
@@ -120,7 +120,7 @@
                                         <child>
                                             <object class="GtkColumnViewColumn" id="size_column">
                                                 <property name="expand">true</property>
-                                                <property name="title">Size</property>
+                                                <property name="title">Größe</property>
                                             </object>
                                         </child>
                                         <child>

@@ -56,7 +56,7 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
 
                 if (settings.MakeDepsOn)
                 {
-                    AnsiConsole.MarkupLine("[yellow]Installing dependencies (including make dependencies)...[/]");
+                    AnsiConsole.MarkupLine("[yellow]Installing dependencies (including make dependencies) …[/]");
                     var makeDepsResult = await AurSplitOutput.Output(manager, m => m.InstallDependenciesOnly(packageList.First(), true), settings.NoConfirm);
                     if (!makeDepsResult)
                     {
@@ -67,7 +67,7 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
                     return 0;
                 }
 
-                AnsiConsole.MarkupLine("[yellow]Installing dependencies...[/]");
+                AnsiConsole.MarkupLine("[yellow]Installing dependencies …[/]");
                 var depsResult = await AurSplitOutput.Output(manager, m => m.InstallDependenciesOnly(packageList.First(), false), settings.NoConfirm);
                 if (!depsResult)
                 {
@@ -98,7 +98,7 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
             manager?.Dispose();
         }
         
-        AnsiConsole.MarkupLine("[green]Installation complete.[/]");
+        AnsiConsole.MarkupLine("[green]Installation komplett[/]");
 
         return 0;
     }
@@ -161,21 +161,21 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
 
                 if (settings.MakeDepsOn)
                 {
-                    Console.Error.WriteLine("Installing dependencies (including make dependencies)...");
+                    Console.Error.WriteLine("Installing dependencies (including make dependencies)  …");
                     await manager.InstallDependenciesOnly(packageList.First(), true);
                     if (hadError) return 1;
                     Console.Error.WriteLine("Dependencies installed successfully!");
                     return 0;
                 }
 
-                Console.Error.WriteLine("Installing dependencies...");
+                Console.Error.WriteLine("Installing dependencies  …");
                 await manager.InstallDependenciesOnly(packageList.First(), false);
                 if (hadError) return 1;
                 Console.Error.WriteLine("Dependencies installed successfully!");
                 return 0;
             }
 
-            Console.Error.WriteLine($"Installing AUR packages: {string.Join(", ", packageList)}");
+            Console.Error.WriteLine($"AUR Paket(e) installieren: {string.Join(", ", packageList)}");
             await manager.InstallPackages(packageList);
             if (hadError) return 1;
         }

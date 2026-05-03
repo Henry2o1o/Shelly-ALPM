@@ -756,7 +756,7 @@ public class PackageManagement(
 
             try
             {
-                lockoutService.Show($"Removing...");
+                lockoutService.Show($"Entfernen …");
                 var result = await privilegedOperationService.RemovePackagesAsync(selectedPackages, _cascadeDeleteCheck.Active,
                     _removeConfigsCheck.Active);
                 if (result.Success)
@@ -770,7 +770,7 @@ public class PackageManagement(
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to install packages: {e.Message}");
+                Console.WriteLine($"Paket(e) installieren fehlgeschlagen: {e.Message}");
             }
             finally
             {

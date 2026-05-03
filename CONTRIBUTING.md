@@ -222,7 +222,7 @@ If editing manually, a typical entry looks like this:
 ``` xml
 
     <data name="Home" xml:space="preserve">
-        <value>Home</value>
+        <value>Startseite</value>
     </data>
 
 ```
@@ -232,7 +232,7 @@ Only modify the text inside `<value>`:
 ``` xml
 
     <data name="Home" xml:space="preserve">
-        <value>Translation</value>
+        <value>Übersetzung</value>
     </data>
 
 ```

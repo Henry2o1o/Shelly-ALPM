@@ -37,10 +37,10 @@ public class RemoveCommand : AsyncCommand<RemovePackageSettings>
 
         using var manager = new AlpmManager();
 
-        AnsiConsole.MarkupLine("[yellow]Initializing ALPM...[/]");
+        AnsiConsole.MarkupLine("[yellow]Initializing ALPM …[/]");
         manager.Initialize(true);
 
-        AnsiConsole.MarkupLine("[yellow]Removing packages...[/]");
+        AnsiConsole.MarkupLine("[yellow]Removing packages …[/]");
 
 
         var flags = AlpmTransFlag.None;
@@ -112,7 +112,7 @@ public class RemoveCommand : AsyncCommand<RemovePackageSettings>
             hadError = true;
         };
 
-        Console.Error.WriteLine("Initializing ALPM...");
+        Console.Error.WriteLine("Initializing ALPM …");
         manager.Initialize(true);
 
         Console.Error.WriteLine($"Removing packages: {string.Join(", ", packageList)}");

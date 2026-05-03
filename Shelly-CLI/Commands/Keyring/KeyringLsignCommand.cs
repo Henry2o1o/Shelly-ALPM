@@ -45,7 +45,7 @@ public class KeyringLsignCommand : Command<KeyringSettings>
             return 1;
         }
 
-        Console.Error.WriteLine($"Locally signing keys: {string.Join(", ", settings.Keys)}...");
+        Console.Error.WriteLine($"Locally signing keys: {string.Join(", ", settings.Keys)} …");
 
         foreach (var key in settings.Keys)
         {

@@ -49,7 +49,7 @@ public class AppImageUpdateCommand : AsyncCommand<AppImageUpdateSettings>
         {
             if (!settings.NoConfirm)
             {
-                if (!AnsiConsole.Confirm($"Update {update.Name} to {update.Version}?"))
+                if (!AnsiConsole.Confirm($"Update {update.Name} zu {update.Version}?"))
                 {
                     continue;
                 }

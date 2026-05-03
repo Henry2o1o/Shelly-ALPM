@@ -60,11 +60,11 @@ public class UpdateCommand : Command<PackageSettings>
             }
         };
 
-        AnsiConsole.MarkupLine("[yellow]Initializing and syncing ALPM...[/]");
+        AnsiConsole.MarkupLine("[yellow]ALPM initialisieren und synchronisieren …[/]");
         manager.IntializeWithSync();
 
-        AnsiConsole.MarkupLine("[yellow]Updating packages...[/]");
-        var progressTable = new Table().AddColumns("Package", "Progress", "Status", "Stage");
+        AnsiConsole.MarkupLine("[yellow]Pakete aktualisieren …[/]");
+        var progressTable = new Table().AddColumns("Pakete", "Fortschritt", "Status", "Abschnitt");
         AnsiConsole.Live(progressTable).AutoClear(false)
             .Start(ctx =>
             {
@@ -74,7 +74,7 @@ public class UpdateCommand : Command<PackageSettings>
                 {
                     lock (renderLock)
                     {
-                        var name = args.PackageName ?? "unknown";
+                        var name = args.PackageName ?? "unbekannt";
                         var pct = args.Percent ?? 0;
                         var bar = ProgressBarRenderer.RenderStatic(pct, 20);
                         var actionType = args.ProgressType;
@@ -104,11 +104,11 @@ public class UpdateCommand : Command<PackageSettings>
 
         if (hadError)
         {
-            AnsiConsole.MarkupLine("[red]Update failed. See errors above.[/]");
+            AnsiConsole.MarkupLine("[red]Update fehlgeschlagen. Siehe Fehler oben.[/]");
             return 1;
         }
 
-        AnsiConsole.MarkupLine("[green]Packages updated successfully![/]");
+        AnsiConsole.MarkupLine("[green]Pakete erfolgreich aktualisiert![/]");
         return 0;
     }
 }

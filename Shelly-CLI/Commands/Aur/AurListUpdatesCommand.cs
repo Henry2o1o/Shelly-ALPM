@@ -58,15 +58,15 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
 
             if (updates.Count == 0)
             {
-                AnsiConsole.MarkupLine("[green]All AUR packages are up to date.[/]");
+                AnsiConsole.MarkupLine("[green]Alle AUR Pakete sind auf dem neuesten Stand :-)[/]");
                 return 0;
             }
 
             var table = new Table().Border(TableBorder.Rounded);
             table.AddColumn("Name");
-            table.AddColumn("Installed");
-            table.AddColumn("Available");
-            table.AddColumn("Description");
+            table.AddColumn("Installiert");
+            table.AddColumn("Verfügbar");
+            table.AddColumn("Beschreibung");
             
             var skip = (settings.Page - 1) * settings.Take;
             var displayPackages = sortedUpdates.Skip(skip).Take(settings.Take).ToList();
@@ -78,18 +78,18 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
                     pkg.Name.EscapeMarkup(),
                     pkg.Version.EscapeMarkup(),
                     pkg.NewVersion.EscapeMarkup(),
-                    (pkg.Description ?? "No Description Available").EscapeMarkup().Truncate(50)
+                    (pkg.Description ?? "Keine Beschreibung verfügbar").EscapeMarkup().Truncate(50)
                 );
             }
 
             AnsiConsole.Write(table);
-            AnsiConsole.MarkupLine($"[blue]Total:[/] {displayPackages.Count} packages need updates");
+            AnsiConsole.MarkupLine($"[blue]Insgesamt: {displayPackages.Count} Pakete benötigen Aktualisierungen");
 
             return 0;
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Failed to check updates:[/] {ex.Message.EscapeMarkup()}");
+            AnsiConsole.MarkupLine($"[red]Fehler beim Updates prüfen:[/] {ex.Message.EscapeMarkup()}");
             return 1;
         }
         finally
@@ -141,7 +141,7 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
 
             if (updates.Count == 0)
             {
-                Console.Error.WriteLine("All AUR packages are up to date.");
+                Console.Error.WriteLine("Alle AUR Pakete sind auf dem neuesten Stand :-)");
                 return 0;
             }
 

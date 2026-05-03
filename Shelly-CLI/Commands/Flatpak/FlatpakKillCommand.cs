@@ -15,7 +15,7 @@ public class FlatpakKillCommand : Command<FlatpakPackageSettings>
             return HandleUiModeKill(settings);
         }
 
-        AnsiConsole.MarkupLine("[yellow]Killing selected flatpak app...[/]");
+        AnsiConsole.MarkupLine("[yellow]Killing selected flatpak app …[/]");
         var result = new FlatpakManager().KillApp(settings.Packages);
 
         AnsiConsole.MarkupLine("[red]" + result.EscapeMarkup() + "[/]");
@@ -25,7 +25,7 @@ public class FlatpakKillCommand : Command<FlatpakPackageSettings>
 
     private static int HandleUiModeKill(FlatpakPackageSettings settings)
     {
-        Console.Error.WriteLine("Killing selected flatpak app...");
+        Console.Error.WriteLine("Killing selected flatpak app  …");
         var result = new FlatpakManager().KillApp(settings.Packages);
 
         Console.Error.WriteLine(result);

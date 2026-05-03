@@ -73,7 +73,7 @@ public class AurUpdate(
         _runChecksCheck = (CheckButton)builder.GetObject("run_checks_check")!;
         _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
         _noPackagesLabel = (Label)builder.GetObject("no_packages_label")!;
-        _noPackagesLabel.Label_ = "<span size='large'>AUR packages are up to date</span>";
+        _noPackagesLabel.Label_ = "<span size='large'>AUR Pakete sind auf dem neuesten Stand :-)</span>";
         _noPackagesLabel.Visible = false;
         _updateButton.SetSensitive(false);
 
@@ -332,7 +332,7 @@ public class AurUpdate(
             if (!configService.LoadConfig().NoConfirm)
             {
                 var args = new GenericQuestionEventArgs(
-                    "Update Packages?", string.Join("\n", selectedPackages)
+                    "Paket(e) aktualisieren?", string.Join("\n", selectedPackages)
                 );
 
                 genericQuestionService.RaiseQuestion(args);
@@ -344,7 +344,7 @@ public class AurUpdate(
 
             try
             {
-                lockoutService.Show($"Installing...");
+                lockoutService.Show($"Installieren …");
 
                 var packageBuilds = await privilegedOperationService.GetAurPackageBuild(selectedPackages);
 
@@ -354,7 +354,7 @@ public class AurUpdate(
                     {
                         if (pkgbuild.PkgBuild == null) continue;
 
-                        var buildArgs = new PackageBuildEventArgs($"Displaying Package Build {pkgbuild.Name}",
+                        var buildArgs = new PackageBuildEventArgs($"Anzeige des Paketaufbaus {pkgbuild.Name}",
                             pkgbuild.PkgBuild);
                         genericQuestionService.RaisePackageBuild(buildArgs);
 
@@ -371,15 +371,15 @@ public class AurUpdate(
 
                 if (result.Success)
                     genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(
-                        $"Updated {selectedPackages.Count} Package(s)"));
+                        $"Paket(e) {selectedPackages.Count} aktualisiert"));
                 else
-                    Console.WriteLine($"Failed to remove packages: {result.Error}");
+                    Console.WriteLine($"Paket(e) entfernen fehlgeschlagen: {result.Error}");
 
                 Reload();
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to remove packages: {e.Message}");
+                Console.WriteLine($"Paket(e) entfernen fehlgeschlagen: {e.Message}");
             }
             finally
             {

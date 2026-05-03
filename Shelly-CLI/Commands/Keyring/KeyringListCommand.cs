@@ -15,13 +15,13 @@ public class KeyringListCommand : Command
         }
 
         RootElevator.EnsureRootExectuion();
-        AnsiConsole.MarkupLine("[yellow]Listing keys in keyring...[/]");
+        AnsiConsole.MarkupLine("[yellow]Listing keys in keyring …[/]");
         return PacmanKeyRunner.Run("--list-keys");
     }
 
     private static int HandleUiModeList()
     {
-        Console.Error.WriteLine("Listing keys in keyring...");
+        Console.Error.WriteLine("Listing keys in keyring …");
         return PacmanKeyRunner.Run("--list-keys");
     }
 }

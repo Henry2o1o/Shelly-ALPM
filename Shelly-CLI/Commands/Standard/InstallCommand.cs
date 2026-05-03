@@ -38,7 +38,7 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
 
 
         using var manager = new AlpmManager();
-        AnsiConsole.MarkupLine("[yellow]Initializing ALPM...[/]");
+        AnsiConsole.MarkupLine("[yellow]Initializing ALPM …[/]");
         manager.Initialize(true);
         if (settings.Upgrade)
         {
@@ -61,7 +61,7 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
 
             if (settings.MakeDepsOn)
             {
-                AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
+                AnsiConsole.MarkupLine("[yellow]Paket(e) installieren …[/]");
                 var result = await SplitOutput.Output(manager,
                     x => x.InstallDependenciesOnly(packageList.First(), true),
                     settings.NoConfirm);
@@ -74,7 +74,7 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
                 return 0;
             }
 
-            AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
+            AnsiConsole.MarkupLine("[yellow]Paket(e) installieren …[/]");
             var depsResult = await SplitOutput.Output(manager, x => x.InstallDependenciesOnly(packageList.First()),
                 settings.NoConfirm);
             if (!depsResult)
@@ -90,7 +90,7 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
         if (settings.NoDeps)
         {
             AnsiConsole.MarkupLine("[yellow]Skipping dependency installation.[/]");
-            AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
+            AnsiConsole.MarkupLine("[yellow]Paket(e) installieren …[/]");
             var noDepsResult = await SplitOutput.Output(manager,
                 x => x.InstallPackages(packageList, AlpmTransFlag.NoDeps),
                 settings.NoConfirm);
@@ -104,7 +104,7 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
             return 0;
         }
 
-        AnsiConsole.MarkupLine("[yellow]Installing packages...[/]");
+        AnsiConsole.MarkupLine("[yellow]Paket(e) installieren …[/]");
 
         var installResult = await SplitOutput.Output(manager, x => x.InstallPackages(packageList), settings.NoConfirm);
         Console.WriteLine(); // Final newline after last package
@@ -159,13 +159,13 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
 
             if (settings.MakeDepsOn)
             {
-                Console.Error.WriteLine("Installing packages...");
+                Console.Error.WriteLine("Paket(e) installieren …");
                 var result = await manager.InstallDependenciesOnly(settings.Packages.ToList().First(), true);
                 if (!result || hadError) return 1;
                 return 0;
             }
 
-            Console.Error.WriteLine("Installing packages...");
+            Console.Error.WriteLine("Paket(e) installieren …");
             var depsResult = await manager.InstallDependenciesOnly(settings.Packages.ToList().First());
             if (!depsResult || hadError) return 1;
             Console.Error.WriteLine("Packages installed successfully!");
@@ -175,14 +175,14 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
         if (settings.NoDeps)
         {
             Console.Error.WriteLine("Skipping dependency installation.");
-            Console.Error.WriteLine("Installing packages...");
+            Console.Error.WriteLine("Paket(e) installieren …");
             var noDepsResult = await manager.InstallPackages(settings.Packages.ToList(), AlpmTransFlag.NoDeps);
             if (!noDepsResult || hadError) return 1;
             Console.Error.WriteLine("Packages installed successfully!");
             return 0;
         }
 
-        Console.WriteLine("Installing packages...");
+        Console.WriteLine("Paket(e) installieren …");
         var installResult = await manager.InstallPackages(settings.Packages.ToList());
         if (!installResult || hadError) return 1;
         Console.Error.WriteLine("Finished installing packages.");

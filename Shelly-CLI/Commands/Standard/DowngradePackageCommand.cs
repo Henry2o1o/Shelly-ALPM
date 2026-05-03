@@ -66,7 +66,7 @@ public class DowngradePackageCommand : Command<DowngradePackageCommandSettings>
         var filePath = Path.Combine(Path.GetTempPath(), fileName);
 
         AnsiConsole.Status()
-            .Start($"[yellow]Downloading {fileName.EscapeMarkup()}...[/]", ctx =>
+            .Start($"[yellow]{fileName.EscapeMarkup()} herunterladen …[/]", ctx =>
             {
                 using var response = client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).Result;
                 response.EnsureSuccessStatusCode();
@@ -75,13 +75,13 @@ public class DowngradePackageCommand : Command<DowngradePackageCommandSettings>
                 response.Content.ReadAsStream().CopyTo(fs);
             });
 
-        AnsiConsole.MarkupLine($"[green]Downloaded to {filePath.EscapeMarkup()}[/]");
+        AnsiConsole.MarkupLine($"[green]Herunterladen nach {filePath.EscapeMarkup()}[/]");
 
         if (!settings.NoConfirm)
         {
             if (!AnsiConsole.Confirm("Do you want to proceed with the installation?"))
             {
-                AnsiConsole.MarkupLine("[yellow]Operation cancelled.[/]");
+                AnsiConsole.MarkupLine("[yellow]Operation abbgebrochen![/]");
                 return 0;
             }
         }
@@ -141,7 +141,7 @@ public class DowngradePackageCommand : Command<DowngradePackageCommandSettings>
             hadError = true;
         };
 
-        AnsiConsole.MarkupLine("[yellow]Installing package...[/]");
+        AnsiConsole.MarkupLine("[yellow]Paket instllieren …[/]");
         var result = manager.InstallLocalPackage(filePath).Result;
 
         if (File.Exists(filePath))

@@ -764,7 +764,7 @@ public class PackageInstall(
                     }
 
                     var args = new GenericQuestionEventArgs(
-                        "Install Packages?", message
+                        "Pakete installieren?", message
                     );
 
                     genericQuestionService.RaiseQuestion(args);
@@ -774,14 +774,14 @@ public class PackageInstall(
                     }
                 }
 
-                lockoutService.Show($"Installing...");
+                lockoutService.Show($"Installieren …");
                 var performUpgrade = _upgradeCheck.GetActive();
                 result = await privilegedOperationService.InstallPackagesAsync(selectedPackages, performUpgrade);
                 Reload();
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to install packages: {e.Message}");
+                Console.WriteLine($"Paket(e) installieren fehlgeschlagen: {e.Message}");
             }
             finally
             {
@@ -796,7 +796,7 @@ public class PackageInstall(
             if (result.Success)
             {
                 var args = new ToastMessageEventArgs(
-                    $"Installed {selectedPackages.Count} Package(s)"
+                    $"Paket(e) {selectedPackages.Count} installiert"
                 );
 
                 genericQuestionService.RaiseToastMessage(args);
@@ -879,7 +879,7 @@ public class PackageInstall(
 
             if (file is not null)
             {
-                lockoutService.Show($"Installing local package...");
+                lockoutService.Show($"Lokale Pakete installieren …");
                 var result = await privilegedOperationService.InstallLocalPackageAsync(file.GetPath()!);
                 if (!result.Success)
                 {

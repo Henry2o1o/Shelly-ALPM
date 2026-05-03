@@ -92,7 +92,7 @@ public class AurInstall(
         _selectionModel.Autoselect = true;
         _columnView.SetModel(_selectionModel);
         _searchForPackageLabel = (Label)builder.GetObject("search_overlay")!;
-        _searchForPackageLabel.Label_ = "<span size='large'>Search for AUR packages</span>";
+        _searchForPackageLabel.Label_ = "<span size='large'>Suche nach AUR-Paketen</span>";
         _searchForPackageLabel.Visible = true;
 
         SetupColumns(_checkColumn, _nameColumn, _votesColumn, _popColumn, _versionColumn);
@@ -381,7 +381,7 @@ public class AurInstall(
                 if (!configService.LoadConfig().NoConfirm)
                 {
                     var args = new GenericQuestionEventArgs(
-                        "Install Packages?", string.Join("\n", selectedPackages)
+                        "Pakete installieren?", string.Join("\n", selectedPackages)
                     );
 
                     genericQuestionService.RaiseQuestion(args);
@@ -391,7 +391,7 @@ public class AurInstall(
                     }
                 }
 
-                lockoutService.Show($"Installing...");
+                lockoutService.Show($"Installieren …");
 
                 var packageBuilds = await privilegedOperationService.GetAurPackageBuild(selectedPackages);
 
@@ -406,7 +406,7 @@ public class AurInstall(
                     if (pkgbuild.PkgBuild == null) continue;
 
                     var buildArgs =
-                        new PackageBuildEventArgs($"Displaying Package Build {pkgbuild.Name}", pkgbuild.PkgBuild);
+                        new PackageBuildEventArgs($"Anzeige des Paketaufbaus {pkgbuild.Name}", pkgbuild.PkgBuild);
                     genericQuestionService.RaisePackageBuild(buildArgs);
 
                     if (!await buildArgs.ResponseTask)
@@ -440,7 +440,7 @@ public class AurInstall(
             if (result.Success)
             {
                 var args = new ToastMessageEventArgs(
-                    $"Installed {selectedPackages.Count} Package(s)"
+                    $"Paket(e){selectedPackages.Count} installiert"
                 );
 
                 genericQuestionService.RaiseToastMessage(args);

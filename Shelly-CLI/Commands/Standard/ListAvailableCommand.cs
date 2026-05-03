@@ -27,13 +27,13 @@ public class ListAvailableCommand : Command<ListSettings>
                 {
                     AnsiConsole.Status()
                         .Spinner(Spinner.Known.Dots)
-                        .Start("Initializing and syncing ALPM...", ctx => { manager.IntializeWithSync(); });
+                        .Start("Initializing and syncing ALPM …", ctx => { manager.IntializeWithSync(); });
                 }
                 else
                 {
                     AnsiConsole.Status()
                         .Spinner(Spinner.Known.Dots)
-                        .Start("Initializing ALPM...", ctx => { manager.Initialize(showHiddenPackages: settings.ShowHidden); });
+                        .Start("Initializing ALPM …", ctx => { manager.Initialize(showHiddenPackages: settings.ShowHidden); });
                 }
             }
             else if (settings.Sync)

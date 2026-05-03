@@ -26,7 +26,7 @@ public class ListUpdatesCommand : Command<ListSettings>
         {
             AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
-                .Start("Initializing and syncing ALPM...", ctx =>
+                .Start("Initializing and syncing ALPM …", ctx =>
                 {
                     manager.Initialize(false, int.Parse(ConfigManager.GetConfigValue("ParallelDownloadCount")!), true,
                         dbPath, showHiddenPackages: settings.ShowHidden);
@@ -54,7 +54,7 @@ public class ListUpdatesCommand : Command<ListSettings>
 
         if (updates.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]All packages are up to date![/]");
+            AnsiConsole.MarkupLine("[green]Alle AUR Pakete sind auf dem neuesten Stand :-)[/]");
             return 0;
         }
 
@@ -116,7 +116,7 @@ public class ListUpdatesCommand : Command<ListSettings>
 
         if (updates.Count == 0)
         {
-            Console.Error.WriteLine("All packages are up to date!");
+            Console.Error.WriteLine("Alle Pakete sind auf dem neuesten Stand :-)");
             return 0;
         }
 

@@ -336,7 +336,7 @@ public class AurRemove(
 
             try
             {
-                lockoutService.Show($"Removing...");
+                lockoutService.Show($"Entfernen …");
                 //do work
                 var result =
                     await privilegedOperationService.RemoveAurPackagesAsync(selectedPackages,
@@ -348,7 +348,7 @@ public class AurRemove(
                 else
                 {
                     var args = new ToastMessageEventArgs(
-                        $"Removed {selectedPackages.Count} Package(s)"
+                        $"Paket(e) {selectedPackages.Count} entfernt"
                     );
                     genericQuestionService.RaiseToastMessage(args);
                 }
@@ -357,7 +357,7 @@ public class AurRemove(
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to remove packages: {e.Message}");
+                Console.WriteLine($"Paket(e) entfernen fehlgeschlagen: {e.Message}");
             }
             finally
             {

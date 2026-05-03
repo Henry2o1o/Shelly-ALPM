@@ -407,7 +407,7 @@ public class FlatpakManager : IDisposable
                     FlatpakReference.GBytesUnref(bytePtr);
                 }
 
-                var scope = isSystem ? "system" : "user";
+                var scope = isSystem ? "System" : "Nutzer";
                 return $"Successfully installed Flatpak to {scope}.";
             }
             finally
@@ -655,7 +655,7 @@ public class FlatpakManager : IDisposable
                     return $"Installation of {appId} failed: {errorMsg}";
                 }
 
-                var scope = isUser ? "user" : "system";
+                var scope = isUser ? "Nutzer" : "System";
                 return $"Successfully installed {appId} from {remote} to {scope}.";
             }
             finally
@@ -816,7 +816,7 @@ public class FlatpakManager : IDisposable
                 return $"Uninstallation of {nameOrId} failed: {errorMsg}";
             }
 
-            var scope = isUser ? "user" : "system";
+            var scope = isUser ? "Nutzer" : "System";
             var result = $"Successfully uninstalled {match.Name} ({match.Id}) from {scope}.";
 
             // Remove unused dependencies if requested
@@ -920,13 +920,13 @@ public class FlatpakManager : IDisposable
                             FlatpakReference.GErrorFree(runError);
                         }
 
-                        return $" Failed to remove {removedCount} unused dependencies.";
+                        return $" Es ist fehlgeschlagen, {removedCount} ungenutzte Abhängigkeiten zu entfernen.";
                     }
 
-                    return $" Removed {removedCount} unused dependencies.";
+                    return $" {removedCount} nicht verwendete Abhängigkeiten wurden entfernt.";
                 }
 
-                return " No unused dependencies to remove.";
+                return " Es sind keine ungenutzten Abhängigkeiten zu entfernen.";
             }
             finally
             {
@@ -1090,7 +1090,7 @@ public class FlatpakManager : IDisposable
                     if (transactionError != IntPtr.Zero || transactionPtr == IntPtr.Zero)
                     {
                         errorMessages.Add(
-                            $"Failed to create transaction for {(isUser ? "user" : "system")} installation.");
+                            $"Failed to create transaction for {(isUser ? "Nutzer" : "System")} installation.");
                         if (transactionError != IntPtr.Zero) FlatpakReference.GErrorFree(transactionError);
                         continue;
                     }
@@ -1125,7 +1125,7 @@ public class FlatpakManager : IDisposable
                         else
                         {
                             var msg = FlatpakReference.GetErrorMessage(runError);
-                            errorMessages.Add($"Update failed for {(isUser ? "user" : "system")}: {msg}");
+                            errorMessages.Add($"Update failed for {(isUser ? "Nutzer" : "System")}: {msg}");
                             if (runError != IntPtr.Zero) FlatpakReference.GErrorFree(runError);
                         }
                     }
@@ -1195,7 +1195,7 @@ public class FlatpakManager : IDisposable
         {
             try
             {
-                AddRemotesFromInstallation(userInstallationPtr, remotesDto, "user");
+                AddRemotesFromInstallation(userInstallationPtr, remotesDto, "Nutzer");
             }
             finally
             {
@@ -1362,7 +1362,7 @@ public class FlatpakManager : IDisposable
                     return $"Failed to add remote '{remoteName}': {errorMsg}";
                 }
 
-                var scope = isSystemWide ? "system" : "user";
+                var scope = isSystemWide ? "System" : "Nutzer";
 
                 if (remoteUrl.EndsWith(".flatpakrepo", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1495,8 +1495,8 @@ public class FlatpakManager : IDisposable
                     return $"Failed to modify remote '{remoteName}': {errorMsg}";
                 }
 
-                var scope = isSystemWide ? "system" : "user";
-                var gpgStatus = gpgVerify ? "enabled" : "disabled";
+                var scope = isSystemWide ? "System" : "Nutzer";
+                var gpgStatus = gpgVerify ? "aktiviert" : "dektiviert";
                 return
                     $"Successfully modified remote '{remoteName}' in {scope} installation. GPG verification: {gpgStatus}";
             }
@@ -1575,7 +1575,7 @@ public class FlatpakManager : IDisposable
                 return $"Failed to remove remote '{remoteName}': {errorMsg}";
             }
 
-            var scope = isSystemWide ? "system" : "user";
+            var scope = isSystemWide ? "System" : "Nutzer";
             return $"Successfully removed remote '{remoteName}' from {scope} installation.";
         }
         finally
@@ -2274,11 +2274,11 @@ public class FlatpakManager : IDisposable
 
             if (isEstimating)
             {
-                Console.Error.WriteLine($"[DEBUG_LOG]Progress: Estimating... {status}");
+                Console.Error.WriteLine($"[DEBUG_LOG]Fortschritt: Schätzung … {status}");
             }
             else
             {
-                Console.Error.WriteLine($"[DEBUG_LOG]Progress: {percentage}% - {status}");
+                Console.Error.WriteLine($"[DEBUG_LOG]Fortschritt {percentage}% - {status}");
             }
 
             // Connect to the progress changed signal for this specific operation
@@ -2307,11 +2307,11 @@ public class FlatpakManager : IDisposable
 
         if (isEstimating)
         {
-            Console.Error.Write($"[Shelly][DEBUG_LOG]Progress: Estimating... {status}\n");
+            Console.Error.Write($"[Shelly][DEBUG_LOG]Fortschritt: Schätzung … {status}\n");
         }
         else
         {
-            Console.Error.Write($"[Shelly][DEBUG_LOG]Progress: {percentage}% - {status}\n");
+            Console.Error.Write($"[Shelly][DEBUG_LOG]Fortschritt: {percentage}% - {status}\n");
         }
     }
 

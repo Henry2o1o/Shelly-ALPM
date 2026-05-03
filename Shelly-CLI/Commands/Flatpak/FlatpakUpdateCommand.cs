@@ -15,7 +15,7 @@ public class FlatpakUpdateCommand : Command<FlatpakPackageSettings>
             return HandleUiModeUpdate(settings);
         }
 
-        AnsiConsole.MarkupLine("[yellow]Updating flatpak app...[/]");
+        AnsiConsole.MarkupLine("[yellow]Flatpak App aktualisieren …[/]");
         var manager = new FlatpakManager();
         var result = manager.UpdateApp(settings.Packages);
 
@@ -26,7 +26,7 @@ public class FlatpakUpdateCommand : Command<FlatpakPackageSettings>
 
     private static int HandleUiModeUpdate(FlatpakPackageSettings settings)
     {
-        Console.Error.WriteLine("Updating flatpak app...");
+        Console.Error.WriteLine("Flatpak App aktualisieren …");
         var manager = new FlatpakManager();
         var result = manager.UpdateApp(settings.Packages);
 

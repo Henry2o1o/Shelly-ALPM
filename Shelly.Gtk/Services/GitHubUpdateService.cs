@@ -23,7 +23,7 @@ public class GitHubUpdateService : IUpdateService
     {
         try
         {
-            await Console.Error.WriteLineAsync("[DEBUG] Checking for updates...");
+            await Console.Error.WriteLineAsync("[DEBUG] Checking for updates …");
             await Console.Error.WriteLineAsync($"[DEBUG] URL: {Url}");
             _latestRelease = await _httpClient.GetFromJsonAsync(Url, ShellyGtkJsonContext.Default.GitHubRelease) ??
                              await _httpClient.GetFromJsonAsync(Url2, ShellyGtkJsonContext.Default.GitHubRelease);

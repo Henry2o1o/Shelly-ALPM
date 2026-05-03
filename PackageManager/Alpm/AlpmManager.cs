@@ -1957,31 +1957,31 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             switch (type)
             {
                 case AlpmEventType.CheckDepsStart:
-                    Console.Error.WriteLine("[ALPM] Checking dependencies...");
+                    Console.Error.WriteLine("[ALPM] Checking dependencies …");
                     break;
                 case AlpmEventType.CheckDepsDone:
                     Console.Error.WriteLine("[ALPM] Dependency check finished.");
                     break;
                 case AlpmEventType.FileConflictsStart:
-                    Console.Error.WriteLine("[ALPM] Checking for file conflicts...");
+                    Console.Error.WriteLine("[ALPM] Checking for file conflicts …");
                     break;
                 case AlpmEventType.FileConflictsDone:
                     Console.Error.WriteLine("[ALPM] File conflict check finished.");
                     break;
                 case AlpmEventType.ResolveDepsStart:
-                    Console.Error.WriteLine("[ALPM] Resolving dependencies...");
+                    Console.Error.WriteLine("[ALPM] Resolving dependencies …");
                     break;
                 case AlpmEventType.ResolveDepsDone:
                     Console.Error.WriteLine("[ALPM] Dependency resolution finished.");
                     break;
                 case AlpmEventType.InterConflictsStart:
-                    Console.Error.WriteLine("[ALPM] Checking for conflicting packages...");
+                    Console.Error.WriteLine("[ALPM] Checking for conflicting packages …");
                     break;
                 case AlpmEventType.InterConflictsDone:
                     Console.Error.WriteLine("[ALPM] Conflict checking finished.");
                     break;
                 case AlpmEventType.TransactionStart:
-                    Console.Error.WriteLine("[ALPM] Starting transaction...");
+                    Console.Error.WriteLine("[ALPM] Starting transaction …");
                     PackageOperation?.Invoke(this, new AlpmPackageOperationEventArgs(type, null));
                     break;
                 case AlpmEventType.TransactionDone:
@@ -1989,19 +1989,19 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     PackageOperation?.Invoke(this, new AlpmPackageOperationEventArgs(type, null));
                     break;
                 case AlpmEventType.IntegrityStart:
-                    Console.Error.WriteLine("[ALPM] Checking package integrity...");
+                    Console.Error.WriteLine("[ALPM] Checking package integrity …");
                     break;
                 case AlpmEventType.IntegrityDone:
                     Console.Error.WriteLine("[ALPM] Integrity check finished.");
                     break;
                 case AlpmEventType.LoadStart:
-                    Console.Error.WriteLine("[ALPM] Loading packages...");
+                    Console.Error.WriteLine("[ALPM] Loading packages …");
                     break;
                 case AlpmEventType.LoadDone:
                     Console.Error.WriteLine("[ALPM] Packages loaded.");
                     break;
                 case AlpmEventType.DiskspaceStart:
-                    Console.Error.WriteLine("[ALPM] Checking available disk space...");
+                    Console.Error.WriteLine("[ALPM] Checking available disk space …");
                     break;
                 case AlpmEventType.DiskspaceDone:
                     Console.Error.WriteLine("[ALPM] Disk space check finished.");
@@ -2009,7 +2009,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
                 case AlpmEventType.PackageOperationStart:
                 {
-                    Console.Error.WriteLine("[ALPM] Starting package operation...");
+                    Console.Error.WriteLine("[ALPM] Starting package operation …");
                     break;
                 }
 
@@ -2036,7 +2036,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 }
 
                 case AlpmEventType.HookStart:
-                    Console.Error.WriteLine("[ALPM] Running hooks...");
+                    Console.Error.WriteLine("[ALPM] Running hooks …");
                     break;
                 case AlpmEventType.HookDone:
                     Console.Error.WriteLine("[ALPM] Hooks finished.");
@@ -2056,18 +2056,18 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
                     var hookLine = !string.IsNullOrEmpty(desc)
                         ? $"({position}/{total}) {desc}"
-                        : $"({position}/{total}) {name ?? "Running hook..."}";
+                        : $"({position}/{total}) {name ?? "Hook ausführen …"}";
 
                     HookRun?.Invoke(this, new AlpmHookEventArgs(hookLine, position, total));
                     break;
                 }
                 case AlpmEventType.HookRunDone:
-                    Console.Error.WriteLine("[ALPM] Hook finished.");
+                    Console.Error.WriteLine("[ALPM] Hook fertiggestellt");
                     break;
 
                 // Database retrieval events (for sync operations)
                 case AlpmEventType.DbRetrieveStart:
-                    Console.Error.WriteLine("[ALPM] Retrieving database...");
+                    Console.Error.WriteLine("[ALPM] Retrieving database …");
                     break;
                 case AlpmEventType.DbRetrieveDone:
                     Console.Error.WriteLine("[ALPM] Database retrieved.");
@@ -2078,7 +2078,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
                 // Package retrieval events
                 case AlpmEventType.PkgRetrieveStart:
-                    Console.Error.WriteLine("[ALPM] Retrieving packages...");
+                    Console.Error.WriteLine("[ALPM] Retrieving packages …");
                     break;
                 case AlpmEventType.PkgRetrieveDone:
                     Console.Error.WriteLine("[ALPM] Packages retrieved.");
@@ -2099,13 +2099,13 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     break;
 
                 case AlpmEventType.KeyringStart:
-                    Console.Error.WriteLine("[ALPM] Checking keyring...");
+                    Console.Error.WriteLine("[ALPM] Checking keyring …");
                     break;
                 case AlpmEventType.KeyringDone:
                     Console.Error.WriteLine("[ALPM] Keyring check finished.");
                     break;
                 case AlpmEventType.KeyDownloadStart:
-                    Console.Error.WriteLine("[ALPM] Downloading keys...");
+                    Console.Error.WriteLine("[ALPM] Downloading keys …");
                     break;
                 case AlpmEventType.KeyDownloadDone:
                     Console.Error.WriteLine("[ALPM] Key download finished.");
@@ -2154,7 +2154,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
                     Console.Error.WriteLine($"[ALPM] .pacsave file created: {fileLocation}");
                     PacsaveInfo?.Invoke(this,
-                        new AlpmPacsaveEventArgs(pkgNameOld ?? "No package name", fileLocation ?? "No file location"));
+                        new AlpmPacsaveEventArgs(pkgNameOld ?? "Keine Paketename", fileLocation ?? "Kein Dateispeicherort"));
                     break;
 
                 default:

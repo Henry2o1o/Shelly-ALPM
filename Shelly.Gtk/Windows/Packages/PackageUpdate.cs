@@ -82,7 +82,7 @@ public class PackageUpdate(
         _updateButton = (Button)builder.GetObject("update_button")!;
         _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
         _noPackagesLabel = (Label)builder.GetObject("no_packages_label")!;
-        _noPackagesLabel.Label_ = "<span size='large'>System packages are up to date</span>";
+        _noPackagesLabel.Label_ = "<span size='large'>Die Systempakete sind aktuell</span>";
         _noPackagesLabel.Visible = false;
         _detailRevealer = (Revealer)builder.GetObject("detail_revealer")!;
         _detailBox = (Box)builder.GetObject("detail_box")!;
@@ -675,7 +675,7 @@ public class PackageUpdate(
         if (selectedPackages.Count != _listStore.GetNItems())
         {
             var args = new GenericQuestionEventArgs(
-                "Update Packages?",
+                "Paket(e) aktualisieren?",
                 "It is unadvised to not update all packages at once. Are you sure you want to continue?"
             );
 
@@ -691,7 +691,7 @@ public class PackageUpdate(
             if (!configService.LoadConfig().NoConfirm)
             {
                 var args = new GenericQuestionEventArgs(
-                    "Update Packages?",
+                    "Paket(e) aktualisieren?",
                     BuildUpdateConfirmationMessage(selectedPackageUpdates),
                     true
                 );
@@ -706,7 +706,7 @@ public class PackageUpdate(
             var isFullUpgrade = selectedPackages.Count == _listStore.GetNItems();
             try
             {
-                lockoutService.Show($"Updating...");
+                lockoutService.Show($"Aktualisieren …");
                 OperationResult upgradeResult;
                 if (isFullUpgrade)
                     upgradeResult = await privilegedOperationService.UpgradeSystemAsync();
@@ -748,7 +748,7 @@ public class PackageUpdate(
                 lockoutService.Hide();
 
                 var args = new ToastMessageEventArgs(
-                    $"Updated {selectedPackages.Count} Package(s)"
+                    $"{selectedPackages.Count} Paket(e) aktualisiert"
                 );
                 genericQuestionService.RaiseToastMessage(args);
             }

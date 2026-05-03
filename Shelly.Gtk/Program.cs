@@ -252,11 +252,11 @@ sealed class Program
                 nb.Hexpand = true;
                 nb.Vexpand = true;
                 var w1 = serviceProvider.GetRequiredService<PackageInstall>();
-                nb.AppendPage(w1.CreateWindow(), Label.New("Install"));
+                nb.AppendPage(w1.CreateWindow(), Label.New("Installieren"));
                 var w2 = serviceProvider.GetRequiredService<PackageUpdate>();
                 nb.AppendPage(w2.CreateWindow(), Label.New("Updates"));
                 var w3 = serviceProvider.GetRequiredService<PackageManagement>();
-                nb.AppendPage(w3.CreateWindow(), Label.New("Manage"));
+                nb.AppendPage(w3.CreateWindow(), Label.New("Verwalten"));
                 packagesPageBox.Append(nb);
                 currentPackagesWindows = [w1, w2, w3];
             }
@@ -267,11 +267,11 @@ sealed class Program
                 nb.Hexpand = true;
                 nb.Vexpand = true;
                 var w1 = serviceProvider.GetRequiredService<AurInstall>();
-                nb.AppendPage(w1.CreateWindow(), Label.New("Install"));
+                nb.AppendPage(w1.CreateWindow(), Label.New("Installieren"));
                 var w2 = serviceProvider.GetRequiredService<AurUpdate>();
                 nb.AppendPage(w2.CreateWindow(), Label.New("Updates"));
                 var w3 = serviceProvider.GetRequiredService<AurRemove>();
-                nb.AppendPage(w3.CreateWindow(), Label.New("Remove"));
+                nb.AppendPage(w3.CreateWindow(), Label.New("Entfernen"));
                 aurPageBox.Append(nb);
                 currentAurWindows = [w1, w2, w3];
             }
@@ -641,7 +641,7 @@ sealed class Program
                     if (!configService.LoadConfig().NoConfirm)
                     {
                         var confirmArgs = new GenericQuestionEventArgs(
-                            "Upgrade All Packages?",
+                            "Alle Pakete upgraden?",
                             BottomBarExtensions.BuildUpgradeConfirmationMessage(packagesNeedingUpdate),
                             true
                         );

@@ -53,8 +53,8 @@ public static class PackageBuildDialog
         var buttonBox = Box.New(Orientation.Horizontal, 8);
         buttonBox.SetHalign(Align.End);
 
-        var cancelButton = Button.NewWithLabel("Cancel");
-        var confirmButton = Button.NewWithLabel("Confirm");
+        var cancelButton = Button.NewWithLabel("Abbrechen");
+        var confirmButton = Button.NewWithLabel("Bestätigen");
         confirmButton.AddCssClass("suggested-action");
 
         cancelButton.OnClicked += (_, _) =>

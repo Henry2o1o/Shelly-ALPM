@@ -83,13 +83,13 @@
                                                 <property name="spacing">5</property>
                                                 <child>
                                                     <object class="GtkCheckButton" id="aur_check">
-                                                        <property name="label">Enable AUR Support</property>
+                                                        <property name="label">AUR-Unterstützung aktivieren</property>
                                                         <property name="active">false</property>
                                                     </object>
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Access the Arch User Repository for a vast collection of community-maintained packages. AUR packages can contain malicous software, so please use caution when using the AUR.</property>
+                                                        <property name="label">Im Arch User Repository (AUR) findest du eine umfangreiche Sammlung von Community-gepflegten Paketen. Beachte jedoch, dass AUR-Pakete Schadsoftware enthalten können. Sei daher bei der Verwendung des AUR vorsichtig.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -115,13 +115,13 @@
                                                 <property name="spacing">5</property>
                                                 <child>
                                                     <object class="GtkCheckButton" id="flatpak_check">
-                                                        <property name="label">Enable Flatpak Support</property>
+                                                        <property name="label">Flatpak-Unterstützung aktivieren</property>
                                                         <property name="active">false</property>
                                                     </object>
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Enable support for Flatpak applications from Flathub and other remotes.</property>
+                                                        <property name="label">Unterstützung für Flatpak-Anwendungen von Flathub und anderen Repositories aktivieren.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -147,13 +147,13 @@
                                                 <property name="spacing">5</property>
                                                 <child>
                                                     <object class="GtkCheckButton" id="appimage_check">
-                                                        <property name="label">Enable AppImage Support</property>
+                                                        <property name="label">AppImage-Unterstützung aktivieren</property>
                                                         <property name="active">false</property>
                                                     </object>
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Manage and configure updates for AppImage applications easily.</property>
+                                                        <property name="label">Updates für AppImage-Anwendungen einfach verwalten und konfigurieren.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -179,13 +179,13 @@
                                                 <property name="spacing">5</property>
                                                 <child>
                                                     <object class="GtkCheckButton" id="tray_check">
-                                                        <property name="label">Enable Tray Icon</property>
+                                                        <property name="label">Tray-Symbol aktivieren</property>
                                                         <property name="active">true</property>
                                                     </object>
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Show a status icon in your system tray for quick access and notifications.</property>
+                                                        <property name="label">Ein Statussymbol in deiner Taskleiste anzeigen, um schnellen Zugriff und Benachrichtigungen zu ermöglichen.</property>
                                                         <property name="wrap">true</property>
                                                         <property name="xalign">0</property>
                                                         <style>
@@ -206,7 +206,7 @@
                                 <property name="spacing">15</property>
                                 <child>
                                     <object class="GtkButton" id="finish_button">
-                                        <property name="label">Finish Setup</property>
+                                        <property name="label">Einstellungen abschließen</property>
                                         <property name="halign">center</property>
                                         <style>
                                             <class name="suggested-action"/>
@@ -215,7 +215,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">Any required installations will run after the Finish button has been accepted.</property>
+                                        <property name="label">Alle erforderlichen Installationen werden ausgeführt, nachdem auf die Schaltfläche \'Fertigstellen\ angeklickt wurde.</property>
                                         <property name="wrap">true</property>
                                         <property name="justify">center</property>
                                         <style>
@@ -226,7 +226,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">These options and others can be configured later in settings.</property>
+                                        <property name="label">Diese und weitere Optionen können später in den Einstellungen konfiguriert werden.</property>
                                         <property name="wrap">true</property>
                                         <property name="justify">center</property>
                                         <style>

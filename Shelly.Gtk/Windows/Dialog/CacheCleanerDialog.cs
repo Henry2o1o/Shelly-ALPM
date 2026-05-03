@@ -47,7 +47,7 @@ public partial class CacheCleanerDialog(
     {
         try
         {
-            lockoutService.Show("Cleaning package cache...");
+            lockoutService.Show("Paket-Cache bereinigen …");
             var result = await privilegedOperationService.RunCacheCleanAsync(keep, uninstalledOnly);
 
             string message;
@@ -55,12 +55,12 @@ public partial class CacheCleanerDialog(
             {
                 var output = StripAnsiAndMarkup(result.Output);
                 message = string.IsNullOrWhiteSpace(output)
-                    ? "Package cache cleaned successfully"
+                    ? "Paket-Cache erfolgreich bereinigt"
                     : output;
             }
             else
             {
-                message = $"Cache clean failed: {result.Error}";
+                message = $"Cache bereinigen fehlgeschlagen: {result.Error}";
             }
 
             var toastArgs = new ToastMessageEventArgs(message);

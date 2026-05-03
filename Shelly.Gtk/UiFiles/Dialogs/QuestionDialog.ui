@@ -23,12 +23,12 @@
             <property name="spacing">10</property>
             <child>
               <object class="GtkButton" id="no_button">
-                <property name="label">No</property>
+                <property name="label">NEIN</property>
               </object>
             </child>
             <child>
               <object class="GtkButton" id="yes_button">
-                <property name="label">Yes</property>
+                <property name="label">JA</property>
                 <style>
                   <class name="suggested-action"/>
                 </style>

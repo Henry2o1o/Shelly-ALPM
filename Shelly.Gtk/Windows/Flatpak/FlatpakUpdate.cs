@@ -229,7 +229,7 @@ public class FlatpakUpdate(
         if (!configService.LoadConfig().NoConfirm)
         {
             var args = new GenericQuestionEventArgs(
-                "Update Packages?", string.Join("\n", _allPackages.Select(x => x.Id))
+                "Paket(e) aktualisieren?", string.Join("\n", _allPackages.Select(x => x.Id))
             );
 
             genericQuestionService.RaiseQuestion(args);
@@ -241,12 +241,12 @@ public class FlatpakUpdate(
 
         try
         {
-            lockoutService.Show("Updating Flatpak packages...");
+            lockoutService.Show("Flatpak Pakete aktualisieren …");
             var result = await unprivilegedOperationService.FlatpakUpgrade();
 
             if (!result.Success)
             {
-                Console.WriteLine($@"Failed to update packages: {result.Error}");
+                Console.WriteLine($@"Paketaktualisierung fehlgeschlagen: {result.Error}");
             }
 
             await LoadDataAsync();
@@ -256,7 +256,7 @@ public class FlatpakUpdate(
             lockoutService.Hide();
 
             var args = new ToastMessageEventArgs(
-                $"Updated all Flatpak(s)"
+                $"Alle Flatpak(s) aktualisiert"
             );
 
             genericQuestionService.RaiseToastMessage(args);

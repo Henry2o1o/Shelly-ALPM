@@ -27,7 +27,7 @@ public class AurUpgradeCommand : AsyncCommand<AurUpgradeSettings>
 
             if (updates.Count == 0)
             {
-                AnsiConsole.MarkupLine("[green]All AUR packages are up to date.[/]");
+                AnsiConsole.MarkupLine("[green]Alle AUR Pakete sind auf dem neuesten Stand :-)[/]");
                 return 0;
             }
 
@@ -82,7 +82,7 @@ public class AurUpgradeCommand : AsyncCommand<AurUpgradeSettings>
 
             if (updates.Count == 0)
             {
-                Console.Error.WriteLine("All AUR packages are up to date.");
+                Console.Error.WriteLine("Alle AUR Pakete sind auf dem neuesten Stand :-)");
                 return 0;
             }
 

@@ -14,17 +14,17 @@ public class CorruptedPackages : Command<CorruptedPackagesSettings>
         }
 
         RootElevator.EnsureRootExectuion();
-        AnsiConsole.MarkupLine("[yellow] Initializing ALPM... [/]");
+        AnsiConsole.MarkupLine("[yellow] Initializing ALPM … [/]");
         using var manager = new AlpmManager();
         manager.Initialize(true);
         var results = manager.RemoveCorruptedPackages(settings.DryRun);
         if (results.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green] No corrupted packages found! [/]");
+            AnsiConsole.MarkupLine("[green] Es wurden keine beschädigten Pakete gefunden! [/]");
             return 0;
         }
 
-        AnsiConsole.MarkupLine(settings.DryRun ? "[green] Running would remove: [/]" : "[green] Removed: [/]");
+        AnsiConsole.MarkupLine(settings.DryRun ? "[green] Running would remove: [/]" : "[green] Entfernt: [/]");
 
         var third = (int)Math.Ceiling(results.Count / 3.0);
         var columnOne = results.Take(third).ToList();

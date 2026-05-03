@@ -61,7 +61,7 @@ public class AlpmEventDialog
             var checkButtons = new List<CheckButton>();
 
             // "Select All" toggle
-            var selectAllCheck = CheckButton.NewWithLabel("Select All");
+            var selectAllCheck = CheckButton.NewWithLabel("Alle auswählen");
             box.Append(selectAllCheck);
 
             // Scrollable container for many options
@@ -92,7 +92,7 @@ public class AlpmEventDialog
                 }
             };
 
-            var confirmButton = Button.NewWithLabel("Confirm");
+            var confirmButton = Button.NewWithLabel("Bestätigen");
             confirmButton.SetCssClasses(["suggested-action"]);
             confirmButton.OnClicked += (_,_) =>
             {
@@ -111,14 +111,14 @@ public class AlpmEventDialog
         }
         else
         {
-            var noButton = Button.NewWithLabel("No");
+            var noButton = Button.NewWithLabel("NEIN");
             noButton.OnClicked += (_,_) =>
             {
                 e.SetResponse(0); 
                 parentOverlay.RemoveOverlay(baseFrame);
             };
 
-            var yesButton = Button.NewWithLabel("Yes");
+            var yesButton = Button.NewWithLabel("JA");
             yesButton.SetCssClasses(["suggested-action"]);
             yesButton.OnClicked += (_,_) =>
             {

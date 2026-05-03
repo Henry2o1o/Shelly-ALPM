@@ -9,7 +9,7 @@ public class FlatpakInstallFromBundleFile : Command<FlatpakBundleInstallSettings
 {
     public override int Execute([NotNull] CommandContext context, [NotNull] FlatpakBundleInstallSettings settings)
     {
-        AnsiConsole.MarkupLine("[yellow]Installing flatpak bundle...[/]");
+        AnsiConsole.MarkupLine("[yellow]Flatpak Bundle installieren …[/]");
         var result = FlatpakManager.InstallAppFromBundle(settings.BundlePath, settings.SystemWide);
 
         AnsiConsole.MarkupLine("[yellow]Installed: " + result.EscapeMarkup() + "[/]");

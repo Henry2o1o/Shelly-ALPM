@@ -78,8 +78,8 @@ public static class GenericQuestionDialog
         var buttonBox = Box.New(Orientation.Horizontal, 8);
         buttonBox.SetHalign(Align.End);
 
-        var noButton = Button.NewWithLabel("No");
-        var yesButton = Button.NewWithLabel("Yes");
+        var noButton = Button.NewWithLabel("Nein");
+        var yesButton = Button.NewWithLabel("Ja");
         yesButton.AddCssClass("suggested-action");
 
         noButton.OnClicked += (_,_) => CloseAndRespond(false);

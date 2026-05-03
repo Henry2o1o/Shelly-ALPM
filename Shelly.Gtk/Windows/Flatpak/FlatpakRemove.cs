@@ -198,7 +198,7 @@ public class FlatpakRemove(
         gestureRemove.OnReleased += (_, _) => deleteRadio.Active = true;
         secondRadio.AddController(gestureRemove);
 
-        var keepLabel = Label.New("Keep Config?");
+        var keepLabel = Label.New("Konfiguration beibehalten?");
         keepLabel.AddCssClass("heading");
 
         var box = Box.New(Orientation.Vertical, 12);
@@ -209,10 +209,10 @@ public class FlatpakRemove(
 
         var dialogArgs = new GenericDialogEventArgs<FlatpakRemoveEnum>(box);
 
-        var closeButton = Button.NewWithLabel("Close");
+        var closeButton = Button.NewWithLabel("Schließen");
         closeButton.OnClicked += (_, _) => dialogArgs.SetResponse(FlatpakRemoveEnum.Cancel);
 
-        var removeButton = Button.NewWithLabel("Confirm");
+        var removeButton = Button.NewWithLabel("Bestätigen");
         removeButton.AddCssClass("suggested-action");
         removeButton.OnClicked += (_, _) =>
         {
@@ -296,12 +296,12 @@ public class FlatpakRemove(
 
         try
         {
-            lockoutService.Show($"Removing {packageId}...");
+            lockoutService.Show($"{packageId} entfernen …");
             var result = await unprivilegedOperationService.RemoveFlatpakPackage(packageId, removeConfig);
 
             if (!result.Success)
             {
-                Console.WriteLine($"Failed to remove package {packageId}: {result.Error}");
+                Console.WriteLine($"Pket entfernen fehlgeschlagen {packageId}: {result.Error}");
             }
             else
             {
@@ -312,7 +312,7 @@ public class FlatpakRemove(
         {
             lockoutService.Hide();
             genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(
-                $"Removed Package(s)"
+                $"Paket(e) entfernt"
             ));
         }
     }

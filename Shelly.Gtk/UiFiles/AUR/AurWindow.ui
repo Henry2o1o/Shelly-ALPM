@@ -14,7 +14,7 @@
                 <child>
                     <object class="GtkButton" id="install_button">
                         <property name="halign">start</property>
-                        <property name="label">Install Aur Package(s)</property>
+                        <property name="label">Aur Paket(e) installieren</property>
                         <style>
                             <class name="suggested-action"/>
                         </style>
@@ -27,13 +27,13 @@
                 </child>
                 <child>
                     <object class="GtkCheckButton" id="chroot_check">
-                        <property name="label">Use chroot</property>
-                        <property name="tooltip-text">Build packages in a clean chroot environment</property>
+                        <property name="label">chroot verwenden</property>
+                        <property name="tooltip-text">Pakete in einer sauberen Chroot-Umgebung erstellen</property>
                     </object>
                 </child>
                 <child>
                     <object class="GtkCheckButton" id="run_checks_check">
-                        <property name="label">Run checks</property>
+                        <property name="label">Prüfungen durchführen</property>
                         <property name="tooltip-text">Run the --check function during package build (installs
                             checkdepends)
                         </property>
@@ -41,7 +41,7 @@
                 </child>
                 <child>
                     <object class="GtkSearchEntry" id="search_entry">
-                        <property name="placeholder-text">Search packages...</property>
+                        <property name="placeholder-text">Pakete suchen …</property>
                         <property name="width-request">200</property>
                         <style>
                             <class name="spaced-search"/>
@@ -91,12 +91,12 @@
                                         </child>
                                         <child>
                                             <object class="GtkColumnViewColumn" id="votes_column">
-                                                <property name="title">Votes</property>
+                                        <property name="title">Stimmen</property>
                                             </object>
                                         </child>
                                         <child>
                                             <object class="GtkColumnViewColumn" id="popularity_column">
-                                                <property name="title">Popularity</property>
+                                        <property name="title">Popularität</property>
                                             </object>
                                         </child>
 

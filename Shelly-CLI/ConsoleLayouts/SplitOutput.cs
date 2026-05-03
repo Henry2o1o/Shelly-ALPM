@@ -41,7 +41,7 @@ public static class SplitOutput
                 new Layout("Progress").Ratio(progressRatio));
 
         layout["Console"].Update(new Panel(new Rows(visible)).Header("Console").Expand());
-        layout["Progress"].Update(new Panel("Waiting...").Header("Progress").Expand());
+        layout["Progress"].Update(new Panel("Warten …").Header("Fortschritt").Expand());
         LiveDisplayContext? liveCtx = null;
         object renderLock = new();
 
@@ -66,7 +66,7 @@ public static class SplitOutput
 
         manager.Progress += (sender, e) =>
         {
-            var name = e.PackageName ?? "unknown";
+            var name = e.PackageName ?? "unbekannt";
             var pct = e.Percent ?? 0;
             var actionType = e.ProgressType.ToString();
 
@@ -109,7 +109,7 @@ public static class SplitOutput
             {
                 var line = e.Line ?? string.Empty;
                 consoleLines.Add(string.IsNullOrEmpty(line)
-                    ? "Running scriptlet..."
+                    ? "Skript ausführen …"
                     : $"Scriptlet: {line.EscapeMarkup()}");
             }
 
@@ -122,7 +122,7 @@ public static class SplitOutput
             {
                 var line = e.Description ?? string.Empty;
                 consoleLines.Add(string.IsNullOrEmpty(line)
-                    ? "Running hook..."
+                    ? "Hook ausführen …"
                     : $"Hook: {line.EscapeMarkup()}");
             }
 

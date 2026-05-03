@@ -14,7 +14,7 @@
         <property name="halign">baseline</property>
         <child>
           <object class="GtkButton" id="remove_button">
-            <property name="label">Remove Selected</property>
+            <property name="label">Ausgewälte entfernen</property>
             <property name="halign">end</property>
             <style>
               <class name="destructive-action"/>

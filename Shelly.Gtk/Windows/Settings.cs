@@ -445,7 +445,7 @@ public class Settings(
     private async Task HandleAurConfirmationAsync(Switch sw, Action<bool> updateAction)
     {
         var args = new GenericQuestionEventArgs(
-            "Enable AUR?",
+            "AUR aktivieren?",
             "The Arch User Repository (AUR) is a community-driven repository. " +
             "Packages are user-produced and may contain risks. Do you want to enable it?"
         );
@@ -491,7 +491,7 @@ public class Settings(
             {
                 try
                 {
-                    lockoutService.Show("Installing flatpak...");
+                    lockoutService.Show("Flatpak installieren …");
                     await privilegedOperationService.InstallPackagesAsync(["flatpak"]);
                     GLib.Functions.IdleAdd(0, () =>
                     {
@@ -552,7 +552,7 @@ public class Settings(
     {
         try
         {
-            lockoutService.Show("Synchronizing databases...");
+            lockoutService.Show("Datenbank synchronisieren …");
             await privilegedOperationService.SyncDatabasesAsync();
         }
         catch (Exception ex)
@@ -615,7 +615,7 @@ public class Settings(
             purifyBox.SetSpacing(12);
             purifyBox.SetSizeRequest(500, -1);
             var title = Label.NewWithProperties([]);
-            title.SetText("Purified Corruption");
+            title.SetText("Beschädigungen bereinigen");
             title.AddCssClass("title-2");
             title.SetHalign(Align.Center);
             purifyBox.Append(title);
@@ -627,7 +627,7 @@ public class Settings(
             var list = Box.NewWithProperties([]);
             list.SetOrientation(Orientation.Vertical);
             list.SetSpacing(8);
-            var output = result.Output != "\n" ? result.Output.Split(",").ToList() : ["No corrupted packages found"];
+            var output = result.Output != "\n" ? result.Output.Split(",").ToList() : ["Es wurden keine beschädigten Pakete gefunden!"];
             foreach (var pkg in output)
             {
                 var text = Label.NewWithProperties([]);
@@ -647,7 +647,7 @@ public class Settings(
         var pacfiles = await unprivilegedOperationService.GetPacFiles();
         if (pacfiles.Count == 0)
         {
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("No pacfiles found"));
+            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("Keine Pac-Datei(n) gefunden"));
             return;
         }
 

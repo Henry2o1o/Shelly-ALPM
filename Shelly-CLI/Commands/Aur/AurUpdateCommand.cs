@@ -31,20 +31,20 @@ public class AurUpdateCommand : AsyncCommand<AurPackageSettings>
             manager = new AurPackageManager();
             await manager.Initialize(root: true, noCheck: !settings.Check);
 
-            AnsiConsole.MarkupLine($"[yellow]Updating AUR packages: {string.Join(", ", settings.Packages.Select(p => p.EscapeMarkup()))}[/]");
+            AnsiConsole.MarkupLine($"[yellow]AUR Pakete aktualisieren: {string.Join(", ", settings.Packages.Select(p => p.EscapeMarkup()))}[/]");
             var result = await AurSplitOutput.Output(manager, m => m.UpdatePackages(settings.Packages.ToList()), settings.NoConfirm);
             if (!result)
             {
-                AnsiConsole.MarkupLine("[red]Update failed. See errors above.[/]");
+                AnsiConsole.MarkupLine("[red]Update fehlgeschlagen. Siehe Fehlermeldungen oben.[/]");
                 return 1;
             }
-            AnsiConsole.MarkupLine("[green]Update complete.[/]");
+            AnsiConsole.MarkupLine("[green]Update abgeschlossen.[/]");
 
          
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Update failed:[/] {ex.Message.EscapeMarkup()}");
+            AnsiConsole.MarkupLine($"[red]Update fehlgeschlagen:[/] {ex.Message.EscapeMarkup()}");
             return 1;
         }
         finally
@@ -117,20 +117,20 @@ public class AurUpdateCommand : AsyncCommand<AurPackageSettings>
                 args.ProceedWithUpdate = true;
             };
 
-            Console.Error.WriteLine($"Updating AUR packages: {string.Join(", ", settings.Packages)}");
+            Console.Error.WriteLine($"AUR Pakete aktualisieren: {string.Join(", ", settings.Packages)}");
             await manager.UpdatePackages(settings.Packages.ToList());
             if (hadError)
             {
-                Console.Error.WriteLine("Update failed.");
+                Console.Error.WriteLine("Update fehlgeschlagen");
                 return 1;
             }
-            Console.Error.WriteLine("Update complete.");
+            Console.Error.WriteLine("Update abgeschlossen.");
 
         
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Update failed: {ex.Message}");
+            Console.Error.WriteLine($"Update fehlgeschlagen: {ex.Message}");
             return 1;
         }
         finally

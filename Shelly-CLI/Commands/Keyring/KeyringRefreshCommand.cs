@@ -15,7 +15,7 @@ public class KeyringRefreshCommand : Command
         }
 
         RootElevator.EnsureRootExectuion();
-        AnsiConsole.MarkupLine("[yellow]Refreshing keys from keyserver...[/]");
+        AnsiConsole.MarkupLine("[yellow]Refreshing keys from keyserver …[/]");
         var result = PacmanKeyRunner.Run("--refresh-keys");
         if (result == 0)
         {
@@ -31,7 +31,7 @@ public class KeyringRefreshCommand : Command
 
     private static int HandleUiModeRefresh()
     {
-        Console.Error.WriteLine("Refreshing keys from keyserver...");
+        Console.Error.WriteLine("Refreshing keys from keyserver …");
         var result = PacmanKeyRunner.Run("--refresh-keys");
         if (result == 0)
         {

@@ -168,7 +168,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             packageArgs += " -r";
         }
 
-        var result = await ExecutePrivilegedWithNoConfirmCheck("Remove packages", "remove", packageArgs);
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Pakete entfernen", "remove", packageArgs);
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.Native);
         return result;
     }
@@ -177,7 +177,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
     {
         var packageArgs = string.Join(" ", packages);
 
-        var result = await ExecutePrivilegedWithNoConfirmCheck("Update packages", "update", packageArgs);
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Paket(e) aktualisieren", "update", packageArgs);
         SendDbusMessage(result);
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.Native);
         return result;
@@ -185,21 +185,21 @@ public class PrivilegedOperationService : IPrivilegedOperationService
 
     public async Task<OperationResult> UpgradeSystemAsync()
     {
-        var result = await ExecutePrivilegedWithNoConfirmCheck("Upgrade system", "upgrade");
+        var result = await ExecutePrivilegedWithNoConfirmCheck("System-Update", "upgrade");
         SendDbusMessage(result);
         return result;
     }
 
     public async Task<OperationResult> UpgradeAllAsync()
     {
-        var result = await ExecutePrivilegedWithNoConfirmCheck("Upgrade all", "upgrade", "-a");
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Alle aktualisieren", "upgrade", "-a");
         SendDbusMessage(result);
         return result;
     }
 
     public async Task<OperationResult> ForceSyncDatabaseAsync()
     {
-        return await ExecutePrivilegedCommandAsync("Force synchronize package databases", "sync", "--force");
+        return await ExecutePrivilegedCommandAsync("Paketdatenbanken synchronisieren erzwingen", "sync", "--force");
     }
 
     public async Task<OperationResult> RemoveDbLockAsync()
@@ -262,7 +262,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
     {
         var packageArgs = string.Join(" ", packages);
         var result =
-            await ExecutePrivilegedWithNoConfirmCheck("Get Package Builds", "aur", "get-package-build", packageArgs);
+            await ExecutePrivilegedWithNoConfirmCheck("Paket-Builds abrufen", "aur", "get-package-build", packageArgs);
         var trimmedLine = StripBom(result.Output);
         return System.Text.Json.JsonSerializer.Deserialize(trimmedLine,
             ShellyGtkJsonContext.Default.ListPackageBuild) ?? [];
@@ -500,10 +500,10 @@ public class PrivilegedOperationService : IPrivilegedOperationService
 
     public async Task<OperationResult> RunCacheCleanAsync(int keep, bool uninstalledOnly)
     {
-        var args = new List<string> { "utility", "cache-clean", "-r", "-k", keep.ToString() };
+        var args = new List<string> { "Utility", "cache-clean", "-r", "-k", keep.ToString() };
         if (uninstalledOnly)
             args.Add("-u");
-        return await ExecutePrivilegedCommandAsync("Clean package cache", args.ToArray());
+        return await ExecutePrivilegedCommandAsync("Pakete-Cache bereinigen", args.ToArray());
     }
 
     public async Task<OperationResult> AppImageInstallAsync(string filePath, string updateUrl = "",
@@ -512,12 +512,12 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         OperationResult result;
         if (updateUrl != "" && updateType != AppImageUpdateType.None)
         {
-            result = await ExecutePrivilegedCommandAsync("Install AppImage", "appimage", "install", "-l", $"\"{filePath}\"", "-u",
+            result = await ExecutePrivilegedCommandAsync("AppImage installieren", "appimage", "install", "-l", $"\"{filePath}\"", "-u",
                 updateUrl, "-t", updateType.ToString().ToLowerInvariant(), "-n");
         }
         else
         {
-            result = await ExecutePrivilegedCommandAsync("Install AppImage", "appimage", "install", "-l", $"\"{filePath}\"", "-n");
+            result = await ExecutePrivilegedCommandAsync("AppImage installieren", "appimage", "install", "-l", $"\"{filePath}\"", "-n");
         }
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.AppImage);
         return result;
@@ -525,7 +525,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
 
     public async Task<OperationResult> AppImageUpgradeAsync()
     {
-        var result = await ExecutePrivilegedCommandAsync("Upgrade AppImage's", "appimage", "upgrade", "-n");
+        var result = await ExecutePrivilegedCommandAsync("AppImage's aktualisieren", "appimage", "upgrade", "-n");
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.AppImage);
         return result;
     }
@@ -652,7 +652,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             {
                 Success = false,
                 Output = string.Empty,
-                Error = "Authentication cancelled by user.",
+                Error = "Authentifizierung durch Benutzer abgebrochen.",
                 ExitCode = -1
             };
         }
@@ -664,7 +664,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             {
                 Success = false,
                 Output = string.Empty,
-                Error = "No password available.",
+                Error = "Kein Passwort verfügbar.",
                 ExitCode = -1
             };
         }
@@ -1072,9 +1072,9 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             {
                 // Check if it was an authentication failure
                 var errorOutput = errorBuilder.ToString();
-                if (errorOutput.Contains("incorrect password") ||
-                    errorOutput.Contains("Sorry, try again") ||
-                    errorOutput.Contains("Authentication failure") ||
+                if (errorOutput.Contains("Falsches Passwort!") ||
+                    errorOutput.Contains("Sorry, erneut versuchen!") ||
+                    errorOutput.Contains("Authentifizierung fehlgeschlagen!") ||
                     process.ExitCode == 1 && errorOutput.Contains("sudo"))
                 {
                     _credentialManager.MarkAsInvalid();
@@ -1113,7 +1113,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             {
                 Success = false,
                 Output = string.Empty,
-                Error = "Authentication cancelled by user.",
+                Error = "Authentifizierung durch Benutzer abgebrochen.",
                 ExitCode = -1
             };
         }

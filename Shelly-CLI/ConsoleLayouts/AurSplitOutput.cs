@@ -39,7 +39,7 @@ public static class AurSplitOutput
                 new Layout("Progress").Ratio(progressRatio));
 
         layout["Console"].Update(new Panel(new Rows()).Header("Console").Expand());
-        layout["Progress"].Update(new Panel("Waiting...").Header("Progress").Expand());
+        layout["Progress"].Update(new Panel("Warten …").Header("Fortschritt").Expand());
         LiveDisplayContext? liveCtx = null;
         object renderLock = new();
         bool hadError = false;
@@ -238,7 +238,7 @@ public static class AurSplitOutput
             {
                 consoleLines.Add(
                     $"[yellow bold]Proceed with update for {args.PackageName.EscapeMarkup()}?[/]");
-                consoleLines.Add("[green]Y[/] = Yes  |  [red]N[/] = No");
+                consoleLines.Add("[green]Y[/] = JA  |  [red]N[/] = NEIN");
 
                 var visible = consoleLines.Skip(Math.Max(0, consoleLines.Count - maxVisibleLines)).ToList();
                 layout["Console"].Update(
@@ -334,7 +334,7 @@ public static class AurSplitOutput
             {
                 var line = e.Line ?? string.Empty;
                 consoleLines.Add(string.IsNullOrEmpty(line)
-                    ? "Running scriptlet..."
+                    ? "Script ausführen …"
                     : $"Scriptlet: {line.EscapeMarkup()}");
             }
 
@@ -347,7 +347,7 @@ public static class AurSplitOutput
             {
                 var line = e.Description ?? string.Empty;
                 consoleLines.Add(string.IsNullOrEmpty(line)
-                    ? "Running hook..."
+                    ? "Hook ausführen …"
                     : $"Hook: {line.EscapeMarkup()}");
             }
 

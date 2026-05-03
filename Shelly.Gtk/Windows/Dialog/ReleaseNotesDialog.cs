@@ -52,7 +52,7 @@ public static partial class ReleaseNotesDialog
         buttonBox.SetHalign(Align.End);
         buttonBox.SetMarginTop(10);
 
-        var closeButton = Button.NewWithLabel("Close");
+        var closeButton = Button.NewWithLabel("Schließen");
         closeButton.AddCssClass("suggested-action");
         closeButton.OnClicked += (_, _) =>
         {
@@ -82,7 +82,7 @@ public static partial class ReleaseNotesDialog
         var box = Box.New(Orientation.Vertical, 12);
         baseFrame.SetChild(box);
         
-        var titleLabel = Label.New("Version History");
+        var titleLabel = Label.New("Versionsverlauf");
         titleLabel.AddCssClass("title-2");
         box.Append(titleLabel);
         
@@ -107,7 +107,7 @@ public static partial class ReleaseNotesDialog
         buttonBox.SetHalign(Align.End);
         buttonBox.SetMarginTop(10);
         
-        var closeButton = Button.NewWithLabel("Close");
+        var closeButton = Button.NewWithLabel("Schließen");
         closeButton.AddCssClass("suggested-action");
         closeButton.OnClicked += (_,_) =>
         {

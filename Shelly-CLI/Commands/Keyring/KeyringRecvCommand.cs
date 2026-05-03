@@ -55,7 +55,7 @@ public class KeyringRecvCommand : Command<KeyringSettings>
             args += $" --keyserver {settings.Keyserver}";
         }
 
-        Console.Error.WriteLine($"Receiving keys: {string.Join(", ", settings.Keys)}...");
+        Console.Error.WriteLine($"Receiving keys: {string.Join(", ", settings.Keys)} …");
         var result = PacmanKeyRunner.Run(args);
         if (result == 0)
         {

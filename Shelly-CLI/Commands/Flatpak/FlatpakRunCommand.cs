@@ -15,7 +15,7 @@ public class FlatpakRunCommand : Command<FlatpakPackageSettings>
             return HandleUiModeRun(settings);
         }
 
-        AnsiConsole.MarkupLine("[yellow]Running selected flatpak app...[/]");
+        AnsiConsole.MarkupLine("[yellow]Running selected flatpak app …[/]");
         var result = new FlatpakManager().LaunchApp(settings.Packages);
 
         if (result)
@@ -30,7 +30,7 @@ public class FlatpakRunCommand : Command<FlatpakPackageSettings>
 
     private static int HandleUiModeRun(FlatpakPackageSettings settings)
     {
-        Console.Error.WriteLine("Running selected flatpak app...");
+        Console.Error.WriteLine("Running selected flatpak app …");
         var result = new FlatpakManager().LaunchApp(settings.Packages);
 
         if (result)

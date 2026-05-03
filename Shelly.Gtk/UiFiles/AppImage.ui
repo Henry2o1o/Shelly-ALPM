@@ -15,7 +15,7 @@
                 <child>
 
                     <object class="GtkLabel">
-                        <property name="label">Manage and Update Appimages</property>
+                        <property name="label">AppImages verwalten und aktualisieren</property>
                         <property name="xalign">0</property>
                         <style>
                             <class name="title-4"/>
@@ -42,7 +42,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">Sync All</property>
+                                        <property name="label">Alle synchronisieren</property>
                                     </object>
                                 </child>
                             </object>
@@ -63,7 +63,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">Upgrade All</property>
+                                        <property name="label">Alle aktualisieren</property>
                                     </object>
                                 </child>
                             </object>
@@ -73,7 +73,7 @@
                 <child>
                     <object class="GtkButton" id="InstallAppImageButton">
                         <property name="valign">center</property>
-                        <property name="tooltip-text">Install a new AppImage from a file or URL</property>
+                        <property name="tooltip-text">Installiere ein neues AppImage aus einer Datei oder über eine URL</property>
                         <style>
                             <class name="suggested-action"/>
                         </style>
@@ -87,7 +87,7 @@
                                 </child>
                                 <child>
                                     <object class="GtkLabel">
-                                        <property name="label">Install AppImage</property>
+                                        <property name="label">AppImage installieren</property>
                                     </object>
                                 </child>
                             </object>
@@ -96,7 +96,7 @@
                 </child>
                 <child>
                     <object class="GtkSearchEntry" id="AppImageSearchEntry">
-                        <property name="placeholder-text">Search...</property>
+                        <property name="placeholder-text">Suchen …</property>
                         <property name="width-request">200</property>
                         <property name="valign">center</property>
                     </object>
@@ -190,7 +190,7 @@
                                         </child>
                                         <child>
                                             <object class="GtkLabel" id="DetailDescriptionLabel">
-                                                <property name="label">Description goes here...</property>
+                                                <property name="label">Hier kommt die Beschreibung …</property>
                                                 <property name="xalign">0</property>
                                                 <property name="wrap">true</property>
                                                 <property name="lines">3</property>
@@ -342,7 +342,7 @@
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label">Save</property>
+                                                        <property name="label">Speichern</property>
                                                         <style>
                                                             <class name="bold"/>
                                                         </style>

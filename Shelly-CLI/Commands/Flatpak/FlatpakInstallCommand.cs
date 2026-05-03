@@ -15,7 +15,7 @@ public class FlatpakInstallCommand : Command<FlatpakPackageSettings>
             return HandleUiModeInstall(settings);
         }
 
-        AnsiConsole.MarkupLine("[yellow]Installing flatpak app...[/]");
+        AnsiConsole.MarkupLine("[yellow]Flatpak App installieren …[/]");
         var manager = new FlatpakManager();
         var result = manager.InstallApp(settings.Packages, settings.Remote, settings.IsUser, settings.Branch ?? "stable", settings.IsRuntime);
 
@@ -26,11 +26,11 @@ public class FlatpakInstallCommand : Command<FlatpakPackageSettings>
 
     private static int HandleUiModeInstall(FlatpakPackageSettings settings)
     {
-        Console.Error.WriteLine("Installing flatpak app...");
+        Console.Error.WriteLine("Flatpak App installieren  …");
         var manager = new FlatpakManager();
         var result = manager.InstallApp(settings.Packages, settings.Remote, settings.IsUser);
 
-        Console.Error.WriteLine("Installed: " + result);
+        Console.Error.WriteLine("Installiert: " + result);
 
         return 0;
     }

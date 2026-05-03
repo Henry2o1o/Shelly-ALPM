@@ -9,7 +9,7 @@ public class FlatpakUpgrade : Command
 {
     public override int Execute([NotNull] CommandContext context)
     {
-        AnsiConsole.MarkupLine("[yellow]Updating all flatpak apps...[/]");
+        AnsiConsole.MarkupLine("[yellow]Alle Flatpak Apps aktualisieren …[/]");
         var result = FlatpakManager.UpdateAllFlatpak();
 
         AnsiConsole.MarkupLine("[yellow]" + result.EscapeMarkup() + "[/]");

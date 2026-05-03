@@ -118,7 +118,7 @@ public class AppImageManager
             if (File.Exists(appImagePath))
             {
                 File.Delete(appImagePath);
-                LogMessage($"Removed AppImage: {appImagePath}");
+                LogMessage($"AppImage entfernt: {appImagePath}");
             }
 
             foreach (var desktopDir in desktopDirs)
@@ -129,7 +129,7 @@ public class AppImageManager
                 if (File.Exists(desktopFilePath))
                 {
                     File.Delete(desktopFilePath);
-                    LogMessage($"Removed desktop entry: {desktopFilePath}");
+                LogMessage($"Desktop-Eintrag entfernt: {desktopFilePath}");
                     UpdateDesktopDatabase(desktopDir);
                 }
                 else
@@ -143,7 +143,7 @@ public class AppImageManager
                         var content = await File.ReadAllLinesAsync(df);
                         if (!content.Any(l => l.StartsWith("Exec=") && (l.Contains(appImagePath) || l.Contains($"\"{appImagePath}\"")))) continue;
                         File.Delete(df);
-                        LogMessage($"Removed desktop entry: {df}");
+                    LogMessage($"Desktop-Eintrag entfernt: {df}");
                         UpdateDesktopDatabase(desktopDir);
                         break;
                     }
@@ -166,7 +166,7 @@ public class AppImageManager
                 foreach (var icon in potentialIcons)
                 {
                     File.Delete(icon);
-                    LogMessage($"Removed icon: {icon}");
+                    LogMessage($"Symbol entfernt: {icon}");
                 }
             }
         }
@@ -211,7 +211,7 @@ public class AppImageManager
         {
             if (!Directory.Exists(backupDir)) Directory.CreateDirectory(backupDir);
 
-            LogMessage($"Downloading update for {update.Name}...");
+            LogMessage($"Downloading update for {update.Name} …");
             using (var client = new HttpClient())
             {
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("Shelly-ALPM");
@@ -223,17 +223,17 @@ public class AppImageManager
 
             SetFilePermissions(downloadPath, "a+x");
 
-            LogMessage($"Backing up current version to {backupPath}...");
+            LogMessage($"Aktuelle Version sichern in {backupPath} …");
             File.Copy(currentPath, backupPath, true);
 
             try
             {
-                LogMessage("Installing new version...");
+                LogMessage("Neue Version installieren …");
                 File.Move(downloadPath, currentPath, true);
             }
             catch (Exception ex)
             {
-                LogError($"Error installing new version: {ex.Message}. Rolling back...");
+                LogError($"Error installing new version: {ex.Message}. Zurück rollen …");
                 File.Copy(backupPath, currentPath, true);
                 return 1;
             }
@@ -276,7 +276,7 @@ public class AppImageManager
 
     public async Task<bool> AppImageConfigureUpdates(string url, string name, UpdateType updateType)
     {
-        LogMessage($"Configuring updates for {name} {url}, type: {updateType}...");
+        LogMessage($"Configuring updates for {name} {url}, type: {updateType} …");
         var appImages = await GetAppImagesFromLocalDb();
         var appImage = appImages.FirstOrDefault(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase));
         if (appImage == null) return false;
@@ -523,7 +523,7 @@ public class AppImageManager
                     continue;
                 }
 
-                LogMessage($"Syncing metadata for {appName}...");
+                LogMessage($"Syncing metadata for {appName} …");
                 var appImageDto = await ExtractMetadata(appImagePath);
                 if (appImageDto == null)
                 {

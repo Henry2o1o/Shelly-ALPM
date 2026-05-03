@@ -246,7 +246,7 @@ public class AppImage(
             var filePath = file.GetPath();
             if (string.IsNullOrEmpty(filePath)) return;
 
-            lockoutService.Show("Installing AppImage...");
+                lockoutService.Show("AppImage installieren …");
 
             var result = await privilegedOperationService.AppImageInstallAsync(filePath);
 
@@ -285,9 +285,9 @@ public class AppImage(
                 return;
             }
 
-            lockoutService.Show("Running updates...");
+            lockoutService.Show("Running updates …");
 
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("Updating AppImages..."));
+            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("AppImages aktualisieren …"));
             var result = await privilegedOperationService.AppImageUpgradeAsync();
 
             if (result.Success)
@@ -394,7 +394,7 @@ public class AppImage(
         {
             if (_selectedApp == null) return;
 
-            lockoutService.Show($"Syncing {_selectedApp.Name}...");
+            lockoutService.Show($"Syncing {_selectedApp.Name} …");
 
             var result =
                 await privilegedOperationService.AppImageSyncApp(_selectedApp.Name);
@@ -425,7 +425,7 @@ public class AppImage(
     {
         try
         {
-            lockoutService.Show($"Syncing all AppImages ...");
+            lockoutService.Show($"Alle AppImages synchronisieren …");
 
             var result =
                 await privilegedOperationService.AppImageSyncAll();
@@ -458,7 +458,7 @@ public class AppImage(
         {
             if (_selectedApp == null) return;
 
-            lockoutService.Show($"Removing {_selectedApp.Name}...");
+            lockoutService.Show($"Removing {_selectedApp.Name} …");
 
             var result = await privilegedOperationService.AppImageRemoveAsync(_selectedApp.Name);
 

@@ -13,7 +13,7 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
 
         if (!Directory.Exists(cacheDir))
         {
-            AnsiConsole.MarkupLine($"[red]Cache directory does not exist: {cacheDir.EscapeMarkup()}[/]");
+            AnsiConsole.MarkupLine($"[red]Cache-Verzeichnis existiert nicht:{cacheDir.EscapeMarkup()}[/]");
             return Task.FromResult(1);
         }
 
@@ -25,7 +25,7 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
 
         if (entries.Count == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]No package files found in cache directory.[/]");
+            AnsiConsole.MarkupLine("[yellow]Im Cache-Verzeichnis wurden keine Paketdateien gefunden.[/]");
             return Task.FromResult(0);
         }
 
@@ -48,7 +48,7 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
         
         if (candidates.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]No candidate packages to remove.[/]");
+            AnsiConsole.MarkupLine("[green]Keine zu entfernenden Kandidatenpakete.[/]");
             return Task.FromResult(0);
         }
 
@@ -56,12 +56,12 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
         
         if (settings.DryRun)
         {
-            AnsiConsole.MarkupLine("[blue]Dry run — the following files would be removed:[/]");
+            AnsiConsole.MarkupLine("[blue]Testlauf – die folgenden Dateien würden entfernt:[/]");
             foreach (var entry in candidates)
             {
                 AnsiConsole.MarkupLine($"  {entry.FullPath.EscapeMarkup()} [dim]({CacheCleanHelper.FormatSize(entry.FileSize)})[/]");
             }
-            AnsiConsole.MarkupLine($"\n[blue]Total: {candidates.Count} files, {CacheCleanHelper.FormatSize(totalSize)}[/]");
+            AnsiConsole.MarkupLine($"\n[blue]Gesamt: {candidates.Count} Datei(n), {CacheCleanHelper.FormatSize(totalSize)}[/]");
             return Task.FromResult(0);
         }
 
@@ -74,12 +74,12 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
                 File.Delete(entry.FullPath);
             }
 
-            AnsiConsole.MarkupLine($"[green]Removed {candidates.Count} files, freed {CacheCleanHelper.FormatSize(totalSize)}[/]");
+            AnsiConsole.MarkupLine($"[green]{candidates.Count} Datei(n) entfernt, Speicher freigeben {CacheCleanHelper.FormatSize(totalSize)}[/]");
             return Task.FromResult(0);
         }
 
         // Default: list candidates
-        AnsiConsole.MarkupLine("[blue]Candidates for removal:[/]");
+        AnsiConsole.MarkupLine("[blue]Kandidaten zum Bereinigen:[/]");
         foreach (var entry in candidates)
         {
             AnsiConsole.MarkupLine($"  {entry.FullPath.EscapeMarkup()} [dim]({CacheCleanHelper.FormatSize(entry.FileSize)})[/]");

@@ -67,7 +67,7 @@ public class SetupWindow(
 
                 if (result) return;
 
-                lockoutService.Show("Installing flatpak...");
+                lockoutService.Show("Flatpak installieren …");
                 var instalResult = await privilegedOperationService.InstallPackagesAsync(["flatpak"]);
 
                 if (instalResult.Success)

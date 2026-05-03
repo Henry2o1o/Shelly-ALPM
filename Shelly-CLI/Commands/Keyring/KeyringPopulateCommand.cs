@@ -23,7 +23,7 @@ public class KeyringPopulateCommand : Command<KeyringSettings>
         }
         else
         {
-            AnsiConsole.MarkupLine("[yellow]Populating keyring with default keys...[/]");
+            AnsiConsole.MarkupLine("[yellow]Populating keyring with default keys …[/]");
         }
 
         var result = PacmanKeyRunner.Run(args);
@@ -45,11 +45,11 @@ public class KeyringPopulateCommand : Command<KeyringSettings>
         if (settings.Keys?.Length > 0)
         {
             args += " " + string.Join(" ", settings.Keys);
-            Console.Error.WriteLine($"Populating keyring with: {string.Join(", ", settings.Keys)}...");
+            Console.Error.WriteLine($"Populating keyring with: {string.Join(", ", settings.Keys)} …");
         }
         else
         {
-            Console.Error.WriteLine("Populating keyring with default keys...");
+            Console.Error.WriteLine("Populating keyring with default keys …");
         }
 
         var result = PacmanKeyRunner.Run(args);

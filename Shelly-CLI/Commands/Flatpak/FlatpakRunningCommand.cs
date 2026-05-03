@@ -15,7 +15,7 @@ public class FlatpakRunningCommand : Command
             return HandleUiModeRunning();
         }
 
-        AnsiConsole.MarkupLine("[yellow]Currently running flatpack instances on machine...[/]");
+        AnsiConsole.MarkupLine("[yellow]Currently running flatpack instances on machine …[/]");
         var result = new FlatpakManager().GetRunningInstances();
 
         if (result.Count > 0)
@@ -42,7 +42,7 @@ public class FlatpakRunningCommand : Command
 
     private static int HandleUiModeRunning()
     {
-        Console.Error.WriteLine("Currently running flatpack instances on machine...");
+        Console.Error.WriteLine("Currently running flatpack instances on machine …");
         var result = new FlatpakManager().GetRunningInstances();
 
         if (result.Count > 0)

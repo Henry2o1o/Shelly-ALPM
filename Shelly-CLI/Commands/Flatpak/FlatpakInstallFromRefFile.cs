@@ -9,10 +9,10 @@ public class FlatpakInstallFromRefFile : Command<FlatpakRemoteRefFileInstallSett
 {
     public override int Execute([NotNull] CommandContext context, [NotNull] FlatpakRemoteRefFileInstallSettings settings)
     {
-        AnsiConsole.MarkupLine("[yellow]Installing flatpak app...[/]");
+        AnsiConsole.MarkupLine("[yellow]Flatpak App installieren …[/]");
         var result = FlatpakManager.InstallAppFromRef(settings.RefFilePath, settings.SystemWide);
 
-        AnsiConsole.MarkupLine("[yellow]Installed: " + result.EscapeMarkup() + "[/]");
+        AnsiConsole.MarkupLine("[yellow]Installiert: " + result.EscapeMarkup() + "[/]");
 
         return 0;
     }

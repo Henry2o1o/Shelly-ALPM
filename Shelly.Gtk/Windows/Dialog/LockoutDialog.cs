@@ -72,7 +72,7 @@ public class LockoutDialog
 
             box.Append(scrolledWindow);
 
-            _closeButton = Button.NewWithLabel("Close");
+            _closeButton = Button.NewWithLabel("Schließen");
             _closeButton.SetHalign(Align.Center);
             _closeButton.SetVisible(false);
             _closeButton.OnClicked += (_, _) => Hide();
@@ -140,7 +140,7 @@ public class LockoutDialog
     {
         _operationComplete = true;
         _closeButton?.SetVisible(true);
-        _descriptionLabel?.SetText("Operation Complete");
+        _descriptionLabel?.SetText("Operation abgeschlossen");
         _progressBar?.SetFraction(1.0);
     }
 

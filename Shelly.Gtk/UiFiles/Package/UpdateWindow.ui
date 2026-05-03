@@ -14,7 +14,7 @@
                 <child>
                     <object class="GtkButton" id="update_button">
                         <property name="halign">start</property>
-                        <property name="label">Update Selected</property>
+                        <property name="label">Ausgewählte aktualisieren</property>
                         <style>
                             <class name="suggested-action"/>
                         </style>
@@ -28,14 +28,14 @@
                 <child>
                     <object class="GtkCheckButton" id="show_hidden_check">
                         <property name="halign">start</property>
-                        <property name="label">Show Hidden</property>
+                        <property name="label">Ausgeblendete anzeigen</property>
                         <property name="tooltip-text">Show packages in the IgnorePkg list from pacman.conf</property>
                         <property name="active">false</property>
                     </object>
                 </child>
                 <child>
                     <object class="GtkSearchEntry" id="search_entry">
-                        <property name="placeholder-text">Search packages...</property>
+                        <property name="placeholder-text">Pakete suchen …</property>
                         <property name="width-request">200</property>
                     </object>
                 </child>
@@ -76,23 +76,23 @@
                                         </child>
                                         <child>
                                             <object class="GtkColumnViewColumn" id="name_column">
-                                                <property name="title">Package Name</property>
+                                                <property name="title">Paketname</property>
                                                 <property name="expand">true</property>
                                             </object>
                                         </child>
                                         <child>
                                             <object class="GtkColumnViewColumn" id="size_diff_column">
-                                                <property name="title">Size Difference</property>
+                                                <property name="title">Größenunterschied</property>
                                             </object>
                                         </child>
                                         <child>
                                             <object class="GtkColumnViewColumn" id="old_column">
-                                                <property name="title">Old Version</property>
+                                                <property name="title">Alte Version</property>
                                             </object>
                                         </child>
                                         <child>
                                             <object class="GtkColumnViewColumn" id="version_column">
-                                                <property name="title">Version</property>
+                                                <property name="title">Neue Version</property>
                                             </object>
                                         </child>
                                     </object>

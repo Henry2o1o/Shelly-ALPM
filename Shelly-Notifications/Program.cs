@@ -98,7 +98,7 @@ try
         await trayHandler.SetUpdatesPending(update > 0);
         if (update > 0)
         {
-            _ = new NotificationHandler().SendNotif(connection, $"Updates available: {update}");
+            _ = new NotificationHandler().SendNotif(connection, $"Verfügbare Updates: {update}");
         }
 
         var time = DateTime.Now;
@@ -113,7 +113,7 @@ try
                     await trayHandler.SetUpdatesPending(update > 0);
                     if (update > 0)
                     {
-                        _ = new NotificationHandler().SendNotif(connection, $"Updates available: {update}");
+                        _ = new NotificationHandler().SendNotif(connection, $"Verfügbare Updates: {update}");
                     }
 
                     time = DateTime.Now;
