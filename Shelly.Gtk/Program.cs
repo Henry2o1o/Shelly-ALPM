@@ -14,6 +14,7 @@ using Shelly.Gtk.UiModels;
 using Shelly.Gtk.Windows.Packages;
 using Module = Gtk.Module;
 using Settings = Shelly.Gtk.Windows.Settings;
+using GtkSettings = Gtk.Settings;
 
 
 namespace Shelly.Gtk;
@@ -132,32 +133,32 @@ sealed class Program
 
     public static int Main(string[] args)
     {
-        Module.Initialize();
         EnsureSessionEnvironment();
         if (DesktopDetector.DetectDesktop() == "KDE")
         {
             ApplyKdeGtkTheme();
         }
-
+        var preferDark = false;
         if (DesktopDetector.DetectDesktop() == "GNOME")
         {
-            Console.WriteLine("GNOME detected");
-
+          
+            Gio.Module.Initialize();
             var s = Gio.Settings.New("org.gnome.desktop.interface");
-            var scheme = s.GetString("color-scheme"); // "prefer-dark" / "default" / "prefer-light"
-            var theme = s.GetString("gtk-theme");
+            var scheme = s.GetString("color-scheme");
+            preferDark = string.Equals(scheme, "prefer-dark", StringComparison.OrdinalIgnoreCase);
 
-            var preferDark = string.Equals(scheme, "prefer-dark", StringComparison.OrdinalIgnoreCase);
-
-            if (string.IsNullOrEmpty(theme))
-            {
-                theme = "Adwaita";
-            }
-
-            var fullTheme = preferDark ? $"{theme}:dark" : theme;
-            Environment.SetEnvironmentVariable("GTK_THEME", fullTheme);
-            Environment.SetEnvironmentVariable("GTK_APPLICATION_PREFER_DARK_THEME", preferDark ? "1" : "0");
+            Environment.SetEnvironmentVariable(
+                "GTK_APPLICATION_PREFER_DARK_THEME", preferDark ? "1" : "0");
         }
+
+        Module.Initialize();
+        if (preferDark)
+        {
+            var settings = GtkSettings.GetDefault();
+            settings?.GtkApplicationPreferDarkTheme = true;
+        }
+
+
 
 
         //GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
