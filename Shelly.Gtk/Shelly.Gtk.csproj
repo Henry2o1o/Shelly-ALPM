@@ -25,6 +25,7 @@
         <Product>Shelly CLI by Seafoam Labs</Product>
         <Copyright>2026 Seafoam Labs</Copyright>
     </PropertyGroup>
+    
 
     <ItemGroup>
         <EmbeddedResource Include="UiFiles\**\*.ui" />

@@ -12,6 +12,7 @@ using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services.Icons;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.Windows.Packages;
+using Module = Gtk.Module;
 using Settings = Shelly.Gtk.Windows.Settings;
 
 
@@ -131,6 +132,7 @@ sealed class Program
 
     public static int Main(string[] args)
     {
+        Module.Initialize();
         EnsureSessionEnvironment();
         if (DesktopDetector.DetectDesktop() == "KDE")
         {
