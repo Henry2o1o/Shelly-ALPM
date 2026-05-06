@@ -23,11 +23,11 @@ public static class LogHelpers
     public static string BuildInstallLog(IReadOnlyCollection<string> selectedPackages, OperationResult result, string packageType)
     {
         var stringBuilder = new StringBuilder();
-        stringBuilder.AppendLine($"Shelly {packageType} install log");
-        stringBuilder.AppendLine($"Generated: {DateTimeOffset.Now:O}");
-        stringBuilder.AppendLine($"Packages: {string.Join(", ", selectedPackages)}");
+        stringBuilder.AppendLine($"Shelly {packageType} Installationsprotokoll");
+        stringBuilder.AppendLine($"Generiert: {DateTimeOffset.Now:O}");
+        stringBuilder.AppendLine($"Pakete: {string.Join(", ", selectedPackages)}");
         stringBuilder.AppendLine($"Exit Code: {result.ExitCode}");
-        stringBuilder.AppendLine($"Success: {result.Success}");
+        stringBuilder.AppendLine($"Erfolgreich: {result.Success}");
         stringBuilder.AppendLine();
         stringBuilder.AppendLine("=== STDERR ===");
         stringBuilder.AppendLine(string.IsNullOrWhiteSpace(result.Error) ? "<empty>" : result.Error.TrimEnd());

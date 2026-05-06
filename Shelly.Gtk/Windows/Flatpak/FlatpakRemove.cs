@@ -301,7 +301,7 @@ public class FlatpakRemove(
 
             if (!result.Success)
             {
-                Console.WriteLine($"Pket entfernen fehlgeschlagen {packageId}: {result.Error}");
+                Console.WriteLine($"Paket entfernen fehlgeschlagen {packageId}: {result.Error}");
             }
             else
             {

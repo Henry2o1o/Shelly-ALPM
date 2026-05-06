@@ -134,14 +134,14 @@ public class PrivilegedOperationService : IPrivilegedOperationService
             packageArgs += " -u";
         }
 
-        var result = await ExecutePrivilegedWithNoConfirmCheck("Install packages", "install", packageArgs);
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Pakete installieren", "install", packageArgs);
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.Native);
         return result;
     }
 
     public async Task<OperationResult> InstallLocalPackageAsync(string filePath)
     {
-        var result = await ExecutePrivilegedWithNoConfirmCheck("Install local package", "install-local", "--location",
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Lokale Pakete installieren", "install-local", "--location",
             filePath);
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.Native);
         return result;
@@ -149,7 +149,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
 
     public async Task<OperationResult> InstallAppImageAsync(string filePath)
     {
-        var result = await ExecutePrivilegedWithNoConfirmCheck("Install local package", "install-appimage", "--location",
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Lokale Pakete installieren", "install-appimage", "--location",
             filePath);
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.AppImage);
         return result;
@@ -763,11 +763,11 @@ public class PrivilegedOperationService : IPrivilegedOperationService
                         if (e.Data.StartsWith("[Shelly][ALPM_SELECT_PROVIDER]"))
                         {
                             Console.WriteLine("Provider question received");
-                            Console.Error.WriteLine($"[Shelly]Select provider for: {e.Data}");
+                            Console.Error.WriteLine($"[Shelly]Anbieter auswählen für: {e.Data}");
                             awaitingProviderSelection = true;
                             providerOptions.Clear();
                             providerQuestion = e.Data.Substring("[Shelly][ALPM_SELECT_PROVIDER]".Length);
-                            Console.Error.WriteLine($"[Shelly]Select provider for: {providerQuestion}");
+                            Console.Error.WriteLine($"[Shelly]Anbieter auswählen für: {providerQuestion}");
                         }
                         else if (e.Data.StartsWith("[Shelly][ALPM_PROVIDER_OPTION]"))
                         {

@@ -75,7 +75,7 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                    <property name="label">AppImage aktivieren</property>
+                                                                        <property name="label">AppImage aktivieren</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -127,7 +127,8 @@
                                                                     </object>
                                                                 </child>
                                                                 <child>
-                                                                    <object class="GtkSpinButton"id="tray_interval_spin">
+                                                                    <object class="GtkSpinButton"
+                                                                            id="tray_interval_spin">
                                                                         <property name="adjustment">
                                                                             <object class="GtkAdjustment">
                                                                                 <property name="lower">1</property>
@@ -146,15 +147,13 @@
                                                                 <property name="spacing">8</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Weekly Schedule
-                                                                        </property>
+                                                                        <property name="label">Weekly Schedule</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
                                                                 </child>
                                                                 <child>
                                                                     <object class="GtkBox">
-                                                                        <property name="orientation">horizontal
-                                                                        </property>
+                                                                        <property name="orientation">horizontal</property>
                                                                         <property name="spacing">8</property>
                                                                         <child>
                                                                             <object class="GtkCheckButton"
@@ -202,8 +201,7 @@
                                                                 </child>
                                                                 <child>
                                                                     <object class="GtkBox">
-                                                                        <property name="orientation">horizontal
-                                                                        </property>
+                                                                        <property name="orientation">horizontal</property>
                                                                         <property name="spacing">12</property>
                                                                         <property name="margin-top">8</property>
                                                                         <child>
@@ -217,15 +215,10 @@
                                                                                     id="update_hour_spin">
                                                                                 <property name="adjustment">
                                                                                     <object class="GtkAdjustment">
-                                                                                        <property name="lower">0
-                                                                                        </property>
-                                                                                        <property name="upper">23
-                                                                                        </property>
-                                                                                        <property name="step-increment">
-                                                                                            1
-                                                                                        </property>
-                                                                                        <property name="value">0
-                                                                                        </property>
+                                                                                        <property name="lower">0</property>
+                                                                                        <property name="upper">23</property>
+                                                                                        <property name="step-increment">1</property>
+                                                                                        <property name="value">0</property>
                                                                                     </object>
                                                                                 </property>
                                                                                 <property name="numeric">true</property>
@@ -241,15 +234,10 @@
                                                                                     id="update_minute_spin">
                                                                                 <property name="adjustment">
                                                                                     <object class="GtkAdjustment">
-                                                                                        <property name="lower">0
-                                                                                        </property>
-                                                                                        <property name="upper">59
-                                                                                        </property>
-                                                                                        <property name="step-increment">
-                                                                                            1
-                                                                                        </property>
-                                                                                        <property name="value">0
-                                                                                        </property>
+                                                                                        <property name="lower">0</property>
+                                                                                        <property name="upper">59</property>
+                                                                                        <property name="step-increment">1</property>
+                                                                                        <property name="value">0</property>
                                                                                     </object>
                                                                                 </property>
                                                                                 <property name="numeric">true</property>
@@ -288,7 +276,7 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Icons Enabled</property>
+                                                                        <property name="label">Symole aktivieren</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -303,8 +291,7 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Use Symbolic Tray Icon
-                                                                        </property>
+                                                                        <property name="label">Symbolisches Tray-Symbol verwenden</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -318,10 +305,9 @@
                                                         <child>
                                                             <object class="GtkBox">
                                                                 <property name="orientation">horizontal</property>
-
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Both tray icons must be set for use, if not it will default to standard shelly icons. Changing tray icons requires a restart of shelly-notifications.</property>
+                                                                        <property name="label">Beide Tray-Symbole müssen aktiviert sein, andernfalls werden die Standard-Shelly-Symbole verwendet. Zum Ändern der Tray-Symbole ist ein Neustart von Shelly-Notifications erforderlich.</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -334,19 +320,19 @@
                                                                 
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Tray Icon</property>
+                                                                        <property name="label">Tray-Symbol</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
                                                                 </child>
                                                                 <child>
                                                                     <object class="GtkButton" id="tray_icon_button">
-                                                                        <property name="label">Select File</property>
+                                                                        <property name="label">Datei auswählen</property>
                                                                     </object>
                                                                 </child>
                                                                 <child>
                                                                     <object class="GtkButton" id="tray_icon_clear_button">
-                                                                        <property name="label">Clear</property>
+                                                                        <property name="label">Bereinigen</property>
                                                                         <property name="margin-start">5</property>    
                                                                     </object>
                                                                 </child>
@@ -357,19 +343,19 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Tray Updates Icon</property>
+                                                                        <property name="label">Tray-Update-Symbol</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
                                                                 </child>
                                                                 <child>
                                                                     <object class="GtkButton" id="tray_updates_icon_button">
-                                                                        <property name="label">Select File</property>
+                                                                        <property name="label">Datei auswählen</property>
                                                                     </object>
                                                                 </child>
                                                                 <child>
                                                                     <object class="GtkButton" id="tray_updates_icon_clear_button">
-                                                                        <property name="label">Clear</property>
+                                                                        <property name="label">Bereinigen</property>
                                                                         <property name="margin-start">5</property>
                                                                     </object>
                                                                 </child>
@@ -380,8 +366,7 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Default page
-                                                                        </property>
+                                                                        <property name="label">Standardseite</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -389,6 +374,21 @@
                                                                 <child>
                                                                     <object class="GtkDropDown"
                                                                             id="default_page_drop"/>
+                                                                </child>
+                                                            </object>
+                                                        </child>
+                                                        <child>
+                                                            <object class="GtkBox">
+                                                                <property name="orientation">horizontal</property>
+                                                                <child>
+                                                                    <object class="GtkLabel">
+                                                                        <property name="label">Seitenleistennavigation verwenden</property>
+                                                                        <property name="hexpand">true</property>
+                                                                        <property name="halign">start</property>
+                                                                    </object>
+                                                                </child>
+                                                                <child>
+                                                                    <object class="GtkSwitch" id="use_old_menu_switch"/>
                                                                 </child>
                                                             </object>
                                                         </child>
@@ -421,7 +421,7 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">No Confirm</property>
+                                                                        <property name="label">Keine Bestätigung</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -436,8 +436,7 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Enable Shelly Search
-                                                                        </property>
+                                                                        <property name="label">Shelly Search aktivieren</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -453,9 +452,7 @@
                                                                 <property name="orientation">horizontal</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Enable Webview
-                                                                            Visualization (experimental)
-                                                                        </property>
+                                                                        <property name="label">Webview-Visualisierung aktivieren (experimentell)</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -471,8 +468,7 @@
                                                                 <property name="spacing">12</property>
                                                                 <child>
                                                                     <object class="GtkLabel">
-                                                                        <property name="label">Parallel Downloads
-                                                                        </property>
+                                                                        <property name="label">Parallel Downloads</property>
                                                                         <property name="hexpand">true</property>
                                                                         <property name="halign">start</property>
                                                                     </object>
@@ -496,7 +492,7 @@
                                                         </child>
                                                         <child>
                                                             <object class="GtkButton" id="sync_button">
-                                                                <property name="label">Force Database Update</property>
+                                                                <property name="label">Datenbank-Update erzwingen</property>
                                                                 <property name="margin-top">10</property>
                                                                 <style>
                                                                     <class name="suggested-action"/>
@@ -505,7 +501,7 @@
                                                         </child>
                                                         <child>
                                                             <object class="GtkButton" id="rm_db_lock_button">
-                                                                <property name="label">Remove db.lock</property>
+                                                                <property name="label">db.lock entfernen</property>
                                                                 <property name="margin-top">10</property>
                                                                 <style>
                                                                     <class name="suggested-action"/>
@@ -514,7 +510,7 @@
                                                         </child>
                                                         <child>
                                                             <object class="GtkButton" id="view_pacfiles_button">
-                                                                <property name="label">View Pacfiles</property>
+                                                                <property name="label">Pac-Dateien ansehen</property>
                                                                 <property name="margin-top">10</property>
                                                                 <style>
                                                                     <class name="suggested-action"/>
@@ -523,11 +519,8 @@
                                                         </child>
                                                         <child>
                                                             <object class="GtkButton" id="fix_permissions_button">
-                                                                <property name="label">Fix Permissions</property>
-                                                                <property name="tooltip-text">Restores correct user
-                                                                    ownership of Shelly configuration and cache folders
-                                                                    if they were accidentally created by root.
-                                                                </property>
+                                                                <property name="label">Berechtigungen reparieren</property>
+                                                                <property name="tooltip-text">Stellt die korrekten Benutzerbesitzrechte an den Shelly-Konfigurations- und Cache-Ordnern wieder her, falls diese versehentlich vom Benutzer root erstellt wurden.</property>
                                                                 <property name="margin-top">10</property>
                                                                 <style>
                                                                     <class name="suggested-action"/>
@@ -536,7 +529,7 @@
                                                         </child>
                                                         <child>
                                                             <object class="GtkButton" id="purify_button">
-                                                                <property name="label">Purify Packages</property>
+                                                                <property name="label">Pakete reparieren</property>
                                                                 <property name="margin-top">10</property>
                                                                 <style>
                                                                     <class name="destructive-action"/>

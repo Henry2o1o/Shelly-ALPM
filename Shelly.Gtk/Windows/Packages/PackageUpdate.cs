@@ -635,15 +635,15 @@ public class PackageUpdate(
         }
         catch (Exception e)
         {
-            Console.WriteLine($"Failed to load packages: {e.Message}");
+            Console.WriteLine($"Pakete konnten nicht geladen werden: {e.Message}");
         }
     }
 
     private async Task ConfirmPartialUpdateAsync(Action onConfirmed)
     {
         var args = new GenericQuestionEventArgs(
-            "Partial Update Warning",
-            "It is not advised you do partial system updates. Are you sure you want to continue?"
+            "Warnung vor teilweisem Update",
+            "Es wird davon abgeraten, partielle System-Updates durchzuführen. Sicher, dass du fortfahren möchtest?"
         );
 
         genericQuestionService.RaiseQuestion(args);
@@ -738,19 +738,23 @@ public class PackageUpdate(
                     genericQuestionService.RaiseQuestion(failArgs);
                     await failArgs.ResponseTask;
                 }
+
+                if (upgradeResult.Success)
+                {
+                    var args = new ToastMessageEventArgs(
+                        $"Updated {selectedPackages.Count} Package(s)"
+                    );
+                    genericQuestionService.RaiseToastMessage(args);
+                }
+
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to install packages: {e.Message}");
+                Console.WriteLine($"Pakete installieren fehlgeschlagen: {e.Message}");
             }
             finally
             {
                 lockoutService.Hide();
-
-                var args = new ToastMessageEventArgs(
-                    $"{selectedPackages.Count} Paket(e) aktualisiert"
-                );
-                genericQuestionService.RaiseToastMessage(args);
             }
         }
     }

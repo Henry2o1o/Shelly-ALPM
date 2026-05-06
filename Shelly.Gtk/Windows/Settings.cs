@@ -58,6 +58,7 @@ public class Settings(
         SetupSwitch("symbolic_tray_switch", _config.UseSymbolicTray, (v) => _config.UseSymbolicTray = v, builder);
         SetupSwitch("shelly_search_switch", _config.ShellySearchEnabled, (v) => _config.ShellySearchEnabled = v,
             builder);
+        SetupSwitch("use_old_menu_switch", !_config.UseOldMenu, (v) => _config.UseOldMenu = !v, builder);
 
         var parallelDownloadsSpin = (SpinButton)builder.GetObject("parallel_downloads_spin")!;
         parallelDownloadsSpin.Value = _config.ParallelDownloadCount;
@@ -209,7 +210,7 @@ public class Settings(
             var pages = new List<string>();
             _availablePages = [];
 
-            pages.Add("Packages");
+            pages.Add("Pakete");
             _availablePages.Add(ShellyTabs.Packages);
 
             if (_config.AurEnabled)
@@ -232,7 +233,7 @@ public class Settings(
 
             if (_config.ShellySearchEnabled)
             {
-                pages.Add("Shelly Search");
+                pages.Add("Shelly-Suche");
                 _availablePages.Add(ShellyTabs.ShellySearch);
             }
 
@@ -557,7 +558,7 @@ public class Settings(
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error syncing databases: {ex.Message}");
+            Console.WriteLine($"Fehler beim Synchronisieren der Datenbanken: {ex.Message}");
         }
         finally
         {
@@ -571,11 +572,11 @@ public class Settings(
 
         if (result.Success)
         {
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("Database lock removed"));
+            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("Datenbanksperre entfernt"));
         }
         else
         {
-            Console.Error.WriteLine($"Failed to remove database lock: {result.Error}");
+            Console.Error.WriteLine($"Datenbanksperre konnte nicht entfernt werden: {result.Error}");
         }
     }
 
@@ -588,20 +589,20 @@ public class Settings(
             if (result.Success)
             {
                 genericQuestionService.RaiseToastMessage(
-                    new ToastMessageEventArgs("Shelly folder ownership restored"));
+                    new ToastMessageEventArgs("Besitzrechte am Shelly-Ordner wurden wiederhergestellt"));
             }
             else
             {
-                Console.Error.WriteLine($"Failed to fix Shelly folder ownership: {result.Error}");
+                Console.Error.WriteLine($"Fehler beim Korrigieren der Besitzverhältnisse des Shelly-Ordners: {result.Error}");
                 genericQuestionService.RaiseToastMessage(
-                    new ToastMessageEventArgs("Failed to fix folder permissions"));
+                    new ToastMessageEventArgs("Ordnerberechtigungen konnten nicht korrigiert werden"));
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error fixing Shelly folder permissions: {ex.Message}");
+            Console.Error.WriteLine($"Fehler bei der Behebung der Shelly-Ordnerberechtigungen: {ex.Message}");
             genericQuestionService.RaiseToastMessage(
-                new ToastMessageEventArgs("Error fixing folder permissions"));
+                new ToastMessageEventArgs("Fehler bei der Behebung von Ordnerberechtigungen"));
         }
     }
 

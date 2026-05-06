@@ -78,7 +78,7 @@ ln -sf "$INSTALL_DIR/shelly-ui" /usr/bin/shelly-ui
 ln -sf "$INSTALL_DIR/shelly" /usr/bin/shelly
 ln -sf "$INSTALL_DIR/shelly-notifications" /usr/bin/shelly-notifications
 
-# Install icon to standard location
+# Install icons to standard location
 echo "Installationssymbol am Standardort …"
 mkdir -p /usr/share/icons/hicolor/256x256/apps
 mkdir -p /usr/share/icons/hicolor/symbolic/apps
@@ -95,7 +95,7 @@ echo "Desktop-Eintrag erstellen"
 cat <<EOF > /usr/share/applications/com.shellyorg.shelly.desktop
 [Desktop Entry]
 Name=Shelly
-Comment=A Modern Arch Package Manager
+Comment=Ein Moderner Arch Package Manager
 Exec=/usr/bin/shelly-ui
 Icon=shelly
 Type=Application
@@ -103,7 +103,7 @@ Categories=System;Utility;
 Terminal=false
 EOF
 
-echo "Creating notifications entry"
+echo "Benachrichtigungseintrag erstellen"
 cat <<EOF > /usr/share/applications/shelly-notifications.desktop
 [Desktop Entry]
 Name=Shelly-Notifications

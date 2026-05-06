@@ -13,15 +13,11 @@
                 <property name="orientation">horizontal</property>
                 <property name="spacing">12</property>
                 <child>
-
-                    <object class="GtkLabel">
-                        <property name="label">AppImages verwalten und aktualisieren</property>
-                        <property name="xalign">0</property>
-                        <style>
-                            <class name="title-4"/>
-                        </style>
+                    <object class="GtkSearchEntry" id="AppImageSearchEntry">
+                        <property name="placeholder-text">Suchen …</property>
+                        <property name="width-request">200</property>
+                        <property name="valign">center</property>
                     </object>
-
                 </child>
                 <child>
                     <object class="GtkBox">
@@ -94,13 +90,7 @@
                         </child>
                     </object>
                 </child>
-                <child>
-                    <object class="GtkSearchEntry" id="AppImageSearchEntry">
-                        <property name="placeholder-text">Suchen …</property>
-                        <property name="width-request">200</property>
-                        <property name="valign">center</property>
-                    </object>
-                </child>
+              
             </object>
         </child>
         <child>

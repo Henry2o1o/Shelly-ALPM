@@ -137,14 +137,14 @@ public class AlpmEventDialog
 
     private static string GetQuestionTitle(QuestionType type) => type switch
     {
-        QuestionType.InstallIgnorePkg => "Install Ignored Package?",
-        QuestionType.ReplacePkg => "Replace Package?",
-        QuestionType.ConflictPkg => "Package Conflict Detected",
-        QuestionType.CorruptedPkg => "Corrupted Package Found",
-        QuestionType.ImportKey => "Import PGP Key?",
-        QuestionType.SelectProvider => "Select Provider",
-        QuestionType.RemovePkgs => "Remove Packages?",
-        QuestionType.SelectOptionalDeps => "Select Optional Dependencies",
+        QuestionType.InstallIgnorePkg => "Ignoriertes Paket installieren?",
+        QuestionType.ReplacePkg => "Paket ersetzen?",
+        QuestionType.ConflictPkg => "Paketkonflikt festgestellt",
+        QuestionType.CorruptedPkg => "Beschädigtes Paket gefunden",
+        QuestionType.ImportKey => "PGP-Schlüssel importieren?",
+        QuestionType.SelectProvider => "Anbieter auswählen",
+        QuestionType.RemovePkgs => "Paket(e) entfernen?",
+        QuestionType.SelectOptionalDeps => "Optionale Abhängigkeiten auswählen",
         _ => "System Question"
     };
 }

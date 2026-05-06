@@ -17,12 +17,12 @@
         <child>
           <object class="GtkSearchEntry" id="search_entry">
             <property name="hexpand">true</property>
-            <property name="placeholder-text">Search packages…</property>
+            <property name="placeholder-text">Pakete suchen …</property>
           </object>
         </child>
         <child>
           <object class="GtkButton" id="install_button">
-            <property name="label">Install Package(s)</property>
+            <property name="label">Paket(e) installieren</property>
             <style>
               <class name="suggested-action"/>
             </style>
@@ -30,7 +30,7 @@
         </child>
         <child>
           <object class="GtkButton" id="remove_button">
-            <property name="label">Remove Package(s)</property>
+            <property name="label">Paket(e) entfernen</property>
             <style>
               <class name="destructive-action"/>
             </style>
@@ -43,7 +43,7 @@
         <property name="overlay-scrolling">false</property>
         <property name="vexpand">true</property>
         <property name="hexpand">true</property>
-        <property name="hscrollbar-policy">never</property>
+        <property name="hscrollbar-policy">niemals</property>
         <property name="propagate-natural-width">false</property>
         <child>
           <object class="GtkColumnView" id="package_grid">
@@ -62,12 +62,19 @@
                 <property name="expand">true</property>
                 <property name="resizable">true</property>
                 <property name="fixed-width">400</property>
-                <property name="title">Description</property>
+                <property name="title">Beschreibung</property>
               </object>
             </child>
             <child>
               <object class="GtkColumnViewColumn" id="version_column">
                 <property name="title">Version</property>
+                <property name="fixed-width">120</property>
+                <property name="resizable">true</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkColumnViewColumn" id="last_updated_column">
+                <property name="title">Letzte Aktualisierung</property>
                 <property name="fixed-width">120</property>
                 <property name="resizable">true</property>
               </object>
