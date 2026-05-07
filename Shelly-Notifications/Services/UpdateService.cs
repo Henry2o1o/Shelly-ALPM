@@ -197,16 +197,9 @@ public class UpdateService(DBusMenuHandler? menuHandler = null)
             Path.Combine(Path.GetDirectoryName(AppContext.BaseDirectory) ?? "", "Shelly", "Shelly"),
         };
 
-        foreach (var path in possiblePaths)
-        {
-            if (File.Exists(path))
-            {
-                return path;
-            }
-        }
-
-        // Fallback to assuming it's in PATH
-        return "shelly";
+        return possiblePaths
+            .Where(File.Exists)
+            .FirstOrDefault("shelly");
     }
 }
 

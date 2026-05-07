@@ -23,11 +23,9 @@ internal static class CliPathResolver
             Path.Combine(Path.GetDirectoryName(AppContext.BaseDirectory) ?? "", "Shelly", "Shelly"),
         };
 
-        foreach (var path in possiblePaths)
-            if (File.Exists(path))
-                return path;
-
-        return "shelly";
+        return possiblePaths
+            .Where(File.Exists)
+            .FirstOrDefault("shelly");
     }
 
 #if DEBUG
