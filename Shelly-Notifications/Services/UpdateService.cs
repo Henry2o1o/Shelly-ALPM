@@ -164,17 +164,25 @@ public class UpdateService(DBusMenuHandler? menuHandler = null)
     private static string FindCliPath()
     {
 #if DEBUG
-        var home = UserPath;
-        if (home == null)
+        static string? FindSolutionRoot(string start)
         {
-            throw new InvalidOperationException("HOME environment variable is not set.");
+            var dir = new DirectoryInfo(start);
+            while (dir != null)
+            {
+                if (dir.GetFiles("*.slnx").Length > 0 || dir.GetFiles("*.sln").Length > 0)
+                    return dir.FullName;
+                dir = dir.Parent;
+            }
+
+            return null;
         }
 
-        var debugPath =
-            Path.Combine(home!, "RiderProjects/Shelly-ALPM/Shelly-CLI/bin/Debug/net10.0/linux-x64/shelly");
+        var solutionRoot = FindSolutionRoot(AppContext.BaseDirectory);
+        var debugPath = solutionRoot != null
+            ? Path.Combine(solutionRoot, "Shelly-CLI", "bin", "Debug", "net10.0", "linux-x64", "shelly")
+            : string.Empty;
         Console.Error.WriteLine($"Debug path: {debugPath}");
 #endif
-
         // Check common installation paths
         var possiblePaths = new[]
         {
