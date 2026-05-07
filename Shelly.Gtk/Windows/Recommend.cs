@@ -91,7 +91,8 @@ public class Recommend(
                 flox.SetSelectionMode(SelectionMode.None);
                 flox.SetColumnSpacing(12);
                 flox.SetRowSpacing(12);
-                flox.SetMaxChildrenPerLine(10);
+                flox.MinChildrenPerLine = 2;
+                flox.MaxChildrenPerLine = 4;
 
                 foreach (var item in categoryPackages)
                 {
@@ -114,13 +115,6 @@ public class Recommend(
 
     private void AddFlowBoxItem(FlowBox flowBox, FlatRecommendModel item)
     {
-        var itemBox = Box.New(Orientation.Horizontal, 12);
-        itemBox.AddCssClass("card");
-        itemBox.SetMarginTop(6);
-        itemBox.SetMarginBottom(6);
-        itemBox.SetMarginStart(6);
-        itemBox.SetMarginEnd(6);
-
         var contentBox = Box.New(Orientation.Horizontal, 12);
         contentBox.SetMarginTop(12);
         contentBox.SetMarginBottom(12);
@@ -158,8 +152,9 @@ public class Recommend(
         descLabel.SetHalign(Align.Start);
         descLabel.AddCssClass("dim-label");
         descLabel.SetWrap(true);
-        descLabel.SetLines(2);
-        descLabel.SetEllipsize(Pango.EllipsizeMode.End);
+        descLabel.SetWrapMode(Pango.WrapMode.WordChar);
+        descLabel.SetEllipsize(Pango.EllipsizeMode.None);
+        descLabel.MaxWidthChars = 25;
 
         textContainer.Append(titleContainer);
         textContainer.Append(descLabel);
@@ -176,14 +171,14 @@ public class Recommend(
 
         contentBox.Append(downloadButton);
 
-        itemBox.Append(contentBox);
-
-        itemBox.SetSizeRequest(300, -1);
-
-        var child = FlowBoxChild.New();
-        child.SetChild(itemBox);
-
-        flowBox.Append(child);
+        var frame = Frame.New(null);
+        frame.SetChild(contentBox);
+        frame.WidthRequest = 300;
+        frame.Hexpand = false;
+        frame.Halign = Align.Fill;
+        frame.AddCssClass("card");
+        
+        flowBox.Append(frame);
     }
 
     public string[] ListensTo { get; } = [];
