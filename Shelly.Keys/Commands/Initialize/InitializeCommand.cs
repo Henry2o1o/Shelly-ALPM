@@ -8,7 +8,7 @@ using static System.IO.UnixFileMode;
 namespace Shelly.Keys.Commands.Initialize;
 
 [SuppressMessage("Interoperability", "CA1416:Validate platform compatibility")]
-public class InitializeCommand : AsyncCommand<Settings>
+public class  InitializeCommand : AsyncCommand<Settings>
 {
     private const string GpgConf = """
                            no-greeting
@@ -114,8 +114,8 @@ public class InitializeCommand : AsyncCommand<Settings>
 
         if (!GpgmeContext.HasSecretKey(ctx))
         {
-            var err = GpgmeImports.gpgme_op_createkey(ctx.Handle, "Keyring Master Key",
-                "rsa",
+            var err = GpgmeImports.gpgme_op_createkey(ctx.Handle, "Pacman Keyring Master Key <pacman@localhost>",
+                "rsa4096",
                 0,
                 0,
                 IntPtr.Zero,

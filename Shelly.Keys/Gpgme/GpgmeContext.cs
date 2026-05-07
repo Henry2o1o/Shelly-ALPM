@@ -10,6 +10,10 @@ public sealed class GpgmeContext : IDisposable
 
     internal GpgmeContextHandle Handle => _handle;
 
+    static GpgmeContext()
+    {
+        GpgmeImports.gpgme_check_version(null);
+    }
     public GpgmeContext()
     {
         uint err = GpgmeImports.gpgme_new(out _handle);
@@ -34,8 +38,12 @@ public sealed class GpgmeContext : IDisposable
         uint err = GpgmeImports.gpgme_op_sign(_handle, plain.Handle, sig.Handle, mode);
         GpgmeHelpers.ThrowIfError(err);
     }
-    
-    // Additional wrappers for Key operations will go here if needed
+
+    public string CheckVersion(string version)
+    {
+        var versionResp = GpgmeImports.gpgme_check_version(version);
+        return GpgmeHelpers.PtrToStringUTF8(versionResp) ?? "Unknown Version";
+    }
     
     // gpg-error code for "end of list"
     private const uint GPG_ERR_EOF = 16383;
