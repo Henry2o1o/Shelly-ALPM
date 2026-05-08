@@ -339,6 +339,7 @@ sealed class Program
             var settingsWindow = serviceProvider.GetRequiredService<Settings>();
             settingsPageBox.Append(settingsWindow.CreateWindow());
 
+            settingsStack.GetPage(recommendPageBox).Visible = initialConfig.RecommendedEnabled;
             settingsStack.GetPage(aurPageBox).Visible = initialConfig.AurEnabled;
             settingsStack.GetPage(flatpakPageBox).Visible = initialConfig.FlatPackEnabled;
             settingsStack.GetPage(appImagePageBox).Visible = initialConfig.AppImageEnabled;
@@ -351,6 +352,7 @@ sealed class Program
                 topHeaderBar.Visible = !useOldMenu;
 
                 if (!useOldMenu) return;
+                sidebarRecommendBtn.Visible = config.RecommendedEnabled;
                 sidebarAurBtn.Visible = config.AurEnabled;
                 sidebarFlatpakBtn.Visible = config.FlatPackEnabled;
                 sidebarAppImageBtn.Visible = config.AppImageEnabled;
@@ -431,8 +433,9 @@ sealed class Program
             }
 
             var initialPageEnum = initialConfig.DefaultPageDropDown;
-
-            // Safeguard: if the saved default page is disabled, fall back to packages
+        
+            if (initialPageEnum == ShellyTabs.Recommend && !initialConfig.RecommendedEnabled)
+                initialPageEnum = ShellyTabs.Packages;
             if (initialPageEnum == ShellyTabs.Aur && !initialConfig.AurEnabled) initialPageEnum = ShellyTabs.Packages;
             if (initialPageEnum == ShellyTabs.Flatpak && !initialConfig.FlatPackEnabled)
                 initialPageEnum = ShellyTabs.Packages;
@@ -447,6 +450,10 @@ sealed class Program
                 case ShellyTabs.Aur:
                     LoadAurPage();
                     initialPageName = "aur_page";
+                    break;
+                case ShellyTabs.Recommend:
+                    LoadRecommendPage();
+                    initialPageName = "recommend_page";
                     break;
                 case ShellyTabs.Flatpak:
                     LoadFlatpakPage();
@@ -476,6 +483,7 @@ sealed class Program
 
             settingsWindow.ConfigChanged += (config) =>
             {
+                settingsStack.GetPage(recommendPageBox).Visible = config.RecommendedEnabled;
                 settingsStack.GetPage(aurPageBox).Visible = config.AurEnabled;
                 settingsStack.GetPage(flatpakPageBox).Visible = config.FlatPackEnabled;
                 settingsStack.GetPage(appImagePageBox).Visible = config.AppImageEnabled;
