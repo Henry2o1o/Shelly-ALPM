@@ -98,7 +98,7 @@ public class AurInstall(
         _listStore = Gio.ListStore.New(AurPackageGObject.GetGType());
         _selectionModel = SingleSelection.New(_listStore);
         _selectionModel.CanUnselect = true;
-        _selectionModel.Autoselect = true;
+        _selectionModel.Autoselect = false;
         _columnView.SetModel(_selectionModel);
         _searchForPackageLabel = (Label)builder.GetObject("search_overlay")!;
         _searchForPackageLabel.Label_ = "<span size='large'>Search for AUR packages</span>";
@@ -375,7 +375,7 @@ public class AurInstall(
                     index++;
                 }
                 
-                if (_listStore.GetNItems() > 0 && _selectionModel.Autoselect)
+                if (_listStore.GetNItems() > 0)
                 {
                     _selectionModel.SetSelected(0);
                     var firstItem = _selectionModel.GetSelectedItem();
