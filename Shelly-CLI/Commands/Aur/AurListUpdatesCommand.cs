@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PackageManager.Aur;
+using PackageManager.Aur.Models;
 using PackageManager.Utilities;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -28,8 +29,7 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
             // Apply filter if specified
             if (!string.IsNullOrWhiteSpace(settings.Filter))
             {
-                updates = updates.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                updates = ApplyFilter(updates, settings.Filter);
             }
 
             // Apply sorting based on settings
@@ -115,8 +115,7 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
             // Apply filter if specified
             if (!string.IsNullOrWhiteSpace(settings.Filter))
             {
-                updates = updates.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                updates = ApplyFilter(updates, settings.Filter);
             }
 
             // Apply sorting based on settings
@@ -178,5 +177,14 @@ public class AurListUpdatesCommand : AsyncCommand<ListSettings>
     private static string GetDefaultDescription(string description)
     {
         return string.IsNullOrWhiteSpace(description) ? "No Description Available" : description;
+    }
+
+    private static List<AurUpdateDto> ApplyFilter(List<AurUpdateDto> packages, string filter)
+    {
+        return packages
+            .Select(x => new { Package = x, Score = StringMatching.PartialRatio(filter, x.Name) })
+            .Where(x => x.Score >= 90)
+            .Select(x => x.Package)
+            .ToList();
     }
 }
