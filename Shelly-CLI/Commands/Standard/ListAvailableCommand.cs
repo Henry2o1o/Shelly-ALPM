@@ -44,14 +44,12 @@ public class ListAvailableCommand : Command<ListSettings>
                 manager.Initialize(showHiddenPackages: settings.ShowHidden);
             }
 
-
             var packages = manager.GetAvailablePackages();
 
             // Apply filter if specified
             if (!string.IsNullOrWhiteSpace(settings.Filter))
             {
-                packages = packages.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                packages = ApplyFilter(packages, settings.Filter);
             }
 
             // Apply sorting based on settings
@@ -132,11 +130,7 @@ public class ListAvailableCommand : Command<ListSettings>
             // Apply filter if specified
             if (!string.IsNullOrWhiteSpace(settings.Filter))
             {
-                var nameRes = packages.Where(p => p.Name.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                var descRes = packages
-                    .Where(p => p.Description.Contains(settings.Filter, StringComparison.OrdinalIgnoreCase)).ToList();
-                packages = nameRes.Concat(descRes).DistinctBy(p => p.Name).ToList();
+                packages = ApplyFilter(packages, settings.Filter);
             }
 
             // Apply sorting based on settings
@@ -181,5 +175,22 @@ public class ListAvailableCommand : Command<ListSettings>
             Console.Error.WriteLine($"[ERROR] Stack trace: {ex.StackTrace}");
             return 1;
         }
+    }
+
+    private static List<AlpmPackageDto> ApplyFilter(List<AlpmPackageDto> packages, string filter)
+    {
+        return packages
+            .Select(x => new { Package = x, Score = MatchObject(filter, x.Name, x.Description) })
+            .Where(x => x.Score >= 75)
+            .Select(x => x.Package)
+            .ToList();
+    }
+
+    private static int MatchObject(string query, string name, string description)
+    {
+        var nameScore = StringMatching.PartialRatio(query, name);
+        var descScore = StringMatching.PartialRatio(query, description);
+
+        return (int)(nameScore * 0.7 + descScore * 0.3);
     }
 }
