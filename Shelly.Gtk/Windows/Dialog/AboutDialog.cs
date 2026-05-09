@@ -22,15 +22,24 @@ public class ShellyAboutDialog(Overlay overlay)
 
             dialog.Website = "https://www.seafoam-labs.org/";
             dialog.WebsiteLabel = "Seafoam Labs Website";
-
-            dialog.Authors = ["Zoey Bauer", "Caroline Snyder"];
+            
+            dialog.AddCreditSection("Project Leads", ["Zoey Bauer", "Caroline Snyder"]);
             dialog.AddCreditSection("Maintainers", [
                 "Vinícius Fonseca",
                 "Anton Ždanov"
             ]);
 
-            dialog.LogoIconName = "shelly";
-            dialog.Show();
+            dialog.LogoIconName  = "shelly"; 
+            
+            dialog.SetTransientFor(overlay.GetRoot() as Window);
+            dialog.Present();
+            dialog.Modal = true;
+            
+            var focusController = EventControllerFocus.New();
+            focusController.OnLeave += (_, _) => dialog.Destroy();
+            dialog.AddController(focusController);
+            dialog.Present();
+
         }
         catch (Exception e)
         {
