@@ -3,7 +3,7 @@ using Spectre.Console.Cli;
 
 namespace Shelly.Keys.Commands.Initialize;
 
-public class Settings : CommandSettings
+public class Settings : GlobalSettings
 {
     [CommandArgument(0, "[directory]")]
     [Description("The directory to initialize the keyring in")]
