@@ -49,6 +49,7 @@ public static class ServiceBuilder
         collection.AddSingleton<LockoutDialog>();
         collection.AddTransient<AlpmEventDialog>();
         collection.AddTransient<AppImage>();
+        collection.AddTransient<Recommend>();
         collection.AddTransient<WebWindow>();
         collection.AddTransient<SetupWindow>();
         return collection.BuildServiceProvider();
