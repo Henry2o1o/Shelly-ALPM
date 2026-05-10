@@ -111,7 +111,7 @@ public class Recommend(
     {
         try
         {
-            var sizeGroup = SizeGroup.New(SizeGroupMode.Both);
+            var sizeGroup = SizeGroup.New(SizeGroupMode.Vertical);
 
             foreach (var category in Enum.GetValues<RecommendCategory>())
             {
@@ -198,9 +198,9 @@ public class Recommend(
         descLabel.AddCssClass("dim-label");
         descLabel.SetWrap(true);
         descLabel.SetWrapMode(Pango.WrapMode.WordChar);
-        descLabel.SetEllipsize(Pango.EllipsizeMode.End);
         descLabel.SetLines(2);
         descLabel.MaxWidthChars = 40;
+        descLabel.NaturalWrapMode = NaturalWrapMode.None;
 
         textContainer.Append(titleContainer);
         textContainer.Append(descLabel);
@@ -261,7 +261,11 @@ public class Recommend(
 
     public void Dispose()
     {
-        _packages.Clear();
+        _cts.Cancel();
         _cts.Dispose();
+        _packages.Clear();
+        _noResultsOverlay?.Dispose();
+        _overlay?.Dispose();
+        _scrolledWindow?.Dispose();
     }
 }
