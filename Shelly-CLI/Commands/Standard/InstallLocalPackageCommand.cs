@@ -16,9 +16,10 @@ namespace Shelly_CLI.Commands.Standard;
 
 public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettings>
 {
+    private const string BinInstallDir = "/opt/shelly";
+
     public override async Task<int> ExecuteAsync(CommandContext context, InstallLocalPackageSettings settings)
     {
-        //Validate the file location and that a file is actually passed in
         if (string.IsNullOrWhiteSpace(settings.PackageLocation))
         {
             if (Program.IsUiMode)
@@ -56,8 +57,8 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
                 return await HandleUiModeInstall(settings);
             }
 
-            var installResult = await InitializeAndInstallLocalAlpmPackage(settings);
-            if (!installResult)
+            var isSuccess = await InitializeAndInstallLocalAlpmPackage(settings);
+            if (!isSuccess)
             {
                 AnsiConsole.MarkupLine("[red]Installation failed. See errors above.[/]");
                 return 1;
@@ -66,10 +67,8 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
             return 0;
         }
 
-        //check if binary and install to /opt/ and create symlink in /bin
         if (await HasBinaries(settings.PackageLocation))
         {
-            //install local files to /opt/{folder here} and then create symlink to /usr/bin
             return await InstallLocalBinaries(settings);
         }
 
@@ -81,11 +80,10 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         var filePath = settings.PackageLocation;
         var extension = Path.GetExtension(filePath);
 
-        // Create install directory under /opt/
         var packageName = Path.GetFileName(filePath)
             .Replace(".pkg.tar" + extension, "")
             .Replace(".tar" + extension, "");
-        var installDir = Path.Combine("/opt", packageName);
+        var installDir = Path.Combine(BinInstallDir, packageName);
         Directory.CreateDirectory(installDir);
 
         var installedBinaries = new List<string>();
@@ -131,9 +129,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
                             await using var fs = File.OpenRead(destPath);
                             var magic = new byte[4];
                             var bytesRead = await fs.ReadAsync(magic);
-                            if (bytesRead >= 4 &&
-                                magic[0] == 0x7F && magic[1] == 0x45 &&
-                                magic[2] == 0x4C && magic[3] == 0x46)
+                            if (IsElfBinary(bytesRead, magic))
                             {
                                 var binaryName = Path.GetFileName(destPath);
                                 var linkPath = Path.Combine("/usr/bin", binaryName);
@@ -161,34 +157,33 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         {
             var iconName = "application-x-executable";
 
-            if (packageName.Contains(binaryName, StringComparison.OrdinalIgnoreCase))
-            {
-                if (foundIcons.Count > 0)
-                {
-                    AnsiConsole.MarkupLine(
-                        $"[cyan]Found icon for {binaryName.EscapeMarkup()}: {foundIcons.FirstOrDefault().Key.EscapeMarkup()}[/]");
-                    var installedIconName = InstallIcon(foundIcons.FirstOrDefault().Value, binaryName);
-                    if (installedIconName != null)
-                    {
-                        iconName = installedIconName;
-                    }
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine($"[yellow]No icon found for {binaryName.EscapeMarkup()}, using default[/]");
-                }
+            if (!packageName.Contains(binaryName, StringComparison.OrdinalIgnoreCase)) continue;
 
-                Console.WriteLine("Creating desktop entry...");
-                CreateDesktopEntry(
-                    appName: binaryName,
-                    executablePath: binaryName,
-                    comment: $"{binaryName} - Installed from {packageName}",
-                    icon: iconName,
-                    terminal: false,
-                    categories: "Utility;"
-                );
-                AnsiConsole.MarkupLine($"[green]Desktop Entries Created[/]");
+            if (foundIcons.Count > 0)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[cyan]Found icon for {binaryName.EscapeMarkup()}: {foundIcons.FirstOrDefault().Key.EscapeMarkup()}[/]");
+                var installedIconName = InstallIcon(foundIcons.FirstOrDefault().Value, binaryName);
+                if (installedIconName != null)
+                {
+                    iconName = installedIconName;
+                }
             }
+            else
+            {
+                AnsiConsole.MarkupLine($"[yellow]No icon found for {binaryName.EscapeMarkup()}, using default[/]");
+            }
+
+            Console.WriteLine("Creating desktop entry...");
+            CreateDesktopEntry(
+                appName: binaryName,
+                executablePath: binaryName,
+                comment: $"{binaryName} - Installed from {packageName}",
+                icon: iconName,
+                terminal: false,
+                categories: "Utility;"
+            );
+            AnsiConsole.MarkupLine("[green]Desktop Entries Created[/]");
         }
 
         return 0;
@@ -203,31 +198,27 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
             ".gz" => new GZipStream(fileStream, CompressionMode.Decompress),
             ".xz" => new XZStream(fileStream),
             ".zst" => new ZstdStream(fileStream, ZstdStreamMode.Decompress),
-            _ => throw new NotSupportedException($"Unsupported file extension")
+            _ => throw new NotSupportedException("Unsupported file extension")
         };
         var tarReader = new TarReader(decompressedStream);
         while (await tarReader.GetNextEntryAsync() is { } entry)
         {
-            if (entry.EntryType != TarEntryType.RegularFile)
-            {
-                continue;
-            }
+            if (entry.EntryType != TarEntryType.RegularFile || entry.DataStream is null) continue;
 
-            if (entry.DataStream is not null)
-            {
-                var magic = new byte[4];
-                var bytesRead = await entry.DataStream.ReadAsync(magic);
+            var magic = new byte[4];
+            var bytesRead = await entry.DataStream.ReadAsync(magic);
 
-                if (bytesRead >= 4 &&
-                    magic[0] == 0x7F && magic[1] == 0x45 &&
-                    magic[2] == 0x4C && magic[3] == 0x46)
-                {
-                    return true;
-                }
-            }
+            if (IsElfBinary(bytesRead, magic)) return true;
         }
 
         return false;
+    }
+
+    private static bool IsElfBinary(int bytesRead, byte[] magic)
+    {
+        return bytesRead >= 4 &&
+               magic[0] == 0x7F && magic[1] == 0x45 &&
+               magic[2] == 0x4C && magic[3] == 0x46;
     }
 
     private static async Task<bool> InitializeAndInstallLocalAlpmPackage(InstallLocalPackageSettings settings)
@@ -253,10 +244,8 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         using var manager = new AlpmManager();
         var hadError = false;
 
-        // Handle questions
         manager.Question += (_, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
 
-        // Handle progress events
         manager.Progress += (_, args) => { Console.Error.WriteLine($"{args.PackageName}: {args.Percent}%"); };
 
         manager.ErrorEvent += (_, e) =>
