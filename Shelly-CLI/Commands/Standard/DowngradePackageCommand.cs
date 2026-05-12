@@ -1,7 +1,6 @@
 using System.Text.RegularExpressions;
 using PackageManager.Alpm;
 using Shelly_CLI.Utility;
-using SharpCompress.Compressors.Xz;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
