@@ -19,7 +19,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
     public override async Task<int> ExecuteAsync(CommandContext context, InstallLocalPackageSettings settings)
     {
         //Validate the file location and that a file is actually passed in
-        if (settings.PackageLocation == null)
+        if (string.IsNullOrWhiteSpace(settings.PackageLocation))
         {
             if (Program.IsUiMode)
             {
@@ -78,7 +78,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
 
     private static async Task<int> InstallLocalBinaries(InstallLocalPackageSettings settings)
     {
-        var filePath = settings.PackageLocation!;
+        var filePath = settings.PackageLocation;
         var extension = Path.GetExtension(filePath);
 
         // Create install directory under /opt/
@@ -241,8 +241,8 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
                             || Console.IsOutputRedirected;
         var result = useSinglePane
             ? await StandardSinglePaneOutput.Output(manager,
-                x => x.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation!)), settings.NoConfirm)
-            : await SplitOutput.Output(manager, x => x.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation!)),
+                x => x.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation)), settings.NoConfirm)
+            : await SplitOutput.Output(manager, x => x.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation)),
                 settings.NoConfirm);
         manager.Dispose();
         return result;
@@ -250,12 +250,6 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
 
     private static async Task<int> HandleUiModeInstall(InstallLocalPackageSettings settings)
     {
-        if (settings.PackageLocation == null)
-        {
-            await Console.Error.WriteLineAsync("Error: No package specified");
-            return 1;
-        }
-
         using var manager = new AlpmManager();
         var hadError = false;
 

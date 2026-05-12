@@ -40,9 +40,9 @@ public class InstallLocalPackageTests
     #region ExecuteAsync - Validation Tests
 
     [Test]
-    public async Task ExecuteAsync_NullPackageLocation_Returns1()
+    public async Task ExecuteAsync_EmptyPackageLocation_Returns1()
     {
-        var settings = new InstallLocalPackageSettings { PackageLocation = null };
+        var settings = new InstallLocalPackageSettings { PackageLocation = string.Empty };
         var result = await _command.ExecuteAsync(CreateCommandContext(), settings);
         Assert.That(result, Is.EqualTo(1));
     }
