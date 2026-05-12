@@ -9,6 +9,7 @@ using Shelly.Gtk.Windows.AUR;
 using Shelly.Gtk.Windows.Dialog;
 using Shelly.Gtk.Windows.Flatpak;
 using Shelly.Gtk.Helpers;
+using Shelly.GTK.Resources;
 using Shelly.Gtk.Services.Icons;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.Windows.Packages;
@@ -152,6 +153,7 @@ sealed class Program
         }
 
         Module.Initialize();
+        Translations.Init();
         if (preferDark)
         {
             var settings = GtkSettings.GetDefault();

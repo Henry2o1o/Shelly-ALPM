@@ -1,0 +1,121 @@
+# Shelly UI translation template.
+# Copyright (C) 2026 Seafoam Labs
+# This file is distributed under the same license as the Shelly package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: shelly-ui 2.2.4.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-05-12 08:39+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Version"
+msgstr ""
+
+msgid "Repository"
+msgstr ""
+
+msgid "Size"
+msgstr ""
+
+msgid "URL"
+msgstr ""
+
+msgid "Depends"
+msgstr ""
+
+msgid "Optional Deps"
+msgstr ""
+
+msgid "Licenses"
+msgstr ""
+
+msgid "Provides"
+msgstr ""
+
+msgid "Conflicts"
+msgstr ""
+
+msgid "Groups"
+msgstr ""
+
+msgid "Close details"
+msgstr ""
+
+msgid "Installed"
+msgstr ""
+
+msgid "Any"
+msgstr ""
+
+msgid "Packages to Upgrade"
+msgstr ""
+
+msgid "Install Packages?"
+msgstr ""
+
+msgid "Installing..."
+msgstr ""
+
+msgid "Installed {0} Package(s)"
+msgstr ""
+
+msgid "Export Shelly install log"
+msgstr ""
+
+msgid "Log Files (*.log)"
+msgstr ""
+
+msgid "Exported Shelly install log"
+msgstr ""
+
+msgid "Failed to export Shelly install log"
+msgstr ""
+
+msgid "Install Local Package"
+msgstr ""
+
+msgid "Local package files (\"*.xz\", \"*.gz\", \"*.zst\")"
+msgstr ""
+
+msgid "Installing local package..."
+msgstr ""
+
+msgid "Installed local package"
+msgstr ""
+
+msgid "Search packages..."
+msgstr ""
+
+msgid "Package Group Filter"
+msgstr ""
+
+msgid "Install Local Packages"
+msgstr ""
+
+msgid "Install Local"
+msgstr ""
+
+msgid "Perform Upgrade"
+msgstr ""
+
+msgid "Perform a full system upgrade with install (-u)"
+msgstr ""
+
+msgid "Show Hidden"
+msgstr ""
+
+msgid "Show packages in the IgnorePkg list from pacman.conf"
+msgstr ""
+
+msgid "Install Selected"
+msgstr ""
+
+msgid "Name"
+msgstr ""

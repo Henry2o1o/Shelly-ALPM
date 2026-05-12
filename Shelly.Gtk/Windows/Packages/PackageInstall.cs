@@ -3,6 +3,7 @@ using Gtk;
 using Shelly.Gtk.DataStores;
 using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
+using static Shelly.GTK.Resources.Translations;
 using static Shelly.Gtk.Helpers.PackageColumnViewSorter;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.Icons;
@@ -72,7 +73,9 @@ public class PackageInstall(
 
     public Widget CreateWindow()
     {
-        _builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Package/PackageWindow.ui"), -1);
+        _builder = Builder.New();
+        _builder.TranslationDomain = Domain;
+        _builder.AddFromString(ResourceHelper.LoadUiFile("UiFiles/Package/PackageWindow.ui"), -1);
         _overlay = (Overlay)_builder.GetObject("PackageWindow")!;
         _columnView = (ColumnView)_builder.GetObject("package_column_view")!;
         _checkColumn = (ColumnViewColumn)_builder.GetObject("check_column")!;
@@ -215,6 +218,26 @@ public class PackageInstall(
                 }
             }
         };
+
+        var factory = SignalListItemFactory.New();
+        factory.OnSetup += (_, args) =>
+        {
+            if (args.Object is not ListItem listItem) return;
+            var label = Label.New(string.Empty);
+            label.Halign = Align.Start;
+            listItem.SetChild(label);
+        };
+        factory.OnBind += (_, args) =>
+        {
+            if (args.Object is not ListItem listItem) return;
+            if (listItem.GetChild() is Label label && listItem.GetItem() is StringObject so)
+            {
+                var val = so.GetString();
+                label.SetText(val == "Any" ? T("Any") : val);
+            }
+        };
+        _groupDropDown.SetFactory(factory);
+
         _sub = DirtySubscription.Attach(dirtyService, this);
         return _overlay;
     }
@@ -258,7 +281,7 @@ public class PackageInstall(
         backButton.SetIconName("go-next-symbolic");
         backButton.Halign = Align.Start;
         backButton.AddCssClass("flat");
-        backButton.TooltipText = "Close details";
+        backButton.TooltipText = T("Close details");
         backButton.OnClicked += (_, _) =>
         {
             _currentDetailPkg = null;
@@ -333,14 +356,14 @@ public class PackageInstall(
         separator.MarginBottom = 16;
         _detailBox.Append(separator);
 
-        AddDetail("Version", pkg.Version);
-        AddDetail("Repository", pkg.Repository);
-        AddDetail("Size", SizeHelpers.FormatSize(pkg.InstalledSize));
+        AddDetail(T("Version"), pkg.Version);
+        AddDetail(T("Repository"), pkg.Repository);
+        AddDetail(T("Size"), SizeHelpers.FormatSize(pkg.InstalledSize));
         if (!string.IsNullOrEmpty(pkg.Url))
         {
             var row = Box.New(Orientation.Horizontal, 12);
             row.MarginBottom = 4;
-            var labelWidget = Label.New("URL:");
+            var labelWidget = Label.New(T("URL") + ":");
             labelWidget.AddCssClass("dim-label");
             labelWidget.Halign = Align.Start;
             labelWidget.Valign = Align.Start;
@@ -363,22 +386,22 @@ public class PackageInstall(
 
         if (pkg.Depends.Count > 0)
         {
-            AddChipList("Depends", pkg.Depends);
+            AddChipList(T("Depends"), pkg.Depends);
         }
 
         if (pkg.OptDepends.Count > 0)
         {
-            AddChipList("Optional Deps", pkg.OptDepends, true);
+            AddChipList(T("Optional Deps"), pkg.OptDepends, true);
         }
 
         if (pkg.Licenses.Count > 0)
-            AddDetail("Licenses", string.Join(", ", pkg.Licenses));
+            AddDetail(T("Licenses"), string.Join(", ", pkg.Licenses));
         if (pkg.Provides.Count > 0)
-            AddDetail("Provides", string.Join(", ", pkg.Provides));
+            AddDetail(T("Provides"), string.Join(", ", pkg.Provides));
         if (pkg.Conflicts.Count > 0)
-            AddDetail("Conflicts", string.Join(", ", pkg.Conflicts));
+            AddDetail(T("Conflicts"), string.Join(", ", pkg.Conflicts));
         if (pkg.Groups.Count > 0)
-            AddDetail("Groups", string.Join(", ", pkg.Groups));
+            AddDetail(T("Groups"), string.Join(", ", pkg.Groups));
 
         if (configService.LoadConfig().WebViewEnabled)
         {
@@ -596,7 +619,7 @@ public class PackageInstall(
             label.SetText(pkg.Name);
             label.Halign = Align.Start;
             installedIcon.Visible = pkgObj.IsInstalled;
-            installedIcon.TooltipText = "Installed";
+            installedIcon.TooltipText = T("Installed");
         };
         nameColumn.SetFactory(_nameFactory);
 
@@ -812,14 +835,14 @@ public class PackageInstall(
                         var updatesNeeded = await unprivilegedOperationService.CheckForStandardApplicationUpdates();
                         if (updatesNeeded.Count > 0)
                         {
-                            message += "\n\n--- Packages to Upgrade ---\n";
+                            message += $"\n\n--- {T("Packages to Upgrade")} ---\n";
                             message += string.Join("\n",
                                 updatesNeeded.Select(u => $"{u.Name}: {u.CurrentVersion} -> {u.NewVersion}"));
                         }
                     }
 
                     var args = new GenericQuestionEventArgs(
-                        "Install Packages?", message
+                        T("Install Packages?"), message
                     );
 
                     genericQuestionService.RaiseQuestion(args);
@@ -829,7 +852,7 @@ public class PackageInstall(
                     }
                 }
 
-                lockoutService.Show($"Installing...");
+                lockoutService.Show(T("Installing..."));
                 var performUpgrade = _upgradeCheck.GetActive();
                 result = await privilegedOperationService.InstallPackagesAsync(selectedPackages, performUpgrade);
                 Reload();
@@ -851,7 +874,7 @@ public class PackageInstall(
             if (result.Success)
             {
                 var args = new ToastMessageEventArgs(
-                    $"Installed {selectedPackages.Count} Package(s)"
+                    T("Installed {0} Package(s)", selectedPackages.Count)
                 );
 
                 genericQuestionService.RaiseToastMessage(args);
@@ -877,11 +900,11 @@ public class PackageInstall(
         try
         {
             var dialog = FileDialog.New();
-            dialog.SetTitle("Export Shelly install log");
+            dialog.SetTitle(T("Export Shelly install log"));
             dialog.SetInitialName(LogHelpers.CreateSuggestedLogFileName(selectedPackages, "shelly"));
 
             var filter = FileFilter.New();
-            filter.SetName("Log Files (*.log)");
+            filter.SetName(T("Log Files (*.log)"));
             filter.AddPattern("*.log");
 
             var filters = Gio.ListStore.New(FileFilter.GetGType());
@@ -902,13 +925,13 @@ public class PackageInstall(
 
             await File.WriteAllTextAsync(path, LogHelpers.BuildInstallLog(selectedPackages, result, "aur"));
 
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("Exported Shelly install log"));
+            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(T("Exported Shelly install log")));
             return true;
         }
         catch (Exception e)
         {
             Console.WriteLine($"Failed to export Shelly install log: {e.Message}");
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs("Failed to export Shelly install log"));
+            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(T("Failed to export Shelly install log")));
             return false;
         }
     }
@@ -918,10 +941,10 @@ public class PackageInstall(
         try
         {
             var dialog = FileDialog.New();
-            dialog.SetTitle("Install Local Package");
+            dialog.SetTitle(T("Install Local Package"));
 
             var filter = FileFilter.New();
-            filter.SetName("Local package files (\"*.xz\", \"*.gz\", \"*.zst\")");
+            filter.SetName(T("Local package files (\"*.xz\", \"*.gz\", \"*.zst\")"));
             filter.AddPattern("*.xz");
             filter.AddPattern("*.gz");
             filter.AddPattern("*.zst");
@@ -934,7 +957,7 @@ public class PackageInstall(
 
             if (file is not null)
             {
-                lockoutService.Show($"Installing local package...");
+                lockoutService.Show(T("Installing local package..."));
                 var result = await privilegedOperationService.InstallLocalPackageAsync(file.GetPath()!);
                 if (!result.Success)
                 {
@@ -951,7 +974,7 @@ public class PackageInstall(
             lockoutService.Hide();
 
             var args = new ToastMessageEventArgs(
-                $"Installed local package"
+                T("Installed local package")
             );
             genericQuestionService.RaiseToastMessage(args);
         }
