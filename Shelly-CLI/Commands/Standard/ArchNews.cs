@@ -3,8 +3,10 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using MemoryPack;
 using PackageManager.Alpm;
 using PackageManager.Utilities;
+using Shelly_CLI.Commands.Standard.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -123,11 +125,5 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
         }).Reverse().ToList();
     }
 
-    public record RssModel
-    {
-        public string? Title { get; init; }
-        public string? Link { get; init; }
-        public string? Description { get; init; }
-        public string? PubDate { get; init; }
-    }
+
 }
