@@ -70,7 +70,7 @@ public static partial class LocalManager
                         if (entry.DataStream is not null)
                         {
                             await using var fs = File.OpenRead(destPath);
-                            if (await IsElfBinary(fs))
+                            if (string.IsNullOrWhiteSpace(Path.GetExtension(destPath)) && await IsElfBinary(fs))
                             {
                                 var binaryName = Path.GetFileName(destPath);
                                 var linkPath = Path.Combine("/usr/bin", binaryName);
@@ -245,7 +245,7 @@ public static partial class LocalManager
                 if (await IsElfBinary(fs)) pkgBins.Add(info);
             }
 
-            List<FileInfo> desktopBins = [];
+            List<string> desktopBins = [];
 
             foreach (var pkgBin in pkgBins)
             {
@@ -263,7 +263,7 @@ public static partial class LocalManager
                     Path.Combine(DesktopDir, $"{Path.GetFileNameWithoutExtension(pkgBin.Name)}.desktop");
                 Console.WriteLine($"Removing {desktopFilePath}");
                 File.Delete(desktopFilePath);
-                desktopBins.Add(pkgBin);
+                desktopBins.Add(pkgBin.Name);
             }
 
             var iconInfos = pkgInfos
@@ -290,8 +290,7 @@ public static partial class LocalManager
                         destDir = $"/usr/share/icons/hicolor/{size}x{size}/apps";
                     }
 
-                    var iconName = desktopBin.Name;
-                    var destPath = Path.Combine(destDir, $"{iconName}{extension}");
+                    var destPath = Path.Combine(destDir, $"{desktopBin}{extension}");
                     Console.WriteLine($"Trying {destPath}");
                     if (!File.Exists(destPath)) continue;
 
