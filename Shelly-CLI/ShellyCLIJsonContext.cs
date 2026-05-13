@@ -23,8 +23,6 @@ namespace Shelly_CLI;
 [JsonSerializable(typeof(SyncPackageModel))]
 [JsonSerializable(typeof(SyncAurModel))]
 [JsonSerializable(typeof(SyncFlatpakModel))]
-[JsonSerializable(typeof(AurSearchPackageBuild.PackageBuild))]
-[JsonSerializable(typeof(List<AurSearchPackageBuild.PackageBuild>))]
 [JsonSerializable(typeof(RssModel))]
 [JsonSerializable(typeof(List<RssModel>))]
 [JsonSerializable(typeof(List<AppImageDto>))]
