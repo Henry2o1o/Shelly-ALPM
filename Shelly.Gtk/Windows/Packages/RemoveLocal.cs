@@ -192,6 +192,7 @@ public sealed class RemoveLocal(
                 if (ct.IsCancellationRequested || _loadGeneration != generation) return false;
 
                 _listStore.RemoveAll();
+                _removeButton.SetSensitive(false);
 
                 foreach (var package in packages)
                 {
