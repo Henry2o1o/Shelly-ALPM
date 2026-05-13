@@ -9,6 +9,7 @@ using Shelly_CLI.Commands.Standard.Pacfile;
 using Shelly_CLI.Commands.Utility;
 using PackageManager.Utilities;
 using Shelly_CLI.Configuration;
+using Shelly_CLI.Utility;
 using Shelly.Writers;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -167,6 +168,11 @@ public class Program
                 .WithExample("remove", "firefox")
                 .WithExample("remove", "firefox", "vlc")
                 .WithExample("remove", "firefox", "--no-confirm");
+
+            config.AddCommand<RemoveLocalCommand>("remove-local")
+                .WithDescription("Remove a locally installed package file")
+                .WithExample("remove-local", LocalManager.InstallDir + "vlc")
+                .WithExample("remove-local", LocalManager.InstallDir + "vlc", "--no-confirm");
 
             config.AddCommand<UpdateCommand>("update")
                 .WithDescription("Update one or more packages")

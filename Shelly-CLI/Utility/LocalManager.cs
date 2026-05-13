@@ -11,12 +11,15 @@ using ZstdSharp;
 namespace Shelly_CLI.Utility;
 
 // TODO: Move to PackageManager
-public static class LocalManager
+public static partial class LocalManager
 {
-    private const string InstallDir = "/opt/shelly";
+    public const string InstallDir = "/opt/shelly";
     private const string DesktopDir = "/usr/share/applications";
 
-    public static async Task<int> InstallLocalBinaries(string filePath)
+    [GeneratedRegex(@"(\d+)x?\d*")]
+    private static partial Regex ImageSizeRegex();
+
+    public static async Task<int> InstallBinariesPackage(string filePath)
     {
         var extension = Path.GetExtension(filePath);
 
@@ -57,8 +60,7 @@ public static class LocalManager
                         await entry.ExtractToFileAsync(destPath, true);
 
                         var ext = Path.GetExtension(destPath).ToLower();
-
-                        if (ext is ".png" or ".svg")
+                        if (IsIcon(ext))
                         {
                             var iconFileName = Path.GetFileNameWithoutExtension(destPath).ToLower();
                             foundIcons[iconFileName] = destPath;
@@ -223,6 +225,84 @@ public static class LocalManager
         return false;
     }
 
+    public static async Task<bool> RemoveBinaryPackages(List<string> packageList)
+    {
+        var dirs = packageList
+            .Select(path => new DirectoryInfo(path))
+            .Where(dir => dir.FullName.StartsWith(InstallDir + '/') && dir.Exists);
+
+        foreach (var dir in dirs)
+        {
+            var pkgInfos = dir
+                .EnumerateFiles("*", SearchOption.AllDirectories)
+                .ToList();
+
+            List<FileInfo> pkgBins = [];
+            foreach (var info in pkgInfos)
+            {
+                await using var fs = File.OpenRead(info.FullName);
+                if (await IsElfBinary(fs)) pkgBins.Add(info);
+            }
+
+            foreach (var pkgBin in pkgBins)
+            {
+                var usrBin = new FileInfo(Path.Combine("/usr/bin", pkgBin.Name));
+                var canDelete = pkgBin.FullName.Equals(usrBin.LinkTarget);
+                if (!canDelete) continue;
+
+                Console.WriteLine($"Removing {pkgBin.Name} from {usrBin.FullName}");
+                File.Delete(usrBin.FullName);
+
+                if (!dir.Name.Contains(pkgBin.Name, StringComparison.InvariantCultureIgnoreCase)) continue;
+
+                var desktopFilePath =
+                    Path.Combine(DesktopDir, $"{Path.GetFileNameWithoutExtension(pkgBin.Name)}.desktop");
+                Console.WriteLine($"Removing {desktopFilePath}");
+                File.Delete(desktopFilePath);
+            }
+
+            var iconInfos = pkgInfos
+                .Where(info => IsIcon(info.Extension.ToLower()))
+                .ToList();
+
+            foreach (var icon in iconInfos)
+            {
+                var iconName = Path.GetFileNameWithoutExtension(icon.Name).ToLower();
+                var extension = icon.Extension.ToLower();
+                string destDir;
+                if (extension == ".svg")
+                {
+                    destDir = "/usr/share/icons/hicolor/scalable/apps";
+                }
+                else
+                {
+                    var sizeMatch = ImageSizeRegex().Match(icon.Name);
+                    var size = sizeMatch.Success && int.TryParse(sizeMatch.Groups[1].Value, out var s)
+                        ? s
+                        : 256;
+                    destDir = $"/usr/share/icons/hicolor/{size}x{size}/apps";
+                }
+
+                var destPath = Path.Combine(destDir, $"{iconName}{extension}");
+                if (!File.Exists(destPath)) continue;
+
+                Console.WriteLine($"Removing icon {destPath}");
+                File.Delete(destPath);
+            }
+
+            // Delete package directory
+            Console.WriteLine($"Removing package directory {dir.FullName}");
+            dir.Delete(true);
+        }
+
+        return true;
+    }
+
+    private static bool IsIcon(string i)
+    {
+        return i is ".png" or ".svg";
+    }
+
     private static async Task<bool> IsElfBinary(Stream stream)
     {
         var magic = new byte[4];
@@ -334,7 +414,7 @@ public static class LocalManager
             }
             else
             {
-                var sizeMatch = Regex.Match(Path.GetFileName(iconPath), @"(\d+)x?\d*");
+                var sizeMatch = ImageSizeRegex().Match(Path.GetFileName(iconPath));
                 var size = sizeMatch.Success && int.TryParse(sizeMatch.Groups[1].Value, out var s)
                     ? s
                     : 256;

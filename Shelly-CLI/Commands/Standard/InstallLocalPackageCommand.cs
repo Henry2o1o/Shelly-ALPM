@@ -61,7 +61,7 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         if (await LocalManager.IsBinariesPackage(settings.PackageLocation))
         {
             // TODO: Add UI & Console mode if needed
-            return await LocalManager.InstallLocalBinaries(settings.PackageLocation);
+            return await LocalManager.InstallBinariesPackage(settings.PackageLocation);
         }
 
         return 0;
