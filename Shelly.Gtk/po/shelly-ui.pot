@@ -1,12 +1,8 @@
-# Shelly UI translation template.
-# Copyright (C) 2026 Seafoam Labs
-# This file is distributed under the same license as the Shelly package.
-#
 msgid ""
 msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-12 21:05-0400\n"
+"POT-Creation-Date: 2026-05-13 08:21-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -15,105 +11,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-msgid "Any"
-msgstr ""
-
-msgid "Close details"
-msgstr ""
-
-msgid "Version"
-msgstr ""
-
-msgid "Size"
-msgstr ""
-
-msgid "URL:"
-msgstr ""
-
-msgid "Depends"
-msgstr ""
-
-msgid "Optional Deps"
-msgstr ""
-
-msgid "Licenses"
-msgstr ""
-
-msgid "Provides"
-msgstr ""
-
-msgid "Conflicts"
-msgstr ""
-
-msgid "Groups"
-msgstr ""
-
-msgid "Package Files ({0})"
-msgstr ""
-
-msgid "Remove Packages?"
-msgstr ""
-
-#: Shelly.Gtk/Windows/Packages/PackageManagement.cs:787
-msgid "Removing..."
-msgstr ""
-
-msgid "Removed {0} Package(s)"
-msgstr ""
-
-msgid "<span size='large'>System packages are up to date</span>"
-msgstr ""
-
-msgid "Current"
-msgstr ""
-
-msgid "New"
-msgstr ""
-
-msgid "Download"
-msgstr ""
-
-msgid "Size Diff"
-msgstr ""
-
-msgid "Repository"
-msgstr ""
-
-msgid "Partial Update Warning"
-msgstr ""
-
-msgid "It is not advised you do partial system updates. Are you sure you want to continue?"
-msgstr ""
-
-msgid "Update Packages?"
-msgstr ""
-
-
-msgid "It is unadvised to not update all packages at once. Are you sure you want to continue?"
-msgstr ""
-
-msgid "Updating..."
-msgstr ""
-
-msgid "Reboot Required"
-msgstr ""
-
-msgid "A full system reboot is required for updates to take effect.\n\nWould you like to reboot now?"
-msgstr ""
-
-msgid "Service Restart Failures"
-msgstr ""
-
-msgid "The following services failed to restart automatically:\n{0}"
-msgstr ""
-
-msgid "Updated {0} Package(s)"
-msgstr ""
-
-msgid "Installed"
-msgstr ""
-
-msgid "Packages to Upgrade"
+msgid "<span size='large'>Search for AUR packages</span>"
 msgstr ""
 
 msgid "Install Packages?"
@@ -122,113 +20,19 @@ msgstr ""
 msgid "Installing..."
 msgstr ""
 
-msgid "Installed {0} Package(s)"
-msgstr ""
-
-msgid "Export Shelly install log"
-msgstr ""
-
-msgid "Log Files (*.log)"
-msgstr ""
-
-msgid "Exported Shelly install log"
-msgstr ""
-
-msgid "Failed to export Shelly install log"
-msgstr ""
-
-msgid "Install Local Package"
-msgstr ""
-
-msgid "Local package files (\"*.xz\", \"*.gz\", \"*.zst\")"
-msgstr ""
-
-msgid "Installing local package..."
-msgstr ""
-
-msgid "Installed local package"
-msgstr ""
-
-msgid "color-scheme"
-msgstr ""
-
-msgid "Please wait while we update your system."
-msgstr ""
-
-msgid "Search packages..."
-msgstr ""
-
-msgid "Sync"
-msgstr ""
-
-msgid "Group Filter"
-msgstr ""
-
-msgid "Clean Uninstall"
-msgstr ""
-
-msgid "Remove Configs"
-msgstr ""
-
-msgid "Show Hidden"
-msgstr ""
-
-msgid "Show packages in the IgnorePkg list from pacman.conf"
-msgstr ""
-
-msgid "Remove Selected"
-msgstr ""
-
-msgid "Package Name"
-msgstr ""
-
-msgid "Update Selected"
-msgstr ""
-
-msgid "Size Difference"
-msgstr ""
-
-msgid "Old Version"
-msgstr ""
-
-msgid "Package Group Filter"
-msgstr ""
-
-msgid "Install Local Packages"
-msgstr ""
-
-msgid "Install Local"
-msgstr ""
-
-msgid "Perform Upgrade"
-msgstr ""
-
-msgid "Perform a full system upgrade with install (-u)"
-msgstr ""
-
-msgid ""
-"Show packages in the IgnorePkg list from pacman.conf\n"
-msgstr ""
-
-msgid "Install Selected"
-msgstr ""
-
-msgid "Name"
-msgstr ""
-
-msgid "<span size='large'>Search for AUR packages</span>"
-msgstr ""
-
-msgid "<span size='large'>AUR packages are up to date</span>"
-msgstr ""
-
 msgid "No packages found."
 msgstr ""
 
 msgid "Displaying Package Build {0}"
 msgstr ""
 
+msgid "Installed {0} Package(s)"
+msgstr ""
+
 msgid "Export AUR install log"
+msgstr ""
+
+msgid "Log Files (*.log)"
 msgstr ""
 
 msgid "Exported AUR install log"
@@ -244,6 +48,12 @@ msgid "Preview PKGBUILD"
 msgstr ""
 
 msgid "Displays Package Build"
+msgstr ""
+
+msgid "Close details"
+msgstr ""
+
+msgid "Version"
 msgstr ""
 
 msgid "Votes"
@@ -267,7 +77,13 @@ msgstr ""
 msgid "First Submitted"
 msgstr ""
 
+msgid "URL:"
+msgstr ""
+
 msgid "AUR:"
+msgstr ""
+
+msgid "Depends"
 msgstr ""
 
 msgid "Make Depends"
@@ -276,32 +92,304 @@ msgstr ""
 msgid "Check Depends"
 msgstr ""
 
+msgid "Optional Deps"
+msgstr ""
+
+msgid "Licenses"
+msgstr ""
+
 msgid "Keywords"
+msgstr ""
+
+msgid "Provides"
+msgstr ""
+
+msgid "Conflicts"
+msgstr ""
+
+msgid "Groups"
 msgstr ""
 
 msgid "Replaces"
 msgstr ""
 
-msgid "Use chroot"
+msgid "Remove Packages?"
 msgstr ""
 
-msgid "Build packages in a clean chroot environment"
+msgid "Removing..."
 msgstr ""
 
-msgid "Run checks"
+msgid "Removed {0} Package(s)"
 msgstr ""
 
-msgid "Run the --check function during package build (installs checkdepends)"
+msgid "<span size='large'>AUR packages are up to date</span>"
 msgstr ""
 
-msgid "Install Aur Package(s)"
+msgid "Update Packages?"
 msgstr ""
 
-msgid "Update Aur Package(s)"
+msgid "Updated {0} Package(s)"
 msgstr ""
 
-msgid "refresh"
+msgid "Select"
 msgstr ""
 
-msgid "Remove Aur Package(s)"
+msgid "Select All"
+msgstr ""
+
+msgid "Confirm"
+msgstr ""
+
+msgid "No"
+msgstr ""
+
+msgid "Yes"
+msgstr ""
+
+msgid "Install Ignored Package?"
+msgstr ""
+
+msgid "Replace Package?"
+msgstr ""
+
+msgid "Package Conflict Detected"
+msgstr ""
+
+msgid "Corrupted Package Found"
+msgstr ""
+
+msgid "Import PGP Key?"
+msgstr ""
+
+msgid "Select Provider"
+msgstr ""
+
+msgid "Select Optional Dependencies"
+msgstr ""
+
+msgid "System Question"
+msgstr ""
+
+msgid "package"
+msgstr ""
+
+msgid "packages"
+msgstr ""
+
+msgid "AUR installation failed"
+msgstr ""
+
+msgid ""
+"Shelly couldn't finish building or installing the selected AUR {0}. Export "
+"the logs and attach them to your report so the team can check whether the "
+"issue came from the PKGBUILD or from Shelly."
+msgstr ""
+
+msgid "Packages"
+msgstr ""
+
+msgid "Recent output"
+msgstr ""
+
+msgid "Close"
+msgstr ""
+
+msgid "Export Logs"
+msgstr ""
+
+msgid "Cache Cleaner"
+msgstr ""
+
+msgid ""
+"Cache directory: {0}\n"
+"Total cached files: {1} ({2})"
+msgstr ""
+
+msgid "Keep versions:"
+msgstr ""
+
+msgid "Uninstalled only"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "Clean"
+msgstr ""
+
+msgid "No candidates for removal."
+msgstr ""
+
+msgid "{0} files, {1} would be freed"
+msgstr ""
+
+msgid "Cache directory does not exist"
+msgstr ""
+
+msgid "Cleaning package cache..."
+msgstr ""
+
+msgid "Package cache cleaned successfully"
+msgstr ""
+
+msgid "Cache clean failed: {0}"
+msgstr ""
+
+msgid "Authentication Required"
+msgstr ""
+
+msgid "Password needed to execute: {0}."
+msgstr ""
+
+msgid "Authenticate"
+msgstr ""
+
+msgid "Incorrect password. Try again."
+msgstr ""
+
+msgid "What's New"
+msgstr ""
+
+msgid "Version History"
+msgstr ""
+
+msgid "Version {0}"
+msgstr ""
+
+msgid "Shelly is an Arch Linux package manager"
+msgstr ""
+
+msgid "Seafoam Labs Website"
+msgstr ""
+
+msgid "Project Leads"
+msgstr ""
+
+msgid "Maintainers"
+msgstr ""
+
+msgid "Fingerprint Disable Instructions"
+msgstr ""
+
+msgid "Disable fingerprint authentication for sudo"
+msgstr ""
+
+msgid "1. Inspect"
+msgstr ""
+
+msgid "2. Disable for sudo"
+msgstr ""
+
+msgid "3. Re-enable later"
+msgstr ""
+
+msgid "Copy"
+msgstr ""
+
+msgid "Operation Complete"
+msgstr ""
+
+msgid "Arch Linux News"
+msgstr ""
+
+msgid "No news available"
+msgstr ""
+
+msgid "Package installation failed"
+msgstr ""
+
+msgid ""
+"Shelly couldn't finish building or installing the selected {0}. Export the "
+"logs and attach them to your report so the team can check whether the issue "
+"came from the PKGBUILD or from Shelly."
+msgstr ""
+
+msgid "Any"
+msgstr ""
+
+msgid "Size"
+msgstr ""
+
+msgid "Package Files ({0})"
+msgstr ""
+
+msgid "<span size='large'>System packages are up to date</span>"
+msgstr ""
+
+msgid "Current"
+msgstr ""
+
+msgid "New"
+msgstr ""
+
+msgid "Download"
+msgstr ""
+
+msgid "Size Diff"
+msgstr ""
+
+msgid "Repository"
+msgstr ""
+
+msgid "Partial Update Warning"
+msgstr ""
+
+msgid ""
+"It is not advised you do partial system updates. Are you sure you want to "
+"continue?"
+msgstr ""
+
+msgid ""
+"It is unadvised to not update all packages at once. Are you sure you want to "
+"continue?"
+msgstr ""
+
+msgid "Updating..."
+msgstr ""
+
+msgid "Reboot Required"
+msgstr ""
+
+msgid ""
+"A full system reboot is required for updates to take effect.\n"
+"\n"
+"Would you like to reboot now?"
+msgstr ""
+
+msgid "Service Restart Failures"
+msgstr ""
+
+msgid ""
+"The following services failed to restart automatically:\n"
+"{0}"
+msgstr ""
+
+msgid "Installed"
+msgstr ""
+
+msgid "Packages to Upgrade"
+msgstr ""
+
+msgid "Export Shelly install log"
+msgstr ""
+
+msgid "Exported Shelly install log"
+msgstr ""
+
+msgid "Failed to export Shelly install log"
+msgstr ""
+
+msgid "Install Local Package"
+msgstr ""
+
+msgid "Local package files (\"*.xz\", \"*.gz\", \"*.zst\")"
+msgstr ""
+
+msgid "Installing local package..."
+msgstr ""
+
+msgid "Installed local package"
+msgstr ""
+
+msgid "color-scheme"
 msgstr ""
