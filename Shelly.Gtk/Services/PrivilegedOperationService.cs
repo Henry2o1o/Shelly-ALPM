@@ -129,10 +129,12 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         return result;
     }
 
-    public Task<OperationResult> RemoveLocalPackagesAsync(IEnumerable<string> packages)
+    public async Task<OperationResult> RemoveLocalPackagesAsync(IEnumerable<string> packages)
     {
-        var packageArgs = string.Join(" ", packages);
-        return ExecutePrivilegedWithNoConfirmCheck("Remove local packages", "remove-local", $"\"{packageArgs}\"");
+        var packageArgs = string.Join(" ", packages.Select(p => $"\"{p}\""));
+        var result = await ExecutePrivilegedWithNoConfirmCheck("Remove local packages", "remove-local", packageArgs);
+        if (result.Success) _dirtyService.MarkDirty(DirtyScopes.Native);
+        return result;
     }
 
     public async Task<OperationResult> UpdatePackagesAsync(IEnumerable<string> packages)
