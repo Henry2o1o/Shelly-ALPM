@@ -676,9 +676,9 @@ public sealed class AurPackageManager(string? configPath = null)
         }
     }
 
-    public async Task RemovePackages(List<string> packageNames, AlpmTransFlag flags = AlpmTransFlag.None)
+    public async Task RemovePackages(List<string> packageNames, AlpmTransFlag flags = AlpmTransFlag.None, bool removeOptionalDeps = false)
     {
-        await _alpm.RemovePackages(packageNames, flags);
+        await _alpm.RemovePackages(packageNames, flags, removeOptionalDeps);
         foreach (var packageName in packageNames)
         {
             _vcsInfoStore.RemovePackage(packageName);
