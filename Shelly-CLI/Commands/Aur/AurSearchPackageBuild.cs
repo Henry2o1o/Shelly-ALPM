@@ -55,7 +55,7 @@ public class AurSearchPackageBuild : AsyncCommand<AurPackageSettings>
     {
         if (settings.Packages.Length == 0)
         {
-            Console.Error.WriteLine("Error: No packages specified");
+            await Console.Error.WriteLineAsync("Error: No packages specified");
             return 1;
         }
 

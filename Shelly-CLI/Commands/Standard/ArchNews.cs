@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using MemoryPack;
 using PackageManager.Utilities;
+using PackageManager.Wire;
 using Shelly_CLI.Commands.Standard.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -25,7 +26,6 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
                 var feed = await GetRssFeedAsync(ArchlinuxFeed);
                 if (settings.Json)
                 {
-                    Console.Error.WriteLine(feed.Count);
                     await OutputFeed(feed);
                 }
                 else
@@ -118,9 +118,7 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
     {
         if (Program.IsUiMode)
         {
-            await using var stdout = Console.OpenStandardOutput();
-            await MemoryPackSerializer.SerializeAsync(stdout, feed);
-            await stdout.FlushAsync();
+            MemPackFrame.WriteToStdout(feed);
         }
         else
         {
