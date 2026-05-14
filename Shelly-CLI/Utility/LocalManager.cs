@@ -291,7 +291,6 @@ public static partial class LocalManager
                     }
 
                     var destPath = Path.Combine(destDir, $"{desktopBin}{extension}");
-                    Console.WriteLine($"Trying {destPath}");
                     if (!File.Exists(destPath)) continue;
 
                     Console.WriteLine($"Removing icon {destPath}");
