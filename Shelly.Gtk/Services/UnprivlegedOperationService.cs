@@ -340,11 +340,12 @@ public class UnprivilegedOperationService(
 
     public async Task<SyncModel> CheckForApplicationUpdates()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Get Available Updates", "utility updates -a -l --json --ui-mode");
+        var result =
+            await ExecuteUnprivilegedCommandAsync("Get Available Updates", "utility updates -a -l --json --ui-mode");
         //SendDbusMessage(result);
         try
         {
-            if(!result.Success) return new SyncModel();
+            if (!result.Success) return new SyncModel();
             MemPackFrame.TryDecode<SyncModel>(result.Output, out var framed);
             return framed ?? new SyncModel();
         }
@@ -488,15 +489,6 @@ public class UnprivilegedOperationService(
                 ExitCode = -1
             };
         }
-    }
-
-    private static string StripBom(string input)
-    {
-        if (string.IsNullOrEmpty(input))
-            return input;
-
-        // UTF-8 BOM is 0xEF 0xBB 0xBF which appears as \uFEFF in .NET strings
-        return input.TrimStart('\uFEFF');
     }
 
     private void SendDbusMessage(UnprivilegedOperationResult result)
