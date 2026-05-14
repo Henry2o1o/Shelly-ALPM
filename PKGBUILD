@@ -43,6 +43,9 @@ build() {
   dotnet publish Shelly.Gtk/Shelly.Gtk.csproj -c Release -r linux-x64 -o out --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
   dotnet publish Shelly-Notifications/Shelly-Notifications.csproj -c Release -r linux-x64 -o out-notify --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
   dotnet publish Shelly.Keys/Shelly.Keys.csproj -c Release -r linux-x64 -o out-keys --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
+
+  # Compile translations
+  msgfmt Shelly.Gtk/po/de.po -o shelly-ui-de.mo
 }
 
 package() {
@@ -112,6 +115,9 @@ EOF
 
   # Install fish shell completions
   install -Dm644 shelly.fish "$pkgdir/usr/share/fish/vendor_completions.d/shelly.fish"
+
+  # Install translations
+  install -Dm644 shelly-ui-de.mo "$pkgdir/usr/share/locale/de/LC_MESSAGES/shelly-ui.mo"
 
   # Install Flatpak integration script
   cat <<'SCRIPT' | install -Dm755 /dev/stdin "$pkgdir/usr/bin/shelly-flatpak-integrate"

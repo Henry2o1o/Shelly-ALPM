@@ -27,6 +27,11 @@ if ! command -v dotnet &> /dev/null; then
     exit 1
 fi
 
+# Check if msgfmt is installed (for translations)
+if ! command -v msgfmt &> /dev/null; then
+    echo "Warning: msgfmt not found. Translations might not be compiled."
+fi
+
 echo "Script directory: $SCRIPT_DIR"
 echo "Install directory: $INSTALL_DIR"
 echo ""
@@ -64,6 +69,18 @@ cp -r "$SCRIPT_DIR/publish/Shelly-Notifications/"* "$INSTALL_DIR/"
 echo "Copying Shelly.Gtk files to $INSTALL_DIR"
 cp -r "$SCRIPT_DIR/publish/Shelly.Gtk/"* "$INSTALL_DIR/"
 
+# Ensure translations are compiled
+echo "Compiling translations..."
+if command -v msgfmt &> /dev/null; then
+    mkdir -p "$SCRIPT_DIR/Shelly.Gtk/locale/de/LC_MESSAGES"
+    msgfmt "$SCRIPT_DIR/Shelly.Gtk/po/de.po" -o "$SCRIPT_DIR/Shelly.Gtk/locale/de/LC_MESSAGES/shelly-ui.mo"
+fi
+
+# Copy locale files
+echo "Copying locale files..."
+mkdir -p "$INSTALL_DIR/locale"
+cp -r "$SCRIPT_DIR/Shelly.Gtk/locale/"* "$INSTALL_DIR/locale/"
+
 # Copy Shelly-CLI binary (output is named 'shelly' due to AssemblyName)
 echo "Copying Shelly-CLI binary to $INSTALL_DIR"
 cp "$SCRIPT_DIR/publish/Shelly-CLI/shelly" "$INSTALL_DIR/shelly"
@@ -89,6 +106,16 @@ cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/flatpak-symbolic.svg" /usr/share/icons/hic
 cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/arch-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/arch-symbolic.svg
 cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/shelly-updates-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/shelly-updates-symbolic.svg
 cp "$SCRIPT_DIR/Shelly.Gtk/Assets/svg/shelly-shell-symbolic.svg" /usr/share/icons/hicolor/symbolic/apps/shelly-shell-symbolic.svg
+
+# Install translations to standard location
+echo "Installing translations to /usr/share/locale..."
+for lang_dir in "$SCRIPT_DIR/Shelly.Gtk/locale/"*; do
+    if [ -d "$lang_dir" ]; then
+        lang=$(basename "$lang_dir")
+        mkdir -p "/usr/share/locale/$lang/LC_MESSAGES"
+        cp "$lang_dir/LC_MESSAGES/shelly-ui.mo" "/usr/share/locale/$lang/LC_MESSAGES/"
+    fi
+done
 
 # Create desktop entry
 echo "Creating desktop entry"

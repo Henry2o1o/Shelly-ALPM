@@ -16,6 +16,11 @@ internal static partial class Translations
     internal static void Init()
     {
         var localeDir = Path.Combine(AppContext.BaseDirectory, "locale");
+        if (!Directory.Exists(localeDir))
+        {
+            localeDir = "/usr/share/locale";
+        }
+        
         bindtextdomain(Domain, localeDir);
         bind_textdomain_codeset(Domain, "UTF-8");
     }

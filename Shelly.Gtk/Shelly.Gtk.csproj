@@ -66,11 +66,8 @@
         <Content Include="Assets\svg\shelly-shell-symbolic.svg">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </Content>
+        <Content Include="locale\**\*">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
-
-    <Target Name="CompileTranslations" BeforeTargets="Build">
-        <Exec Command="mkdir -p locale/de/LC_MESSAGES &amp;&amp; msgfmt po/de.po -o locale/de/LC_MESSAGES/shelly-ui.mo"
-              WorkingDirectory="$(MSBuildProjectDirectory)"
-              Condition="Exists('po/de.po')" />
-    </Target>
 </Project>
