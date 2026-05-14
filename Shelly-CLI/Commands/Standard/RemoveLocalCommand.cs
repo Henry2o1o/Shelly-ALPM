@@ -26,19 +26,15 @@ public class RemoveLocalCommand : AsyncCommand<PackageSettings>
         AnsiConsole.MarkupLine(
             $"[yellow]Packages to remove:[/] {string.Join(", ", packageList.Select(p => p.EscapeMarkup()))}");
 
-        if (!settings.NoConfirm)
+        if (!settings.NoConfirm && !AnsiConsole.Confirm("Do you want to proceed?"))
         {
-            if (!AnsiConsole.Confirm("Do you want to proceed?"))
-            {
-                AnsiConsole.MarkupLine("[yellow]Operation cancelled.[/]");
-                return 0;
-            }
+            AnsiConsole.MarkupLine("[yellow]Operation cancelled.[/]");
+            return 0;
         }
 
         AnsiConsole.MarkupLine("[yellow]Removing packages...[/]");
 
-        var result = await LocalManager.RemoveBinaryPackages(packageList);
-
+        var result = await LocalManager.RemoveBinaryPackages(packageList, uiMode: false);
         if (!result)
         {
             AnsiConsole.MarkupLine("[red]Removal failed. See errors above.[/]");
@@ -63,8 +59,7 @@ public class RemoveLocalCommand : AsyncCommand<PackageSettings>
 
         await Console.Error.WriteLineAsync($"Removing packages: {string.Join(", ", packageList)}");
 
-        var result = await LocalManager.RemoveBinaryPackages(packageList);
-
+        var result = await LocalManager.RemoveBinaryPackages(packageList, uiMode: true);
         if (!result)
         {
             await Console.Error.WriteLineAsync("Removal failed.");

@@ -238,84 +238,108 @@ public static partial class LocalManager
         return false;
     }
 
-    public static async Task<bool> RemoveBinaryPackages(List<string> packageList)
+    public static async Task<bool> RemoveBinaryPackages(List<string> packageList, bool uiMode)
     {
-        var dirs = packageList
-            .Select(path => new DirectoryInfo(path))
-            .Where(dir => dir.FullName.StartsWith(InstallDir + '/') && dir.Exists);
-
-        foreach (var dir in dirs)
+        try
         {
-            var pkgInfos = dir
-                .EnumerateFiles("*", SearchOption.AllDirectories)
-                .ToList();
+            var dirs = packageList
+                .Select(path => new DirectoryInfo(path))
+                .Where(dir => dir.FullName.StartsWith(InstallDir + '/') && dir.Exists);
 
-            List<FileInfo> pkgBins = [];
-            foreach (var info in pkgInfos)
+            foreach (var dir in dirs)
             {
-                await using var fs = File.OpenRead(info.FullName);
-                if (await IsElfBinary(fs)) pkgBins.Add(info);
-            }
+                var pkgInfos = dir
+                    .EnumerateFiles("*", SearchOption.AllDirectories)
+                    .ToList();
 
-            List<string> desktopBins = [];
-
-            foreach (var pkgBin in pkgBins)
-            {
-                var usrBin = new FileInfo(Path.Combine("/usr/bin", pkgBin.Name));
-                var canDelete = pkgBin.FullName.Equals(usrBin.LinkTarget);
-                if (!canDelete) continue;
-
-                Console.WriteLine($"Removing {pkgBin.Name} from {usrBin.FullName}");
-                File.Delete(usrBin.FullName);
-
-                if (!CleanInvalidNames(dir.Name)
-                        .Contains(pkgBin.Name, StringComparison.InvariantCultureIgnoreCase)) continue;
-
-                var desktopFilePath =
-                    Path.Combine(DesktopDir, $"{Path.GetFileNameWithoutExtension(pkgBin.Name)}.desktop");
-                Console.WriteLine($"Removing {desktopFilePath}");
-                File.Delete(desktopFilePath);
-                desktopBins.Add(pkgBin.Name);
-            }
-
-            var iconInfos = pkgInfos
-                .Where(info => IsIcon(info.Extension.ToLower()))
-                .OrderBy(info => info.Name)
-                .ToList();
-
-            foreach (var desktopBin in desktopBins)
-            {
-                foreach (var icon in iconInfos)
+                List<FileInfo> pkgBins = [];
+                foreach (var info in pkgInfos)
                 {
-                    var extension = icon.Extension.ToLower();
-                    string destDir;
-                    if (extension == ".svg")
+                    await using var fs = File.OpenRead(info.FullName);
+                    if (await IsElfBinary(fs))
                     {
-                        destDir = "/usr/share/icons/hicolor/scalable/apps";
+                        pkgBins.Add(info);
                     }
-                    else
-                    {
-                        var sizeMatch = ImageSizeRegex().Match(icon.Name);
-                        var size = sizeMatch.Success && int.TryParse(sizeMatch.Groups[1].Value, out var s)
-                            ? s
-                            : 256;
-                        destDir = $"/usr/share/icons/hicolor/{size}x{size}/apps";
-                    }
-
-                    var destPath = Path.Combine(destDir, $"{desktopBin}{extension}");
-                    if (!File.Exists(destPath)) continue;
-
-                    Console.WriteLine($"Removing icon {destPath}");
-                    File.Delete(destPath);
                 }
+
+                List<string> desktopBins = [];
+
+                foreach (var pkgBin in pkgBins)
+                {
+                    var usrBin = new FileInfo(Path.Combine("/usr/bin", pkgBin.Name));
+                    var canDelete = pkgBin.FullName.Equals(usrBin.LinkTarget);
+                    if (!canDelete)
+                    {
+                        continue;
+                    }
+
+                    await WriteInfoAsync($"Removing {pkgBin.Name} from {usrBin.FullName}", uiMode);
+                    File.Delete(usrBin.FullName);
+
+                    if (!CleanInvalidNames(dir.Name)
+                            .Contains(pkgBin.Name, StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var desktopFilePath =
+                        Path.Combine(DesktopDir, $"{Path.GetFileNameWithoutExtension(pkgBin.Name)}.desktop");
+
+                    if (File.Exists(desktopFilePath))
+                    {
+                        await WriteInfoAsync($"Removing {desktopFilePath}", uiMode);
+                        File.Delete(desktopFilePath);
+                    }
+
+                    desktopBins.Add(pkgBin.Name);
+                }
+
+                var iconInfos = pkgInfos
+                    .Where(info => IsIcon(info.Extension.ToLowerInvariant()))
+                    .OrderBy(info => info.Name)
+                    .ToList();
+
+                foreach (var desktopBin in desktopBins)
+                {
+                    foreach (var icon in iconInfos)
+                    {
+                        var extension = icon.Extension.ToLowerInvariant();
+                        string destDir;
+                        if (extension == ".svg")
+                        {
+                            destDir = "/usr/share/icons/hicolor/scalable/apps";
+                        }
+                        else
+                        {
+                            var sizeMatch = ImageSizeRegex().Match(icon.Name);
+                            var size = sizeMatch.Success && int.TryParse(sizeMatch.Groups[1].Value, out var s)
+                                ? s
+                                : 256;
+                            destDir = $"/usr/share/icons/hicolor/{size}x{size}/apps";
+                        }
+
+                        var destPath = Path.Combine(destDir, $"{desktopBin}{extension}");
+                        if (!File.Exists(destPath))
+                        {
+                            continue;
+                        }
+
+                        await WriteInfoAsync($"Removing icon {destPath}", uiMode);
+                        File.Delete(destPath);
+                    }
+                }
+
+                await WriteInfoAsync($"Removing package directory {dir.FullName}", uiMode);
+                dir.Delete(true);
             }
 
-            // Delete package directory
-            Console.WriteLine($"Removing package directory {dir.FullName}");
-            dir.Delete(true);
+            return true;
         }
-
-        return true;
+        catch (Exception ex)
+        {
+            await WriteErrorAsync($"Failed to remove binary package(s): {ex.Message}", uiMode);
+            return false;
+        }
     }
 
     private static bool IsIcon(string i)
