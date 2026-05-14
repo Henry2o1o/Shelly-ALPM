@@ -255,7 +255,7 @@ public class UnprivilegedOperationService(
     public async Task<List<RssModel>> GetArchNewsAsync(bool all = false)
     {
         var args = all ? "news" + " --json" + " --all" : "news" + " --json";
-        var result = await ExecuteUnprivilegedCommandAsync("Fetch Arch News", args, "--ui-mode");
+        var result = await ExecuteUnprivilegedCommandAsync("Fetch Arch News", args);
         if (!result.Success || string.IsNullOrEmpty(result.Output))
         {
             return [];
