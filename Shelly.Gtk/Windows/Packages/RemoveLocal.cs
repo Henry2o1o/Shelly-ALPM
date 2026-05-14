@@ -19,8 +19,7 @@ public sealed class RemoveLocal(
     public string[] ListensTo => [DirtyScopes.Native, DirtyScopes.NativeInstalled];
     private CancellationTokenSource _cts = new();
     private int _loadGeneration;
-    private SingleSelection _selectionModel = null!;
-    private ListStore _listStore = null!;
+    private readonly ListStore _listStore = ListStore.New(LocalPackageGObject.GetGType());
 
     private Button _removeButton = null!;
 
@@ -40,11 +39,11 @@ public sealed class RemoveLocal(
         _removeButton = (Button)builder.GetObject("remove_button")!;
         _removeButton.SetSensitive(false);
 
-        _listStore = ListStore.New(LocalPackageGObject.GetGType());
-        _selectionModel = SingleSelection.New(_listStore);
-        _selectionModel.CanUnselect = true;
-        _selectionModel.Autoselect = false;
-        columnView.SetModel(_selectionModel);
+        _listStore.RemoveAll();
+        var selectionModel = SingleSelection.New(_listStore);
+        selectionModel.CanUnselect = true;
+        selectionModel.Autoselect = false;
+        columnView.SetModel(selectionModel);
 
         SetupColumns(checkColumn, nameColumn, sizeColumn);
 
@@ -55,7 +54,7 @@ public sealed class RemoveLocal(
         columnView.OnRealize += (_, _) => { Reload(); };
         columnView.OnActivate += (_, _) =>
         {
-            var item = _selectionModel.GetSelectedItem();
+            var item = selectionModel.GetSelectedItem();
             if (item is LocalPackageGObject pkgObj)
             {
                 pkgObj.ToggleSelection();
