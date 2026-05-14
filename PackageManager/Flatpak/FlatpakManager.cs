@@ -2369,6 +2369,9 @@ public class FlatpakManager : IDisposable
         }
     }
     
+    /// <summary>
+    /// Helper method to get all available flatpak repository paths
+    /// </summary>
     public List<string> GetRepositoryPaths()
     {
         var paths = new List<string>();

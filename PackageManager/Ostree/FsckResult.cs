@@ -11,11 +11,18 @@ public class FsckResult
     
     public string Commit { get; set; } = "";
     
-    public List<string> MissingObjects { get; set; }
+    public string Remote { get; set; } = "";
     
-    public List<string> InvalidObjects { get; set; }
+    public string RepoPath { get; set; } = "";
+
+    public List<string> MissingObjects { get; set; } = [];
+
+    public List<string> InvalidObjects { get; set; } = [];
+
+    public string? ErrorMessage { get; set; }
     
-    public string? errorMessage { get; set; }
+    public string FullRef =>
+        $"{Remote}:{Ref}";
     
-    public bool isValid => Status == FsckStatus.Ok;
+    public bool IsValid => Status == FsckStatus.Ok;
 }

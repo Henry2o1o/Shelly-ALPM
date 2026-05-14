@@ -61,6 +61,23 @@ public class FlatpakRepair : Command<FlatpakRepairSettings>
         
         // Step 2 - Verify each commit they point to, removing any invalid objects and noting any missing objects.
 
+        foreach (var repo in repositories)
+        {
+            var refs = ostreeManager.ListRefs(repo);
+
+            foreach (var reference in refs)
+            {
+                reference.Commit = ostreeManager.GetCommitForRef(repo, reference.FullRef);
+
+                if (string.IsNullOrWhiteSpace(reference.Commit))
+                {
+                    AnsiConsole.MarkupLine($"[red]Failed to resolve commit: {reference.FullRef}[/]");
+                }
+                
+                AnsiConsole.MarkupLine($"[green]Commit: {reference.Commit} -> {reference.FullRef}[/]");
+            }
+        }
+        
         // Step 3 - Remove any refs that had an invalid object, and any non-partial refs that had missing objects.
 
         // Step 4 - Prune all objects not referenced by a ref, which gets rid of any possibly invalid non-scanned objects.

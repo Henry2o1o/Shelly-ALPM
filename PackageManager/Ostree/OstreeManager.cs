@@ -88,6 +88,54 @@ public class OstreeManager()
         
     }
 
+    public string? GetCommitForRef(
+        string repoPath,
+        string fullRef)
+    {
+        if (string.IsNullOrWhiteSpace(repoPath))
+        {
+            return null;
+        }
+
+        if (!Directory.Exists(repoPath))
+        {
+            return null;
+        }
+
+        var process = new Process();
+
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = "/usr/bin/ostree",
+            Arguments =
+                $"rev-parse --repo=\"{repoPath}\" \"{fullRef}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        process.Start();
+
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+        {
+            Console.Error.WriteLine(
+                $"Failed to resolve commit for ref '{fullRef}': {stderr}");
+            return null;
+        }
+
+        var commit = stdout.Trim();
+
+        return string.IsNullOrWhiteSpace(commit)
+            ? null
+            : commit;
+    }
+    
     public bool DeleteRef(string repoPath, string remote, string reference)
     {
         return false;
