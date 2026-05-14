@@ -18,114 +18,143 @@ public static partial class LocalManager
     [GeneratedRegex(@"(\d+)x?\d*")]
     private static partial Regex ImageSizeRegex();
 
-    public static async Task<int> InstallBinariesPackage(string filePath)
+    public static async Task<int> InstallBinariesPackage(string filePath, bool uiMode)
     {
-        var extension = Path.GetExtension(filePath);
-
-        var packageName = Path.GetFileName(filePath)
-            .Replace(".pkg.tar" + extension, "")
-            .Replace(".tar" + extension, "");
-        var installDir = Path.Combine(InstallDir, packageName);
-        Directory.CreateDirectory(installDir);
-
-        var installedBinaries = new List<string>();
-        var foundIcons = new SortedDictionary<string, string>();
-
-        await using var fileStream = File.OpenRead(filePath);
-        await using Stream decompressedStream = extension switch
+        try
         {
-            ".gz" => new GZipStream(fileStream, CompressionMode.Decompress),
-            ".zst" => new ZstdStream(fileStream, ZstdStreamMode.Decompress),
-            _ => throw new NotSupportedException($"Unsupported compression: {extension}")
-        };
+            var extension = Path.GetExtension(filePath);
 
-        await using (var tarReader = new TarReader(decompressedStream))
-        {
-            while (await tarReader.GetNextEntryAsync() is { } entry)
+            var packageName = Path.GetFileName(filePath)
+                .Replace(".pkg.tar" + extension, "")
+                .Replace(".tar" + extension, "");
+            var installDir = Path.Combine(InstallDir, packageName);
+            Directory.CreateDirectory(installDir);
+
+            var installedBinaries = new List<string>();
+            var foundIcons = new SortedDictionary<string, string>();
+
+            await using var fileStream = File.OpenRead(filePath);
+            await using Stream decompressedStream = extension switch
             {
-                var destPath = Path.Combine(installDir, entry.Name);
+                ".gz" => new GZipStream(fileStream, CompressionMode.Decompress),
+                ".zst" => new ZstdStream(fileStream, ZstdStreamMode.Decompress),
+                _ => throw new NotSupportedException($"Unsupported compression: {extension}")
+            };
 
-                switch (entry.EntryType)
+            await using (var tarReader = new TarReader(decompressedStream))
+            {
+                while (await tarReader.GetNextEntryAsync() is { } entry)
                 {
-                    case TarEntryType.Directory:
-                    {
-                        Directory.CreateDirectory(destPath);
-                        break;
-                    }
-                    case TarEntryType.RegularFile:
-                    {
-                        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                        await entry.ExtractToFileAsync(destPath, true);
+                    var destPath = Path.Combine(installDir, entry.Name);
 
-                        var ext = Path.GetExtension(destPath).ToLower();
-                        if (IsIcon(ext))
+                    switch (entry.EntryType)
+                    {
+                        case TarEntryType.Directory:
                         {
-                            var iconFileName = Path.GetFileNameWithoutExtension(destPath).ToLower();
-                            foundIcons[iconFileName] = destPath;
+                            Directory.CreateDirectory(destPath);
+                            break;
                         }
-
-                        // Check if it's an ELF binary and create symlink in /usr/bin
-                        if (entry.DataStream is not null)
+                        case TarEntryType.RegularFile:
                         {
+                            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                            await entry.ExtractToFileAsync(destPath, true);
+
+                            var ext = Path.GetExtension(destPath).ToLowerInvariant();
+                            if (IsIcon(ext))
+                            {
+                                var iconFileName = Path.GetFileNameWithoutExtension(destPath).ToLowerInvariant();
+                                foundIcons[iconFileName] = destPath;
+                            }
+
                             await using var fs = File.OpenRead(destPath);
                             if (string.IsNullOrWhiteSpace(Path.GetExtension(destPath)) && await IsElfBinary(fs))
                             {
                                 var binaryName = Path.GetFileName(destPath);
                                 var linkPath = Path.Combine("/usr/bin", binaryName);
-                                if (File.Exists(linkPath)) File.Delete(linkPath);
+                                if (File.Exists(linkPath))
+                                {
+                                    File.Delete(linkPath);
+                                }
+
                                 File.CreateSymbolicLink(linkPath, destPath);
-
                                 installedBinaries.Add(binaryName);
-                            }
-                        }
 
-                        break;
-                    }
-                    case TarEntryType.SymbolicLink:
-                    {
-                        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                        if (File.Exists(destPath)) File.Delete(destPath);
-                        File.CreateSymbolicLink(destPath, entry.LinkName);
-                        break;
+                                await WriteInfoAsync($"Installed binary symlink: {linkPath} -> {destPath}", uiMode);
+                            }
+
+                            break;
+                        }
+                        case TarEntryType.SymbolicLink:
+                        {
+                            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                            if (File.Exists(destPath))
+                            {
+                                File.Delete(destPath);
+                            }
+
+                            File.CreateSymbolicLink(destPath, entry.LinkName);
+                            await WriteInfoAsync($"Created symbolic link: {destPath} -> {entry.LinkName}", uiMode);
+                            break;
+                        }
                     }
                 }
             }
-        }
 
-        AnsiConsole.MarkupLine($"[green]Extracted to {installDir.EscapeMarkup()}[/]");
+            await WriteSuccessAsync($"Extracted to {installDir}", uiMode);
 
-        foreach (var binaryName in installedBinaries)
-        {
-            var iconName = "application-x-executable";
-
-            if (!CleanInvalidNames(packageName)
-                    .Contains(binaryName, StringComparison.OrdinalIgnoreCase)) continue;
-
-            if (foundIcons.Count > 0)
+            foreach (var binaryName in installedBinaries)
             {
-                AnsiConsole.MarkupLine(
-                    $"[cyan]Found icon for {binaryName.EscapeMarkup()}: {foundIcons.FirstOrDefault().Key.EscapeMarkup()}[/]");
-                var installedIconName = InstallIcon(foundIcons.FirstOrDefault().Value, binaryName);
-                if (installedIconName != null) iconName = installedIconName;
+                var iconName = "application-x-executable";
+
+                if (!CleanInvalidNames(packageName)
+                        .Contains(binaryName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (foundIcons.Count > 0)
+                {
+                    var icon = foundIcons.FirstOrDefault();
+                    await WriteInfoAsync($"Found icon for {binaryName}: {icon.Key}", uiMode);
+                    var installedIconName = InstallIcon(icon.Value, binaryName, uiMode);
+                    if (installedIconName != null)
+                    {
+                        iconName = installedIconName;
+                    }
+                }
+                else
+                {
+                    await WriteWarningAsync($"No icon found for {binaryName}, using default", uiMode);
+                }
+
+                await WriteInfoAsync("Creating desktop entry...", uiMode);
+                CreateDesktopEntry(
+                    binaryName,
+                    binaryName,
+                    uiMode,
+                    $"{binaryName} - Installed from {packageName}",
+                    iconName,
+                    false,
+                    "Utility;"
+                );
+            }
+
+            if (installedBinaries.Count == 0)
+            {
+                await WriteWarningAsync("No executable ELF binaries were found in the archive.", uiMode);
             }
             else
             {
-                AnsiConsole.MarkupLine($"[yellow]No icon found for {binaryName.EscapeMarkup()}, using default[/]");
+                await WriteSuccessAsync("Desktop entries created.", uiMode);
             }
 
-            Console.WriteLine("Creating desktop entry...");
-            CreateDesktopEntry(
-                binaryName,
-                binaryName,
-                $"{binaryName} - Installed from {packageName}",
-                iconName,
-                false,
-                "Utility;"
-            );
-            AnsiConsole.MarkupLine("[green]Desktop Entries Created[/]");
+            return 0;
         }
-
-        return 0;
+        catch (Exception ex)
+        {
+            await WriteErrorAsync($"Failed to install binary package: {ex.Message}", uiMode);
+            return 1;
+        }
     }
 
     public static List<LocalPackageDto> GetInstalledBinaryPackages()
@@ -296,6 +325,8 @@ public static partial class LocalManager
 
     private static async Task<bool> IsElfBinary(Stream stream)
     {
+        if (stream.CanSeek) stream.Seek(0, SeekOrigin.Begin);
+
         var magic = new byte[4];
         var bytesRead = await stream.ReadAsync(magic);
 
@@ -307,6 +338,7 @@ public static partial class LocalManager
     private static void CreateDesktopEntry(
         string appName,
         string executablePath,
+        bool uiMode,
         string? comment = null,
         string icon = "application-x-executable",
         bool terminal = false,
@@ -331,14 +363,14 @@ public static partial class LocalManager
         {
             Directory.CreateDirectory(DesktopDir);
             File.WriteAllText(desktopFilePath, content.ToString());
-            SetFilePermissions(desktopFilePath, "644");
-            UpdateDesktopDatabase(DesktopDir);
+            SetFilePermissions(desktopFilePath, "644", uiMode);
+            UpdateDesktopDatabase(DesktopDir, uiMode);
 
-            AnsiConsole.MarkupLine($"[green]Desktop entry created: {desktopFilePath.EscapeMarkup()}[/]");
+            WriteSuccess($"Desktop entry created: {desktopFilePath}", uiMode);
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[yellow]Warning: Could not create desktop entry: {ex.Message.EscapeMarkup()}[/]");
+            WriteWarning($"Warning: Could not create desktop entry: {ex.Message}", uiMode);
         }
     }
 
@@ -350,7 +382,7 @@ public static partial class LocalManager
             .Replace("\\", "-");
     }
 
-    private static void SetFilePermissions(string filePath, string permissions)
+    private static void SetFilePermissions(string filePath, string permissions, bool uiMode)
     {
         try
         {
@@ -367,11 +399,11 @@ public static partial class LocalManager
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[yellow]Warning: Could not set file permissions: {ex.Message.EscapeMarkup()}[/]");
+            WriteWarning($"Warning: Could not set file permissions: {ex.Message}", uiMode);
         }
     }
 
-    private static void UpdateDesktopDatabase(string desktopDir)
+    private static void UpdateDesktopDatabase(string desktopDir, bool uiMode)
     {
         try
         {
@@ -388,11 +420,11 @@ public static partial class LocalManager
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[yellow]Warning: Could not set desktop database: {ex.Message.EscapeMarkup()}[/]");
+            WriteWarning($"Warning: Could not set desktop database: {ex.Message}", uiMode);
         }
     }
 
-    private static string? InstallIcon(string iconPath, string appName)
+    private static string? InstallIcon(string iconPath, string appName, bool uiMode)
     {
         try
         {
@@ -432,15 +464,81 @@ public static partial class LocalManager
             }
             catch (Exception ex)
             {
-                AnsiConsole.MarkupLine($"[yellow]Warning: Failed to update icon cache: {ex.Message.EscapeMarkup()}[/]");
+                WriteWarning($"Warning: Failed to update icon cache: {ex.Message}", uiMode);
             }
 
             return appName.ToLower();
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[yellow]Warning: Could not install icon: {ex.Message.EscapeMarkup()}[/]");
+            WriteWarning($"Warning: Could not install icon: {ex.Message}", uiMode);
             return null;
         }
+    }
+
+    private static async Task WriteInfoAsync(string message, bool uiMode)
+    {
+        if (uiMode)
+        {
+            await Console.Error.WriteLineAsync(message);
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[cyan]{message.EscapeMarkup()}[/]");
+    }
+
+    private static async Task WriteWarningAsync(string message, bool uiMode)
+    {
+        if (uiMode)
+        {
+            await Console.Error.WriteLineAsync(message);
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[yellow]{message.EscapeMarkup()}[/]");
+    }
+
+    private static async Task WriteErrorAsync(string message, bool uiMode)
+    {
+        if (uiMode)
+        {
+            await Console.Error.WriteLineAsync(message);
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[red]{message.EscapeMarkup()}[/]");
+    }
+
+    private static async Task WriteSuccessAsync(string message, bool uiMode)
+    {
+        if (uiMode)
+        {
+            await Console.Error.WriteLineAsync(message);
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[green]{message.EscapeMarkup()}[/]");
+    }
+
+    private static void WriteWarning(string message, bool uiMode)
+    {
+        if (uiMode)
+        {
+            Console.Error.WriteLine(message);
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[yellow]{message.EscapeMarkup()}[/]");
+    }
+
+    private static void WriteSuccess(string message, bool uiMode)
+    {
+        if (uiMode)
+        {
+            Console.Error.WriteLine(message);
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[green]{message.EscapeMarkup()}[/]");
     }
 }

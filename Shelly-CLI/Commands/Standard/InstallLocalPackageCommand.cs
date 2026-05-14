@@ -60,11 +60,24 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
 
         if (await LocalManager.IsBinariesPackage(settings.PackageLocation))
         {
-            // TODO: Add UI & Console mode if needed
-            return await LocalManager.InstallBinariesPackage(settings.PackageLocation);
+            if (Program.IsUiMode)
+            {
+                return await HandleUiModeBinaryInstall(settings);
+            }
+
+            return await HandleConsoleBinaryInstall(settings);
         }
 
-        return 0;
+        if (Program.IsUiMode)
+        {
+            await Console.Error.WriteLineAsync("Error: Unsupported local package format.");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[red]Error: Unsupported local package format.[/]");
+        }
+
+        return 1;
     }
 
     private static async Task<bool> InitializeAndInstallLocalAlpmPackage(InstallLocalPackageSettings settings)
@@ -113,5 +126,32 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
 
         await Console.Error.WriteLineAsync("Installation complete.");
         return 0;
+    }
+
+    private static async Task<int> HandleConsoleBinaryInstall(InstallLocalPackageSettings settings)
+    {
+        return await LocalManager.InstallBinariesPackage(
+            Path.GetFullPath(settings.PackageLocation),
+            uiMode: false);
+    }
+
+    private static async Task<int> HandleUiModeBinaryInstall(InstallLocalPackageSettings settings)
+    {
+        await Console.Error.WriteLineAsync($"Installing local binary package: {settings.PackageLocation}");
+
+        var result = await LocalManager.InstallBinariesPackage(
+            Path.GetFullPath(settings.PackageLocation),
+            uiMode: true);
+
+        if (result == 0)
+        {
+            await Console.Error.WriteLineAsync("Installation complete.");
+        }
+        else
+        {
+            await Console.Error.WriteLineAsync("Installation failed.");
+        }
+
+        return result;
     }
 }
