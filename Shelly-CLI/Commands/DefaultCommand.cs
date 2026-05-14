@@ -96,7 +96,7 @@ public class DefaultCommand : AsyncCommand<DefaultCommandSettings>
             Shelly_CLI.Configuration.DefaultCommand.SyncForce => new SyncCommand().Execute(context,
                 new SyncSettings { Force = true }),
             Shelly_CLI.Configuration.DefaultCommand.ListInstalled => new ListInstalledCommand().Execute(context,
-                new ListSettings()),
+                new AlpmListSettings()),
             _ => 1
         };
     }
