@@ -29,7 +29,7 @@ public partial class FlatpakPackageDto
         $"{GetKindString()}/{Id}/{Arch}/{Branch}";
 
     public string FullRef =>
-        $"{remote}:{Ref}";
+        $"{Remote}:{Ref}";
 
     private string GetKindString()
     {
