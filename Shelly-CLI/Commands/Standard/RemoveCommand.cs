@@ -134,7 +134,7 @@ public class RemoveCommand : AsyncCommand<RemovePackageSettings>
             flags |= AlpmTransFlag.Cascade;
         }
 
-        var result = await manager.RemovePackages(packageList, flags);
+        var result = await manager.RemovePackages(packageList, flags, settings.OptDeps);
         if (settings.RemoveConfig)
         {
             HandleConfigRemoval(settings.Packages);

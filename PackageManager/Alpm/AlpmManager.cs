@@ -1265,6 +1265,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                         $"[ALPM_WARN] Failed to set reason for {name}: {GetErrorMessage(err)}");
                     // don't abort — install already succeeded
                 }
+                Console.Error.WriteLine($"[DEBUG] Installed optional dependency: {name}");
             }
         }
         finally
@@ -1389,6 +1390,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                      where !string.IsNullOrEmpty(name)
                      select name)
             {
+                Console.Error.WriteLine($"[DEBUG] Removing optional dependency: {name}");
                 optDepCandidates.Add(name);
             }
 
@@ -1397,10 +1399,16 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
             foreach (var name in optDepCandidates)
             {
-                var lp = AlpmReference.DbGetPkg(localDb, name);
-                if (lp == IntPtr.Zero) continue; // not installed
-                if (GetPkgReason(lp) != AlpmPkgReason.Depend) continue; // user explicitly wanted it
-                if (PackageChecker.IsStillNeededByOther(lp, removedSet)) continue; // someone else still wants it
+                var lp = DbGetPkg(localDb, name);
+                if (lp == IntPtr.Zero) { Console.Error.WriteLine($"[DEBUG] {name}: not installed"); continue; }
+                var reason = GetPkgReason(lp);
+                if (reason != AlpmPkgReason.Depend) { Console.Error.WriteLine($"[DEBUG] {name}: reason={reason}, skip"); continue; }
+                if (PackageChecker.IsStillNeededByOther(lp, removedSet))
+                {
+                    Console.Error.WriteLine($"[DEBUG] {name}: still required/optional-for another package, skip");
+                    continue;
+                }
+                Console.Error.WriteLine($"[DEBUG] {name}: queued for removal");
                 toAlsoRemove.Add(lp);
             }
         }
@@ -1561,6 +1569,32 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 Replaces?.Invoke(this, new AlpmReplacesEventArgs(pkg.Name, pkg.Repository, replaces));
             }
         }
+    }
+
+    public void RaiseQuestion(AlpmQuestionEventArgs args)
+    {
+        Question?.Invoke(this, args);
+    }
+
+    /// <summary>
+    /// Marks an installed package in the local DB with the Depend install reason. Used by
+    /// the AUR layer to flag user-selected optional dependencies after they are installed
+    /// in a separate transaction. Returns true when the reason was successfully set.
+    /// </summary>
+    public bool MarkPackageAsDepend(string packageName)
+    {
+        if (_handle == IntPtr.Zero) Initialize();
+        var localDb = AlpmReference.GetLocalDb(_handle);
+        if (localDb == IntPtr.Zero) return false;
+        var localPkg = AlpmReference.DbGetPkg(localDb, packageName);
+        if (localPkg == IntPtr.Zero) return false;
+        if (PkgSetReason(localPkg, AlpmPkgReason.Depend) != 0)
+        {
+            var err = ErrorNumber(_handle);
+            Console.Error.WriteLine($"[ALPM_WARN] Failed to set reason for {packageName}: {GetErrorMessage(err)}");
+            return false;
+        }
+        return true;
     }
 
     public Task<bool> InstallLocalPackage(string path, AlpmTransFlag flags = AlpmTransFlag.None)

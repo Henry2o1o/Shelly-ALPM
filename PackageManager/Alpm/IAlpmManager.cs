@@ -44,6 +44,13 @@ public interface IAlpmManager
     Task<bool> InstallLocalPackage(string path, AlpmTransFlag flags = AlpmTransFlag.None);
 
     /// <summary>
+    /// Raises the Question event from outside the AlpmManager so other layers (e.g., the AUR
+    /// package manager) can reuse the existing question/response pipeline (CLI prompts and
+    /// Gtk dialogs) without duplicating the event surface.
+    /// </summary>
+    void RaiseQuestion(AlpmQuestionEventArgs args);
+
+    /// <summary>
     /// This installs the first package that provides a given dependency.
     /// </summary>
     string GetPackageNameFromProvides(string provides, AlpmTransFlag flags = AlpmTransFlag.None);

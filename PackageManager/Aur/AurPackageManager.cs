@@ -385,8 +385,18 @@ public sealed class AurPackageManager(string? configPath = null)
         });
     }
 
+    /// <summary>
+    /// When true, suppresses the optional-dependency selection prompt for the current
+    /// invocation. Used to prevent re-prompting during recursive AUR fallback installs
+    /// triggered by previously selected opt-deps.
+    /// </summary>
+    private bool _skipOptDepsPrompt;
+
     public async Task InstallPackages(List<string> packageNames)
     {
+        // Per-call map of selected optional dependencies (by top-level package).
+        var selectedOptDepsByPkg = new Dictionary<string, List<string>>();
+
         var totalCount = packageNames.Count;
         for (var i = 0; i < packageNames.Count; i++)
         {
@@ -436,6 +446,19 @@ public sealed class AurPackageManager(string? configPath = null)
                 Message = "Building package with makepkg"
             });
             var pkgbuildInfo = PkgbuildParser.Parse(Path.Combine(tempPath, "PKGBUILD"));
+
+            // Prompt the user for optional dependencies declared in the PKGBUILD. The selected
+            // names are installed after the main AUR package is committed (see post-install
+            // block). The prompt is suppressed when this call is itself a recursive AUR
+            // fallback install triggered by an earlier opt-deps selection.
+            if (!_skipOptDepsPrompt)
+            {
+                var selectedOptDeps = PromptAurOptionalDeps(packageName, pkgbuildInfo.OptDepends);
+                if (selectedOptDeps.Count > 0)
+                {
+                    selectedOptDepsByPkg[packageName] = selectedOptDeps;
+                }
+            }
 
             // Track makedepends (and checkdepends) that are not runtime deps and not yet installed
             var runtimeDepNames = pkgbuildInfo.ParsedDepends.Select(d => d.Name).ToHashSet();
@@ -626,6 +649,27 @@ public sealed class AurPackageManager(string? configPath = null)
                 continue;
             }
 
+            // Post-install: install any user-selected optional dependencies. Repo-resolvable
+            // names go through _alpm.InstallPackages; the rest are attempted as a recursive AUR
+            // install (with the prompt suppressed to avoid re-prompting). Truly missing names
+            // produce a warning and do NOT fail the main install.
+            if (selectedOptDepsByPkg.TryGetValue(packageName, out var optDeps) && optDeps.Count > 0)
+            {
+                try
+                {
+                    await InstallSelectedOptDeps(packageName, optDeps);
+                }
+                catch (Exception ex)
+                {
+                    BuildOutput?.Invoke(this, new BuildOutputEventArgs
+                    {
+                        PackageName = packageName,
+                        Line = $"[Shelly] Warning: failed to install some optional dependencies: {ex.Message}",
+                        IsError = true
+                    });
+                }
+            }
+
             // Remove build-only dependencies (makedepends/checkdepends) that were installed for this build
             if (buildOnlyDeps.Count > 0)
             {
@@ -673,6 +717,133 @@ public sealed class AurPackageManager(string? configPath = null)
                 TotalCount = totalCount,
                 Status = PackageProgressStatus.Completed
             });
+        }
+    }
+
+    /// <summary>
+    /// Raises a SelectOptionalDeps question through _alpm so the existing CLI prompt and Gtk
+    /// dialog pipelines react identically to a sync-path prompt. Returns the bare optdep names
+    /// (the part before the first ':') that the user selected.
+    /// </summary>
+    private List<string> PromptAurOptionalDeps(string pkgName, List<string> optDepends)
+    {
+        if (optDepends == null || optDepends.Count == 0)
+            return new List<string>();
+
+        var args = new AlpmQuestionEventArgs(
+            AlpmQuestionType.SelectOptionalDeps,
+            $"Select optional dependencies for {pkgName}",
+            optDepends);
+        _alpm.RaiseQuestion(args);
+        args.WaitForResponse();
+
+        return optDepends
+            .Where((_, i) => (args.Response & (1L << i)) != 0)
+            .Select(d => d.Split(':', 2)[0].Trim())
+            .Where(n => !string.IsNullOrEmpty(n))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Splits selected optional-dependency names into (repo-resolvable, AUR-fallback) buckets
+    /// using the existing sync-DB lookup. A name that is satisfied by any sync DB (directly or
+    /// via provides) is treated as repo; everything else is treated as AUR-fallback.
+    /// </summary>
+    private (List<string> repo, List<string> aur) PartitionByRepoAvailability(IEnumerable<string> names)
+    {
+        var repo = new List<string>();
+        var aur = new List<string>();
+        foreach (var name in names.Distinct())
+        {
+            if (_alpm.IsDepdencySatisfiedBySyncDbs(name))
+            {
+                repo.Add(_alpm.FindSatisfierInSyncDbs(name) ?? name);
+            }
+            else
+            {
+                aur.Add(name);
+            }
+        }
+        return (repo, aur);
+    }
+
+    /// <summary>
+    /// Marks the given packages with AlpmPkgReason.Depend in the local DB, mirroring the
+    /// post-commit reason loop on the sync install path. Failures are logged but never
+    /// propagated.
+    /// </summary>
+    private void MarkAsDepend(IEnumerable<string> names)
+    {
+        foreach (var name in names)
+        {
+            _alpm.MarkPackageAsDepend(name);
+        }
+    }
+
+    /// <summary>
+    /// Installs the user-selected optional dependencies for an AUR package. Repo names go
+    /// through the sync install path; AUR-only names are installed via a recursive AUR build
+    /// with the opt-deps prompt suppressed. Unresolvable names emit a warning and are skipped.
+    /// </summary>
+    private async Task InstallSelectedOptDeps(string parentPkg, List<string> selectedNames)
+    {
+        var (repoMatches, aurFallbacks) = PartitionByRepoAvailability(selectedNames);
+
+        if (repoMatches.Count > 0)
+        {
+            BuildOutput?.Invoke(this, new BuildOutputEventArgs
+            {
+                PackageName = parentPkg,
+                Line = $"[Shelly] Installing optional dependencies from repo: {string.Join(", ", repoMatches)}",
+                IsError = false
+            });
+            try
+            {
+                await _alpm.InstallPackages(repoMatches);
+                _alpm.Refresh();
+                MarkAsDepend(repoMatches);
+            }
+            catch (Exception ex)
+            {
+                BuildOutput?.Invoke(this, new BuildOutputEventArgs
+                {
+                    PackageName = parentPkg,
+                    Line = $"[Shelly] Warning: failed to install repo optional dependencies: {ex.Message}",
+                    IsError = true
+                });
+            }
+        }
+
+        if (aurFallbacks.Count > 0)
+        {
+            var previous = _skipOptDepsPrompt;
+            _skipOptDepsPrompt = true;
+            try
+            {
+                foreach (var name in aurFallbacks)
+                {
+                    BuildOutput?.Invoke(this, new BuildOutputEventArgs
+                    {
+                        PackageName = parentPkg,
+                        Line = $"[Shelly] Attempting AUR install for optional dependency: {name}",
+                        IsError = false
+                    });
+                    try
+                    {
+                        await InstallPackages(new List<string> { name });
+                        MarkAsDepend(new[] { name });
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(
+                            $"Optional dependency '{name}' not found in sync DBs or AUR: {ex.Message}"));
+                    }
+                }
+            }
+            finally
+            {
+                _skipOptDepsPrompt = previous;
+            }
         }
     }
 
