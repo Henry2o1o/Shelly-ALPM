@@ -1,4 +1,5 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Events;
 using PackageManager.Aur;
 using Shelly_CLI.Configuration;
 using Shelly_CLI.Utility;
@@ -113,7 +114,7 @@ public static class AurSplitOutput
         {
             var name = e.PackageName ?? "unknown";
             var pct = e.Percent ?? 0;
-            var actionType = e.ProgressType.ToString();
+            var actionType = e.ProgressType.ToFriendlyLabel();
 
             lock (renderLock)
             {

@@ -1,4 +1,5 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Events;
 using Shelly_CLI.Configuration;
 using Shelly_CLI.Utility;
 using Spectre.Console;
@@ -27,16 +28,16 @@ public static class StandardSinglePaneOutput
         {
             var name = e.PackageName ?? "unknown";
             var pct = e.Percent ?? 0;
-            var actionType = e.ProgressType.ToString();
+            var label = e.ProgressType.ToFriendlyLabel();
 
             if (!emittedRetrieving
-                && actionType.StartsWith("Download", StringComparison.OrdinalIgnoreCase))
+                && e.ProgressType == AlpmProgressType.PackageDownload)
             {
                 emittedRetrieving = true;
                 region.WriteLine("[bold]::[/] Retrieving packages...");
             }
 
-            region.UpdateBar(name, e.Current ?? 0, e.HowMany ?? 0, pct, actionType);
+            region.UpdateBar(name, e.Current ?? 0, e.HowMany ?? 0, pct, label);
         };
 
         manager.PackageOperation += (_, e) =>

@@ -1,4 +1,5 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Events;
 using PackageManager.Aur;
 using Shelly_CLI.Configuration;
 using Shelly_CLI.Utility;
@@ -67,7 +68,7 @@ public static class AurSinglePaneOutput
         {
             var name = e.PackageName ?? "unknown";
             var pct = e.Percent ?? 0;
-            region.UpdateBar(name, e.Current ?? 0, e.HowMany ?? 0, pct, e.ProgressType.ToString());
+            region.UpdateBar(name, e.Current ?? 0, e.HowMany ?? 0, pct, e.ProgressType.ToFriendlyLabel());
         };
 
         manager.BuildOutput += (_, e) =>

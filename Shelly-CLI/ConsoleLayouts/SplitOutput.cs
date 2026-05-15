@@ -1,4 +1,5 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Events;
 using Shelly_CLI.Configuration;
 using Shelly_CLI.Utility;
 using Spectre.Console;
@@ -68,7 +69,7 @@ public static class SplitOutput
         {
             var name = e.PackageName ?? "unknown";
             var pct = e.Percent ?? 0;
-            var actionType = e.ProgressType.ToString();
+            var label = e.ProgressType.ToFriendlyLabel();
 
             lock (renderLock)
             {
@@ -82,7 +83,7 @@ public static class SplitOutput
                 r.Current = e.Current ?? 0;
                 r.HowMany = e.HowMany ?? 0;
                 r.Pct = pct;
-                r.ActionType = actionType;
+                r.ActionType = label;
                 if (pct >= 100) r.Completed = true;
 
                 RebuildProgressLines(frame: 0);
