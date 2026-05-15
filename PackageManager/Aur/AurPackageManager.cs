@@ -710,6 +710,17 @@ public sealed class AurPackageManager(string? configPath = null)
                 }
             }
 
+            // Clean makepkg build artifacts (src/, pkg/) so a later fresh-clone recovery
+            // isn't blocked by root-owned fakeroot-staged trees inside the cache dir.
+            // Best-effort; failures are logged but never fail the install.
+            await CleanBuildArtifactsAsync(user, tempPath);
+            BuildOutput?.Invoke(this, new BuildOutputEventArgs
+            {
+                PackageName = packageName,
+                Line = "[Shelly] Cleaned build artifacts (src/, pkg/)",
+                IsError = false
+            });
+
             PackageProgress?.Invoke(this, new PackageProgressEventArgs
             {
                 PackageName = packageName,
@@ -1152,6 +1163,34 @@ public sealed class AurPackageManager(string? configPath = null)
         return (process.ExitCode, await stdoutTask, await stderrTask);
     }
 
+    /// <summary>
+    /// Best-effort cleanup of makepkg build artifacts (<c>src/</c> and <c>pkg/</c>) inside
+    /// the per-package cache dir. Mirrors the sudo→root fallback strategy in
+    /// <see cref="RemoveCacheDirAsync"/> because <c>pkg/</c> commonly contains
+    /// fakeroot-staged root-owned files. Never throws; cleanup failure is logged only.
+    /// </summary>
+    private static async Task CleanBuildArtifactsAsync(string user, string tempPath)
+    {
+        if (!Directory.Exists(tempPath)) return;
+
+        foreach (var sub in new[] { "src", "pkg" })
+        {
+            var path = Path.Combine(tempPath, sub);
+            if (!Directory.Exists(path)) continue;
+
+            var (rc, _, rerr) = await RunProcessAsync(
+                "sudo", $"-u {user} rm -rf {path}");
+            if (rc == 0) continue;
+
+            var (rc2, _, rerr2) = await RunProcessAsync("rm", $"-rf {path}");
+            if (rc2 != 0)
+            {
+                await Console.Error.WriteLineAsync(
+                    $"[Shelly] could not clean {path}: {rerr2.Trim()} / {rerr.Trim()}");
+            }
+        }
+    }
+
     private static async Task<bool> RemoveCacheDirAsync(string user, string tempPath)
     {
         if (!Directory.Exists(tempPath))
@@ -1258,6 +1297,10 @@ public sealed class AurPackageManager(string? configPath = null)
 
             if (needsClone)
             {
+                // Strip root-owned src/ and pkg/ first so the subsequent user-level
+                // rm -rf on the cache dir isn't blocked by fakeroot-staged artifacts.
+                await CleanBuildArtifactsAsync(user, tempPath);
+
                 if (!await RemoveCacheDirAsync(user, tempPath))
                 {
                     return false;
