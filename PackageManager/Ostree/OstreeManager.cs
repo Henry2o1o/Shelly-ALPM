@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using PackageManager.Flatpak;
+using PackageManager.Ostree.Enums;
 
 namespace PackageManager.Ostree;
 
@@ -207,6 +209,128 @@ public class OstreeManager()
             OstreeReference.GObjectUnref(file);
         }
     }
+    
+    public FsckResult FsckCommit(
+        string repoPath,
+        string commit)
+    {
+        var result = new FsckResult
+        {
+            Commit = commit,
+            MissingObjects = [],
+            InvalidObjects = []
+        };
+
+        var repo = OpenRepo(repoPath);
+
+        if (repo == null)
+        {
+            result.Status =
+                FsckStatus.UnknownError;
+
+            result.ErrorMessage =
+                "Failed to open OSTree repo";
+
+            return result;
+        }
+
+        try
+        {
+            var success =
+                OstreeReference.RepoFsckObject(
+                    repo.Value,
+                    (int)OstreeObjectType.Commit,
+                    commit,
+                    IntPtr.Zero,
+                    out var error);
+
+            if (success)
+            {
+                result.Status =
+                    FsckStatus.Ok;
+
+                return result;
+            }
+
+            var errorMessage =
+                FlatpakReference.GetErrorMessage(error);
+
+            result.ErrorMessage =
+                errorMessage;
+
+            if (errorMessage.Contains(
+                    "No such metadata object"))
+            {
+                result.Status =
+                    FsckStatus.MissingObjects;
+
+                result.MissingObjects.Add(commit);
+            }
+            else if (errorMessage.Contains(
+                         "corrupted"))
+            {
+                result.Status =
+                    FsckStatus.CorruptedCommit;
+
+                result.InvalidObjects.Add(commit);
+            }
+            else
+            {
+                result.Status =
+                    FsckStatus.UnknownError;
+            }
+
+            if (error != IntPtr.Zero)
+            {
+                OstreeReference.GErrorFree(error);
+            }
+
+            return result;
+        }
+        finally
+        {
+            OstreeReference.GObjectUnref(repo.Value);
+        }
+    }
+    
+    private IntPtr? OpenRepo(string repoPath)
+    {
+        var file =
+            OstreeReference.GFileNewForPath(repoPath);
+
+        if (file == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        var repo =
+            OstreeReference.RepoNew(file);
+
+        OstreeReference.GObjectUnref(file);
+
+        if (repo == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        if (!OstreeReference.RepoOpen(
+                repo,
+                IntPtr.Zero,
+                out var error))
+        {
+            if (error != IntPtr.Zero)
+            {
+                OstreeReference.GErrorFree(error);
+            }
+
+            OstreeReference.GObjectUnref(repo);
+
+            return null;
+        }
+
+        return repo;
+    }
+    
     
     public bool DeleteRef(string repoPath, string remote, string reference)
     {

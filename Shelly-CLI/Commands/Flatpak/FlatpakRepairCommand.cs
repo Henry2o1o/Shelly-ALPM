@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using PackageManager.Flatpak;
 using PackageManager.Ostree;
+using PackageManager.Ostree.Enums;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -14,6 +15,9 @@ public class FlatpakRepair : Command<FlatpakRepairSettings>
         var flatpakManager = new FlatpakManager();
         var ostreeManager = new OstreeManager();
         var status = AnsiConsole.Status();
+
+        List<OstreeRef> invalidRefs = [];
+        List<OstreeRef> validRefs = [];
         
         // Step 1 - Scan all locally available refs, removing any that don't correspond to a deployed ref.
 
@@ -67,16 +71,55 @@ public class FlatpakRepair : Command<FlatpakRepairSettings>
 
             foreach (var reference in refs)
             {
-                reference.Commit = ostreeManager.GetCommitForRef(repo, reference.FullRef);
+                var commit = ostreeManager.GetCommitForRef(repo, reference.FullRef)!;
 
-                if (string.IsNullOrWhiteSpace(reference.Commit))
-                {
-                    AnsiConsole.MarkupLine($"[red]Failed to resolve commit: {reference.FullRef}[/]");
-                }
+                reference.Commit = commit;
                 
-                AnsiConsole.MarkupLine($"[green]Commit: {reference.Commit} -> {reference.FullRef}[/]");
+                if (string.IsNullOrWhiteSpace(commit))
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]Missing commit:[/] {reference.FullRef}");
+                    
+                    invalidRefs.Add(reference);
+                    continue;
+                }
+
+                var fsck = ostreeManager.FsckCommit(repo, commit);
+
+                if (fsck.Status == FsckStatus.Ok)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[green]OK:[/] {reference.FullRef} -> {commit}");
+                    
+                    validRefs.Add(reference);
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]FSCK FAIL:[/] {reference.FullRef} ({fsck.Status})");
+                    
+                    invalidRefs.Add(reference);
+
+                    if (fsck.MissingObjects.Count > 0)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"  Missing: {string.Join(", ", fsck.MissingObjects)}");
+                    }
+
+                    if (fsck.InvalidObjects.Count > 0)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"  Invalid: {string.Join(", ", fsck.InvalidObjects)}");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(fsck.ErrorMessage))
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"  Error: {fsck.ErrorMessage}");
+                    }
+                }
             }
-        }
+        }        
         
         // Step 3 - Remove any refs that had an invalid object, and any non-partial refs that had missing objects.
 

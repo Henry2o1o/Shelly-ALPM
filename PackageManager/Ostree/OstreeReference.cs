@@ -63,6 +63,16 @@ internal static partial class OstreeReference
         IntPtr repo,
         IntPtr cancellable,
         out IntPtr error);
+    
+    [LibraryImport(LibName, EntryPoint = "ostree_repo_fsck_object",
+        StringMarshalling = StringMarshalling.Utf8)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RepoFsckObject(
+        IntPtr repo,
+        int objectType,
+        string checksum,
+        IntPtr cancellable,
+        out IntPtr error);
 
     [LibraryImport(LibName, EntryPoint = "ostree_repo_resolve_rev",
         StringMarshalling = StringMarshalling.Utf8)]
