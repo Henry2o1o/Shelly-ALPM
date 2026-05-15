@@ -410,13 +410,19 @@ public sealed class AurPackageManager(string? configPath = null)
                 Status = PackageProgressStatus.Downloading
             });
             var newPkgbuild = await FetchPkgbuildAsync(packageName);
-            PkgbuildDiffRequest?.Invoke(this,new PkgbuildDiffRequestEventArgs()
+            var args = new PkgbuildDiffRequestEventArgs
             {
                 PackageName = packageName,
                 OldPkgbuild = string.Empty,
                 NewPkgbuild = newPkgbuild ?? string.Empty,
                 ProceedWithUpdate = true
-            });
+            };
+            PkgbuildDiffRequest?.Invoke(this,args);
+
+            if (!args.ProceedWithUpdate)
+            {
+                continue;
+            }
 
             var success = await DownloadPackage(packageName);
 
