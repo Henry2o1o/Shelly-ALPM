@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace PackageManager.Ostree;
 
@@ -9,7 +10,7 @@ public class OstreeManager()
 {
     public List<OstreeRef> ListRefs(string repoPath)
     {
-        var refs = new  List<OstreeRef>();
+        var refs = new List<OstreeRef>();
 
         if (string.IsNullOrWhiteSpace(repoPath))
         {
@@ -21,56 +22,100 @@ public class OstreeManager()
             return refs;
         }
 
-        var process = new Process();
+        var file = OstreeReference.GFileNewForPath(repoPath);
 
-        process.StartInfo = new ProcessStartInfo
+        if (file == IntPtr.Zero)
         {
-            FileName = "/usr/bin/ostree",
-            Arguments = $"refs --repo=\"{repoPath}\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        process.Start();
-        
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        
-        process.WaitForExit();
-
-        if (process.ExitCode != 0)
-        {
-            Console.Error.WriteLine(
-                $"Failed to list OSTree refs: {stderr}");
-
             return refs;
         }
-        
-        var lines = stdout.Split(
-            '\n',
-            StringSplitOptions.RemoveEmptyEntries);
 
-        foreach (var line in lines)
+        try
         {
-            var trimmed = line.Trim();
+            var repo = OstreeReference.RepoNew(file);
 
-            if (string.IsNullOrWhiteSpace(trimmed))
+            if (repo == IntPtr.Zero)
+            {
+                return refs;
+            }
+
+            try
+            {
+                if (!OstreeReference.RepoOpen(
+                        repo,
+                        IntPtr.Zero,
+                        out var error))
+                {
+                    if (error != IntPtr.Zero)
+                    {
+                        OstreeReference.GErrorFree(error);
+                    }
+
+                    return refs;
+                }
+
+                if (!OstreeReference.RepoListRefs(
+                        repo,
+                        null,
+                        out var refsTable,
+                        IntPtr.Zero,
+                        out error))
+                {
+                    if (error != IntPtr.Zero)
+                    {
+                        OstreeReference.GErrorFree(error);
+                    }
+
+                    return refs;
+                }
+
+                refs.AddRange(
+                    ParseRefsTable(refsTable));
+            }
+            finally
+            {
+                OstreeReference.GObjectUnref(repo);
+            }
+        }
+        finally
+        {
+            OstreeReference.GObjectUnref(file);
+        }
+
+        return refs;
+    }
+    
+    private List<OstreeRef> ParseRefsTable(
+        IntPtr refsTable)
+    {
+        var refs = new List<OstreeRef>();
+
+        OstreeReference.GHashTableIterInit(
+            out var iter,
+            refsTable);
+
+        while (OstreeReference.GHashTableIterNext(
+                   ref iter,
+                   out var keyPtr,
+                   out var valuePtr))
+        {
+            var fullRef =
+                Marshal.PtrToStringUTF8(keyPtr);
+
+            if (string.IsNullOrWhiteSpace(fullRef))
             {
                 continue;
             }
 
-            var split = trimmed.Split(':', 2);
+            var split =
+                fullRef.Split(':', 2);
 
             if (split.Length != 2)
             {
                 continue;
             }
-            
+
             var reference = split[1];
 
-            // Ignoring non-flatpak refs
             if (!reference.StartsWith("app/") &&
                 !reference.StartsWith("runtime/"))
             {
@@ -85,55 +130,82 @@ public class OstreeManager()
         }
 
         return refs;
-        
     }
-
+    
     public string? GetCommitForRef(
         string repoPath,
         string fullRef)
     {
-        if (string.IsNullOrWhiteSpace(repoPath))
+        var file = OstreeReference.GFileNewForPath(repoPath);
+
+        if (file == IntPtr.Zero)
         {
             return null;
         }
 
-        if (!Directory.Exists(repoPath))
+        try
         {
-            return null;
+            var repo = OstreeReference.RepoNew(file);
+
+            if (repo == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (!OstreeReference.RepoOpen(
+                        repo,
+                        IntPtr.Zero,
+                        out var error))
+                {
+                    if (error != IntPtr.Zero)
+                    {
+                        OstreeReference.GErrorFree(error);
+                    }
+
+                    return null;
+                }
+
+                if (!OstreeReference.RepoResolveRev(
+                        repo,
+                        fullRef,
+                        false,
+                        out var revisionPtr,
+                        IntPtr.Zero,
+                        out error))
+                {
+                    if (error != IntPtr.Zero)
+                    {
+                        OstreeReference.GErrorFree(error);
+                    }
+
+                    return null;
+                }
+
+                if (revisionPtr == IntPtr.Zero)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    return Marshal.PtrToStringUTF8(revisionPtr);
+                }
+                finally
+                {
+                    OstreeReference.GFree(revisionPtr);
+                }
+            }
+            finally
+            {
+                OstreeReference.GObjectUnref(repo);
+            }
         }
-
-        var process = new Process();
-
-        process.StartInfo = new ProcessStartInfo
+        finally
         {
-            FileName = "/usr/bin/ostree",
-            Arguments =
-                $"rev-parse --repo=\"{repoPath}\" \"{fullRef}\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        process.Start();
-
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-
-        process.WaitForExit();
-
-        if (process.ExitCode != 0)
-        {
-            Console.Error.WriteLine(
-                $"Failed to resolve commit for ref '{fullRef}': {stderr}");
-            return null;
+            OstreeReference.GObjectUnref(file);
         }
-
-        var commit = stdout.Trim();
-
-        return string.IsNullOrWhiteSpace(commit)
-            ? null
-            : commit;
     }
     
     public bool DeleteRef(string repoPath, string remote, string reference)
