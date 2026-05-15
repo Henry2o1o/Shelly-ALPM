@@ -18,8 +18,6 @@ public interface IUnprivilegedOperationService
 
     Task<List<FlatpakRemoteDto>> FlatpakListRemotes();
 
-    Task<UnprivilegedOperationResult> UpdateFlatpakPackage(string package);
-
     Task<UnprivilegedOperationResult> RemoveFlatpakPackage(string package, bool config);
 
     Task<UnprivilegedOperationResult> InstallFlatpakPackage(string package, bool user,
@@ -30,8 +28,6 @@ public interface IUnprivilegedOperationService
     Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, string scope);
 
     Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, string scope, string url);
-    
-    Task<UnprivilegedOperationResult> RunFlatpakName(string name);
 
     Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, string scope);
 
@@ -42,8 +38,6 @@ public interface IUnprivilegedOperationService
     Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates(bool showHidden = false);
 
     Task<UnprivilegedOperationResult> ExportSyncFile(string filePath, string name);
-
-    Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query);
 
     Task<ulong> GetFlatpakAppDataAsync(string remote, string app, string arch);
     

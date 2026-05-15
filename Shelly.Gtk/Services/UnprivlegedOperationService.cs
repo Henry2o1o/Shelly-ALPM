@@ -95,15 +95,7 @@ public class UnprivilegedOperationService(
             }
         }, ct);
     }
-
-
-    public async Task<UnprivilegedOperationResult> UpdateFlatpakPackage(string package)
-    {
-        var result = await ExecuteUnprivilegedCommandAsync("Update package", "flatpak update", package);
-        if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
-        return result;
-    }
-
+    
     public async Task<UnprivilegedOperationResult> RemoveFlatpakPackage(string package, bool removeConfig)
     {
         UnprivilegedOperationResult result;
@@ -199,12 +191,7 @@ public class UnprivilegedOperationService(
         if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
         return result;
     }
-
-    public async Task<UnprivilegedOperationResult> RunFlatpakName(string name)
-    {
-        return await ExecuteUnprivilegedCommandAsync("Remove Remote", "flatpak run", name);
-    }
-
+    
     public async Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, string scope, string url)
     {
         if (scope == "user")
@@ -353,29 +340,6 @@ public class UnprivilegedOperationService(
         {
             Console.WriteLine($"Failed to parse updates JSON: {ex.Message}");
             return new SyncModel();
-        }
-    }
-
-    public async Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query)
-    {
-        var result =
-            await ExecuteUnprivilegedCommandAsync("Search Flathub", "flatpak search", query, "--json", "--limit",
-                "100");
-
-        if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
-        {
-            return [];
-        }
-
-        try
-        {
-            MemPackFrame.TryDecode<List<FlatpakPackageDto>>(result.Output, out var framed);
-            return framed ?? [];
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Failed to parse Flathub search JSON: {ex.Message}");
-            return [];
         }
     }
 
