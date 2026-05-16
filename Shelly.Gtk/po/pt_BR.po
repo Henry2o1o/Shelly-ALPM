@@ -343,10 +343,10 @@ msgstr "Limpeza de cache"
 
 msgid ""
 "Cache directory: {0}\n"
-"Total cached files: {1} ({2})"
+"Total cached files: {1} ({2})\n"
 msgstr ""
 "Diretório de cache: {0}\n"
-"Arquivos em cache: {1} ({2})"
+"Arquivos em cache: {1} ({2})\n"
 
 msgid "Keep versions:"
 msgstr "Manter versões:"
