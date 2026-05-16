@@ -69,11 +69,15 @@ public class SyncCommand : Command<SyncSettings>
 
     private static int HandleUiMode(SyncSettings settings)
     {
-        using var manager = new AlpmManager();
-        Console.WriteLine("Synchronizing package databases...");
-        manager.Progress += (sender, args) => { Console.WriteLine($"{args.PackageName}: {args.Percent}%"); };
-        manager.Sync(settings.Force);
-        Console.WriteLine("Package databases synchronized successfully");
-        return 0;
+        Console.Error.WriteLine("Synchronizing package databases...");
+        return UiModeRunner.RunAsync(
+            noConfirm: false,
+            r =>
+            {
+                r.Manager.Sync(settings.Force);
+                return Task.FromResult(true);
+            },
+            successMessage: "Package databases synchronized successfully",
+            failureMessage: "Failed to synchronize package databases.").GetAwaiter().GetResult();
     }
 }

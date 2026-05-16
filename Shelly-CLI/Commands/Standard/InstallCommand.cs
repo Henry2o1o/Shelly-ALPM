@@ -130,73 +130,39 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
         return 0;
     }
 
-    private static async Task<int> HandleUiModeInstall(CommandContext context, InstallPackageSettings settings)
+    private static Task<int> HandleUiModeInstall(CommandContext context, InstallPackageSettings settings)
     {
         if (settings.Packages.Length == 0)
         {
             Console.Error.WriteLine("Error: No packages specified");
-            return 1;
+            return Task.FromResult(1);
+        }
+
+        if (settings.BuildDepsOn && settings.Packages.Length > 1)
+        {
+            Console.Error.WriteLine("Cannot build dependencies for multiple packages at once.");
+            return Task.FromResult(1);
         }
 
         if (settings.Upgrade)
         {
             var command = new UpgradeCommand();
-            command.ExecuteAsync(context, new UpgradeSettings()
+            command.ExecuteAsync(context, new UpgradeSettings
             {
                 JsonOutput = true,
             }).Wait();
         }
 
-        using var manager = new AlpmManager();
-        bool hadError = false;
-        manager.Question += (_, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
-        manager.Progress += (_, args) => { Console.WriteLine($"{args.PackageName}: {args.Percent}%"); };
-        manager.HookRun += (_, args) => { Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}"); };
-        manager.ErrorEvent += (_, e) =>
-        {
-            Console.Error.WriteLine($"[ALPM_ERROR]{e.Error}");
-            hadError = true;
-        };
-        Console.Error.WriteLine("Initializing ALPM...");
-        manager.Initialize(true);
+        var pkgs = settings.Packages.ToList();
 
-        if (settings.BuildDepsOn)
-        {
-            if (settings.Packages.Length > 1)
-            {
-                Console.WriteLine("Cannot build dependencies for multiple packages at once.");
-                return -1;
-            }
-
-            if (settings.MakeDepsOn)
-            {
-                Console.Error.WriteLine("Installing packages...");
-                var result = await manager.InstallDependenciesOnly(settings.Packages.ToList().First(), true);
-                if (!result || hadError) return 1;
-                return 0;
-            }
-
-            Console.Error.WriteLine("Installing packages...");
-            var depsResult = await manager.InstallDependenciesOnly(settings.Packages.ToList().First());
-            if (!depsResult || hadError) return 1;
-            Console.Error.WriteLine("Packages installed successfully!");
-            return 0;
-        }
-
-        if (settings.NoDeps)
-        {
-            Console.Error.WriteLine("Skipping dependency installation.");
-            Console.Error.WriteLine("Installing packages...");
-            var noDepsResult = await manager.InstallPackages(settings.Packages.ToList(), AlpmTransFlag.NoDeps);
-            if (!noDepsResult || hadError) return 1;
-            Console.Error.WriteLine("Packages installed successfully!");
-            return 0;
-        }
-
-        Console.WriteLine("Installing packages...");
-        var installResult = await manager.InstallPackages(settings.Packages.ToList());
-        if (!installResult || hadError) return 1;
-        Console.Error.WriteLine("Finished installing packages.");
-        return 0;
+        return UiModeRunner.RunAsync(
+            settings.NoConfirm,
+            r => settings.BuildDepsOn
+                ? r.Manager.InstallDependenciesOnly(pkgs[0], settings.MakeDepsOn)
+                : settings.NoDeps
+                    ? r.Manager.InstallPackages(pkgs, AlpmTransFlag.NoDeps)
+                    : r.Manager.InstallPackages(pkgs),
+            successMessage: "Finished installing packages.",
+            failureMessage: "Installation failed.");
     }
 }

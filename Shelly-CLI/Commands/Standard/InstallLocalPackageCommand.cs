@@ -98,34 +98,14 @@ public class InstallLocalPackageCommand : AsyncCommand<InstallLocalPackageSettin
         return result;
     }
 
-    private static async Task<int> HandleUiModeInstall(InstallLocalPackageSettings settings)
+    private static Task<int> HandleUiModeInstall(InstallLocalPackageSettings settings)
     {
-        using var manager = new AlpmManager();
-        var hadError = false;
-
-        manager.Question += (_, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
-
-        manager.Progress += (_, args) => { Console.Error.WriteLine($"{args.PackageName}: {args.Percent}%"); };
-
-        manager.ErrorEvent += (_, e) =>
-        {
-            Console.Error.WriteLine($"[ALPM_ERROR]{e.Error}");
-            hadError = true;
-        };
-
-        await Console.Error.WriteLineAsync("Initializing ALPM...");
-        manager.Initialize();
-
-        await Console.Error.WriteLineAsync($"Installing local package: {settings.PackageLocation}");
-        var result = await manager.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation));
-        if (!result || hadError)
-        {
-            await Console.Error.WriteLineAsync("Installation failed.");
-            return 1;
-        }
-
-        await Console.Error.WriteLineAsync("Installation complete.");
-        return 0;
+        Console.Error.WriteLine($"Installing local package: {settings.PackageLocation}");
+        return UiModeRunner.RunAsync(
+            settings.NoConfirm,
+            r => r.Manager.InstallLocalPackage(Path.GetFullPath(settings.PackageLocation)),
+            successMessage: "Installation complete.",
+            failureMessage: "Installation failed.");
     }
 
     private static async Task<int> HandleConsoleBinaryInstall(InstallLocalPackageSettings settings)
