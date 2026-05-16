@@ -1184,7 +1184,7 @@ msgid "Update AUR"
 msgstr "AUR aktualisieren"
 
 msgid "Remove AUR"
-msgstr "AUR enfernen"
+msgstr "AUR entfernen"
 
 msgid "Install Flatpak"
 msgstr "Flatpak installieren"
