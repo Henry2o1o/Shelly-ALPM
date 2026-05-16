@@ -393,7 +393,7 @@ msgid "Recently Updated"
 msgstr "Kürzlich aktualisiert"
 
 msgid "Audio & Video"
-msgstr "Audo & Video"
+msgstr "Audio & Video"
 
 msgid "Development"
 msgstr "Entwicklung"
@@ -489,7 +489,7 @@ msgid "Removing {0}..."
 msgstr "{0} entfernen …"
 
 msgid "Failed to remove package {0}: {1}"
-msgstr " Paket {0} entfernen fehlgeschlagen: {1}"
+msgstr "Paket {0} entfernen fehlgeschlagen: {1}"
 
 msgid "Removed Package(s)"
 msgstr "Paket(e) entfernt"
@@ -921,7 +921,7 @@ msgid "Summary"
 msgstr "Zusammenfassung"
 
 msgid "No description available."
-msgstr "No description available."
+msgstr "Keine Beschreibung verfügbar."
 
 msgid "Delete Selected Remote"
 msgstr "Ausgewählten Remote löschen"
@@ -1023,7 +1023,7 @@ msgid "Tray Check Interval (Hours)"
 msgstr "Intervall für Tray-Prüfung (Stunden)"
 
 msgid "Weekly Schedule"
-msgstr "Weekly Schedule"
+msgstr "Wochenplan"
 
 msgid "Sun"
 msgstr "So"
@@ -1047,7 +1047,7 @@ msgid "Sat"
 msgstr "SA"
 
 msgid "Update Time (24h):"
-msgstr "Update Time"
+msgstr "Aktualisierungszeit"
 
 msgid "Look & Feel"
 msgstr "Optik & Handhabung"
@@ -1238,7 +1238,7 @@ msgid "Enable support for Flatpak applications from Flathub and other remotes."
 msgstr "Unterstützung für Flatpak-Anwendungen von Flathub und anderen Remotes aktivieren."
 
 msgid "Enable AppImage Support"
-msgstr "Enable AppImage Support"
+msgstr "AppImage-Unterstützung aktivieren"
 
 msgid "Manage and configure updates for AppImage applications easily."
 msgstr "Updates für AppImage-Anwendungen ganz einfach verwalten und konfigurieren."
