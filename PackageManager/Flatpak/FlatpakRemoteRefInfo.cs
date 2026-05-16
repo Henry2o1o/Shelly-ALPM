@@ -1,6 +1,9 @@
+using MemoryPack;
+
 namespace PackageManager.Flatpak;
 
-public class FlatpakRemoteRefInfo
+[MemoryPackable]
+public partial record FlatpakRemoteRefInfo
 {
     public ulong DownloadSize { get; set; }
     public ulong InstalledSize { get; set; }
