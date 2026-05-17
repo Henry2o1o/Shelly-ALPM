@@ -74,6 +74,9 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
                             package,
                             StringComparison.Ordinal)))
                 .ToList();
+            
+            var matchedSize = matchedEntries.Sum(x => x.FileSize);
+
 
             if (matchedEntries.Count == 0)
             {
@@ -84,8 +87,9 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
             }
 
             AnsiConsole.MarkupLine(
-                "[blue]The following cache entries will be removed:[/]");
-
+                $"[blue]The following cache entries will be removed " +
+                $"({CacheCleanHelper.FormatSize(matchedSize)}):[/]");
+            
             foreach (var entry in matchedEntries)
             {
                 AnsiConsole.MarkupLine(
