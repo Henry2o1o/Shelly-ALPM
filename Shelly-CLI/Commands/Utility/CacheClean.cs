@@ -8,7 +8,7 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
 {
     public override Task<int> ExecuteAsync(CommandContext context, CacheCleanSettings settings)
     {
-
+        
         var cacheDir = settings.CacheDir ?? "/var/cache/pacman/pkg";
 
         if (!Directory.Exists(cacheDir))
@@ -28,7 +28,7 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
             AnsiConsole.MarkupLine("[yellow]No package files found in cache directory.[/]");
             return Task.FromResult(0);
         }
-
+        
         var grouped = entries.GroupBy(e => e.Name).ToDictionary(g => g.Key, g => g.ToList());
 
         var candidates = new List<CacheEntry>();
@@ -68,12 +68,14 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
         if (settings.Remove)
         {
             RootElevator.EnsureRootExectuion();
-
-            foreach (var entry in candidates)
+            
+            // Need to place logic here. It's supposed to 
+            candidates.Where(x => settings.Packages.Contains(x.Name)).ToList().ForEach(candidate =>
             {
-                File.Delete(entry.FullPath);
-            }
-
+                File.Delete(candidate.FullPath);
+                Console.WriteLine($"Finished: {candidate.FullPath}");
+            });
+            
             AnsiConsole.MarkupLine($"[green]Removed {candidates.Count} files, freed {CacheCleanHelper.FormatSize(totalSize)}[/]");
             return Task.FromResult(0);
         }

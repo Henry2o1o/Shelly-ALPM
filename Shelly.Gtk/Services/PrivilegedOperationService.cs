@@ -111,7 +111,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         return result;
     }
 
-    public async Task<OperationResult> RemovePackagesAsync(IEnumerable<string> packages, bool isCascade, bool isCleanup, bool removeOptionalDeps)
+    public async Task<OperationResult> RemovePackagesAsync(IEnumerable<string> packages, bool isCascade, bool isCleanup, bool removeOptionalDeps, bool removePackageFromCache)
     {
         var packageArgs = string.Join(" ", packages);
         if (isCascade)
@@ -130,7 +130,13 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         }
 
         var result = await ExecutePrivilegedWithNoConfirmCheck("Remove packages", "remove", packageArgs);
+        if (result.Success && removePackageFromCache)
+        {
+            var removeResult = await ExecutePrivilegedWithNoConfirmCheck("Removing package from cache", "utility cache-clean", packageArgs);
+            
+        }
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.Native);
+        
         return result;
     }
 

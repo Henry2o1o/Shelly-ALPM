@@ -26,11 +26,11 @@ public class CacheCleanSettings : CommandSettings
     [CommandArgument(0, "<cache-dir>")]
     [Description("Path to the cache directory")]
     public string? CacheDir { get; set; } = "/var/cache/pacman/pkg";
-    
-    [CommandOption("-c | --target")]
-    [CommandArgument(0, "<cache-dir>")]
-    [Description("Path to the cache package")]
-    public string? RemoveCache { get; set; }
+
+    [CommandOption("-t | --target")]
+    [CommandArgument(0, "<package>")]
+    [Description("Package name")]
+    public string[] Packages { get; set; } = [];
 
 
 
