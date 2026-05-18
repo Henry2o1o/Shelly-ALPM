@@ -120,6 +120,16 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
 
                     AnsiConsole.MarkupLine(
                         $"[green]Removed:[/] {Markup.Escape(entry.FullPath)}");
+
+                    var sigPath = $"{entry.FullPath}.sig";
+
+                    if (File.Exists(sigPath))
+                    {
+                        File.Delete(sigPath);
+                        AnsiConsole.MarkupLine(
+                            $"[green]Removed:[/] {Markup.Escape(sigPath)}");
+                    }
+
                 }
                 catch (Exception ex)
                 {

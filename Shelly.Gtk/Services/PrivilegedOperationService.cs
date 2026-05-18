@@ -117,7 +117,9 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         var targetArgs = packages
             .SelectMany(x => new[] { "-t", x })
             .ToArray();
-
+        
+        Console.Error.Write("Removing package cache...");
+        
         return await ExecutePrivilegedCommandAsync(
             "Removing package from cache",
             [
@@ -151,10 +153,6 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         if (result.Success && removePackageFromCache)
         {
             var cacheResult = await RemovePackageCacheAsync(packages);
-            if (cacheResult.Success)
-            {
-                return cacheResult;
-            }
         } 
         if (result.Success) _dirtyService.MarkDirty(DirtyScopes.Native);
         
