@@ -67,6 +67,8 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
         
         if (settings.Packages.Length > 0)
         {
+            RootElevator.EnsureRootExectuion();
+            
             var matchedEntries = entries
                 .Where(entry =>
                     settings.Packages.Any(package =>
@@ -76,8 +78,7 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
                 .ToList();
             
             var matchedSize = matchedEntries.Sum(x => x.FileSize);
-
-
+            
             if (matchedEntries.Count == 0)
             {
                 AnsiConsole.MarkupLine(
@@ -85,7 +86,7 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
 
                 return Task.FromResult(0);
             }
-
+            
             AnsiConsole.MarkupLine(
                 $"[blue]The following cache entries will be removed " +
                 $"({CacheCleanHelper.FormatSize(matchedSize)}):[/]");
@@ -94,6 +95,15 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
             {
                 AnsiConsole.MarkupLine(
                     $"  {Markup.Escape(entry.FullPath)} [dim]({CacheCleanHelper.FormatSize(entry.FileSize)})[/]");
+                
+                var sigPath = $"{entry.FullPath}.sig";
+
+                if (File.Exists(sigPath))
+                {
+                    AnsiConsole.MarkupLine(
+                        $"  {Markup.Escape(sigPath)} [dim](signature)[/]");
+                }
+
             }
             
             if (!settings.NoConfirm)
@@ -108,10 +118,9 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
 
                     return Task.FromResult(0);
                 }
+
             }
             
-            RootElevator.EnsureRootExectuion();
-
             foreach (var entry in matchedEntries)
             {
                 try
