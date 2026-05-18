@@ -1,7 +1,7 @@
 # Maintainer: Zoey Bauer <zoey.erin.bauer@gmail.com>
 # Maintainer: Caroline Snyder <hirpeng@gmail.com>
 pkgname=shelly
-pkgver=2.3.0.0
+pkgver=2.3.0.2
 pkgrel=1
 pkgdesc="Shelly: A Modern Arch Package Manager"
 arch=('x86_64')
@@ -34,7 +34,7 @@ makedepends=('dotnet-sdk-10.0' 'clang' 'gettext')
 # Source tarball from GitHub release
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Seafoam-Labs/Shelly-ALPM/archive/v${pkgver}.tar.gz")
 
-sha256sums=('56688c09db68cb7b615252c38a20b69decd0b41bb1c7485f4c42040bc3971cc9')
+sha256sums=('dc14dce0a93ee78dcaaac369ea8e8d558e9737860a2b07ed8fdc521dab0cbdb8')
 
 build() {
   cd "$srcdir/Shelly-ALPM-${pkgver}"
@@ -106,6 +106,7 @@ Exec=/usr/bin/shelly-notifications
 Icon=shelly-tray
 Type=Application
 Categories=System;Utility;
+Keywords=program;software;store;repository;package;add;install;uninstall;remove;update;apps;applications;flatpak;pacman;aur;appimage;
 Terminal=false
 NoDisplay=true
 EOF
