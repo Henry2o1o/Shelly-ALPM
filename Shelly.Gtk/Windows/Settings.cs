@@ -61,6 +61,7 @@ public class Settings(
         SetupSwitch("shelly_search_switch", _config.ShellySearchEnabled, (v) => _config.ShellySearchEnabled = v,
             builder);
         SetupSwitch("use_old_menu_switch", !_config.UseOldMenu, (v) => _config.UseOldMenu = !v, builder);
+        SetupTrayAutoStart("tray_auto_switch", _config.TrayAutoStart, (v) => _config.TrayAutoStart = v, builder);
 
         var parallelDownloadsSpin = (SpinButton)builder.GetObject("parallel_downloads_spin")!;
         parallelDownloadsSpin.Value = _config.ParallelDownloadCount;
@@ -331,6 +332,46 @@ public class Settings(
             {
                 _ = HandleAurConfirmationAsync(sw, updateAction);
                 return true;
+            }
+
+            updateAction(e.State);
+            SaveConfig();
+            return false;
+        };
+    }
+    
+    private void SetupTrayAutoStart(string id, bool initialValue, Action<bool> updateAction, Builder builder)
+    {
+        var sw = (Switch)builder.GetObject(id)!;
+        sw.Active = initialValue;
+        sw.OnStateSet += (s, e) =>
+        {
+            if (e.State)
+            {
+                const string serviceContent = $"""
+                                               [Unit]
+                                               Description=Shelly Notifications tray service
+                                               PartOf=default.target
+
+                                               [Service]
+                                               Type=simple
+                                               ExecStart=/usr/bin/shelly-notifications
+                                               Restart=on-failure
+                                               RestartSec=5s
+
+                                               [Install]
+                                               WantedBy=default.target
+                                               """;
+                
+                unprivilegedOperationService.AddSystemdServiceTray(serviceContent, "shelly-notifications");
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(Translations.T("Systemd startup service added.")));
+            }
+            else
+            {
+                unprivilegedOperationService.RemoveSystemdServiceTray("shelly-notifications");
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(Translations.T("Systemd startup service removed.")));
             }
 
             updateAction(e.State);
