@@ -156,12 +156,12 @@ public class CacheClean : AsyncCommand<CacheCleanSettings>
         if (settings.Remove)
         {
             RootElevator.EnsureRootExectuion();
-            
-            candidates.Where(x => settings.Packages.Contains(x.Name)).ToList().ForEach(candidate =>
+
+            foreach (var entry in candidates)
             {
-                File.Delete(candidate.FullPath);
-            });
-            
+                File.Delete(entry.FullPath);
+            }
+
             AnsiConsole.MarkupLine($"[green]Removed {candidates.Count} files, freed {CacheCleanHelper.FormatSize(totalSize)}[/]");
             return Task.FromResult(0);
         }
