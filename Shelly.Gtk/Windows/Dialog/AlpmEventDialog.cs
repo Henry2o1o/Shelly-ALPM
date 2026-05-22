@@ -95,8 +95,8 @@ public class AlpmEventDialog
                     : option.Name;
 
                 var check = CheckButton.NewWithLabel(label);
-                // Match the CLI noConfirm default: select if flagged, otherwise select all not-installed.
-                check.SetActive(option.IsSelected || !option.IsInstalled);
+                // Default: unchecked. Only honor an explicit IsSelected from the manager.
+                check.SetActive(option.IsSelected);
                 if (!string.IsNullOrEmpty(option.Description))
                     check.SetTooltipText(option.Description);
 
@@ -106,9 +106,9 @@ public class AlpmEventDialog
             scrolled.SetChild(optionsBox);
             box.Append(scrolled);
 
-            // Wire up "Select All" toggle (skips already-installed entries so the
-            // bitmask matches the CLI's "select all not-installed" semantics).
-            selectAllCheck.SetActive(true);
+            // Wire up "Select All" toggle (skips already-installed entries). Start
+            // unchecked so it matches the per-option defaults.
+            selectAllCheck.SetActive(false);
             selectAllCheck.OnToggled += (_,_) =>
             {
                 var active = selectAllCheck.GetActive();

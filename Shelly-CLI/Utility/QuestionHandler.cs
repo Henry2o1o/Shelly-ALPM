@@ -40,11 +40,11 @@ public static class QuestionHandler
         {
             if (noConfirm)
             {
-                // Select all (that aren't already installed)
-                var allSelected = question.ProviderOptions
-                    .Select(o => o with { IsSelected = !o.IsInstalled })
+                // Default: install no optional dependencies under --noconfirm (matches pacman).
+                var noneSelected = question.ProviderOptions
+                    .Select(o => o with { IsSelected = false })
                     .ToList();
-                question.SetResponse(new QuestionResponse(1, allSelected));
+                question.SetResponse(new QuestionResponse(0, noneSelected));
                 return;
             }
 
