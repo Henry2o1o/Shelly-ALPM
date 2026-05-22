@@ -3,7 +3,7 @@ msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
 "POT-Creation-Date: 2026-05-14 18:41-0400\n"
-"PO-Revision-Date: 2026-05-22 21:29+0200\n"
+"PO-Revision-Date: 2026-05-22 21:59+0200\n"
 "Last-Translator: helge1o1o1@gmail.com\n"
 "Language-Team: Deutschland (Deutsch) helge1o1o1@gmail.com\n"
 "Language: de\n"
@@ -37,7 +37,7 @@ msgid "Copy Log"
 msgstr "Protokoll kopieren"
 
 msgid "Log copied to clipboard"
-msgstr "Sitzungsprotokoll ist zu groß, um angezeigt zu werden"
+msgstr "Protokoll in Zwischenablage kopiert"
 
 msgid "Available Updates ({0})"
 msgstr "Verfügbare Updates ({0})"
@@ -61,19 +61,19 @@ msgid "yesterday"
 msgstr "gestern"
 
 msgid "{0}d ago"
-msgstr "vor {0} Tg."
+msgstr "vor {0} Tg"
 
 msgid "<span size='large'>Search for AUR packages</span>"
 msgstr "<span size='large'>Nach AUR-Paketen suchen</span>"
 
 msgid "Install Packages?"
-msgstr "Pakete installieren"
+msgstr "Pakete installieren?"
 
 msgid "Installing..."
 msgstr "Installieren..."
 
 msgid "No packages found."
-msgstr "Keine Pakete gefunden"
+msgstr "Keine Pakete gefunden."
 
 msgid "Displaying Package Build {0}"
 msgstr "Paket-Build {0} wird angezeigt"
@@ -130,10 +130,10 @@ msgid "First Submitted"
 msgstr "Erstmals eingereicht"
 
 msgid "URL:"
-msgstr "URL"
+msgstr "URL:"
 
 msgid "AUR:"
-msgstr "AUR"
+msgstr "AUR:"
 
 msgid "Depends"
 msgstr "Abhängigkeiten"
@@ -320,7 +320,7 @@ msgid "Incorrect password. Try again."
 msgstr "Falsches Passwort. Erneut versuchen."
 
 msgid "What's New"
-msgstr "Was gibt’s Neues?"
+msgstr "Was gibt’s Neues"
 
 msgid "Version History"
 msgstr "Versionsverlauf"
@@ -376,7 +376,7 @@ msgid "Failed to add remote: {0}"
 msgstr "Remote-Servers hinzufügen fehlgeschlagen: {0}"
 
 msgid "Added Remote: {0}"
-msgstr "Remote hinzugefügt"
+msgstr "Remote hinzugefügt {0}"
 
 msgid "Removed Remote"
 msgstr "Remote entfernt"
@@ -539,14 +539,14 @@ msgid ""
 "continue?"
 msgstr ""
 "Es wird davon abgeraten, partielle System-Updates durchzuführen. Sicher, "
-"dass du fortfahren möchtest? "
+"dass du fortfahren möchtest?"
 
 msgid ""
 "It is unadvised to not update all packages at once. Are you sure you want to "
 "continue?"
 msgstr ""
 "Es wird davon abgeraten, nicht alle Pakete gleichzeitig zu aktualisieren. "
-"Sicher, dass du fortfahren möchtest? "
+"Sicher, dass du fortfahren möchtest?"
 
 msgid "Updating..."
 msgstr "Aktualisieren..."
@@ -765,8 +765,8 @@ msgstr "{0} synchronisiert"
 msgid "Failed to sync: {0}"
 msgstr "Synchronisieren fehlgeschlagen: {0}"
 
-msgid "Syncing all AppImages..."
-msgstr "Alle AppImages synchronisieren..."
+msgid "Syncing all AppImages ..."
+msgstr "Alle AppImages synchronisieren ..."
 
 msgid "Synced"
 msgstr "Synchronisiert"
@@ -788,7 +788,7 @@ msgid "Already installed"
 msgstr "Bereits installiert"
 
 msgid "Install "
-msgstr "Installieren"
+msgstr "Installieren "
 
 msgid "Package is already installed"
 msgstr "Paket bereits installiert"
@@ -836,7 +836,7 @@ msgid "Search packages..."
 msgstr "Pakete suchen..."
 
 msgid "Use chroot"
-msgstr "chroot verwenden"
+msgstr "Chroot verwenden"
 
 msgid "Build packages in a clean chroot environment"
 msgstr "Pakete in einer sauberen Chroot-Umgebung erstellen"
@@ -951,7 +951,7 @@ msgid "e.g., flathub"
 msgstr "z.B. flathub"
 
 msgid "Remote URL"
-msgstr "Remute-URL"
+msgstr "Remote-URL"
 
 msgid "e.g., https://flathub.org/repo/flathub.flatpakrepo"
 msgstr ""
@@ -1056,7 +1056,7 @@ msgid "Sat"
 msgstr "SA"
 
 msgid "Update Time (24h):"
-msgstr "Aktualisierungszeit"
+msgstr "Aktualisierungszeit (24 Std)"
 
 msgid "Look & Feel"
 msgstr "Optik & Handhabung"
@@ -1311,7 +1311,7 @@ msgid "Add Tray To Auto Start"
 msgstr "Cache bei der Deinstallation entfernen"
 
 msgid "Systemd startup service added."
-msgstr "Cache bei der Deinstallation entfernen"
+msgstr "Cache bei der Deinstallation entfernen."
 
 msgid "Systemd startup service removed."
 msgstr "Systemd-Startdienst entfernt."
