@@ -63,9 +63,13 @@ public static class QuestionHandler
             }
 
             Console.Error.WriteLine($"[ALPM_SELECT_OPTDEPS]{question.DependencyName}");
-            foreach (var t in visible)
+            for (var i = 0; i < question.ProviderOptions.Count; i++)
             {
-                Console.Error.WriteLine($"[ALPM_OPTDEPS_OPTION]{t.OriginalIndex}:{t.Option.Name}");
+                var o = question.ProviderOptions[i];
+                var desc = o.Description ?? string.Empty;
+                var installed = o.IsInstalled ? "1" : "0";
+                var selected = o.IsSelected ? "1" : "0";
+                Console.Error.WriteLine($"[ALPM_OPTDEPS_OPTION]{i}\u001F{o.Name}\u001F{desc}\u001F{installed}\u001F{selected}");
             }
 
             Console.Error.WriteLine("[ALPM_OPTDEPS_END]");
@@ -132,7 +136,7 @@ public static class QuestionHandler
             Console.Error.WriteLine($"[ALPM_SELECT_PROVIDER]{question.DependencyName}");
             for (int i = 0; i < question.ProviderOptions.Count; i++)
             {
-                Console.Error.WriteLine($"[ALPM_PROVIDER_OPTION]{i}:{question.ProviderOptions[i].Name}");
+                Console.Error.WriteLine($"[ALPM_PROVIDER_OPTION]{i}\u001F{question.ProviderOptions[i].Name}");
             }
 
             Console.Error.WriteLine("[ALPM_PROVIDER_END]");

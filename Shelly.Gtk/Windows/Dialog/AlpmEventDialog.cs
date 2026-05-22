@@ -88,7 +88,17 @@ public class AlpmEventDialog
             for (var i = 0; i < e.ProviderOptions.Count; i++)
             {
                 var option = e.ProviderOptions[i];
-                if (option.IsInstalled) continue;
+
+                if (option.IsInstalled)
+                {
+                    var row = Box.New(Orientation.Horizontal, 6);
+                    row.Append(Image.NewFromIconName("emblem-ok-symbolic"));   // or "object-select-symbolic"
+                    row.Append(Label.New($"{option.Name}  ({T("already installed")})"));
+                    if (!string.IsNullOrEmpty(option.Description))
+                        row.SetTooltipText(option.Description);
+                    optionsBox.Append(row);
+                    continue;
+                }
 
                 var check = CheckButton.NewWithLabel(option.Name);
                 check.SetActive(option.IsSelected);
