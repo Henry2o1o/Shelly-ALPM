@@ -141,7 +141,23 @@ public class FlatpakRepair : Command<FlatpakRepairSettings>
         }
 
         // Step 4 - Prune all objects not referenced by a ref, which gets rid of any possibly invalid non-scanned objects.
+        foreach (var repo in repositories)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Pruning repository:[/] {repo}");
+            var result = ostreeManager.Prune(repo);
+            if (result.Success)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[green]Pruned:[/] {result.ObjectsPruned}/{result.ObjectsTotal} objects ({result.PrunedBytes} bytes)");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine(
+                    $"[red]Prune failed:[/] {result.ErrorMessage}");
 
+            }
+        }
+        
         // Step 5 - Enumerate all deployed refs and re-install any that are not in the repo (or are partial for a non-subdir deploy).
         
         return 0;

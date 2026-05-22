@@ -369,11 +369,53 @@ public class OstreeManager()
         }
     }
 
-    public bool Prune(string repoPath)
+    public OstreePruneResult Prune(string repoPath)
     {
-        return true;
-    }
+        var result = new OstreePruneResult();
 
+        var repo = OpenRepo(repoPath);
+
+        if (repo == null)
+        {
+            result.Success = false;
+            result.ErrorMessage = "Failed to open repo";
+
+            return result;
+        }
+
+        try
+        {
+            var success = OstreeReference.RepoPrune(
+                repo.Value,
+                (int)OstreeRepoPruneFlags.None,
+                -1,
+                out var total,
+                out var pruned,
+                out var size,
+                IntPtr.Zero,
+                out var error);
+
+            result.Success = success;
+            result.ObjectsTotal = total;
+            result.ObjectsPruned = pruned;
+            result.PrunedBytes = size;
+
+            if (!success && error != IntPtr.Zero)
+            {
+                result.ErrorMessage =
+                    FlatpakReference.GetErrorMessage(error);
+
+                OstreeReference.GErrorFree(error);
+            }
+
+            return result;
+        }
+        finally
+        {
+            OstreeReference.GObjectUnref(repo.Value);
+        }
+    }
+    
     public FsckResult Result(string repoPath)
     {
         return new FsckResult();

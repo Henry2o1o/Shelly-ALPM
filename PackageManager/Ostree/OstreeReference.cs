@@ -113,4 +113,17 @@ internal static partial class OstreeReference
         string? checksum,
         IntPtr cancellable,
         out IntPtr error);
+    
+    [LibraryImport(LibName, EntryPoint = "ostree_repo_prune")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RepoPrune(
+        IntPtr repo,
+        int flags, 
+        int depth,
+        out long outObjectsTotal,
+        out long outObjectsPruned,
+        out ulong outPrunedObjectSizeTotal,
+        IntPtr cancellable,
+        out IntPtr error);
 }
+
