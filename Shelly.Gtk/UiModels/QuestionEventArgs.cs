@@ -3,7 +3,7 @@ namespace Shelly.Gtk.UiModels;
 public class QuestionEventArgs(
     QuestionType questionType,
     string questionText,
-    List<string>? providerOptions = null,
+    List<ProviderOptionUiModel>? providerOptions = null,
     string? dependencyName = null)
     : EventArgs
 {
@@ -12,7 +12,7 @@ public class QuestionEventArgs(
 
     public QuestionType QuestionType { get; } = questionType;
     public string QuestionText { get; } = questionText;
-    public List<string>? ProviderOptions { get; } = providerOptions;
+    public List<ProviderOptionUiModel>? ProviderOptions { get; } = providerOptions;
     public string? DependencyName { get; } = dependencyName;
     public int Response { get; private set; } = -1;
 

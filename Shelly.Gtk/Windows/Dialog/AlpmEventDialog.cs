@@ -44,9 +44,24 @@ public class AlpmEventDialog
             var combo = ComboBoxText.New();
             foreach (var option in e.ProviderOptions)
             {
-                combo.AppendText(option);
+                var label = option.IsInstalled
+                    ? $"{option.Name}  ({T("installed")})"
+                    : option.Name;
+                combo.AppendText(label);
             }
-            combo.SetActive(0);
+
+            var preselect = e.ProviderOptions.FindIndex(o => o.IsSelected);
+            combo.SetActive(preselect >= 0 ? preselect : 0);
+
+            void UpdateTooltip()
+            {
+                var idx = combo.GetActive();
+                if (idx >= 0 && idx < e.ProviderOptions.Count)
+                    combo.SetTooltipText(e.ProviderOptions[idx].Description ?? string.Empty);
+            }
+            UpdateTooltip();
+            combo.OnChanged += (_, _) => UpdateTooltip();
+
             box.Append(combo);
 
             var selectButton = Button.NewWithLabel(T("Select"));
@@ -72,24 +87,35 @@ public class AlpmEventDialog
             scrolled.SetPolicy(PolicyType.Never, PolicyType.Automatic);
 
             var optionsBox = Box.New(Orientation.Vertical, 4);
-            foreach (var option in e.ProviderOptions)
+            for (var i = 0; i < e.ProviderOptions.Count; i++)
             {
-                var check = CheckButton.NewWithLabel(option);
-                check.SetActive(true); // default all selected
+                var option = e.ProviderOptions[i];
+                var label  = option.IsInstalled
+                    ? $"{option.Name}  ({T("already installed")})"
+                    : option.Name;
+
+                var check = CheckButton.NewWithLabel(label);
+                // Match the CLI noConfirm default: select if flagged, otherwise select all not-installed.
+                check.SetActive(option.IsSelected || !option.IsInstalled);
+                if (!string.IsNullOrEmpty(option.Description))
+                    check.SetTooltipText(option.Description);
+
                 checkButtons.Add(check);
                 optionsBox.Append(check);
             }
             scrolled.SetChild(optionsBox);
             box.Append(scrolled);
 
-            // Wire up "Select All" toggle
+            // Wire up "Select All" toggle (skips already-installed entries so the
+            // bitmask matches the CLI's "select all not-installed" semantics).
             selectAllCheck.SetActive(true);
             selectAllCheck.OnToggled += (_,_) =>
             {
                 var active = selectAllCheck.GetActive();
-                foreach (var cb in checkButtons)
+                for (var i = 0; i < checkButtons.Count; i++)
                 {
-                    cb.SetActive(active);
+                    if (e.ProviderOptions[i].IsInstalled) continue;
+                    checkButtons[i].SetActive(active);
                 }
             };
 
