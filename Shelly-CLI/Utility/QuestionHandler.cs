@@ -1,3 +1,4 @@
+using System.Text.Json;
 using PackageManager.Alpm;
 using PackageManager.Alpm.Questions;
 using Spectre.Console;
@@ -57,14 +58,12 @@ public static class QuestionHandler
             Console.Error.WriteLine("[ALPM_OPTDEPS_END]");
             Console.Error.Flush();
             var input = Console.ReadLine();
-            //Uncomment if debugging
-            //Console.WriteLine($"Received: {input}");
-            //Console.WriteLine($"Bitmask: {input}");
-            var bitmask = int.Parse(input!);
+            // Expect a JSON array of selected indices (e.g. "[0,2]"). Empty/invalid => none selected.
+            var selectedIndices = ParseSelectedIndices(input);
             var uiSelected = question.ProviderOptions
-                .Select((o, i) => o with { IsSelected = (bitmask & (1 << i)) != 0 })
+                .Select((o, i) => o with { IsSelected = selectedIndices.Contains(i) })
                 .ToList();
-            question.SetResponse(new QuestionResponse(bitmask, uiSelected));
+            question.SetResponse(new QuestionResponse(0, uiSelected));
             return;
         }
 
@@ -82,16 +81,21 @@ public static class QuestionHandler
             .Select(o => o with { IsSelected = selection.Contains(o.Name) })
             .ToList();
 
-        var resultBitmask = 0;
-        for (var i = 0; i < selectedOptions.Count; i++)
-        {
-            if (selectedOptions[i].IsSelected)
-            {
-                resultBitmask |= (1 << i);
-            }
-        }
+        question.SetResponse(new QuestionResponse(0, selectedOptions));
+    }
 
-        question.SetResponse(new QuestionResponse(resultBitmask, selectedOptions));
+    private static HashSet<int> ParseSelectedIndices(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return [];
+        try
+        {
+            var arr = JsonSerializer.Deserialize(input!, ShellyCLIJsonContext.Default.Int32Array);
+            return arr is null ? new HashSet<int>() : new HashSet<int>(arr);
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private static void HandleProviderSelection(AlpmQuestionEventArgs question, bool uiMode = false,

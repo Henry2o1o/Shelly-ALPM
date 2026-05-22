@@ -177,8 +177,6 @@ public static class SplitOutputHelpers
                     break;
 
                 case ConsoleKey.Enter:
-                    var bitmask = selected.Aggregate(0, (current, idx) => current | (1 << idx));
-
                     consoleLines.RemoveRange(optionStartIndex, consoleLines.Count - optionStartIndex);
                     if (selected.Count == 0)
                     {
@@ -197,7 +195,7 @@ public static class SplitOutputHelpers
                     var selectedOptions = question.ProviderOptions
                         .Select((o, i) => o with { IsSelected = selected.Contains(i) })
                         .ToList();
-                    question.SetResponse(new QuestionResponse(bitmask, selectedOptions));
+                    question.SetResponse(new QuestionResponse(0, selectedOptions));
 
                     lock (renderLock)
                     {

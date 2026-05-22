@@ -1178,10 +1178,16 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         foreach (var pkgPtr in pkgPtrs)
         {
             var pkg = new AlpmPackage(pkgPtr);
-            var pkgOptDepends = pkg.OptDepends;
-            optDependList.AddRange(from pkgOptDepend in pkgOptDepends
-                let isInstalled = PackageUtilities.IsPackageInstalled(_handle, pkgOptDepend)
-                select new ProviderOption(pkgOptDepend, "No description  found", isInstalled));
+            foreach (var raw in pkg.OptDepends)
+            {
+                var parts = raw.Split(':', 2);
+                var name = parts[0].Trim();
+                if (string.IsNullOrEmpty(name)) continue;
+                var description = parts.Length > 1 ? parts[1].Trim() : "No description found";
+                if (string.IsNullOrEmpty(description)) description = "No description found";
+                var isInstalled = PackageUtilities.IsPackageInstalled(_handle, name);
+                optDependList.Add(new ProviderOption(name, description, isInstalled));
+            }
         }
 
         List<string> optDepNames = [];
@@ -1192,11 +1198,10 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 optDependList);
             Question?.Invoke(this, args);
             args.WaitForResponse();
-            optDepNames = optDependList
+            var responseOptions = args.Response.ProviderOptions ?? [];
+            optDepNames = responseOptions
                 .Where(x => x is { IsSelected: true, IsInstalled: false }).Select(x => x.Name).ToList();
-            var result = PackageListBuilder.Build(_handle,
-                args.Response.ProviderOptions?.Where(x => x.IsSelected && !x.IsInstalled).Select(x => x.Name)
-                    .ToList() ?? []);
+            var result = PackageListBuilder.Build(_handle, optDepNames);
             pkgPtrs.AddRange(result);
         }
 

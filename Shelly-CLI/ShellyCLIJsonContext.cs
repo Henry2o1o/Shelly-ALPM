@@ -60,4 +60,5 @@ namespace Shelly_CLI;
 [JsonSerializable(typeof(ProviderOption))]
 [JsonSerializable(typeof(List<ProviderOption>))]
 [JsonSerializable(typeof(QuestionResponse))]
+[JsonSerializable(typeof(int[]))]
 internal partial class ShellyCLIJsonContext : JsonSerializerContext;

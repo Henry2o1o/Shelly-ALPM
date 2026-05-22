@@ -467,8 +467,17 @@ public sealed class AurPackageManager(string? configPath = null)
                 foreach (var pkg in pkgbuildInfo.OptDepends)
                 {
                     var name = StripDepDecorations(pkg);
-                    var isPackageInstalled = _alpm.IsPackageInstalled(pkg);
-                    optDepends.Add(new ProviderOption(name, "No Description", isPackageInstalled));
+                    if (string.IsNullOrEmpty(name)) continue;
+                    // PKGBUILD optdepends are typically "name: description" — preserve the
+                    // description for the UI tooltip/label while keeping Name to the bare
+                    // package name so downstream installers can resolve it.
+                    var colonIdx = pkg.IndexOf(':');
+                    var description = colonIdx >= 0 && colonIdx + 1 < pkg.Length
+                        ? pkg[(colonIdx + 1)..].Trim()
+                        : string.Empty;
+                    if (string.IsNullOrEmpty(description)) description = "No description found";
+                    var isPackageInstalled = _alpm.IsPackageInstalled(name);
+                    optDepends.Add(new ProviderOption(name, description, isPackageInstalled));
                 }
 
                 if (optDepends.Count > 0)
@@ -766,25 +775,6 @@ public sealed class AurPackageManager(string? configPath = null)
                 Status = PackageProgressStatus.Completed
             });
         }
-    }
-
-    /// <summary>
-    /// Raises a SelectOptionalDeps question through _alpm so the existing CLI prompt and Gtk
-    /// dialog pipelines react identically to a sync-path prompt. Returns the bare optdep names
-    /// (the part before the first ':') that the user selected.
-    /// </summary>
-    private List<ProviderOption> PromptAurOptionalDeps(string pkgName, List<ProviderOption> optDepends)
-    {
-        if (optDepends.Count == 0)
-            return [];
-
-        var args = new AlpmQuestionEventArgs(
-            AlpmQuestionType.SelectOptionalDeps,
-            $"Select optional dependencies for {pkgName}",
-            optDepends);
-        _alpm.RaiseQuestion(args);
-        args.WaitForResponse();
-        return optDepends;
     }
 
     private static readonly char[] _depVersionOps = ['>', '<', '='];

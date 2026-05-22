@@ -123,15 +123,15 @@ public class AlpmEventDialog
             confirmButton.SetCssClasses(["suggested-action"]);
             confirmButton.OnClicked += (_,_) =>
             {
-                int bitmask = 0;
+                var selectedIndices = new List<int>();
                 for (int i = 0; i < checkButtons.Count; i++)
                 {
                     if (checkButtons[i].GetActive())
                     {
-                        bitmask |= (1 << i);
+                        selectedIndices.Add(i);
                     }
                 }
-                e.SetResponse(bitmask);
+                e.SetResponse(selectedIndices.ToArray());
                 parentOverlay.RemoveOverlay(baseFrame);
             };
             buttonBox.Append(confirmButton);

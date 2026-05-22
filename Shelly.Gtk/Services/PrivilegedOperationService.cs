@@ -741,7 +741,10 @@ public class PrivilegedOperationService : IPrivilegedOperationService
                             _alpmEventService.RaiseQuestion(args);
                             await args.WaitForResponseAsync();
 
-                            await SafeWriteAsync(args.Response.ToString());
+                            var indices = args.SelectedIndices ?? [];
+                            var json = System.Text.Json.JsonSerializer.Serialize(
+                                indices, ShellyGtkJsonContext.Default.Int32Array);
+                            await SafeWriteAsync(json);
                             awaitingOptDepsSelection = false;
                             optDepsQuestion = null;
                             optDepsOptions.Clear();
