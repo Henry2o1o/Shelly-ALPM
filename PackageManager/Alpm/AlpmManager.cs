@@ -15,6 +15,7 @@ using PackageManager.Alpm.Questions;
 using PackageManager.Alpm.TransactionErrors;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Utilities;
+using Shelly.Utilities;
 using static PackageManager.Alpm.AlpmReference;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
@@ -48,10 +49,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     private static readonly HttpClient DownloadClient = new(_socketsHttpHandler, disposeHandler: false)
     {
         Timeout = TimeSpan.FromMinutes(5),
-        DefaultRequestHeaders =
-        {
-            { "User-Agent", "Shelly/2.0 (compatible)" }
-        },
+        DefaultRequestHeaders = { UserAgent = { Http.UserAgent } }
     };
 
     private HashSet<string> _preDownloadedFiles = new();
@@ -1183,6 +1181,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 var parts = raw.Split(':', 2);
                 var name = parts[0].Trim();
                 if (string.IsNullOrEmpty(name)) continue;
+                if (!PackageListBuilder.IsAvailableInSyncDbs(_handle, name)) continue;
                 var description = parts.Length > 1 ? parts[1].Trim() : "No description found";
                 if (string.IsNullOrEmpty(description)) description = "No description found";
                 var isInstalled = PackageUtilities.IsPackageInstalled(_handle, name);
