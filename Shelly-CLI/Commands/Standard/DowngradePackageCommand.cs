@@ -43,7 +43,7 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
         RootElevator.EnsureRootExectuion();
 
         using var manager = new AlpmManager();
-        manager.Initialize(root: true, showHiddenPackages: true);
+        manager.Initialize(true, showHiddenPackages: true);
 
         // TODO: Add version matching: downgrade 'foo=1.0.0-1' 'bar>=1.2.1-1' 'baz=~^1.2',
         //  which allows the use of the following operators:
@@ -67,25 +67,9 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
             return 1;
         }
 
-        // Note that pkg version numbers aren't normalized and might differ from distro to distro.
-        var naturalComparer = StringComparer.Create(CultureInfo.InvariantCulture, CompareOptions.NumericOrdering);
-        packages = packages.OrderByDescending(info => info.Filename, naturalComparer)
-            .ThenByDescending(info => info.IsInstalled)
-            .ThenByDescending(info => info.Location)
-            .ToList();
+        packages = SortDowngradeOptions(packages);
 
-        var isAutoSelect = settings.NoConfirm || settings.UseNewest || settings.UseOldest;
-        var preSelectedPackage = settings.UseOldest ? packages[^1] : packages[0];
-
-        var selection = isAutoSelect
-            ? preSelectedPackage
-            : AnsiConsole.Prompt(
-                new SelectionPrompt<PackageInfo>()
-                    .Title("[yellow]Select Version[/]")
-                    .UseConverter(info =>
-                        $"{info.Filename.EscapeMarkup()} ({info.Location}){(info.IsInstalled ? " [green]Installed[/]" : "")}")
-                    .EnableSearch()
-                    .AddChoices(packages));
+        var selection = SelectPackageVersion(settings, packages);
 
         AnsiConsole.MarkupLine($"Selected: {selection.Filename.EscapeMarkup()}");
 
@@ -120,8 +104,7 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
             return 1;
         }
 
-        if (settings is { NoConfirm: true, AddIgnore: true } ||
-            settings.AddIgnore || AnsiConsole.Confirm("Do you want to add package to IgnorePkg list?"))
+        if (ShouldIgnorePackage(settings))
             try
             {
                 manager.IgnorePackage(selection.Name);
@@ -135,20 +118,45 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
 
         AnsiConsole.MarkupLine("[green]Package downgraded successfully![/]");
         return 0;
+
+        static bool ShouldIgnorePackage(DowngradePackageCommandSettings settings)
+        {
+            return settings is { NoConfirm: true, AddIgnore: true }
+                   || settings.AddIgnore
+                   || AnsiConsole.Confirm("Do you want to add package to IgnorePkg list?");
+        }
+
+        PackageInfo SelectPackageVersion(DowngradePackageCommandSettings downgradePackageCommandSettings,
+            List<PackageInfo> packageInfos)
+        {
+            var isAutoSelect = downgradePackageCommandSettings.NoConfirm || downgradePackageCommandSettings.UseNewest ||
+                               downgradePackageCommandSettings.UseOldest;
+            var preSelectedPackage = downgradePackageCommandSettings.UseOldest ? packageInfos[^1] : packageInfos[0];
+
+            return isAutoSelect
+                ? preSelectedPackage
+                : AnsiConsole.Prompt(
+                    new SelectionPrompt<PackageInfo>()
+                        .Title("[yellow]Select Version[/]")
+                        .UseConverter(info =>
+                            $"{info.Filename.EscapeMarkup()} ({info.Location}){(info.IsInstalled ? " [green]Installed[/]" : "")}")
+                        .EnableSearch()
+                        .AddChoices(packageInfos));
+        }
+    }
+
+    private static List<PackageInfo> SortDowngradeOptions(List<PackageInfo> packages)
+    {
+        var naturalComparer = StringComparer.Create(CultureInfo.InvariantCulture, CompareOptions.NumericOrdering);
+        return packages.OrderByDescending(info => info.Filename, naturalComparer)
+            .ThenByDescending(info => info.IsInstalled)
+            .ThenByDescending(info => info.Location)
+            .ToList();
     }
 
     private static async Task<List<PackageInfo>> SearchArchArchive(AlpmPackageDto package)
     {
-        var handler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = true,
-            AutomaticDecompression = DecompressionMethods.All,
-            MaxAutomaticRedirections = 10,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
-        };
-        using var client = new HttpClient(handler);
-        client.Timeout = TimeSpan.FromMinutes(15);
-        client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
+        using var client = CreateHttpClient();
         using var result = await client.GetAsync($"{ArchRepo}{package.Name[0]}/{package.Name}/");
         result.EnsureSuccessStatusCode();
 
@@ -177,6 +185,8 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
 
     private static List<PackageInfo> SearchLocalCache(AlpmPackageDto package)
     {
+        if (!Directory.Exists(PacmanCache)) return [];
+
         var packageRegex = new Regex($"^{CreatePackageRegex(package.Name)}$");
 
         return Directory.GetFiles(PacmanCache)
@@ -191,17 +201,7 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
 
     private static async Task<string> DownloadRemote(PackageInfo packageInfo)
     {
-        var handler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = true,
-            AutomaticDecompression = DecompressionMethods.All,
-            MaxAutomaticRedirections = 10,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
-        };
-        using var client = new HttpClient(handler);
-        client.Timeout = TimeSpan.FromMinutes(15);
-        client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-
+        using var client = CreateHttpClient();
         var url = $"{ArchRepo}{packageInfo.Name[0]}/{packageInfo.Name}/{packageInfo.Filename}";
 
         using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
@@ -212,6 +212,22 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
         await response.Content.CopyToAsync(fs);
 
         return path;
+    }
+
+    private static HttpClient CreateHttpClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = true,
+            AutomaticDecompression = DecompressionMethods.All,
+            MaxAutomaticRedirections = 10,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+        };
+
+        var client = new HttpClient(handler);
+        client.Timeout = TimeSpan.FromMinutes(15);
+        client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
+        return client;
     }
 
     private static string CreatePackageRegex(string packageName)
