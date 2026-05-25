@@ -43,7 +43,7 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
         RootElevator.EnsureRootExectuion();
 
         using var manager = new AlpmManager();
-        manager.Initialize(true);
+        manager.Initialize(root: true, showHiddenPackages: true);
 
         // TODO: Add version matching: downgrade 'foo=1.0.0-1' 'bar>=1.2.1-1' 'baz=~^1.2',
         //  which allows the use of the following operators:
@@ -119,6 +119,19 @@ public partial class DowngradePackageCommand : AsyncCommand<DowngradePackageComm
             AnsiConsole.MarkupLine("[red]Downgrade failed. See errors above.[/]");
             return 1;
         }
+
+        if (settings is { NoConfirm: true, AddIgnore: true } ||
+            settings.AddIgnore || AnsiConsole.Confirm("Do you want to add package to IgnorePkg list?"))
+            try
+            {
+                manager.IgnorePackage(selection.Name);
+                AnsiConsole.WriteLine("Package added to IgnorePkg list.");
+            }
+            catch (Exception e)
+            {
+                AnsiConsole.MarkupLine($"[red]Error: {e.Message.EscapeMarkup()}[/]");
+                return 1;
+            }
 
         AnsiConsole.MarkupLine("[green]Package downgraded successfully![/]");
         return 0;
