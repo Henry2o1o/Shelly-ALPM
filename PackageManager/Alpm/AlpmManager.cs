@@ -881,6 +881,20 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         return packages;
     }
 
+    public AlpmPackageDto? GetInstalledPackage(string name)
+    {
+        if (_handle == IntPtr.Zero) Initialize();
+        var dbPtr = GetLocalDb(_handle);
+        var pkgPtr = DbGetPkg(dbPtr, name);
+
+        if (pkgPtr == 0 || (!_showHiddenPackages && _config.IgnorePkg.Contains(name)))
+        {
+            return null;
+        }
+
+        return new AlpmPackage(pkgPtr).ToDto();
+    }
+
     public List<AlpmPackageDto> GetForeignPackages()
     {
         if (_handle == IntPtr.Zero) Initialize();
