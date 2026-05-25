@@ -29,7 +29,6 @@ namespace PackageManager.Alpm;
     "CS8618:Non-nullable field must contain a non-null value when exiting constructor. Consider adding the \'required\' modifier or declaring as nullable.")]
 public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, IAlpmManager
 {
-    private string _configPath = configPath;
     private PacmanConf _config;
     private IntPtr _handle = IntPtr.Zero;
 
@@ -90,7 +89,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             _handle = IntPtr.Zero;
         }
 
-        _config = PacmanConfParser.Parse(_configPath);
+        _config = PacmanConfParser.Parse(configPath);
         //Checks to see if the temp path is being used to run in
         //non-root mode for update checking.
         if (useTempPath)
@@ -879,6 +878,20 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
 
         return packages;
+    }
+
+    public AlpmPackageDto? GetInstalledPackage(string name)
+    {
+        if (_handle == IntPtr.Zero) Initialize();
+        var dbPtr = GetLocalDb(_handle);
+        var pkgPtr = DbGetPkg(dbPtr, name);
+
+        if (pkgPtr == 0 || (!_showHiddenPackages && _config.IgnorePkg.Contains(name)))
+        {
+            return null;
+        }
+
+        return new AlpmPackage(pkgPtr).ToDto();
     }
 
     public List<AlpmPackageDto> GetForeignPackages()
@@ -2459,6 +2472,11 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     public bool IsPackageInstalled(string packageName)
     {
         return PackageUtilities.IsPackageInstalled(_handle, packageName);
+    }
+
+    public void IgnorePackage(string packageName)
+    {
+        PacmanConfWriter.AddIgnorePkg(_config, packageName, configPath);
     }
 
     private void HandleErrorMessage(IntPtr dataPtr, AlpmErrno error)
