@@ -7,7 +7,7 @@ namespace Shelly_CLI.Commands.Standard;
 
 public class IgnoreRemoveSettings : CommandSettings
 {
-    [CommandArgument(0, "<PACKAGE>")]
+    [CommandArgument(0, "<package>")]
     [Description("Package name to remove from IgnorePkg")]
     public string PackageName { get; set; } = string.Empty;
 }

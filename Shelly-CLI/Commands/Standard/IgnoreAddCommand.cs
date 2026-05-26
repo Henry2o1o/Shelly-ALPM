@@ -7,7 +7,7 @@ namespace Shelly_CLI.Commands.Standard;
 
 public class IgnoreAddSettings : CommandSettings
 {
-    [CommandArgument(0, "<PACKAGE>")]
+    [CommandArgument(0, "<package>")]
     [Description("Package name to add to IgnorePkg")]
     public string PackageName { get; set; } = string.Empty;
 }
