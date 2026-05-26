@@ -1,6 +1,23 @@
 ![shelly_banner.png](shelly_banner.png)
 
-![Shelly Wiki](https://img.shields.io/badge/Shelly-Wiki-blue)
+### Powered by
+
+<a href="https://jb.gg/OpenSource">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://www.jetbrains.com/company/brand/img/logo_jb_dos_3.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg">
+    <img alt="JetBrains logo." src="https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg">
+  </picture>
+</a>
+
+## About
+
+Shelly is a modern reimagination of the Arch Linux package manager, designed to be a more intuitive and user-friendly
+alternative to `pacman` and `octopi`. Unlike other Arch package managers, Shelly offers a modern, visual interface with
+a focus on
+user experience and ease of use; It **IS NOT** built as a `pacman` wrapper or front-end. It is a complete reimagination
+of how a user
+interacts with their Arch Linux system, providing a more streamlined and intuitive experience.
 
 <details>
   <summary>Screenshots</summary>
@@ -12,16 +29,6 @@
   <img width="1768" height="1177" alt="image" src="https://github.com/user-attachments/assets/cc2a8d31-e5c9-42d4-ba87-db25e10a1110" />
   </p>
 </details>
-
-
-### About
-
-Shelly is a modern reimagination of the Arch Linux package manager, designed to be a more intuitive and user-friendly
-alternative to `pacman` and `octopi`. Unlike other Arch package managers, Shelly offers a modern, visual interface with
-a focus on
-user experience and ease of use; It **IS NOT** built as a `pacman` wrapper or front-end. It is a complete reimagination
-of how a user
-interacts with their Arch Linux system, providing a more streamlined and intuitive experience.
 
 ## Quick Install
 
