@@ -3,8 +3,8 @@ msgstr ""
 "Project-Id-Version: shelly-notifications 2.3.0.2\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
 "POT-Creation-Date: 2026-05-20 12:32-0400\n"
-"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
-"Last-Translator: Automatically generated\n"
+"PO-Revision-Date: 2026-05-26 11:34+0000\n"
+"Last-Translator: juliazero <juliazero2@gmail.com>\n"
 "Language-Team: none\n"
 "Language: pl\n"
 "MIME-Version: 1.0\n"
@@ -12,48 +12,53 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 "
 "|| n%100>=20) ? 1 : 2;\n"
+"X-Generator: Weblate 5.16.2\n"
 
 msgid "Updates available: {0}"
-msgstr ""
+msgstr "Dostępne aktualizacje: {0}"
 
 msgid "Shelly Notifications started. Press Ctrl+C to exit."
-msgstr ""
+msgstr "Uruchomiono powiadomienia Shelly. Naciśnij Ctrl+C, aby wyjść."
 
 msgid "Warning: No StatusNotifierWatcher found. The tray icon will not be visible."
 msgstr ""
+"Ostrzeżenie: Nie znaleziono StatusNotifierWatcher. Ikona w zasobniku nie "
+"będzie widoczna."
 
 msgid "Tip: If you are using GNOME, ensure you have an 'AppIndicator' extension installed."
 msgstr ""
+"Wskazówka: Jeśli używasz środowiska GNOME, upewnij się, że masz "
+"zainstalowane rozszerzenie „AppIndicator”."
 
 msgid "Open Shelly"
-msgstr ""
+msgstr "Otwórz Shelly"
 
 msgid "Update Packages"
-msgstr ""
+msgstr "Zaktualizuj pakiety"
 
 msgid "Check for Updates"
-msgstr ""
+msgstr "Sprawdź aktualizacje"
 
 msgid "Last check: Never"
-msgstr ""
+msgstr "Ostatnio sprawdzono: Nigdy"
 
 msgid "Exit"
-msgstr ""
+msgstr "Wyjdź"
 
 msgid "No updates available."
-msgstr ""
+msgstr "Brak dostępnych aktualizacji."
 
 msgid "Flatpak"
-msgstr ""
+msgstr "Flatpak"
 
 msgid "AUR"
-msgstr ""
+msgstr "AUR"
 
 msgid "Standard"
-msgstr ""
+msgstr "Standardowe"
 
 msgid "Last check: {0}"
-msgstr ""
+msgstr "Ostatnio sprawdzono: {0}"
 
 msgid "Shelly Notifications"
-msgstr ""
+msgstr "Powiadomienia Shelly"
