@@ -29,7 +29,8 @@ public class Recommend(
     })
     {
         Timeout = TimeSpan.FromMinutes(1),
-        DefaultRequestHeaders = { UserAgent = { Http.UserAgent } }
+        DefaultRequestHeaders = { UserAgent = { Http.UserAgent } },
+        DefaultRequestVersion = HttpVersion.Version30,
     };
     private Box? _scrolledWindow;
     private Overlay? _overlay;
