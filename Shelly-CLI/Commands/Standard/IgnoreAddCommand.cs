@@ -7,21 +7,21 @@ namespace Shelly_CLI.Commands.Standard;
 
 public class IgnoreAddSettings : CommandSettings
 {
-    [CommandArgument(0, "<package>")]
-    [Description("Package name to add to IgnorePkg")]
-    public string PackageName { get; set; } = string.Empty;
+    [CommandArgument(0, "<packages>")]
+    [Description("One or more package names to add to IgnorePkg (space-separated)")]
+    public string[] Packages { get; set; } = [];
 }
 
 public class IgnoreAddCommand : Command<IgnoreAddSettings>
 {
     public override int Execute(CommandContext context, IgnoreAddSettings settings)
     {
-        if (string.IsNullOrWhiteSpace(settings.PackageName))
+        if (settings.Packages.Length == 0)
         {
             if (Program.IsUiMode)
-                Console.Error.WriteLine("Error: No package specified");
+                Console.Error.WriteLine("Error: No packages specified");
             else
-                AnsiConsole.MarkupLine("[red]Error: No package specified[/]");
+                AnsiConsole.MarkupLine("[red]Error: No packages specified[/]");
 
             return 1;
         }
@@ -32,13 +32,14 @@ public class IgnoreAddCommand : Command<IgnoreAddSettings>
         try
         {
             using var manager = new AlpmManager();
-            manager.IgnorePackage(settings.PackageName);
+            manager.IgnorePackages(settings.Packages);
 
+            var formattedPackages = string.Join(", ", settings.Packages);
             if (Program.IsUiMode)
-                Console.Error.WriteLine($"{settings.PackageName} added to IgnorePkg list.");
+                Console.Error.WriteLine($"Added to IgnorePkg list: {formattedPackages} ");
             else
                 AnsiConsole.MarkupLine(
-                    $"[green]{settings.PackageName.EscapeMarkup()}[/] added to IgnorePkg list.");
+                    $"Added to IgnorePkg list: [green]{formattedPackages.EscapeMarkup()}[/]");
 
             return 0;
         }

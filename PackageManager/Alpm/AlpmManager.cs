@@ -2470,18 +2470,24 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         PacmanConfWriter.AddIgnorePkg(_config, packageName, configPath);
     }
 
+    public void IgnorePackages(IEnumerable<string> packageNames)
+    {
+        PacmanConfWriter.AddIgnorePkg(_config, packageNames, configPath);
+    }
+
     public void UnignorePackage(string packageName)
     {
         PacmanConfWriter.RemoveIgnorePkg(_config, packageName, configPath);
     }
 
+    public void UnignorePackages(IEnumerable<string> packageNames)
+    {
+        PacmanConfWriter.RemoveIgnorePkg(_config, packageNames, configPath);
+    }
+
     public List<string> GetIgnoredPackages()
     {
-        return _config.IgnorePkg
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x.Trim())
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        return PacmanConfWriter.NormalizePackageNames(_config.IgnorePkg);
     }
 
     private void HandleErrorMessage(IntPtr dataPtr, AlpmErrno error)

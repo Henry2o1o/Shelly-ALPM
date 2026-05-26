@@ -193,16 +193,18 @@ public class Program
                 ignore.SetDescription("Manage IgnorePkg entries in pacman.conf");
 
                 ignore.AddCommand<IgnoreListCommand>("list")
-                    .WithDescription("List packages in IgnorePkg")
+                    .WithDescription("List all IgnorePkg packages")
                     .WithExample("ignore", "list");
 
                 ignore.AddCommand<IgnoreAddCommand>("add")
-                    .WithDescription("Add a package to IgnorePkg")
-                    .WithExample("ignore", "add", "firefox");
+                    .WithDescription("Add one or more packages to IgnorePkg list")
+                    .WithExample("ignore", "add", "firefox")
+                    .WithExample("ignore", "add", "firefox", "vlc");
 
                 ignore.AddCommand<IgnoreRemoveCommand>("remove")
-                    .WithDescription("Remove a package from IgnorePkg")
-                    .WithExample("ignore", "remove", "firefox");
+                    .WithDescription("Remove one or more packages from IgnorePkg list")
+                    .WithExample("ignore", "remove", "firefox")
+                    .WithExample("ignore", "remove", "firefox", "vlc");
             });
 
             config.AddCommand<ArchNews>("news")

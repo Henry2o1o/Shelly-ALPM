@@ -7,21 +7,21 @@ namespace Shelly_CLI.Commands.Standard;
 
 public class IgnoreRemoveSettings : CommandSettings
 {
-    [CommandArgument(0, "<package>")]
-    [Description("Package name to remove from IgnorePkg")]
-    public string PackageName { get; set; } = string.Empty;
+    [CommandArgument(0, "<packages>")]
+    [Description("One or more package names to remove from IgnorePkg (space-separated)")]
+    public string[] Packages { get; set; } = [];
 }
 
 public class IgnoreRemoveCommand : Command<IgnoreRemoveSettings>
 {
     public override int Execute(CommandContext context, IgnoreRemoveSettings settings)
     {
-        if (string.IsNullOrWhiteSpace(settings.PackageName))
+        if (settings.Packages.Length == 0)
         {
             if (Program.IsUiMode)
-                Console.Error.WriteLine("Error: No package specified");
+                Console.Error.WriteLine("Error: No packages specified");
             else
-                AnsiConsole.MarkupLine("[red]Error: No package specified[/]");
+                AnsiConsole.MarkupLine("[red]Error: No packages specified[/]");
 
             return 1;
         }
@@ -32,13 +32,14 @@ public class IgnoreRemoveCommand : Command<IgnoreRemoveSettings>
         try
         {
             using var manager = new AlpmManager();
-            manager.UnignorePackage(settings.PackageName);
+            manager.UnignorePackages(settings.Packages);
 
+            var formattedPackages = string.Join(", ", settings.Packages);
             if (Program.IsUiMode)
-                Console.Error.WriteLine($"{settings.PackageName} removed from IgnorePkg list.");
+                Console.Error.WriteLine($"Removed from IgnorePkg list: {formattedPackages}");
             else
                 AnsiConsole.MarkupLine(
-                    $"[green]{settings.PackageName.EscapeMarkup()}[/] removed from IgnorePkg list.");
+                    $"Removed from IgnorePkg list: [green]{formattedPackages.EscapeMarkup()}[/]");
 
             return 0;
         }
