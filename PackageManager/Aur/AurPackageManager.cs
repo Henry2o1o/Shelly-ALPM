@@ -1330,8 +1330,10 @@ public sealed class AurPackageManager(string? configPath = null)
         }
         catch (Exception ex)
         {
-            await Console.Error.WriteLineAsync(
-                $"[Shelly] DownloadPackageAtCommit failed for {packageName}: {ex.Message}");
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                $"Failed to download package {packageName} at commit {commit}: {ex.Message}"));
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                ex.StackTrace ?? "No stack trace available"));
             return false;
         }
     }
@@ -1344,8 +1346,8 @@ public sealed class AurPackageManager(string? configPath = null)
             var pkgbase = await _aurSearchManager.GetPackageBaseAsync(packageName);
             var tempPath = XdgPaths.ShellyCache(pkgbase);
             var expectedRemote = $"https://aur.archlinux.org/{pkgbase}.git";
-            await Console.Error.WriteLineAsync($"Downloading {pkgbase} from AUR");
-
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                $"Downloading package {packageName} with pkgbase {pkgbase} from AUR: {expectedRemote}"));
             var hasGit = Directory.Exists(Path.Combine(tempPath, ".git"));
             var remoteOk = false;
             if (hasGit)
