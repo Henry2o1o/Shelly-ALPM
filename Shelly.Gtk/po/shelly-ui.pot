@@ -940,6 +940,12 @@ msgstr ""
 msgid "Remove Selected"
 msgstr ""
 
+msgid "Flatpak Repair"
+msgstr ""
+
+msgid "Repairs Flatpak Installation (Experimental)"
+msgstr ""
+
 msgid "Update All"
 msgstr ""
 

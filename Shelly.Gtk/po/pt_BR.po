@@ -952,6 +952,12 @@ msgstr "Escopo"
 msgid "Remove Selected"
 msgstr "Remover Itens Selecionados"
 
+msgid "Flatpak Repair"
+msgstr "Reparo Flatpak"
+
+msgid "Repairs Flatpak Installation (Experimental)"
+msgstr "Repara a instalação Flatpak atual (experimental)"
+
 msgid "Update All"
 msgstr "Atualizar Tudo"
 
