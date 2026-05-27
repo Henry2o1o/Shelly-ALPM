@@ -773,6 +773,15 @@ msgstr ""
 msgid "Package installed successfully"
 msgstr ""
 
+msgid "Remove "
+msgstr ""
+
+msgid "Removing package..."
+msgstr ""
+
+msgid "Package removed successfully"
+msgstr ""
+
 msgid "Reboot required after flatpak installation."
 msgstr ""
 
@@ -1257,9 +1266,6 @@ msgid "Add Tray To Auto Start"
 msgstr ""
 
 msgid "Systemd startup service added."
-msgstr ""
-
-msgid "Systemd startup service removed."
 msgstr ""
 
 msgid "Systemd startup service removed."
