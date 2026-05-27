@@ -48,10 +48,12 @@ public class FlatpakRemove(
 
         _listView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
         removeButton.OnClicked += (_, _) => { _ = RemoveSelectedAsync(); };
+        flatpakRepairButton.OnClicked += (_, _) => { _ = FlatpakRepairAsync(); };
 
         _sub = DirtySubscription.Attach(dirtyService, this);
         return box;
     }
+
 
     public void Reload() => _ = LoadDataAsync(_cts.Token);
 
@@ -126,6 +128,23 @@ public class FlatpakRemove(
         idLabel.SetText(package.Id);
         versionLabel.SetText(package.Version);
     }
+    
+    private async Task FlatpakRepairAsync()
+    {
+        try
+        {
+            var exec = await unprivilegedOperationService.FlatpakRepair();
+            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(
+                Translations.T($"Repaired Flatpak installation")));
+        }
+        catch (OperationCanceledException e)
+        {
+            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(
+                Translations.T($"Failed to repair Flatpak installation")));
+        }
+        
+    }
+
 
     private async Task LoadDataAsync(CancellationToken ct = default)
     {
