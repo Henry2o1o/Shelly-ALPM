@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,6 +95,8 @@ public sealed class AurPackageManager(string? configPath = null)
     public event EventHandler<AlpmPacsaveEventArgs>? PacsaveInfo;
     public event EventHandler<AlpmErrorEventArgs>? ErrorEvent;
 
+    public event EventHandler<InformationalEventArgs>? InformationalEvent;
+
     public async Task Initialize(bool root = false, bool useTempPath = false, bool useChroot = false,
         string chrootPath = "/var/lib/shelly/chroot", string tempPath = "", bool showHiddenPackages = false,
         bool noCheck = true)
@@ -109,6 +112,7 @@ public sealed class AurPackageManager(string? configPath = null)
         _alpm.PacnewInfo += (_, args) => PacnewInfo?.Invoke(this, args);
         _alpm.PacsaveInfo += (_, args) => PacsaveInfo?.Invoke(this, args);
         _alpm.ErrorEvent += (_, args) => ErrorEvent?.Invoke(this, args);
+        _alpm.InformationalEvent += (_, args) => InformationalEvent?.Invoke(this, args);
         _aurSearchManager = new AurSearchManager(_httpClient);
         _useChroot = useChroot;
         _chrootPath = chrootPath;
@@ -206,7 +210,10 @@ public sealed class AurPackageManager(string? configPath = null)
             }
             catch (Exception ex)
             {
-                await Console.Error.WriteLineAsync($"Error checking version for {installedPkg.Name}: {ex.Message}");
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"Error checking version for {installedPkg.Name}: {ex.Message}"));
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                    ex.StackTrace ?? "No stack trace available"));
                 return null;
             }
             finally
@@ -261,7 +268,8 @@ public sealed class AurPackageManager(string? configPath = null)
 
         if (packagesToUpdate.Count > 0)
         {
-            Console.WriteLine("Updating the following packages:");
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                $"Updating {packagesToUpdate.Count} packages: {string.Join(", ", packagesToUpdate)}"));
             await InstallPackages(packagesToUpdate);
         }
     }
@@ -272,7 +280,9 @@ public sealed class AurPackageManager(string? configPath = null)
         {
             // Resolve pkgname -> pkgbase: split AUR packages live under their pkgbase repo
             var pkgbase = await _aurSearchManager.GetPackageBaseAsync(packageName);
-            await Console.Error.WriteLineAsync($"pkgbase {pkgbase}");
+            InformationalEvent?.Invoke(this,
+                new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                    $"Fetching PKGBUILD for {packageName} ({pkgbase})"));
             var url = $"https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h={pkgbase}";
             var response = await _httpClient.GetAsync(url);
             if (response.IsSuccessStatusCode)
@@ -517,7 +527,8 @@ public sealed class AurPackageManager(string? configPath = null)
                 .ToList();
 
             var (allRepoPackages, orderedAurPackages) = CollectAllDependencies(pkgbuildInfo);
-            await Console.Error.WriteLineAsync($"dependency count {allRepoPackages.Count + orderedAurPackages.Count}");
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                $"Collected {allRepoPackages.Count + orderedAurPackages.Count} dependencies for {packageName}"));
             InstallCollectedDependencies(allRepoPackages, orderedAurPackages, AlpmTransFlag.AllDeps);
 
 
@@ -901,6 +912,7 @@ public sealed class AurPackageManager(string? configPath = null)
                             var isInstalled = _alpm.IsPackageInstalled(provider);
                             availableProviders.Add(new ProviderOption(provider, "No Description", isInstalled));
                         }
+
                         var qArgs = new AlpmQuestionEventArgs(
                             AlpmQuestionType.SelectProvider,
                             $"Multiple AUR providers for '{name}'",
@@ -909,7 +921,8 @@ public sealed class AurPackageManager(string? configPath = null)
                         _alpm.RaiseQuestion(qArgs);
                         qArgs.WaitForResponse();
                         var idx = qArgs.Response;
-                        chosen = idx.ProviderOptions?.Where(x => x is { IsInstalled: true, IsSelected: true }).Select(x => x.Name).FirstOrDefault() ?? null;
+                        chosen = idx.ProviderOptions?.Where(x => x is { IsInstalled: true, IsSelected: true })
+                            .Select(x => x.Name).FirstOrDefault() ?? null;
                         if (chosen is null)
                         {
                             ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(
@@ -1237,7 +1250,7 @@ public sealed class AurPackageManager(string? configPath = null)
     /// <see cref="RemoveCacheDirAsync"/> because <c>pkg/</c> commonly contains
     /// fakeroot-staged root-owned files. Never throws; cleanup failure is logged only.
     /// </summary>
-    private static async Task CleanBuildArtifactsAsync(string user, string tempPath)
+    private async Task CleanBuildArtifactsAsync(string user, string tempPath)
     {
         if (!Directory.Exists(tempPath)) return;
 
@@ -1253,13 +1266,13 @@ public sealed class AurPackageManager(string? configPath = null)
             var (rc2, _, rerr2) = await RunProcessAsync("rm", $"-rf {path}");
             if (rc2 != 0)
             {
-                await Console.Error.WriteLineAsync(
-                    $"[Shelly] could not clean {path}: {rerr2.Trim()} / {rerr.Trim()}");
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"Failed to clean up {path}: {rerr2.Trim()} / {rerr.Trim()}"));
             }
         }
     }
 
-    private static async Task<bool> RemoveCacheDirAsync(string user, string tempPath)
+    private async Task<bool> RemoveCacheDirAsync(string user, string tempPath)
     {
         if (!Directory.Exists(tempPath))
         {
@@ -1273,14 +1286,10 @@ public sealed class AurPackageManager(string? configPath = null)
         }
 
         var (rc2, _, rerr2) = await RunProcessAsync("rm", $"-rf {tempPath}");
-        if (rc2 != 0)
-        {
-            await Console.Error.WriteLineAsync(
-                $"[Shelly] could not clean cache dir {tempPath}: {rerr2.Trim()} / {rerr.Trim()}");
-            return false;
-        }
-
-        return true;
+        if (rc2 == 0) return true;
+        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+            $"Failed to remove cache dir {tempPath}: {rerr2.Trim()} / {rerr.Trim()}"));
+        return false;
     }
 
     private async Task<bool> DownloadPackageAtCommit(string packageName, string commit)
@@ -1301,8 +1310,9 @@ public sealed class AurPackageManager(string? configPath = null)
                 "sudo", $"-u {user} git clone {expectedRemote} {tempPath}");
             if (cc != 0)
             {
-                await Console.Error.WriteLineAsync(
-                    $"[Shelly] git clone failed for {pkgbase}: {cerr.Trim()}");
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                    $"Failed to clone package {packageName} with pkgbase {pkgbase} from AUR: {cerr.Trim()}"));
+
                 return false;
             }
 
@@ -1310,8 +1320,8 @@ public sealed class AurPackageManager(string? configPath = null)
                 "sudo", $"-u {user} git checkout {commit}", tempPath);
             if (xc != 0)
             {
-                await Console.Error.WriteLineAsync(
-                    $"[Shelly] git checkout {commit} failed for {pkgbase}: {xerr.Trim()}");
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                    $"Failed to checkout package {packageName} with pkgbase {pkgbase} at commit {commit}: {xerr.Trim()}"));
                 return false;
             }
 
