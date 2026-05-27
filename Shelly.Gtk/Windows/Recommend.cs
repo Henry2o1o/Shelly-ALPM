@@ -1,5 +1,5 @@
+using System.Net;
 using System.Text.Json;
-using System.Net.Http;
 using Gtk;
 using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
@@ -7,6 +7,7 @@ using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.Icons;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.Recommend;
+using Shelly.Utilities;
 using static Shelly.GTK.Resources.Translations;
 
 namespace Shelly.Gtk.Windows;
@@ -17,7 +18,21 @@ public class Recommend(
     ILockoutService lockoutService,
     IIconResolverService iconResolverService) : IShellyWindow, IReloadable
 {
-    private static readonly HttpClient Client = new();
+    private static readonly HttpClient Client = new(new SocketsHttpHandler
+    {
+        AutomaticDecompression = DecompressionMethods.All,
+        AllowAutoRedirect = true,
+        MaxAutomaticRedirections = 10,
+        ConnectTimeout = TimeSpan.FromSeconds(30),
+        EnableMultipleHttp2Connections = true,
+        EnableMultipleHttp3Connections = true
+    })
+    {
+        Timeout = TimeSpan.FromMinutes(1),
+        DefaultRequestHeaders = { UserAgent = { Http.UserAgent } },
+        DefaultRequestVersion = HttpVersion.Version11,
+        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher
+    };
     private Box? _scrolledWindow;
     private Overlay? _overlay;
     private Box? _noResultsOverlay;
@@ -69,8 +84,10 @@ public class Recommend(
             var alpmPackages = await privilegedOperationService.GetAvailablePackagesAsync();
             var installedPackages = await privilegedOperationService.GetInstalledPackagesAsync();
 
-            var values = await Client.GetStringAsync("https://www.seafoam-labs.org/recommend.json", ct);
-
+            var response = await Client.GetAsync("https://www.seafoam-labs.org/recommend.json", ct);
+            response.EnsureSuccessStatusCode();
+            var values = await response.Content.ReadAsStringAsync(ct);
+            
             var result = JsonSerializer.Deserialize(values, RecommendJsonContext.Default.ListRecommendModel) ?? [];
 
             if (result.Count < 1)
