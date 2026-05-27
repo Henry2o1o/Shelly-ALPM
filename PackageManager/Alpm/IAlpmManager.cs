@@ -19,6 +19,8 @@ public interface IAlpmManager
     event EventHandler<AlpmPacsaveEventArgs>? PacsaveInfo;
 
     event EventHandler<AlpmErrorEventArgs>? ErrorEvent;
+    
+    event EventHandler<InformationalEventArgs>? InformationalEvent;
 
     void IntializeWithSync();
 

@@ -1,9 +1,14 @@
-namespace PackageManager.Alpm;
+namespace Shelly.Utilities.Eventing;
 
-/// <summary>
-/// ALPM event types - values must match alpm_event_type_t from alpm.h
-/// </summary>
-public enum AlpmEventType
+public enum EventSource
+{
+    Alpm,
+    Aur,
+    AppImage,
+    Flatpak
+}
+
+public enum AlpmEvents
 {
     CheckDepsStart = 1,
     CheckDepsDone = 2,
@@ -41,10 +46,5 @@ public enum AlpmEventType
     HookStart = 34,
     HookDone = 35,
     HookRunStart = 36,
-    HookRunDone = 37,
-    
-    //Custom event types
-    InformationalOutput = 256,
-    DebugOutput = 257,
-    TraceOutput = 258,
+    HookRunDone = 37
 }

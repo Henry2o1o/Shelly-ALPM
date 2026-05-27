@@ -32,7 +32,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     private PacmanConf _config;
     private IntPtr _handle = IntPtr.Zero;
 
-    private static SocketsHttpHandler _socketsHttpHandler = new()
+    private static readonly SocketsHttpHandler AlpmSocketsHttpHandler = new()
     {
         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
@@ -45,7 +45,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         EnableMultipleHttp3Connections = true,
     };
 
-    private static readonly HttpClient DownloadClient = new(_socketsHttpHandler, disposeHandler: false)
+    private static readonly HttpClient DownloadClient = new(AlpmSocketsHttpHandler, disposeHandler: false)
     {
         Timeout = TimeSpan.FromMinutes(5),
         DefaultRequestHeaders = { UserAgent = { Http.UserAgent } }
@@ -69,6 +69,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     public event EventHandler<AlpmHookEventArgs>? HookRun;
     public event EventHandler<AlpmPacnewEventArgs>? PacnewInfo;
     public event EventHandler<AlpmPacsaveEventArgs>? PacsaveInfo;
+
+    public event EventHandler<InformationalEventArgs>? InformationalEvent;
 
     public event EventHandler<AlpmErrorEventArgs>? ErrorEvent;
 
@@ -157,12 +159,12 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
             if (SetDefaultSigLevel(_handle, sigLevel) != 0)
             {
-                Console.Error.WriteLine("[ALPM_ERROR] Failed to set default signature level");
+                ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Failed to set default signature level"));
             }
 
             if (SetLocalFileSigLevel(_handle, localSigLevel) != 0)
             {
-                Console.Error.WriteLine("[ALPM_ERROR] Failed to set local file signature level");
+                ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Failed to set local file signature level"));
             }
         }
 
@@ -170,7 +172,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         if (SetRemoteFileSigLevel(_handle, remoteSigLevel) != 0)
         {
-            Console.Error.WriteLine("[ALPM_ERROR] Failed to set remote file signature level");
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Failed to set remote file signature level"));
         }
 
         if (!string.IsNullOrEmpty(_config.CacheDir))
@@ -193,7 +195,9 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         if (!string.IsNullOrEmpty(resolvedArch))
         {
-            Console.Error.WriteLine($"[DEBUG_LOG] Resolved Architecture: {resolvedArch}");
+            InformationalEvent?.Invoke(this,
+                new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                    $"Resolved Architecture: {resolvedArch}"));
             AddArchitecture(_handle, resolvedArch);
             AddArchitecture(_handle, "any");
         }
@@ -202,25 +206,25 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         _fetchCallback = DownloadFile;
         if (SetFetchCallback(_handle, _fetchCallback, IntPtr.Zero) != 0)
         {
-            Console.Error.WriteLine("[ALPM_ERROR] Failed to set download callback");
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Failed to set download callback."));
         }
 
         _eventCallback = HandleEvent;
         if (SetEventCallback(_handle, _eventCallback, IntPtr.Zero) != 0)
         {
-            Console.Error.WriteLine("[ALPM_ERROR] Failed to set event callback");
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Failed to set event callback"));
         }
 
         _questionCallback = HandleQuestion;
         if (SetQuestionCallback(_handle, _questionCallback, IntPtr.Zero) != 0)
         {
-            Console.Error.WriteLine("[ALPM_ERROR] Failed to set question callback");
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Failed to set question callback"));
         }
 
         _progressCallback = HandleProgress;
         if (SetProgressCallback(_handle, _progressCallback, IntPtr.Zero) != 0)
         {
-            Console.Error.WriteLine("[ALPM_ERROR] Failed to set progress callback");
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Failed to set progress callback"));
         }
 
 
@@ -230,7 +234,9 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             var effectiveSigLevel = repo.SigLevel is AlpmSigLevel.None or AlpmSigLevel.UseDefault
                 ? _config.SigLevel
                 : repo.SigLevel;
-            Console.Error.WriteLine($"[DEBUG] Registering {repo.Name} with SigLevel: {effectiveSigLevel}");
+            InformationalEvent?.Invoke(this,
+                new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"Registering {repo.Name} with SigLevel: {effectiveSigLevel}"));
             IntPtr db = RegisterSyncDb(_handle, repo.Name, effectiveSigLevel);
             if (db == IntPtr.Zero)
             {
@@ -251,23 +257,27 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     {
                         if (registeredArchitectures.Contains(resolvedArch + $"_v{i}")) continue;
                         AddArchitecture(_handle, resolvedArch + $"_v{i}");
-                        Console.Error.WriteLine($"[DEBUG_LOG] Registering Architecture: {resolvedArch + $"_v{i}"}");
+                        InformationalEvent?.Invoke(this,
+                            new InformationalEventArgs(AlpmEventType.DebugOutput,
+                                $"Registering Architecture: {resolvedArch + $"_v{i}"}"));
                         registeredArchitectures.Add(resolvedArch + $"_v{i}");
                     }
-                    //AddArchitecture(_handle, resolvedArch + suffix);
 
-                    //Commented out logs because it's too much noise. Uncomment if needed
-                    //Console.Error.WriteLine($"[DEBUG_LOG] Found architecture suffix: {suffix}");
-                    //Console.Error.WriteLine($"[DEBUG_LOG] Registering Architecture: {resolvedArch + suffix}");
+                    InformationalEvent?.Invoke(this,
+                        new InformationalEventArgs(AlpmEventType.TraceOutput, $"Found architecture suffix: {suffix}"));
+                    InformationalEvent?.Invoke(this,
+                        new InformationalEventArgs(AlpmEventType.TraceOutput,
+                            $"Registering Architecture: {resolvedArch + suffix}"));
                 }
 
                 // Resolve $repo and $arch variables in the server URL
                 var resolvedServer = server
                     .Replace("$repo", repo.Name)
                     .Replace("$arch", resolvedArch);
-                //Console.Error.WriteLine($"[DEBUG_LOG] Resolved Architecture {resolvedArch}");
-
-                //Console.Error.WriteLine($"[DEBUG_LOG] Registering Server: {resolvedServer}");
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.DebugOutput, $"Resolved Architecture: {resolvedArch}"));
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                    $"Registering Server: {resolvedServer}"));
                 DbAddServer(db, resolvedServer);
             }
         }
@@ -286,21 +296,16 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
 
         string? packageName = null;
-        string? questionText = null;
+        string? questionText;
         List<ProviderOption>? conflictOptions = null;
 
         switch (questionType)
         {
             case AlpmQuestionType.InstallIgnorePkg:
                 var ignoreQuestion = Marshal.PtrToStructure<InstallIgnorePackage>(questionPtr);
-                if (ignoreQuestion.Pkg != IntPtr.Zero)
-                {
-                    packageName = Marshal.PtrToStringUTF8(GetPkgName(ignoreQuestion.Pkg));
-                }
-                else
-                {
-                    packageName = "unknown";
-                }
+                packageName = ignoreQuestion.Pkg != IntPtr.Zero
+                    ? Marshal.PtrToStringUTF8(GetPkgName(ignoreQuestion.Pkg))
+                    : "unknown";
 
                 questionText = $"Install ignored package: {packageName}?";
                 break;
@@ -328,7 +333,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 if (conflictQuestion.Conflict == IntPtr.Zero)
                 {
                     questionText = "Package conflict detected (details unavailable)";
-                    Console.Error.WriteLine("[ALPM_ERROR]Conflict pointer is null");
+                    ErrorEvent?.Invoke(this, new AlpmErrorEventArgs("Conflict pointer is null"));
                     break;
                 }
 
@@ -349,8 +354,6 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     packageTwo = new AlpmPackage(conflict.PackageTwo);
                 }
 
-                packageName =
-                    $"{packageOne?.Name ?? "unknown"} - {packageOne?.Version ?? "unknown"} conflicts with {packageTwo?.Name ?? "unknown"} - {packageTwo?.Version ?? "unknown"}";
                 // Determine which package is installed and which is new
                 var installedPkg = GetInstalledPackages().Any(x => x.Name == (packageOne?.Name ?? "unknown"))
                     ? packageOne
@@ -360,7 +363,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 packageName =
                     $"{incomingPkg?.Name ?? "unknown"} - {incomingPkg?.Version ?? "unknown"} conflicts with {installedPkg?.Name ?? "unknown"} - {installedPkg?.Version ?? "unknown"}";
                 questionText = $"{packageName}. Remove {installedPkg?.Name ?? "unknown"}?";
-                conflictOptions = new List<ProviderOption>();
+                conflictOptions = [];
                 if (!string.IsNullOrEmpty(packageOne?.Name))
                 {
                     var isInstalled = PackageUtilities.IsPackageInstalled(_handle, packageOne.Name);
@@ -406,7 +409,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         // Block until the GUI user responds
         args.WaitForResponse();
 
-        Console.Error.WriteLine($"[ALPM_RESPONSE] {questionText} (Answering {args.Response})");
+        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+            $"{questionText} (Answering {args.Response})"));
 
         // Write the response back to the answer field.
         question.Answer = args.Response.Response;
@@ -425,8 +429,6 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             if (depStringPtr != IntPtr.Zero)
             {
                 dependencyName = Marshal.PtrToStringUTF8(depStringPtr);
-                // Note: alpm_dep_compute_string returns a malloc'd string that should be freed
-                // but we don't have access to free() easily, so we accept a small leak here
             }
         }
 
@@ -497,29 +499,25 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 }
                 catch (Exception)
                 {
-                    Console.Error.WriteLine("[DEBUG_LOG] localpathPtr points to invalid memory");
+                    InformationalEvent?.Invoke(this,
+                        new InformationalEventArgs(AlpmEventType.DebugOutput, "localpathPtr points to invalid memory"));
                 }
             }
 
-            Console.Error.WriteLine(
-                $"[DEBUG_LOG] DownloadFile called with url='{url}', localpath='{localpathDir}', force={force}");
+            InformationalEvent?.Invoke(this,
+                new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"DownloadFile called with url='{url}', localpath='{localpathDir}', force={force}"));
 
             if (string.IsNullOrEmpty(url)) return -1;
 
             // Extract filename from URL
-            string fileName;
-            if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
-            {
-                fileName = Path.GetFileName(uri.LocalPath);
-            }
-            else
-            {
-                fileName = Path.GetFileName(url);
-            }
+            var fileName = Path.GetFileName(Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.LocalPath : url);
 
             if (!_isPackageDownload && _preDownloadedFiles.Remove(fileName))
             {
-                Console.Error.WriteLine($"[DEBUG_LOG] File {fileName} already downloaded, skipping");
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.TraceOutput,
+                        $"File {fileName} already downloaded, skipping"));
                 return 0;
             }
 
@@ -543,7 +541,9 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 }
             }
 
-            Console.Error.WriteLine($"[DEBUG_LOG] Full destination path: {localpath}");
+            InformationalEvent?.Invoke(this,
+                new InformationalEventArgs(AlpmEventType.DebugOutput, $"Full destination path: {localpath}"));
+
 
             if (string.IsNullOrEmpty(localpath)) return -1;
 
@@ -560,8 +560,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[DEBUG_LOG] Download failed: {ex.Message}");
-            Console.Error.WriteLine($"[DEBUG_LOG] Stack trace: {ex.StackTrace}");
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs($"Download failed: {ex.Message}"));
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(ex.StackTrace ?? "No stack trace available"));
             return -1;
         }
     }
@@ -571,12 +571,14 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     {
         // Use a temporary file for atomic writes - prevents corruption if download is interrupted
         string tempPath = localpath + ".part";
-        Console.Error.WriteLine($"[DEBUG_LOG] Using temp file {tempPath}");
+        InformationalEvent?.Invoke(this,
+            new InformationalEventArgs(AlpmEventType.TraceOutput, $"Using temp file {tempPath}"));
         SocketsHttpHandler? handler = null;
         HttpClient? client = null;
         try
         {
-            Console.Error.WriteLine($"[Shelly][DEBUG_LOG] Downloading {fullUrl} to {localpath}");
+            InformationalEvent?.Invoke(this,
+                new InformationalEventArgs(AlpmEventType.DebugOutput, $"Downloading {fullUrl} to {localpath}"));
             using var response = DownloadClient.GetAsync(fullUrl, HttpCompletionOption.ResponseContentRead)
                 .GetAwaiter()
                 .GetResult();
@@ -584,7 +586,14 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
             if (!response.IsSuccessStatusCode)
             {
-                Console.Error.WriteLine($"[DEBUG_LOG] Failed to download {fullUrl}: {response.StatusCode}");
+                ErrorEvent?.Invoke(this,
+                    new AlpmErrorEventArgs($"Failed to download {fullUrl}: {response.StatusCode}"));
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.DebugOutput,
+                        $"Response headers: {string.Join(", ", response.Headers.Select(h => $"{h.Key}: {h.Value}"))}"));
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.DebugOutput,
+                        $"Response ReasonPhrase: {response.ReasonPhrase}"));
                 return -1;
             }
 
@@ -595,7 +604,10 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
             using (var stream = response.Content.ReadAsStream())
             {
-                Console.Error.WriteLine($"[DEBUG_LOG] Reading content stream");
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.DebugOutput,
+                        $"Reading content stream of {fileName} from {fullUrl} to {tempPath}"));
+
                 byte[] buffer = new byte[8192];
                 int bytesRead;
                 long totalRead = 0;
@@ -606,33 +618,27 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     fs.Write(buffer, 0, bytesRead);
                     totalRead += bytesRead;
 
-                    if (totalBytes.HasValue && totalBytes.Value > 0)
-                    {
-                        int percent = (int)((totalRead * 100) / totalBytes.Value);
-                        if (percent != lastPercent)
-                        {
-                            PercentLoggerHandler("Downloading", fileName, percent, totalRead, totalBytes.Value);
-                            lastPercent = percent;
-                            Progress?.Invoke(this, new AlpmProgressEventArgs(
-                                AlpmProgressType.PackageDownload,
-                                fileName,
-                                percent,
-                                (ulong)totalBytes.Value,
-                                (ulong)totalRead
-                            ));
-                        }
-                    }
+                    if (totalBytes is not > 0) continue;
+                    int percent = (int)((totalRead * 100) / totalBytes.Value);
+                    if (percent == lastPercent) continue;
+                    lastPercent = percent;
+                    Progress?.Invoke(this, new AlpmProgressEventArgs(
+                        AlpmProgressType.PackageDownload,
+                        fileName,
+                        percent,
+                        (ulong)totalBytes.Value,
+                        (ulong)totalRead
+                    ));
                 }
 
                 // Ensure 100% is sent
                 if (lastPercent != 100)
                 {
-                    PercentLoggerHandler("Downloading", fileName, 100, totalBytes.Value, totalBytes.Value);
                     Progress?.Invoke(this, new AlpmProgressEventArgs(
                         AlpmProgressType.PackageDownload,
                         fileName,
                         100,
-                        (ulong)(totalBytes ?? (long)totalRead),
+                        (ulong)(totalBytes ?? totalRead),
                         (ulong)totalRead
                     ));
                 }
@@ -648,7 +654,9 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 }
                 catch
                 {
-                    Console.Error.WriteLine($"[DEBUG_LOG] Failed to delete temp file: {tempPath}");
+                    InformationalEvent?.Invoke(this,
+                        new InformationalEventArgs(AlpmEventType.DebugOutput,
+                            $"Failed to delete temp file: {tempPath}"));
                 }
 
                 return 0;
@@ -661,31 +669,38 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[DEBUG_LOG] Failed to move temp file: {ex.Message}");
-                Console.Error.WriteLine($"[DEBUG_LOG] Source: {tempPath}, Exists: {File.Exists(tempPath)}");
-                Console.Error.WriteLine($"[DEBUG_LOG] Destination: {localpath}");
-                Console.Error.WriteLine(
-                    $"[DEBUG_LOG] Dest dir exists: {Directory.Exists(Path.GetDirectoryName(localpath))}");
+                ErrorEvent?.Invoke(this,
+                    new AlpmErrorEventArgs($"Failed to move temp file: {ex.Message}"));
+                ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(ex.StackTrace ?? "No stack trace available"));
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.DebugOutput,
+                        $"Source: {tempPath}, Exists: {File.Exists(tempPath)}"));
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.DebugOutput, $"Destination: {localpath}"));
+                InformationalEvent?.Invoke(this,
+                    new InformationalEventArgs(AlpmEventType.DebugOutput,
+                        $"Dest dir exists: {Directory.Exists(Path.GetDirectoryName(localpath))}"));
                 return -1;
             }
 
+            if (!fullUrl.EndsWith(".db") || fullUrl.EndsWith(".db.sig")) return 0;
             // If we just downloaded a .db file, also download the corresponding .db.sig file
-            // This ensures database and signature files stay in sync, preventing "signature invalid" errors
-            Console.Error.WriteLine($"[DEBUG_LOG] Downloading corresponding signature file: {fullUrl}.sig");
-            Console.Error.WriteLine($"[DEBUG_LOG] Destination: {localpath}.sig");
-            if (fullUrl.EndsWith(".db") && !fullUrl.EndsWith(".db.sig"))
-            {
-                var sigUrl = fullUrl + ".sig";
-                var sigLocalPath = localpath + ".sig";
-                Console.Error.WriteLine($"[DEBUG_LOG] Downloading corresponding signature file: {sigUrl}");
-                DownloadSignatureFile(sigUrl, sigLocalPath);
-            }
-
+            // Ensures database and signature files stay in sync, preventing "signature invalid" errors
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                $"Downloading corresponding signature file: {fullUrl}.sig"));
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                $"Destination: {localpath}.sig"));
+            var sigUrl = fullUrl + ".sig";
+            var sigLocalPath = localpath + ".sig";
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                $"Downloading corresponding signature file: {sigUrl}"));
+            DownloadSignatureFile(sigUrl, sigLocalPath);
             return 0;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[DEBUG_LOG] Download failed for {fullUrl}: {ex.Message}");
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs($"Download failed for {fullUrl}: {ex.Message}"));
+            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(ex.StackTrace ?? "No stack trace available"));
             // Clean up temp file on failure to prevent leaving partial files
             try
             {
@@ -693,7 +708,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             }
             catch
             {
-                /* Ignore cleanup errors */
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"Failed to delete temp file: {tempPath}"));
             }
         }
         finally
