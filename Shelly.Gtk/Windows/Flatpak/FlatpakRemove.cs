@@ -142,7 +142,6 @@ public class FlatpakRemove(
             genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(
                 Translations.T($"Failed to repair Flatpak installation")));
         }
-        
     }
 
 

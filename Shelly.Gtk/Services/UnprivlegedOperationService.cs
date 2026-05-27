@@ -152,8 +152,6 @@ public class UnprivilegedOperationService(
     public async Task<UnprivilegedOperationResult> FlatpakRepair()
     {
         var result = await ExecuteUnprivilegedCommandAsync("Flatpak repair", "flatpak repair");
-        SendDbusMessage(result);
-        if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
         return result;
     }
 
