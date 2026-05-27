@@ -238,7 +238,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             if (db == IntPtr.Zero)
             {
                 var errno = ErrorNumber(_handle);
-                Console.Error.WriteLine($"[ALPM_ERROR] Failed to register {repo.Name}: {errno}");
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"Failed to register {repo.Name}: {errno}"));
                 continue;
             }
 
@@ -459,7 +460,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         for (int i = 0; i < providerOptions.Count; i++)
         {
-            Console.Error.WriteLine($"  [{i}] {providerOptions[i]}");
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                $"[{i}] {providerOptions[i]}"));
         }
 
         var args = new AlpmQuestionEventArgs(
@@ -2161,102 +2163,138 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             switch (type)
             {
                 case AlpmEventType.CheckDepsStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.CheckDepsStart,
                         "Checking dependencies..."));
                     break;
+                }
                 case AlpmEventType.CheckDepsDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.CheckDepsDone,
                         "Dependency check finished."));
                     break;
+                }
                 case AlpmEventType.FileConflictsStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.FileConflictsStart,
                         "Checking for file conflicts..."));
                     break;
+                }
                 case AlpmEventType.FileConflictsDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.FileConflictsDone,
                         "File conflict check finished."));
                     break;
+                }
                 case AlpmEventType.ResolveDepsStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.ResolveDepsStart,
                         "Resolving dependencies..."));
                     break;
+                }
                 case AlpmEventType.ResolveDepsDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.ResolveDepsDone,
                         "Dependency resolution finished."));
                     break;
+                }
                 case AlpmEventType.InterConflictsStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InterConflictsStart,
                         "Checking for package conflicts..."));
                     break;
+                }
                 case AlpmEventType.InterConflictsDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InterConflictsDone,
                         "Package conflict check finished."));
                     break;
+                }
                 case AlpmEventType.TransactionStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TransactionStart,
                         "Starting transaction..."));
                     break;
+                }
                 case AlpmEventType.TransactionDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TransactionDone,
-                        "Transaction completed successfully."));
+                        "Transaction completed."));
                     break;
+                }
                 case AlpmEventType.IntegrityStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.IntegrityStart,
                         "Checking package integrity..."));
                     break;
+                }
                 case AlpmEventType.IntegrityDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.IntegrityDone,
                         "Package integrity check finished."));
                     break;
+                }
                 case AlpmEventType.LoadStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.LoadStart,
                         "Loading packages..."));
                     break;
+                }
                 case AlpmEventType.LoadDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.LoadDone,
-                        "Packages loaded successfully."));
+                        "Packages loaded."));
                     break;
+                }
                 case AlpmEventType.DiskspaceStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DiskspaceStart,
                         "Checking disk space..."));
                     break;
+                }
                 case AlpmEventType.DiskspaceDone:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DiskspaceDone,
                         "Disk space check finished."));
                     break;
+                }
                 case AlpmEventType.PackageOperationStart:
+                {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PackageOperationStart,
                         "Starting package operation..."));
                     break;
+                }
                 case AlpmEventType.PackageOperationDone:
                 {
-                    Console.Error.WriteLine("[ALPM] Package operation finished.");
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PackageOperationDone,
+                        "Package operation completed."));
                     break;
                 }
-
                 case AlpmEventType.ScriptletInfo:
                 {
                     var scriptletEvent = Marshal.PtrToStructure<AlpmEventScriptletInfo>(eventPtr);
                     string? line = scriptletEvent.Line != IntPtr.Zero
                         ? Marshal.PtrToStringUTF8(scriptletEvent.Line)
                         : null;
-
                     if (!string.IsNullOrEmpty(line))
                     {
-                        Console.Error.WriteLine($"[ALPM_SCRIPTLET]{line}");
                         ScriptletInfo?.Invoke(this, new AlpmScriptletEventArgs(line));
                     }
 
                     break;
                 }
-
                 case AlpmEventType.HookStart:
-                    Console.Error.WriteLine("[ALPM] Running hooks...");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookStart,
+                        "Running hooks..."));
                     break;
+                }
                 case AlpmEventType.HookDone:
-                    Console.Error.WriteLine("[ALPM] Hooks finished.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookDone,
+                        "Finished running hooks."));
                     break;
-
+                }
                 case AlpmEventType.HookRunStart:
                 {
                     var hookEvent = Marshal.PtrToStructure<AlpmEventHookRun>(eventPtr);
@@ -2277,56 +2315,86 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     break;
                 }
                 case AlpmEventType.HookRunDone:
-                    Console.Error.WriteLine("[ALPM] Hook finished.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookRunDone,
+                        "Finished running hook."));
                     break;
-
-                // Database retrieval events (for sync operations)
+                }
                 case AlpmEventType.DbRetrieveStart:
-                    Console.Error.WriteLine("[ALPM] Retrieving database...");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveStart,
+                        "Retrieving database..."));
                     break;
+                }
                 case AlpmEventType.DbRetrieveDone:
-                    Console.Error.WriteLine("[ALPM] Database retrieved.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveDone,
+                        "Database retrieved."));
                     break;
+                }
                 case AlpmEventType.DbRetrieveFailed:
-                    Console.Error.WriteLine("[ALPM] Database retrieval failed.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveFailed,
+                        "Failed to retrieve database."));
                     break;
-
-                // Package retrieval events
+                }
                 case AlpmEventType.PkgRetrieveStart:
-                    Console.Error.WriteLine("[ALPM] Retrieving packages...");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveStart,
+                        "Retrieving package..."));
                     break;
+                }
                 case AlpmEventType.PkgRetrieveDone:
-                    Console.Error.WriteLine("[ALPM] Packages retrieved.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveDone,
+                        "Package retrieved."));
                     break;
+                }
                 case AlpmEventType.PkgRetrieveFailed:
-                    Console.Error.WriteLine("[ALPM] Package retrieval failed.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveFailed,
+                        "Package retrieval failed."));
                     break;
-
+                }
                 case AlpmEventType.DatabaseMissing:
                 {
-                    Console.Error.WriteLine(
-                        "[ALPM] Database missing. Please run 'pacman-key --init' to initialize it.");
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DatabaseMissing,
+                        "Database missing. Please run `shelly keyring init` to initialize the keyring."));
+                    break;
+                }
+                case AlpmEventType.OptdepRemoval:
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.OptdepRemoval,
+                        "Removing optional dependencies..."));
                     break;
                 }
 
-                case AlpmEventType.OptdepRemoval:
-                    Console.Error.WriteLine("[ALPM] Optional dependency being removed.");
-                    break;
-
                 case AlpmEventType.KeyringStart:
-                    Console.Error.WriteLine("[ALPM] Checking keyring...");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyringStart,
+                        "Checking keyring..."));
                     break;
+                }
                 case AlpmEventType.KeyringDone:
-                    Console.Error.WriteLine("[ALPM] Keyring check finished.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyringDone,
+                        "Keyring check finished."));
                     break;
+                }
                 case AlpmEventType.KeyDownloadStart:
-                    Console.Error.WriteLine("[ALPM] Downloading keys...");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyDownloadStart,
+                        "Downloading key..."));
                     break;
+                }
                 case AlpmEventType.KeyDownloadDone:
-                    Console.Error.WriteLine("[ALPM] Key download finished.");
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyDownloadDone,
+                        "Key download finished."));
                     break;
-
+                }
                 case AlpmEventType.PacnewCreated:
+                {
                     var pacnewEvent = Marshal.PtrToStructure<AlpmPacnewCreatedEvent>(eventPtr);
 
                     string? file = pacnewEvent.File != IntPtr.Zero
@@ -2348,12 +2416,11 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     }
 
                     bool fromNoupgrade = pacnewEvent.FromNoUpgrade != 0;
-
-                    Console.Error.WriteLine($"[ALPM] .pacnew file created: {file}");
                     PacnewInfo?.Invoke(this, new AlpmPacnewEventArgs(file!));
                     break;
+                }
                 case AlpmEventType.PacsaveCreated:
-                    Console.Error.WriteLine("[ALPM] .pacsave file created.");
+                {
                     var pacsaveEvent = Marshal.PtrToStructure<AlpmPacsaveCreatedEvent>(eventPtr);
 
                     var fileLocation = pacsaveEvent.File != IntPtr.Zero
@@ -2367,64 +2434,26 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                         pkgNameOld = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
                     }
 
-                    Console.Error.WriteLine($"[ALPM] .pacsave file created: {fileLocation}");
                     PacsaveInfo?.Invoke(this,
                         new AlpmPacsaveEventArgs(pkgNameOld ?? "No package name", fileLocation ?? "No file location"));
                     break;
+                }
 
+                // ReSharper disable once UnreachableSwitchCaseDueToIntegerAnalysis
                 default:
-                    // Unknown event type - just ignore it
+                {
+                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                        $"Unhandled event type: {type}"));
                     break;
+                }
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[ALPM_ERROR] Error handling event: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Safely reads a string pointer from an event struct at the given offset.
-    /// Returns null if the pointer is invalid or reading fails.
-    /// </summary>
-    private static string? ReadStringFromEvent(IntPtr eventPtr, int offset)
-    {
-        try
-        {
-            IntPtr strPtr = Marshal.ReadIntPtr(eventPtr, offset);
-            if (strPtr == IntPtr.Zero) return null;
-            return Marshal.PtrToStringUTF8(strPtr);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Safely reads the package name from a PackageOperation event.
-    /// The struct layout is: type (4) + operation (4) + oldpkg ptr + newpkg ptr
-    /// </summary>
-    private string? ReadPackageNameFromEvent(IntPtr eventPtr)
-    {
-        try
-        {
-            const int ptrOffset = 8; // type (4) + operation (4)
-            IntPtr oldPkgPtr = Marshal.ReadIntPtr(eventPtr, ptrOffset);
-            IntPtr newPkgPtr = Marshal.ReadIntPtr(eventPtr, ptrOffset + IntPtr.Size);
-
-            // For install/upgrade, use NewPkgPtr; for remove, use OldPkgPtr
-            IntPtr pkgPtr = newPkgPtr != IntPtr.Zero ? newPkgPtr : oldPkgPtr;
-            if (pkgPtr == IntPtr.Zero) return null;
-
-            IntPtr namePtr = GetPkgName(pkgPtr);
-            if (namePtr == IntPtr.Zero) return null;
-
-            return Marshal.PtrToStringUTF8(namePtr);
-        }
-        catch
-        {
-            return null;
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                $"Error handling event: {ex.Message}"));
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                ex.StackTrace ?? "No stack trace available"));
         }
     }
 
@@ -2531,7 +2560,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 out var pkgPtr);
             if (result == -1)
             {
-                Console.WriteLine(filePath);
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                    $"Adding corrupted package at: {filePath}"));
                 corruptedPackages.Add(Path.GetFileName(filePath));
                 if (!dryRun)
                 {
