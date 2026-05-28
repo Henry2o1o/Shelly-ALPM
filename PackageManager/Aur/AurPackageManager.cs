@@ -1728,15 +1728,16 @@ public sealed class AurPackageManager(string? configPath = null)
             buildProcess.WaitForExit();
             if (buildProcess.ExitCode != 0)
             {
-                Console.Error.WriteLine(
-                    $"[Shelly] Failed to build AUR dependency: {packageName} (exit code {buildProcess.ExitCode})");
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                    $"Failed to build {packageName} with makepkg: {buildProcess.StandardError.ReadToEnd()}"));
                 return;
             }
 
             var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
             if (pkgFile is null)
             {
-                Console.Error.WriteLine($"[Shelly] No package file matching '{packageName}' produced by makepkg");
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                    $"No package file found for {packageName} in {tempPath} produced by makepkg"));
                 return;
             }
 
@@ -1754,8 +1755,8 @@ public sealed class AurPackageManager(string? configPath = null)
         List<ParsedDependency> orderedAurPackages,
         AlpmTransFlag flags = AlpmTransFlag.None)
     {
-        Console.Error.WriteLine(
-            $"[Shelly] Installing collected dependencies: {allRepoPackages.Count} repo, {orderedAurPackages.Count} AUR");
+        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+            $"Installing collected dependencies: {allRepoPackages.Count} repo packages, {orderedAurPackages.Count} AUR packages"));
         if (allRepoPackages.Count > 0)
         {
             _alpm.Refresh();
@@ -1774,7 +1775,8 @@ public sealed class AurPackageManager(string? configPath = null)
         var packageName = package.Name;
         if (!_currentlyInstallingAurDeps.Add(packageName))
         {
-            Console.Error.WriteLine($"[Shelly] Skipping {packageName} - circular dependency detected");
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                $"Skipping {packageName} - circular dependency detected"));
             return;
         }
 
