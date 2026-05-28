@@ -133,14 +133,17 @@ public class FlatpakRemove(
     {
         try
         {
+            lockoutService.Show(Translations.T("Repaired Flatpak installation"));
             var exec = await unprivilegedOperationService.FlatpakRepair();
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(
-                Translations.T($"Repaired Flatpak installation")));
         }
-        catch (OperationCanceledException e)
+        catch (OperationCanceledException)
         {
             genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(
                 Translations.T($"Failed to repair Flatpak installation")));
+        }
+        finally
+        {
+            lockoutService.Hide();
         }
     }
 
