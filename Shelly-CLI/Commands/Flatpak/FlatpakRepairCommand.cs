@@ -12,6 +12,12 @@ public class FlatpakRepair : Command<FlatpakRepairSettings>
 {
     public override int Execute([NotNull] CommandContext context, [NotNull] FlatpakRepairSettings settings)
     {
+        
+        if (Program.IsUiMode)
+        {
+            return HandleUiModeRepair();
+        }
+        
         var flatpakManager = new FlatpakManager();
         var ostreeManager = new OstreeManager();
         var status = AnsiConsole.Status();
@@ -195,4 +201,139 @@ public class FlatpakRepair : Command<FlatpakRepairSettings>
         
         return 0;
     }
+    
+    private static int HandleUiModeRepair()
+    {
+        var flatpakManager = new FlatpakManager();
+        var ostreeManager = new OstreeManager();
+        var status = AnsiConsole.Status();
+
+        List<OstreeRepositoryRef> invalidRefs = [];
+        List<OstreeRepositoryRef> validRefs = [];
+        
+        // Step 1 - Scan all locally available refs, removing any that don't correspond to a deployed ref.
+
+        var repositories = flatpakManager.GetRepositoryPaths();
+
+        var installed = flatpakManager.SearchInstalled();
+        var installedRefs =
+            installed
+                .Select(x => x.FullRef)
+                .ToHashSet();
+
+        foreach (var repo in repositories)
+        {
+            var refs =
+                ostreeManager.ListRefs(repo);
+
+            foreach (var reference in refs)
+            {
+                if (!installedRefs.Contains(
+                        reference.FullRef))
+                {
+                    Console.Error.WriteLine($"Orphan ref: {reference.FullRef}");
+                }
+            }
+        }
+        
+        // Step 2 - Verify each commit they point to, removing any invalid objects and noting any missing objects.
+
+        foreach (var repo in repositories)
+        {
+            var refs = ostreeManager.ListRefs(repo);
+
+            foreach (var reference in refs)
+            {
+                var commit = ostreeManager.GetCommitForRef(repo, reference.FullRef)!;
+
+                reference.Commit = commit;
+                
+                if (string.IsNullOrWhiteSpace(commit))
+                {
+                    
+                    Console.Error.WriteLine($"Missing commit: {reference.FullRef}");
+                    
+                    invalidRefs.Add(reference);
+                    continue;
+                }
+
+                var fsck = ostreeManager.FsckCommit(repo, commit);
+
+                if (fsck.Status == FsckStatus.Ok)
+                {
+                    
+                    validRefs.Add(reference);
+                }
+                else
+                {
+                    invalidRefs.Add(reference);
+                }
+            }
+        }        
+        
+        // Step 3 - Remove any refs that had an invalid object, and any non-partial refs that had missing objects.
+
+        foreach (var reference in invalidRefs)
+        {
+            var installedRef = installed.FirstOrDefault(
+                x => x.FullRef == reference.FullRef);
+
+            if (installedRef != null)
+            {
+                var uninstallResult =
+                    flatpakManager.UninstallAppFromRef(
+                        installedRef);
+
+                Console.Error.WriteLine(uninstallResult
+                    ? $"Uninstalled: {reference.FullRef}"
+                    : $"Failed uninstall: {reference.FullRef}");
+            }
+        }
+        
+        // Step 4 - Prune all objects not referenced by a ref, which gets rid of any possibly invalid non-scanned objects.
+        foreach (var repo in repositories)
+        {
+            var result = ostreeManager.Prune(repo);
+
+            if (result.Success)
+            {
+                if (result.ObjectsPruned > 0)
+                {
+                    Console.Error.WriteLine($"Pruning repository: {repo}");
+                }
+
+            }
+            
+        }
+        
+        // Step 5 - Enumerate all deployed refs and re-install any that are not in the repo (or are partial for a non-subdir deploy).
+        
+        var currentRefs =
+            repositories
+                .SelectMany(repo => ostreeManager.ListRefs(repo))
+                .Select(x => x.FullRef)
+                .ToHashSet();
+
+        foreach (var installedRef in installed)
+        {
+            
+            if (currentRefs.Contains(installedRef.FullRef))
+            {
+                continue;
+            }
+
+            Console.Error.WriteLine($"Install required: {installedRef.Name}");
+            
+            var success =
+                flatpakManager.FlatpakRepairRestore(installedRef);
+
+            Console.Error.WriteLine(success
+                ? $"Installed: {installedRef.Name}"
+                : $"Failed install: {installedRef.Name}");
+        }
+        
+        return 0;
+    }
+
+    
 }
