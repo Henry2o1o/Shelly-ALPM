@@ -40,7 +40,7 @@ public sealed class PackageManagement(
         _checkBinding = [];
 
     private readonly bool _deletePackageCache = configService.LoadConfig().RemoveCache;
-    private Box _box = null!;
+    private Overlay _box = null!;
     private SearchEntry _searchEntry = null!;
     private CheckButton _cascadeDeleteCheck = null!;
     private CheckButton _removeConfigsCheck = null!;
@@ -53,6 +53,10 @@ public sealed class PackageManagement(
     private List<string> _groups = [];
     private DropDown _groupDropDown = null!;
     private string _selectedGroup = T("Any");
+
+    private Box _loadingOverlay = null!;
+    private Spinner _loadingSpinner = null!;
+    private Label _errorLabel = null!;
 
     private ColumnViewColumn _nameColumn = null!;
     private ColumnViewColumn _versionColumn = null!;
@@ -67,13 +71,17 @@ public sealed class PackageManagement(
     {
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Package/PackageManagement.ui"), -1);
         builder.TranslationDomain = Domain;
-        _box = (Box)builder.GetObject("PackageManagement")!;
+        _box = (Overlay)builder.GetObject("PackageManagement")!;
         var columnView = (ColumnView)builder.GetObject("package_grid")!;
         _searchEntry = (SearchEntry)builder.GetObject("search_entry")!;
         _cascadeDeleteCheck = (CheckButton)builder.GetObject("cascade_delete_check")!;
         _removeConfigsCheck = (CheckButton)builder.GetObject("remove_configs_check")!;
         _removeOptDepsCheck = (CheckButton)builder.GetObject("remove_optdeps_check")!;
         _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
+
+        _loadingOverlay = (Box)builder.GetObject("loading_overlay")!;
+        _loadingSpinner = (Spinner)builder.GetObject("loading_spinner")!;
+        _errorLabel = (Label)builder.GetObject("error_label")!;
 
         var checkColumn = (ColumnViewColumn)builder.GetObject("check_column")!;
         checkColumn.Resizable = true;
@@ -690,6 +698,9 @@ public sealed class PackageManagement(
 
     private async Task LoadDataAsync(int generation = 0, CancellationToken ct = default)
     {
+        if (_loadGeneration != generation) return;
+        OverlayHelper.ShowLoading(_loadingOverlay, _loadingSpinner, _errorLabel);
+
         try
         {
             var packages = await privilegedOperationService.GetInstalledPackagesAsync(_showHiddenCheck.Active);
@@ -699,7 +710,14 @@ public sealed class PackageManagement(
             ct.ThrowIfCancellationRequested();
             GLib.Functions.IdleAdd(0, () =>
             {
-                if (ct.IsCancellationRequested || _loadGeneration != generation) return false;
+                if (ct.IsCancellationRequested || _loadGeneration != generation)
+                {
+                    if (_loadGeneration == generation)
+                    {
+                        OverlayHelper.HideLoading(_loadingOverlay, _loadingSpinner);
+                    }
+                    return false;
+                }
 
                 _filterListModel.SetFilter(null);
                 _listStore.RemoveAll();
@@ -739,6 +757,8 @@ public sealed class PackageManagement(
                     }
                 }
 
+                OverlayHelper.HideLoading(_loadingOverlay, _loadingSpinner);
+
                 packages.Clear();
                 packages.TrimExcess();
                 return false;
@@ -746,6 +766,11 @@ public sealed class PackageManagement(
         }
         catch (Exception e)
         {
+            if (_loadGeneration == generation)
+            {
+                OverlayHelper.HideLoading(_loadingOverlay, _loadingSpinner);
+                _errorLabel.SetVisible(true);
+            }
             Console.WriteLine($"Failed to load packages: {e.Message}");
         }
     }
@@ -776,6 +801,8 @@ public sealed class PackageManagement(
 
             try
             {
+                OverlayHelper.ShowLoading(_loadingOverlay, _loadingSpinner, _errorLabel);
+
                 lockoutService.Show(T("Removing..."));
                 var result = await privilegedOperationService.RemovePackagesAsync(selectedPackages,
                     isCascade: _cascadeDeleteCheck.Active,
@@ -794,7 +821,8 @@ public sealed class PackageManagement(
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to install packages: {e.Message}");
+                OverlayHelper.HideLoading(_loadingOverlay, _loadingSpinner);
+                Console.WriteLine($"Failed to remove packages: {e.Message}");
             }
             finally
             {
