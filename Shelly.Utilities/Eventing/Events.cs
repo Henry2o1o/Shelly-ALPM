@@ -22,3 +22,21 @@ public sealed record AlpmReplaceEvent(
     string PackageName,
     List<string> Replaces,
     DateTimeOffset TimeStamp = default) : Event(EventSource.Alpm, EventLevel.Information, TimeStamp);
+
+public abstract record ProgressEvent(
+    EventSource Source,
+    string ProgressType,
+    int Percent,
+    DateTimeOffset TimeStamp = default)
+    : Event(Source, EventLevel.Information, TimeStamp);
+
+public sealed record AlpmPackageProgress(
+    string PackageName,
+    int CurrentIndex,
+    int TotalPackages,
+    string Status,
+    string ProgressType,
+    int Percent,
+    string? Message,
+    DateTimeOffset TimeStamp = default)
+    : ProgressEvent(EventSource.Alpm, ProgressType, Percent, TimeStamp);
