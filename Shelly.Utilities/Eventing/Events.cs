@@ -14,6 +14,7 @@ namespace Shelly.Utilities.Eventing;
 [JsonDerivedType(typeof(AlpmBuildOutputEvent),   "alpm.build")]
 [JsonDerivedType(typeof(AlpmPkgBuildDiffEvent),  "alpm.pkgbuilddiff")]
 [JsonDerivedType(typeof(AlpmStatusEvent),        "alpm.status")]
+[JsonDerivedType(typeof(AlpmInformationalEvent), "alpm.info")]
 public abstract record Event(EventSource Source, EventLevel Level, DateTimeOffset TimeStamp = default)
 {
     public DateTimeOffset TimeStamp { get; init; } = TimeStamp == default ? DateTimeOffset.Now : TimeStamp;
@@ -63,4 +64,13 @@ public sealed record AlpmPkgBuildDiffEvent(string OldPkgBuild, string NewPkgBuil
     : Event(EventSource.Alpm, EventLevel.Information, TimeStamp);
 
 public sealed record AlpmStatusEvent(string Status, DateTimeOffset TimeStamp = default)
+    : Event(EventSource.Alpm, EventLevel.Information, TimeStamp);
+
+public sealed record AlpmInformationalEvent(
+    AlpmEvents EventType,
+    string Message,
+    string? PackageName = null,
+    int? CurrentIndex = null,
+    int? TotalCount = null,
+    DateTimeOffset TimeStamp = default)
     : Event(EventSource.Alpm, EventLevel.Information, TimeStamp);

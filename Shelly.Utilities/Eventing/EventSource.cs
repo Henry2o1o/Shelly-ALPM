@@ -52,6 +52,18 @@ public enum AlpmEvents
     InformationalOutput = 256,
     DebugOutput = 257,
     TraceOutput = 258,
+
+    //AUR orchestration event types
+    AurDownloadStart = 512,
+    AurDownloadDone = 513,
+    AurBuildStart = 514,
+    AurBuildDone = 515,
+    AurInstallStart = 516,
+    AurInstallDone = 517,
+    AurCleanupStart = 518,
+    AurCleanupDone = 519,
+    AurPackageFailed = 520,
+    AurPackageCompleted = 521,
 }
 
 public enum ProgressType
@@ -66,5 +78,8 @@ public enum ProgressType
     IntegrityStart,
     LoadStart,
     KeyringStart,
-    PackageDownload = 100
+    PackageDownload = 100,
+    MakepkgBuild = 200,
+    MakepkgPackage = 201,
+    AurDownload = 202
 }
