@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using PackageManager.Flatpak;
+using PackageManager.Flatpak.Events;
 using PackageManager.Ostree;
 using PackageManager.Ostree.Enums;
 using Shelly_CLI.Utility;
@@ -10,6 +11,8 @@ namespace Shelly_CLI.Commands.Flatpak;
 
 public class FlatpakRepair : Command
 {
+    public EventHandler<FlatpakEventArgs> FlatpakEvent;
+
     public override int Execute([NotNull] CommandContext context)
     {
         
@@ -202,7 +205,7 @@ public class FlatpakRepair : Command
         return 0;
     }
     
-    private static int HandleUiModeRepair()
+    private int HandleUiModeRepair()
     {
         var hasErrors = false;
         
@@ -214,7 +217,10 @@ public class FlatpakRepair : Command
         
         // Step 1 - Scan all locally available refs, removing any that don't correspond to a deployed ref.
 
-        Console.Error.WriteLine("Working on Flatpak installation...");
+        
+        FlatpakEvent?.Invoke(this,
+            new FlatpakEventArgs(FlatpakEventEnum.Information, $"Working on Flatpak installation..."));
+        
         var repositories = flatpakManager.GetRepositoryPaths();
 
         var installed = flatpakManager.SearchInstalled();
@@ -233,7 +239,9 @@ public class FlatpakRepair : Command
                 if (!installedRefs.Contains(
                         reference.FullRef))
                 {
-                    Console.Error.WriteLine($"Orphan ref: {reference.FullRef}");
+                    FlatpakEvent?.Invoke(this,
+                        new FlatpakEventArgs(FlatpakEventEnum.Error, 
+                            $"Orphan ref: {reference.FullRef}"));
                 }
             }
         }
@@ -253,7 +261,9 @@ public class FlatpakRepair : Command
                 if (string.IsNullOrWhiteSpace(commit))
                 {
                     
-                    Console.Error.WriteLine($"Missing commit: {reference.FullRef}");
+                    FlatpakEvent?.Invoke(this,
+                        new FlatpakEventArgs(FlatpakEventEnum.Error, 
+                            $"Missing commit: {reference.FullRef}"));
                     
                     invalidRefs.Add(reference);
                     continue;
@@ -291,9 +301,19 @@ public class FlatpakRepair : Command
                     hasErrors = true;
                 }
                 
-                Console.Error.WriteLine(uninstallResult
+                var message = uninstallResult
                     ? $"Uninstalled: {reference.FullRef}"
-                    : $"Failed uninstall: {reference.FullRef}");
+                    : $"Failed uninstall: {reference.FullRef}";
+                
+                FlatpakEvent?.Invoke(
+                    this,
+                    new FlatpakEventArgs(
+                        FlatpakEventEnum.Information,
+                        message
+                    )
+                );
+                
+                
             }
         }
         
@@ -306,7 +326,9 @@ public class FlatpakRepair : Command
             {
                 if (result.ObjectsPruned > 0)
                 {
-                    Console.Error.WriteLine($"Pruning repository: {repo}");
+                    FlatpakEvent?.Invoke(this,
+                        new FlatpakEventArgs(FlatpakEventEnum.Information, 
+                            $"Pruning repository: {repo}"));
                 }
 
             }
@@ -329,14 +351,24 @@ public class FlatpakRepair : Command
                 continue;
             }
 
-            Console.Error.WriteLine($"Install required: {installedRef.Name}");
+            FlatpakEvent?.Invoke(this,
+                new FlatpakEventArgs(FlatpakEventEnum.Information, 
+                    $"Install required: {installedRef.Name}"));
             
             var success =
                 flatpakManager.FlatpakRepairRestore(installedRef);
 
-            Console.Error.WriteLine(success
+            var message = success 
                 ? $"Installed: {installedRef.Name}"
-                : $"Failed install: {installedRef.Name}");
+                : $"Failed install: {installedRef.Name}";
+
+            FlatpakEvent?.Invoke(
+                this,
+                new FlatpakEventArgs(
+                    FlatpakEventEnum.Information,
+                    message
+                )
+            );
 
             if (!success)
             {
@@ -346,11 +378,23 @@ public class FlatpakRepair : Command
 
         if (!hasErrors)
         {
-            Console.Error.WriteLine("Flatpak installation repaired");
+            FlatpakEvent?.Invoke(
+                this,
+                new FlatpakEventArgs(
+                    FlatpakEventEnum.Information,
+                    "Flatpak installation repaired"
+                )
+            );
             return 0;
         }
         
-        Console.Error.WriteLine("Flatpak repair completed with errors");
+        FlatpakEvent?.Invoke(
+            this,
+            new FlatpakEventArgs(
+                FlatpakEventEnum.Warning,
+                "Flatpak repair completed with errors"
+            )
+        );
         return 0;
     }
 
