@@ -52,6 +52,7 @@ public enum AlpmEvents
     InformationalOutput = 256,
     DebugOutput = 257,
     TraceOutput = 258,
+    TransactionFailed = 259,
 
     //AUR orchestration event types
     AurDownloadStart = 512,
