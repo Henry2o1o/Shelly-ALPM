@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using PackageManager.Flatpak.Events;
+using Shelly.Utilities;
 
 namespace PackageManager.Flatpak;
 
@@ -2459,16 +2460,16 @@ public class FlatpakManager : IDisposable
         var paths = new List<string>();
 
         var systemRepo = "/var/lib/flatpak/repo";
-
+        
         if (Directory.Exists(systemRepo))
         {
             paths.Add(systemRepo);
         }
 
         var userRepo = Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.UserProfile),
-            ".local/share/flatpak/repo");
+            XdgPaths.DataHome(),
+            "flatpak",
+            "repo");
 
         if (Directory.Exists(userRepo))
         {

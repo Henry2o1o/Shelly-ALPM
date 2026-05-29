@@ -37,6 +37,11 @@ public class FlatpakRepair : Command
         {
             var refs = ostreeManager.ListRefs(repo);
 
+            if (refs.Count == 0)
+            {
+                continue;
+            }
+            
             var tree = new Tree(
                 $"[yellow]Packages in repo:{repo}[/]");
 
