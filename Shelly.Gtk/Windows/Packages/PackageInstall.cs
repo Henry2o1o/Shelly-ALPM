@@ -312,6 +312,8 @@ public sealed class PackageInstall(
         AddDetail(T("Version"), pkg.Version);
         AddDetail(T("Repository"), pkg.Repository);
         AddDetail(T("Size"), SizeHelpers.FormatSize(pkg.InstalledSize));
+        AddDetail(T("Installed Size"), SizeHelpers.FormatSize(pkg.InstalledSize));
+        AddDetail(T("Build Date"), pkg.BuildDate.ToString("yyyy-MM-dd HH:mm:ss"));
         if (!string.IsNullOrEmpty(pkg.Url))
         {
             var row = Box.New(Orientation.Horizontal, 12);

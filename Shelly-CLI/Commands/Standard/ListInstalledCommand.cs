@@ -70,6 +70,7 @@ public class ListInstalledCommand : Command<AlpmListSettings>
         table.AddColumn("Version");
         table.AddColumn("Size");
         table.AddColumn("Description");
+        table.AddColumn("Installed as");
 
         var skip = (settings.Page - 1) * settings.Take;
         var displayPackages = sortedPackages.Skip(skip).Take(settings.Take).ToList();
@@ -80,7 +81,8 @@ public class ListInstalledCommand : Command<AlpmListSettings>
                 pkg.Name,
                 pkg.Version,
                 FormatSize(pkg.InstalledSize),
-                pkg.Description.EscapeMarkup().Truncate(50)
+                pkg.Description.EscapeMarkup().Truncate(50),
+                pkg.InstallReason
             );
         }
 
