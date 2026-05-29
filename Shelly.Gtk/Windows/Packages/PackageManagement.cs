@@ -102,6 +102,7 @@ public sealed class PackageManagement(
         _removeButton.SetSensitive(false);
         _downgradeButton = (Button)builder.GetObject("downgrade_button")!;
         _downgradeButton.SetSensitive(false);
+        _downgradeButton.SetVisible(configService.LoadConfig().PackageDowngradeEnabled);
 
         _listStore = Gio.ListStore.New(AlpmPackageGObject.GetGType());
         _filter = PackageSearch.CreateSafeFilter(FilterPackage);
