@@ -140,8 +140,9 @@ public class InstallCommand : AsyncCommand<InstallPackageSettings>
         }
 
         using var manager = new AlpmManager();
-        manager.Question += (_, args) => QuestionHandler.HandleQuestion(args, true, settings.NoConfirm);
         manager.Initialize(true);
+        manager.Question += (_, args) => QuestionHandler.HandleQuestion(args, true, settings.NoConfirm);
+  
 
         var packageList = settings.Packages.ToList();
 

@@ -59,6 +59,7 @@ public static class QuestionHandler
 
     public static void HandleQuestion(AlpmQuestionEventArgs question, bool uiMode = false, bool noConfirm = false)
     {
+        Console.WriteLine($"Handling question: {question.QuestionText}");
         switch (question.QuestionType)
         {
             case AlpmQuestionType.SelectProvider:
