@@ -12,8 +12,9 @@ public class OstreeManager()
 {
     public List<OstreeRepositoryRef> ListRefs(string repoPath)
     {
+        
         var refs = new List<OstreeRepositoryRef>();
-
+        
         if (string.IsNullOrWhiteSpace(repoPath))
         {
             return refs;
