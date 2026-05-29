@@ -179,16 +179,4 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
             manager?.Dispose();
         }
     }
-
-    private static async Task<List<string>> GetMissingPackages(AurPackageManager manager, List<string> packageList)
-    {
-        var installedPackages = await manager.GetInstalledPackages();
-        var installedPackageNames = installedPackages
-            .Select(package => package.Name)
-            .ToHashSet(StringComparer.Ordinal);
-
-        return packageList
-            .Where(packageName => !installedPackageNames.Contains(packageName))
-            .ToList();
-    }
 }

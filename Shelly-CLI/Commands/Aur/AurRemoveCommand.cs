@@ -4,8 +4,10 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using PackageManager.Alpm;
 using PackageManager.Aur;
+using PackageManager.Wire;
 using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
+using Shelly.Utilities.Eventing;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -150,7 +152,7 @@ public class AurRemoveCommand : AsyncCommand<AurRemovePackageSettings>
     {
         if (settings.Packages.Length == 0)
         {
-            Console.Error.WriteLine("Error: No packages specified");
+            JsonPackFrame.WriteToStdout<Event>(new AlpmErrorEvent(EventLevel.Error, "No packages specified"));
             return 1;
         }
         var flags = AlpmTransFlag.None;
