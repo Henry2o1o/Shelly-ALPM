@@ -1,9 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
 using PackageManager.Alpm;
 using PackageManager.Aur;
+using PackageManager.Wire;
 using Shelly_CLI.Configuration;
 using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
+using Shelly.Utilities.Eventing;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -81,7 +83,6 @@ public class AurUpgradeCommand : AsyncCommand<AurUpgradeSettings>
     private static async Task<int> HandleUiModeUpgrade(AurUpgradeSettings settings)
     {
         AurPackageManager? manager = null;
-        bool hadError = false;
         try
         {
             manager = new AurPackageManager();
@@ -91,90 +92,31 @@ public class AurUpgradeCommand : AsyncCommand<AurUpgradeSettings>
 
             if (updates.Count == 0)
             {
-                Console.Error.WriteLine("All AUR packages are up to date.");
+                JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                    AlpmEvents.InformationalOutput, "All AUR packages are up to date."));
                 return 0;
             }
 
-            Console.Error.WriteLine($"{updates.Count} AUR packages need updates:");
-            foreach (var pkg in updates)
-            {
-                Console.Error.WriteLine($"  {pkg.Name}: {pkg.Version} -> {pkg.NewVersion}");
-            }
-
-            manager.ErrorEvent += (_, e) =>
-            {
-                Console.Error.WriteLine($"[ALPM_ERROR]{e.Error}");
-                hadError = true;
-            };
-
-            manager.Replaces += (_, args) =>
-            {
-                foreach (var replace in args.Replaces)
-                {
-                    Console.Error.WriteLine(
-                        $"Replacement: {args.Repository}/{args.PackageName} replaces {replace}");
-                }
-            };
-
-            manager.Question += (_, args) =>
-            {
-                Console.Error.WriteLine();
-                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
-            };
-
-            manager.Progress += (_, args) =>
-            {
-                var name = args.PackageName ?? "unknown";
-                var pct = args.Percent ?? 0;
-                var actionType = args.ProgressType;
-                Console.Error.WriteLine($"{name}: {pct}% - {actionType}");
-            };
-
-            manager.HookRun += (_, args) => Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}");
-
-            manager.ScriptletInfo += (_, args) => Console.Error.WriteLine($"[Shelly][ALPM_SCRIPTLET]{args.Line}");
-
-            manager.InformationalEvent += (_, args) =>
-            {
-                if (args.EventType == AlpmEventType.AurBuildOutput)
-                    Console.Error.WriteLine($"[Shelly] makepkg: {args.Message}");
-                else if (args.EventType == AlpmEventType.AurBuildError)
-                    Console.Error.WriteLine($"[Shelly] makepkg error: {args.Message}");
-                else if (args.PackageName != null)
-                    Console.Error.WriteLine($"[{args.CurrentIndex}/{args.TotalCount}] {args.PackageName}: {args.EventType}" +
-                                            (!string.IsNullOrEmpty(args.Message) ? $" - {args.Message}" : ""));
-            };
-
-            manager.Progress += (_, args) =>
-            {
-                if (args.ProgressType == AlpmProgressType.MakepkgBuild)
-                    Console.Error.WriteLine($"[AUR_PROGRESS]Percent: {args.Percent}% Message: {args.Message}");
-            };
-
+            manager.Question += (_, args) => QuestionHandler.HandleQuestion(args, true, settings.NoConfirm);
             manager.PkgbuildDiffRequest += (_, args) =>
                 QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
 
-            var packageNames = updates.Select(u => u.Name).ToList();
-            await manager.UpdatePackages(packageNames);
-            if (hadError)
-            {
-                await Console.Error.WriteLineAsync("Upgrade failed.");
-                return 1;
-            }
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                AlpmEvents.AurDownloadStart,
+                $"{updates.Count} AUR packages need updates"));
 
-            await Console.Error.WriteLineAsync("Upgrade complete.");
-        }
-        catch (Exception ex)
-        {
-            await  Console.Error.WriteLineAsync($"Upgrade failed: {ex.Message}");
-            return 1;
+            var packageNames = updates.Select(u => u.Name).ToList();
+            var ok = await UiModeOutput.Run(manager, m => m.UpdatePackages(packageNames));
+
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                ok ? AlpmEvents.AurPackageCompleted : AlpmEvents.AurPackageFailed,
+                ok ? "Upgrade complete." : "Upgrade failed."));
+            return ok ? 0 : 1;
         }
         finally
         {
             manager?.Dispose();
         }
-
-        return 0;
     }
     
 }

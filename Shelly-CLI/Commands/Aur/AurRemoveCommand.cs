@@ -155,61 +155,35 @@ public class AurRemoveCommand : AsyncCommand<AurRemovePackageSettings>
             JsonPackFrame.WriteToStdout<Event>(new AlpmErrorEvent(EventLevel.Error, "No packages specified"));
             return 1;
         }
+
         var flags = AlpmTransFlag.None;
         if (settings.Cascade)
-        {
-            flags |= AlpmTransFlag.NoSave|AlpmTransFlag.Recurse;
-
-        }
-        else if(settings.Ripple)
-        {
+            flags |= AlpmTransFlag.NoSave | AlpmTransFlag.Recurse;
+        else if (settings.Ripple)
             flags |= AlpmTransFlag.Cascade;
-        }
 
         AurPackageManager? manager = null;
-        bool hadError = false;
         try
         {
             manager = new AurPackageManager();
             await manager.Initialize(root: true);
 
+            manager.Question += (_, args) => QuestionHandler.HandleQuestion(args, true, settings.NoConfirm);
+            manager.PkgbuildDiffRequest += (_, args) =>
+                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
+
             var packageList = settings.Packages.ToList();
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                AlpmEvents.AurInstallStart,
+                $"Removing AUR packages: {string.Join(", ", packageList)}"));
 
-            // Handle informational events (formerly PackageProgress)
-            manager.InformationalEvent += (_, args) =>
-            {
-                if (args.PackageName == null) return;
-                Console.Error.WriteLine($"[{args.CurrentIndex}/{args.TotalCount}] {args.PackageName}: {args.EventType}" +
-                                        (!string.IsNullOrEmpty(args.Message) ? $" - {args.Message}" : ""));
-            };
+            var ok = await UiModeOutput.Run(manager,
+                m => m.RemovePackages(packageList, flags, settings.OptDeps));
 
-            // Handle progress events
-            manager.Progress += (sender, args) => { Console.Error.WriteLine($"{args.PackageName}: {args.Percent}%"); };
-
-            // Handle questions
-            manager.Question += (sender, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
-
-            manager.ErrorEvent += (_, e) =>
-            {
-                Console.Error.WriteLine($"[ALPM_ERROR]{e.Error}");
-                hadError = true;
-            };
-
-            Console.Error.WriteLine($"Removing AUR packages: {string.Join(", ", packageList)}");
-            await manager.RemovePackages(packageList, flags, settings.OptDeps);
-            if (hadError)
-            {
-                Console.Error.WriteLine("Removal failed.");
-                return 1;
-            }
-            Console.Error.WriteLine("Removal complete.");
-
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Removal failed: {ex.Message}");
-            return 1;
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                ok ? AlpmEvents.AurPackageCompleted : AlpmEvents.AurPackageFailed,
+                ok ? "Removal complete." : "Removal failed."));
+            return ok ? 0 : 1;
         }
         finally
         {

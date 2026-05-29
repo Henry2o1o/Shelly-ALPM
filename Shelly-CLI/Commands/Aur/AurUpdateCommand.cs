@@ -1,9 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
 using PackageManager.Alpm;
 using PackageManager.Aur;
+using PackageManager.Wire;
 using Shelly_CLI.Configuration;
 using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
+using Shelly.Utilities.Eventing;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -74,68 +76,35 @@ public class AurUpdateCommand : AsyncCommand<AurPackageSettings>
     {
         if (settings.Packages.Length == 0)
         {
-            Console.Error.WriteLine("No packages specified.");
+            JsonPackFrame.WriteToStdout<Event>(new AlpmErrorEvent(EventLevel.Error, "No packages specified"));
             return 1;
         }
 
         AurPackageManager? manager = null;
-        bool hadError = false;
         try
         {
             manager = new AurPackageManager();
             await manager.Initialize(root: true, noCheck: !settings.Check);
 
-            manager.HookRun += (_, args) => Console.Error.WriteLine($"[ALPM_HOOK]{args.Description}");
-            manager.ErrorEvent += (_, e) =>
-            {
-                Console.Error.WriteLine($"[ALPM_ERROR]{e.Error}");
-                hadError = true;
-            };
-
-            manager.InformationalEvent += (_, args) =>
-            {
-                if (args.EventType == AlpmEventType.AurBuildOutput)
-                    Console.Error.WriteLine($"[Shelly] makepkg: {args.Message}");
-                else if (args.EventType == AlpmEventType.AurBuildError)
-                    Console.Error.WriteLine($"[Shelly] makepkg error: {args.Message}");
-                else if (args.PackageName != null)
-                    Console.Error.WriteLine($"[{args.CurrentIndex}/{args.TotalCount}] {args.PackageName}: {args.EventType}" +
-                                            (!string.IsNullOrEmpty(args.Message) ? $" - {args.Message}" : ""));
-            };
-
-            manager.Progress += (sender, args) =>
-            {
-                if (args.ProgressType == AlpmProgressType.MakepkgBuild)
-                    Console.Error.WriteLine($"[AUR_PROGRESS]Percent: {args.Percent}% Message: {args.Message}");
-                else
-                    Console.Error.WriteLine($"{args.PackageName}: {args.Percent}%");
-            };
-
-            manager.Question += (sender, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
-
+            manager.Question += (_, args) => QuestionHandler.HandleQuestion(args, true, settings.NoConfirm);
             manager.PkgbuildDiffRequest += (_, args) =>
                 QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
 
-            Console.Error.WriteLine($"Updating AUR packages: {string.Join(", ", settings.Packages)}");
-            await manager.UpdatePackages(settings.Packages.ToList());
-            if (hadError)
-            {
-                Console.Error.WriteLine("Update failed.");
-                return 1;
-            }
+            var packageList = settings.Packages.ToList();
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                AlpmEvents.AurDownloadStart,
+                $"Updating AUR packages: {string.Join(", ", packageList)}"));
 
-            Console.Error.WriteLine("Update complete.");
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Update failed: {ex.Message}");
-            return 1;
+            var ok = await UiModeOutput.Run(manager, m => m.UpdatePackages(packageList));
+
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                ok ? AlpmEvents.AurPackageCompleted : AlpmEvents.AurPackageFailed,
+                ok ? "Update complete." : "Update failed."));
+            return ok ? 0 : 1;
         }
         finally
         {
             manager?.Dispose();
         }
-
-        return 0;
     }
 }
