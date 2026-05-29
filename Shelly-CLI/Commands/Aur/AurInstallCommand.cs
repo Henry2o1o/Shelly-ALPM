@@ -4,9 +4,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using PackageManager.Alpm;
 using PackageManager.Aur;
+using PackageManager.Wire;
 using Shelly_CLI.Configuration;
 using Shelly_CLI.ConsoleLayouts;
 using Shelly_CLI.Utility;
+using Shelly.Utilities.Eventing;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -122,81 +124,60 @@ public class AurInstallCommand : AsyncCommand<AurInstallSettings>
     {
         if (settings.Packages.Length == 0)
         {
-            Console.Error.WriteLine("Error: No packages specified");
+            JsonPackFrame.WriteToStdout<Event>(new AlpmErrorEvent(EventLevel.Error, "No packages specified"));
             return 1;
         }
 
         AurPackageManager? manager = null;
-        bool hadError = false;
         try
         {
             manager = new AurPackageManager();
             await manager.Initialize(root: true, useChroot: settings.UseChroot, noCheck: !settings.Check);
 
-            var packageList = settings.Packages.ToList();
-
-            // Handle progress events
-            manager.Progress += (sender, args) => { Console.Error.WriteLine($"{args.PackageName}: {args.Percent}%"); };
-
-            // Handle informational events (formerly PackageProgress + BuildOutput raw lines)
-            manager.InformationalEvent += (_, args) =>
-            {
-                Console.Error.WriteLine(args.PackageName != null
-                    ? $"[{args.CurrentIndex}/{args.TotalCount}] {args.PackageName}: {args.EventType} - {args.Message}"
-                    : $"{args.EventType}: {args.Message}");
-            };
-
             // Handle questions
             manager.Question += (sender, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
 
-            manager.ErrorEvent += (_, e) =>
-            {
-                Console.Error.WriteLine($"[ALPM_ERROR]{e.Error}");
-                hadError = true;
-            };
+            manager.PkgbuildDiffRequest += (_, args) =>
+                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
+
+            var packageList = settings.Packages.ToList();
+
 
             // Handle build dependencies only mode
             if (settings.BuildDepsOn)
             {
                 if (settings.Packages.Length > 1)
                 {
-                    Console.Error.WriteLine("Cannot build dependencies for multiple packages at once.");
+                    JsonPackFrame.WriteToStdout<Event>(new AlpmErrorEvent(EventLevel.Error,
+                        "Cannot build dependencies for multiple packages at once."));
                     return 1;
                 }
 
-                if (settings.MakeDepsOn)
-                {
-                    Console.Error.WriteLine("Installing dependencies (including make dependencies)...");
-                    await manager.InstallDependenciesOnly(packageList.First(), true);
-                    if (hadError) return 1;
-                    Console.Error.WriteLine("Dependencies installed successfully!");
-                    return 0;
-                }
-
-                Console.Error.WriteLine("Installing dependencies...");
-                await manager.InstallDependenciesOnly(packageList.First(), false);
-                if (hadError) return 1;
-                Console.Error.WriteLine("Dependencies installed successfully!");
+                var includeMake = settings.MakeDepsOn;
+                JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(AlpmEvents.InformationalOutput,
+                    "Installing dependencies (including make dependencies)..."));
+                var depsResult = await UiModeOutput.Run(manager,
+                    m => m.InstallDependenciesOnly(packageList.First(), includeMake));
+                if (!depsResult) return 1;
+                JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(AlpmEvents.InformationalOutput,
+                    "Dependencies installed successfully!"));
                 return 0;
             }
 
-            Console.Error.WriteLine($"Installing AUR packages: {string.Join(", ", packageList)}");
-            await manager.InstallPackages(packageList);
-            if (hadError) return 1;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Installation failed: {ex.Message}");
-            return 1;
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                AlpmEvents.AurDownloadStart,
+                $"Installing AUR packages: {string.Join(", ", packageList)}"));
+            
+            var ok = await UiModeOutput.Run(manager, m => m.InstallPackages(packageList));
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                ok ? AlpmEvents.AurPackageCompleted : AlpmEvents.AurPackageFailed,
+                ok ? "Installation complete." : "Installation failed."));
+            return ok ? 0 : 1;
         }
         finally
         {
             manager?.Dispose();
         }
-
-        Console.Error.WriteLine("Installation complete.");
-
-        return 0;
     }
 
     private static async Task<List<string>> GetMissingPackages(AurPackageManager manager, List<string> packageList)

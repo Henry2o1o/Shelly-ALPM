@@ -184,18 +184,8 @@ public static class AurSinglePaneOutput
             region.SuspendForPrompt();
             try
             {
-                AnsiConsole.MarkupLine($"[bold]:: PKGBUILD for {args.PackageName.EscapeMarkup()}:[/]");
-                foreach (var line in PackageBuilderDiffGenerator.BuildUnifiedDiffLines(
-                             args.OldPkgbuild ?? string.Empty,
-                             args.NewPkgbuild ?? string.Empty))
-                {
-                    AnsiConsole.MarkupLine(line);
-                }
-
-                var pkgBuildConfirm = noConfirm
-                                      || AnsiConsole.Confirm(":: Proceed with this PKGBUILD?", true);
-                args.ProceedWithUpdate = pkgBuildConfirm;
-                if (!pkgBuildConfirm)
+                QuestionHandler.HandleQuestion(args, uiMode: false, noConfirm: noConfirm);
+                if (!args.ProceedWithUpdate)
                     region.WriteLine($"[yellow] Cancelled because of pkgbuild diff.[/]");
             }
             finally

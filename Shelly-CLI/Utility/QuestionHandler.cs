@@ -1,12 +1,62 @@
 using System.Text.Json;
 using PackageManager.Alpm;
 using PackageManager.Alpm.Questions;
+using PackageManager.Aur;
+using PackageManager.Wire;
+using Shelly.Utilities.Eventing;
 using Spectre.Console;
 
 namespace Shelly_CLI.Utility;
 
 public static class QuestionHandler
 {
+    /// <summary>
+    /// Overload allowing every command to wire <c>manager.PkgbuildDiffRequest</c> through
+    /// the same single entry point as the ALPM <c>Question</c> event.
+    /// </summary>
+    public static void HandleQuestion(PkgbuildDiffRequestEventArgs args, bool uiMode = false, bool noConfirm = false)
+        => HandlePkgbuildDiff(args, uiMode, noConfirm);
+
+    public static void HandlePkgbuildDiff(PkgbuildDiffRequestEventArgs args, bool uiMode, bool noConfirm)
+    {
+        if (noConfirm)
+        {
+            args.ProceedWithUpdate = true;
+            return;
+        }
+
+        if (!uiMode)
+        {
+            PackageBuilderDiffGenerator.PrintUnifiedDiff(args.OldPkgbuild, args.NewPkgbuild, isUiMode: false);
+            args.ProceedWithUpdate = AnsiConsole.Confirm(
+                $"[yellow]Proceed with update to {args.PackageName.EscapeMarkup()}?[/]",
+                defaultValue: true);
+            return;
+        }
+
+        // UiMode: emit a framed PkgbuildDiffQuestionDto on stdout, block on the matching answer.
+        var id = Guid.NewGuid().ToString("N");
+        JsonPackFrame.WriteToStdout<QuestionRequest>(new PkgbuildDiffQuestionDto(
+            id, args.PackageName, args.OldPkgbuild, args.NewPkgbuild));
+
+        var resp = ReadAnswer<PkgbuildDiffAnswer>(id);
+        args.ProceedWithUpdate = resp.ProceedWithUpdate;
+    }
+
+    /// <summary>
+    /// Blocking loop on stdin — discards frames whose <c>QuestionId</c> does not match,
+    /// returning the first matching answer of the expected type.
+    /// </summary>
+    private static T ReadAnswer<T>(string id) where T : QuestionResponseDto
+    {
+        while (true)
+        {
+            var resp = JsonPackFrame.ReadFromStdin<QuestionResponseDto>();
+            if (resp is T t && t.QuestionId == id) return t;
+            // Stale or unknown answer — ignore and keep reading.
+        }
+    }
+
     public static void HandleQuestion(AlpmQuestionEventArgs question, bool uiMode = false, bool noConfirm = false)
     {
         switch (question.QuestionType)

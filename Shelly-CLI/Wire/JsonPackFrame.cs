@@ -36,4 +36,30 @@ public static class JsonPackFrame
         writer.Write('\n');
         writer.Flush();
     }
+
+    /// <summary>
+    /// Reads a single framed payload from stdin and deserializes it as <typeparamref name="T"/>.
+    /// Blocks until a line containing <see cref="Prefix"/>…<see cref="Suffix"/> is read.
+    /// Used by the question pipeline for bidirectional request/response over stdin/stdout.
+    /// </summary>
+    public static T ReadFromStdin<T>()
+    {
+        string? line;
+        while ((line = Console.In.ReadLine()) != null)
+        {
+            var start = line.IndexOf(Prefix, StringComparison.Ordinal);
+            if (start < 0) continue;
+            start += Prefix.Length;
+            var end = line.IndexOf(Suffix, start, StringComparison.Ordinal);
+            if (end < 0) continue;
+            var b64 = line.Substring(start, end - start);
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+            var info = EventingJsonContext.Default.GetTypeInfo(typeof(T))
+                       ?? Shelly_CLI.ShellyCLIJsonContext.Default.GetTypeInfo(typeof(T))
+                       ?? throw new InvalidOperationException(
+                           $"No JsonTypeInfo for {typeof(T)} in EventingJsonContext or ShellyCLIJsonContext.");
+            return JsonSerializer.Deserialize(json, (JsonTypeInfo<T>)info)!;
+        }
+        throw new EndOfStreamException("stdin closed while awaiting framed payload");
+    }
 }

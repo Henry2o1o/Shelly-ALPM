@@ -11,7 +11,6 @@ namespace Shelly.Utilities.Eventing;
 [JsonDerivedType(typeof(AlpmScriptletEvent),     "alpm.scriptlet")]
 [JsonDerivedType(typeof(AlpmReplaceEvent),       "alpm.replace")]
 [JsonDerivedType(typeof(AlpmPackageProgressEvent),"alpm.progress")]
-[JsonDerivedType(typeof(AlpmPkgBuildDiffEvent),  "alpm.pkgbuilddiff")]
 [JsonDerivedType(typeof(AlpmStatusEvent),        "alpm.status")]
 [JsonDerivedType(typeof(AlpmInformationalEvent), "alpm.info")]
 public abstract record Event(EventSource Source, EventLevel Level, DateTimeOffset TimeStamp = default)
@@ -52,8 +51,6 @@ public sealed record AlpmPackageProgressEvent(
     : ProgressEvent(EventSource.Alpm, ProgressType, Percent, TimeStamp);
 
 
-public sealed record AlpmPkgBuildDiffEvent(string OldPkgBuild, string NewPkgBuild, DateTimeOffset TimeStamp = default)
-    : Event(EventSource.Alpm, EventLevel.Information, TimeStamp);
 
 public sealed record AlpmStatusEvent(string Status, DateTimeOffset TimeStamp = default)
     : Event(EventSource.Alpm, EventLevel.Information, TimeStamp);

@@ -151,17 +151,8 @@ public class AurUpgradeCommand : AsyncCommand<AurUpgradeSettings>
                     Console.Error.WriteLine($"[AUR_PROGRESS]Percent: {args.Percent}% Message: {args.Message}");
             };
 
-            manager.PkgbuildDiffRequest += (sender, args) =>
-            {
-                if (settings.NoConfirm)
-                {
-                    args.ProceedWithUpdate = true;
-                    return;
-                }
-
-                PackageBuilderDiffGenerator.PrintUnifiedDiff(args.OldPkgbuild, args.NewPkgbuild, Program.IsUiMode);
-                args.ProceedWithUpdate = true;
-            };
+            manager.PkgbuildDiffRequest += (_, args) =>
+                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
 
             var packageNames = updates.Select(u => u.Name).ToList();
             await manager.UpdatePackages(packageNames);

@@ -113,17 +113,8 @@ public class AurUpdateCommand : AsyncCommand<AurPackageSettings>
 
             manager.Question += (sender, args) => { QuestionHandler.HandleQuestion(args, true, settings.NoConfirm); };
 
-            manager.PkgbuildDiffRequest += (sender, args) =>
-            {
-                if (settings.NoConfirm)
-                {
-                    args.ProceedWithUpdate = true;
-                    return;
-                }
-
-                PackageBuilderDiffGenerator.PrintUnifiedDiff(args.OldPkgbuild, args.NewPkgbuild, Program.IsUiMode);
-                args.ProceedWithUpdate = true;
-            };
+            manager.PkgbuildDiffRequest += (_, args) =>
+                QuestionHandler.HandleQuestion(args, Program.IsUiMode, settings.NoConfirm);
 
             Console.Error.WriteLine($"Updating AUR packages: {string.Join(", ", settings.Packages)}");
             await manager.UpdatePackages(settings.Packages.ToList());
