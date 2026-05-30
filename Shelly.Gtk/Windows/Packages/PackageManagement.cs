@@ -351,6 +351,8 @@ public sealed class PackageManagement(
             AddDetail(T("Conflicts"), string.Join(", ", pkg.Conflicts));
         if (pkg.Groups.Count > 0)
             AddDetail(T("Groups"), string.Join(", ", pkg.Groups));
+        AddDetail(T("Build Date"), pkg.BuildDate.ToString("yyyy-MM-dd HH:mm:ss"));
+        AddDetail(T("Install As"), pkg.InstallReason);
 
         if (pkg.PackageFile is { Files.Count: > 0 })
         {
