@@ -6,6 +6,7 @@ using Shelly.Gtk.Helpers;
 using static Shelly.Gtk.Helpers.PackageColumnViewSorter;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.Icons;
+using Shelly.Gtk.Services.PackageTraversal;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
@@ -347,6 +348,12 @@ public sealed class PackageInstall(
         if (pkg.OptDepends.Count > 0)
         {
             AddChipList(T("Optional Deps"), pkg.OptDepends, true);
+        }
+
+        var names = PackageTraversalService.FetchInverseFullDependencyPackageInformation(pkg.Name, _packageData);
+        if (names.Count > 0)
+        {
+            AddChipList(T("Required By"), names);
         }
 
         if (pkg.Licenses.Count > 0)
