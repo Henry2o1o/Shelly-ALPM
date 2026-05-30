@@ -4,6 +4,7 @@ using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.Icons;
 using Shelly.Gtk.Enums;
+using Shelly.Gtk.Services.PackageTraversal;
 using static Shelly.GTK.Resources.Translations;
 using static Shelly.Gtk.Helpers.PackageColumnViewSorter;
 using Shelly.Gtk.UiModels;
@@ -341,6 +342,12 @@ public sealed class PackageManagement(
         if (pkg.OptDepends.Count > 0)
         {
             AddChipList(T("Optional Deps"), pkg.OptDepends, true);
+        }
+        
+        var names = PackageTraversalService.FetchInverseFullDependencyPackageInformation(pkg.Name, _packageData);
+        if (names.Count > 0)
+        {
+            AddChipList(T("Required By"), names);
         }
 
         if (pkg.Licenses.Count > 0)
