@@ -47,6 +47,7 @@ public static class GenericQuestionDialog
             foreach (var line in e.Message.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
             {
                 var lineLabel = Label.New(string.Empty);
+                lineLabel.SetSelectable(true);
                 lineLabel.SetHalign(Align.Fill);
                 lineLabel.SetHexpand(true);
                 lineLabel.SetXalign(0);
@@ -61,7 +62,8 @@ public static class GenericQuestionDialog
         else
         {
             var messageLabel = Label.New(e.Message);
-            messageLabel.SetHalign(Align.Start);
+            messageLabel.SetSelectable(true);
+            messageLabel.SetHalign(Align.Fill);
             messageLabel.SetXalign(0);
             messageLabel.SetJustify(Justification.Left);
             messageLabel.SetWrap(true);
