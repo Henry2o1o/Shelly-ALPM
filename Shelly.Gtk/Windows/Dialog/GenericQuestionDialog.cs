@@ -2,6 +2,7 @@ using Gtk;
 using Pango;
 using Shelly.Gtk.UiModels;
 using static Shelly.GTK.Resources.Translations;
+using WrapMode = Gtk.WrapMode;
 
 namespace Shelly.Gtk.Windows.Dialog;
 
@@ -40,12 +41,27 @@ public static class GenericQuestionDialog
 
         if (e.UseMonospaceMessage)
         {
-            var messageBox = Box.New(Orientation.Vertical, 2);
-            messageBox.SetHalign(Align.Fill);
-            messageBox.SetHexpand(true);
+            
+            // Moving to label, without appending extra info to it, to see how it looks.
+            
+            var label = Label.New(null);
 
-            foreach (var line in e.Message.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
+            label.SetSelectable(true);
+            label.SetWrap(true);
+            label.SetXalign(0);
+            label.SetUseMarkup(true);
+
+            label.SetMarkup(
+                $"<tt>{GLib.Markup.EscapeText(e.Message)}</tt>"
+            );
+            
+            // Commenting out older implementation for now, needs more testing.
+            /* foreach (var line in e.Message.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
             {
+                var messageBox = Box.New(Orientation.Vertical, 2);
+                messageBox.SetHalign(Align.Fill);
+                messageBox.SetHexpand(true);
+
                 var lineLabel = Label.New(string.Empty);
                 lineLabel.SetSelectable(true);
                 lineLabel.SetHalign(Align.Fill);
@@ -55,9 +71,10 @@ public static class GenericQuestionDialog
                 lineLabel.SetEllipsize(EllipsizeMode.End);
                 lineLabel.SetMarkup($"<tt>{GLib.Markup.EscapeText(line)}</tt>");
                 messageBox.Append(lineLabel);
-            }
+            } */
 
-            messageWidget = messageBox;
+            //messageWidget = messageBox;
+            messageWidget = label;
         }
         else
         {
