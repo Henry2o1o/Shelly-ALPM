@@ -33,7 +33,7 @@
 
 | Command                    | Description                                     |
 |----------------------------|-------------------------------------------------|
-| `ignore list`              | List all IgnorePkg entries                      |
+| `ignore list`              | List all IgnorePkg packages                     |
 | `ignore add <packages>`    | Add one or more packages to IgnorePkg list      |
 | `ignore remove <packages>` | Remove one or more packages from IgnorePkg list |
 
@@ -73,6 +73,7 @@ hash |
 | `flatpak list`                                   | List installed flatpak apps           |
 | `flatpak list-updates`                           | List installed flatpak apps           |
 | `flatpak running`                                | List running flatpak apps             |
+| `flatpak repair`                                 | Repairs Flatpak Installation          |
 | `flatpak uninstall <package>`                    | Remove flatpak app                    |
 | `flatpak run <package>`                          | Run flatpak app                       |
 | `flatpak kill <package>`                         | Kill running flatpak app              |
@@ -529,20 +530,24 @@ Downgrade a package
 - `-i, --ignore` — Add to IgnorePkg list
 - `-j, --json` — Output results in JSON format for UI integration and 
 scripting
-- `-l, --latest` — Installs the newest matched version
+- `--list-options` — List available downgrade versions
 - `-n, --no-confirm` — Proceed without asking for user confirmation
-- `-o, --oldest` — Installs the oldest matched version
+- `-o, --oldest` — Installs the oldest matched version (default 
+newest)
 - `--singlepane` — Use pacman-style single-stream output instead of the 
 split-pane Live layout
 - `-y, --sync` — Synchronize package databases before performing the 
 operation
+- `-t, --target` — Install a specific downgrade target by exact version or 
+package filename
 
 **Examples:**
 
 ```sh
 shelly downgrade firefox
 shelly downgrade firefox --oldest
-shelly downgrade firefox --latest
+shelly downgrade firefox --exact 67.0.4-2
+shelly downgrade firefox --list-options
 shelly downgrade firefox --ignore
 ```
 
@@ -554,14 +559,14 @@ Manage IgnorePkg entries in pacman.conf
 
 **Subcommands:**
 
-- `shelly ignore list` — List all IgnorePkg entries
+- `shelly ignore list` — List all IgnorePkg packages
 - `shelly ignore add` — Add one or more packages to IgnorePkg list
 - `shelly ignore remove` — Remove one or more packages from IgnorePkg list
 
 
 ### `shelly ignore list`
 
-List all IgnorePkg entries
+List all IgnorePkg packages
 
 **Options:**
 
@@ -1068,6 +1073,7 @@ Manage flatpak
 - `shelly flatpak list` — List installed flatpak apps
 - `shelly flatpak list-updates` — List installed flatpak apps
 - `shelly flatpak running` — List running flatpak apps
+- `shelly flatpak repair` — Repairs Flatpak Installation
 - `shelly flatpak uninstall` — Remove flatpak app
 - `shelly flatpak run` — Run flatpak app
 - `shelly flatpak kill` — Kill running flatpak app
@@ -1185,6 +1191,16 @@ List running flatpak apps
 
 ```sh
 shelly flatpak running
+```
+
+### `shelly flatpak repair`
+
+Repairs Flatpak Installation
+
+**Examples:**
+
+```sh
+shelly flatpak repair
 ```
 
 ### `shelly flatpak uninstall`
