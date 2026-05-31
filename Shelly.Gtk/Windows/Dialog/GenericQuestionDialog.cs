@@ -41,39 +41,16 @@ public static class GenericQuestionDialog
 
         if (e.UseMonospaceMessage)
         {
-            
-            // Moving to label, without appending extra info to it, to see how it looks.
-            
             var label = Label.New(null);
-
             label.SetSelectable(true);
+            label.SetHalign(Align.Fill);
+            label.SetJustify(Justification.Left);
             label.SetWrap(true);
             label.SetXalign(0);
             label.SetUseMarkup(true);
-
             label.SetMarkup(
                 $"<tt>{GLib.Markup.EscapeText(e.Message)}</tt>"
             );
-            
-            // Commenting out older implementation for now, needs more testing.
-            /* foreach (var line in e.Message.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
-            {
-                var messageBox = Box.New(Orientation.Vertical, 2);
-                messageBox.SetHalign(Align.Fill);
-                messageBox.SetHexpand(true);
-
-                var lineLabel = Label.New(string.Empty);
-                lineLabel.SetSelectable(true);
-                lineLabel.SetHalign(Align.Fill);
-                lineLabel.SetHexpand(true);
-                lineLabel.SetXalign(0);
-                lineLabel.SetJustify(Justification.Left);
-                lineLabel.SetEllipsize(EllipsizeMode.End);
-                lineLabel.SetMarkup($"<tt>{GLib.Markup.EscapeText(line)}</tt>");
-                messageBox.Append(lineLabel);
-            } */
-
-            //messageWidget = messageBox;
             messageWidget = label;
         }
         else
