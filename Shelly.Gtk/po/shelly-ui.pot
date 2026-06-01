@@ -1092,7 +1092,7 @@ msgstr ""
 msgid "Force Database Update"
 msgstr ""
 
-msgid "Remove db.lock"
+msgid "Remove db.lck"
 msgstr ""
 
 msgid "View Pacfiles"
@@ -1311,4 +1311,7 @@ msgid "Add to IgnorePkg list"
 msgstr ""
 
 msgid "Downgrade"
+msgstr ""
+
+msgid "Enable Package Downgrade"
 msgstr ""
