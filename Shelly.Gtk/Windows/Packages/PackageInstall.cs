@@ -33,7 +33,6 @@ public sealed class PackageInstall(
     public string[] ListensTo => [DirtyScopes.NativeInstalled];
     private Overlay _overlay = null!;
     private ScrolledWindow _scroller = null!;
-    private ColumnView _columnView = null!;
     private CancellationTokenSource _cts = new();
     private int _loadGeneration;
     private SingleSelection _selectionModel = null!;
@@ -71,8 +70,7 @@ public sealed class PackageInstall(
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Package/PackageWindow.ui"), -1);
         builder.TranslationDomain = Domain;
         _overlay = (Overlay)builder.GetObject("PackageWindow")!;
-        _columnView = (ColumnView)builder.GetObject("package_column_view")!;
-        var columnView = _columnView;
+        var columnView = (ColumnView)builder.GetObject("package_column_view")!;
         _scroller = (ScrolledWindow)columnView.GetParent()!;
         var checkColumn = (ColumnViewColumn)builder.GetObject("check_column")!;
         checkColumn.Resizable = true;
