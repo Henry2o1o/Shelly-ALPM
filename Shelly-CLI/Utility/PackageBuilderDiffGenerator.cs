@@ -94,7 +94,6 @@ public static class PackageBuilderDiffGenerator
         return result;
     }
     
-    
     public static IEnumerable<string> BuildUnifiedDiffLinesUiMode(string oldText, string newText)
     {
         var oldLines = oldText.Split('\n');
