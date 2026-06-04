@@ -19,9 +19,11 @@ namespace Shelly.Gtk.Services;
 public class UnprivilegedOperationService(
     ITrayDbus trayDbus,
     IPackageUpdateNotifier packageUpdateNotifier,
-    IDirtyService dirtyService) : IUnprivilegedOperationService
+    IDirtyService dirtyService,
+    IGenericQuestionService genericQuestionService) : IUnprivilegedOperationService
 {
     private readonly string _cliPath = CliPathResolver.FindCliPath();
+
 
     public async Task<List<FlatpakPackageDto>> ListFlatpakPackages()
     {
@@ -466,7 +468,14 @@ public class UnprivilegedOperationService(
                             await stdinWriter.WriteLineAsync(value);
                             await stdinWriter.FlushAsync();
                         }
-                    });
+                    }, async dto => {
+                        var args = new PackageBuildDiffEventArgs(dto.PackageName,
+                            dto.OldPkgbuild, 
+                            dto.NewPkgbuild);
+                        genericQuestionService.RaisePackageBuildDiff(args);     
+                        return await args.ResponseTask; 
+                    }
+                        );
                 }
                 catch (Exception ex)
                 {

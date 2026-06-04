@@ -689,6 +689,15 @@ sealed class Program
                 });
             };
 
+            genericQuestionService.PackageBuildDiffRequested += (_, e) =>
+            {
+                GLib.Functions.IdleAdd(0, () =>
+                {
+                    PackageBuildDiffDialog.ShowPackageBuildDiffDialog(mainOverlay, e);
+                    return false;
+                });
+            };
+
 
             window.Show();
 
