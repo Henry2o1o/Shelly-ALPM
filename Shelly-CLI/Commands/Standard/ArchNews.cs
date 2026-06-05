@@ -52,7 +52,7 @@ public class ArchNews : AsyncCommand<ArchNewsSettings>
             var cachedFeed = await LoadCachedFeed();
             var feed = await GetRssFeedAsync(ArchlinuxFeed);
 
-            var newFeed = feed.Except(cachedFeed).ToList();
+            var newFeed = feed.ExceptBy(cachedFeed.Select(model => model.Link), model => model.Link).ToList();
 
             if (settings.Json)
             {
