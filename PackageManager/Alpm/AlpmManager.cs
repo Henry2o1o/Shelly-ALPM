@@ -2647,6 +2647,28 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         return PacmanConfWriter.NormalizePackageNames(_config.IgnorePkg);
     }
 
+    public List<string> GetAllowedArchitectures()
+    {
+        if (_handle == IntPtr.Zero) Initialize();
+        var architectures = new List<string>();
+        var syncDbsPtr = GetArchitectures(_handle);
+
+        var currentPtr = syncDbsPtr;
+        while (currentPtr != IntPtr.Zero)
+        {
+            var node = Marshal.PtrToStructure<AlpmList>(currentPtr);
+            if (node.Data != IntPtr.Zero)
+            {
+                var arch = Marshal.PtrToStringUTF8(node.Data);
+                if (arch != null) architectures.Add(arch);
+            }
+
+            currentPtr = node.Next;
+        }
+
+        return architectures;
+    }
+
     private void HandleErrorMessage(IntPtr dataPtr, AlpmErrno error)
     {
         var errorMsg = GetErrorMessage(error);
