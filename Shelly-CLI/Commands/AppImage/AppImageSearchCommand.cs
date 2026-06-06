@@ -1,4 +1,5 @@
 using PackageManager.AppImage;
+using PackageManager.AppImage.AppImageV2;
 using PackageManager.Wire;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -9,13 +10,13 @@ public class AppImageSearchCommand : AsyncCommand<AppImageSearchSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, AppImageSearchSettings settings)
     {
-        var manager = new AppImageManager();
+        var manager = new AppImageManagerV2();
         manager.ErrorEvent += (_, args) => { AnsiConsole.MarkupLine($"[red]{args.Error.EscapeMarkup()}[/]"); };
 
         manager.MessageEvent += (_, args) => { AnsiConsole.MarkupLine($"[blue]{args.Message.EscapeMarkup()}[/]"); };
 
         var appImages = await manager.GetAppImagesFromLocalDb();
-        List<AppImageDto> results;
+        List<AppImageDtoV2> results;
 
         if (!string.IsNullOrWhiteSpace(settings.Query))
         {

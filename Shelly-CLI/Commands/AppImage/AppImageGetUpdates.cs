@@ -1,4 +1,5 @@
 using PackageManager.AppImage;
+using PackageManager.AppImage.AppImageV2;
 using PackageManager.Wire;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -9,7 +10,7 @@ public class AppImageGetUpdates : AsyncCommand<AppImageDefaultSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, AppImageDefaultSettings settings)
     {
-        var manager = new AppImageManager();
+        var manager = new AppImageManagerV2();
         manager.ErrorEvent += (_, args) => { AnsiConsole.MarkupLine($"[red]{args.Error.EscapeMarkup()}[/]"); };
 
         manager.MessageEvent += (_, args) => { AnsiConsole.MarkupLine($"[blue]{args.Message.EscapeMarkup()}[/]"); };

@@ -1,4 +1,5 @@
 using PackageManager.AppImage;
+using PackageManager.AppImage.AppImageV2;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -18,8 +19,6 @@ public class AppImageRemoveCommand : AsyncCommand<AppImageRemoveSettings>
 
             return 1;
         }
-
-        RootElevator.EnsureRootExectuion();
 
         const string installDir = "/opt/shelly";
         if (!Directory.Exists(installDir))
@@ -69,7 +68,7 @@ public class AppImageRemoveCommand : AsyncCommand<AppImageRemoveSettings>
             return 0;
         }
 
-        var manager = new AppImageManager();
+        var manager = new AppImageManagerV2();
         if (Program.IsUiMode)
         {
             manager.ErrorEvent += (_, args) => UiFrames.Error(args.Error);

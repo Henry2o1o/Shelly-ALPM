@@ -1,4 +1,5 @@
 using PackageManager.AppImage;
+using PackageManager.AppImage.AppImageV2;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -8,8 +9,6 @@ public class AppImageSyncMeta : AsyncCommand<AppImageSyncMetaSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, AppImageSyncMetaSettings settings)
     {
-        RootElevator.EnsureRootExectuion();
-
         const string installDir = "/opt/shelly";
         if (!Directory.Exists(installDir))
         {
@@ -17,7 +16,7 @@ public class AppImageSyncMeta : AsyncCommand<AppImageSyncMetaSettings>
             return 0;
         }
 
-        var manager = new AppImageManager();
+        var manager = new AppImageManagerV2();
         manager.ErrorEvent += (_, args) => { AnsiConsole.MarkupLine($"[red]{args.Error.EscapeMarkup()}[/]"); };
 
         manager.MessageEvent += (_, args) => { AnsiConsole.MarkupLine($"[blue]{args.Message.EscapeMarkup()}[/]"); };

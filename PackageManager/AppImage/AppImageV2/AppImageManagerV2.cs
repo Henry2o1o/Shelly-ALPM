@@ -49,6 +49,7 @@ public class AppImageManagerV2
 
         LogMessage($"Installing AppImage {appName}...");
         File.Copy(filePath, destAppImagePath, true);
+        XdgPaths.FixOwnershipIfRoot(destAppImagePath);
         SetFilePermissions(destAppImagePath, "a+x");
 
         var appImageDto = await ExtractMetadata(destAppImagePath);
@@ -157,6 +158,168 @@ public class AppImageManagerV2
             return [];
         }
     }
+    
+    private async Task<bool> RemoveAppImageFromLocalDb(AppImageDto appImage)
+    {
+        try
+        {
+            var appImages = await GetAppImagesFromLocalDb();
+            var initialCount = appImages.Count;
+            appImages.RemoveAll(a => string.Equals(a.Name, appImage.Name, StringComparison.OrdinalIgnoreCase));
+
+            if (appImages.Count != initialCount)
+            {
+                await EnsureDbDirectoryExists();
+                var json = JsonSerializer.Serialize(appImages, AppImageJsonContext.Default.ListAppImageDto);
+                await File.WriteAllTextAsync(LocalDbPath, json);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogError($"Error removing AppImage from local DB: {ex.Message}");
+            return false;
+        }
+    }
+    
+     public async Task<int> RemoveAppImage(string appImagePath)
+    {
+        var appName = Path.GetFileNameWithoutExtension(appImagePath);
+        var cleanName = CleanInvalidNames(appName);
+        var userDataHome = XdgPaths.DataHome();
+        string[] desktopDirs = [Path.Combine(userDataHome, "applications")];
+
+        try
+        {
+            await RemoveAppImageFromLocalDb(new AppImageDto { Name = appName });
+
+            if (File.Exists(appImagePath))
+            {
+                File.Delete(appImagePath);
+                LogMessage($"Removed AppImage: {appImagePath}");
+            }
+
+            foreach (var desktopDir in desktopDirs)
+            {
+                if (!Directory.Exists(desktopDir)) continue;
+
+                var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
+                if (File.Exists(desktopFilePath))
+                {
+                    File.Delete(desktopFilePath);
+                    LogMessage($"Removed desktop entry: {desktopFilePath}");
+                    UpdateDesktopDatabase(desktopDir);
+                }
+                else
+                {
+                    var potentialDesktopFiles = Directory.GetFiles(desktopDir, "*.desktop")
+                        .Where(f => Path.GetFileName(f).Contains(cleanName, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var df in potentialDesktopFiles)
+                    {
+                        var content = await File.ReadAllLinesAsync(df);
+                        if (!content.Any(l => l.StartsWith("Exec=") && (l.Contains(appImagePath) || l.Contains($"\"{appImagePath}\"")))) continue;
+                        File.Delete(df);
+                        LogMessage($"Removed desktop entry: {df}");
+                        UpdateDesktopDatabase(desktopDir);
+                        break;
+                    }
+                }
+            }
+
+            string[] iconDirs =
+            [
+                Path.Combine(userDataHome, "icons/hicolor/scalable/apps"),
+                Path.Combine(userDataHome, "icons/hicolor/256x256/apps")
+            ];
+
+            foreach (var iconDir in iconDirs)
+            {
+                if (!Directory.Exists(iconDir)) continue;
+                
+                var potentialIcons = Directory.GetFiles(iconDir, $"{cleanName}.*");
+                foreach (var icon in potentialIcons)
+                {
+                    File.Delete(icon);
+                    LogMessage($"Removed icon: {icon}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError($"Error during removal: {ex.Message}");
+            return 1;
+        }
+
+        return 0;
+    }
+     
+     public async Task<bool> SyncAppImageMeta(List<string> appImageNames)
+    {
+        try
+        {
+            var appImagesInDb = await GetAppImagesFromLocalDb();
+            var success = true;
+
+            foreach (var appName in appImageNames)
+            {
+                var appImagePath = Path.Combine(_installDirectory, $"{appName}.AppImage");
+                if (!File.Exists(appImagePath))
+                {
+                    LogWarning($"AppImage not found at {appImagePath}");
+                    success = false;
+                    continue;
+                }
+
+                LogMessage($"Syncing metadata for {appName}...");
+                var appImageDto = await ExtractMetadata(appImagePath);
+                if (appImageDto == null)
+                {
+                    LogError($"Failed to extract metadata for {appName}");
+                    success = false;
+                    continue;
+                }
+
+                var existing = appImagesInDb.FirstOrDefault(a => string.Equals(a.Name, appName, StringComparison.OrdinalIgnoreCase));
+                if (existing != null)
+                {
+                    if (!string.IsNullOrEmpty(existing.UpdateURl))
+                    {
+                        appImageDto.UpdateURl = existing.UpdateURl;
+                        appImageDto.UpdateType = existing.UpdateType;
+                    }
+
+                    if (!string.IsNullOrEmpty(existing.RawUpdateInfo) && string.IsNullOrEmpty(appImageDto.RawUpdateInfo))
+                    {
+                        appImageDto.RawUpdateInfo = existing.RawUpdateInfo;
+                    }
+
+                    if (!string.IsNullOrEmpty(existing.UpdateVersion))
+                    {
+                        appImageDto.UpdateVersion = existing.UpdateVersion;
+                    }
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(appImageDto.RawUpdateInfo) && string.IsNullOrEmpty(appImageDto.UpdateURl))
+                    {
+                        appImageDto.UpdateType = UpdateType.StaticUrl;
+                    }
+                }
+
+                await AddAppImageToLocalDb(appImageDto);
+            }
+
+            return success;
+        }
+        catch (Exception ex)
+        {
+            LogError($"Error syncing AppImage metadata: {ex.Message}");
+            return false;
+        }
+    }
 
     private async Task<AppImageDtoV2?> ExtractMetadata(string filePath)
     {
@@ -231,33 +394,27 @@ public class AppImageManagerV2
                 }
 
                 var iconSubDir = extension == ".svg" ? "icons/hicolor/scalable/apps" : "icons/hicolor/256x256/apps";
-                var systemIconDir = Path.Combine("/usr/share", iconSubDir);
                 var userIconDir = Path.Combine(XdgPaths.DataHome(), iconSubDir);
 
                 destIconName = $"{CleanInvalidNames(appName).ToLower()}{extension}";
 
-                foreach (var iconDir in new[] { systemIconDir, userIconDir })
+                try
                 {
-                    try
-                    {
-                        Directory.CreateDirectory(iconDir);
-                        var destIconPath = Path.Combine(iconDir, destIconName);
-                        File.Copy(iconPath, destIconPath, true);
-                        finalIconPath = CleanInvalidNames(appName).ToLower();
-                        LogMessage($"Updated icon: {destIconPath}");
-                    }
-                    catch (Exception ex)
-                    {
-                        LogWarning($"Could not copy icon to {iconDir}: {ex.Message}");
-                    }
+                    Directory.CreateDirectory(userIconDir);
+                    var destIconPath = Path.Combine(userIconDir, destIconName);
+                    File.Copy(iconPath, destIconPath, true);
+                    XdgPaths.FixOwnershipIfRoot(destIconPath);
+                    finalIconPath = CleanInvalidNames(appName).ToLower();
+                    LogMessage($"Updated icon: {destIconPath}");
+                }
+                catch (Exception ex)
+                {
+                    LogWarning($"Could not copy icon to {userIconDir}: {ex.Message}");
                 }
 
-                foreach (var themeDir in new[]
-                             { "/usr/share/icons/hicolor", Path.Combine(XdgPaths.DataHome(), "icons/hicolor") })
-                {
-                    if (Directory.Exists(themeDir))
-                        UpdateIconCache(themeDir);
-                }
+                var themeDir = Path.Combine(XdgPaths.DataHome(), "icons/hicolor");
+                if (Directory.Exists(themeDir))
+                    UpdateIconCache(themeDir);
             }
 
             if (desktopFile != null)
@@ -315,22 +472,20 @@ public class AppImageManagerV2
                     var desktopFileName = $"{cleanName}.desktop";
                     var desktopContent = patchedContent.ToString();
 
-                    foreach (var desktopDir in new[]
-                                 { "/usr/share/applications", Path.Combine(XdgPaths.DataHome(), "applications") })
+                    var desktopDir = Path.Combine(XdgPaths.DataHome(), "applications");
+                    try
                     {
-                        try
-                        {
-                            Directory.CreateDirectory(desktopDir);
-                            var desktopFilePath = Path.Combine(desktopDir, desktopFileName);
-                            await File.WriteAllTextAsync(desktopFilePath, desktopContent);
-                            SetFilePermissions(desktopFilePath, "644");
-                            UpdateDesktopDatabase(desktopDir);
-                            LogMessage($"Updated desktop entry: {desktopFilePath}");
-                        }
-                        catch (Exception ex)
-                        {
-                            LogWarning($"Could not update desktop entry in {desktopDir}: {ex.Message}");
-                        }
+                        Directory.CreateDirectory(desktopDir);
+                        var desktopFilePath = Path.Combine(desktopDir, desktopFileName);
+                        await File.WriteAllTextAsync(desktopFilePath, desktopContent);
+                        XdgPaths.FixOwnershipIfRoot(desktopFilePath);
+                        SetFilePermissions(desktopFilePath, "644");
+                        UpdateDesktopDatabase(desktopDir);
+                        LogMessage($"Updated desktop entry: {desktopFilePath}");
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWarning($"Could not update desktop entry in {desktopDir}: {ex.Message}");
                     }
                 }
                 catch (Exception ex)
@@ -519,23 +674,21 @@ public class AppImageManagerV2
         content.AppendLine($"Categories={categories}");
         content.AppendLine("StartupNotify=true");
 
-        foreach (var desktopDir in new[]
-                     { "/usr/share/applications", Path.Combine(XdgPaths.DataHome(), "applications") })
+        var desktopDir = Path.Combine(XdgPaths.DataHome(), "applications");
+        try
         {
-            try
-            {
-                Directory.CreateDirectory(desktopDir);
-                var desktopFilePath = Path.Combine(desktopDir, desktopFileName);
-                File.WriteAllText(desktopFilePath, content.ToString());
-                SetFilePermissions(desktopFilePath, "644");
-                UpdateDesktopDatabase(desktopDir);
+            Directory.CreateDirectory(desktopDir);
+            var desktopFilePath = Path.Combine(desktopDir, desktopFileName);
+            File.WriteAllText(desktopFilePath, content.ToString());
+            XdgPaths.FixOwnershipIfRoot(desktopFilePath);
+            SetFilePermissions(desktopFilePath, "644");
+            UpdateDesktopDatabase(desktopDir);
 
-                LogMessage($"Desktop entry created: {desktopFilePath}");
-            }
-            catch (Exception ex)
-            {
-                LogWarning($"Could not create desktop entry in {desktopDir}: {ex.Message}");
-            }
+            LogMessage($"Desktop entry created: {desktopFilePath}");
+        }
+        catch (Exception ex)
+        {
+            LogWarning($"Could not create desktop entry in {desktopDir}: {ex.Message}");
         }
     }
 
@@ -862,6 +1015,136 @@ public class AppImageManagerV2
         }
     }
 
+    public async Task<bool> MigrateAppImages()
+    {
+        const string installDir = "/opt/shelly";
+        
+        var localDbDir = XdgPaths.ShellyCache("appimage-local-meta-store");
+        
+        if (Directory.Exists(installDir))
+        {
+            var files = Directory.GetFiles(installDir);
+            foreach (var file in files)
+            {
+                var destFile = Path.Combine(_installDirectory, Path.GetFileName(file));
+                File.Copy(file, destFile, true);
+                XdgPaths.FixOwnershipIfRoot(destFile);
+                File.Delete(file);
+            }
+        }
+        
+        var oldDbPath = XdgPaths.ShellyConfig("appimage-metadata.db");
+        if (!File.Exists(oldDbPath)) return true;
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(oldDbPath);
+            var appImages = JsonSerializer.Deserialize(json, AppImageJsonContext.Default.ListAppImageDto) ?? [];
+            foreach (var newApp in appImages.Select(apps => new AppImageDtoV2()
+                     {
+                         Name = apps.Name,
+                         Version = apps.Version,
+                         Description = apps.Description,
+                         IconName = apps.IconName,
+                         UpdateVersion = apps.UpdateVersion,
+                         UpdateType = apps.UpdateType,
+                         AllowPrerelease = false,
+                         DesktopName = apps.DesktopName,
+                         RawUpdateInfo = apps.RawUpdateInfo,
+                         UpdateURl = apps.UpdateURl,
+                         RepoOwner = apps.UpdateType switch
+                         {
+                             UpdateType.GitHub or UpdateType.GitLab or UpdateType.Codeberg or UpdateType.Forgejo
+                                 when apps.UpdateURl.Contains('/') => apps.UpdateURl.Split('/')[0],
+                             _ => null
+                         },
+                         RepoName = apps.UpdateType switch
+                         {
+                             UpdateType.GitHub or UpdateType.GitLab or UpdateType.Codeberg or UpdateType.Forgejo
+                                 when apps.UpdateURl.Contains('/') => apps.UpdateURl.Split('/')[1],
+                             _ => null
+                         },
+                         SizeOnDisk = apps.SizeOnDisk
+                     }))
+            {
+                await AddAppImageToLocalDb(newApp);
+
+                // Migrate desktop entry
+                await MigrateDesktopEntry(newApp);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError($"Error reading AppImage local DB: {ex.Message}");
+        
+        }
+        
+        File.Delete(oldDbPath);
+        
+        return true;
+    }
+
+    private async Task MigrateDesktopEntry(AppImageDtoV2 appImage)
+    {
+        var cleanName = CleanInvalidNames(appImage.Name);
+        var desktopFileName = $"{cleanName}.desktop";
+        var newExecPath = Path.Combine(_installDirectory, $"{appImage.Name}.AppImage");
+
+        var desktopDir = Path.Combine(XdgPaths.DataHome(), "applications");
+        var desktopFilePath = Path.Combine(desktopDir, desktopFileName);
+        if (File.Exists(desktopFilePath))
+        {
+            try
+            {
+                var lines = await File.ReadAllLinesAsync(desktopFilePath);
+                var updated = false;
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    if (!lines[i].StartsWith("Exec=")) continue;
+                    var currentExec = lines[i]["Exec=".Length..].Trim();
+
+                    if (currentExec.Contains(newExecPath)) continue;
+                    var fieldCodes = "";
+                    foreach (var token in currentExec.Split(' '))
+                    {
+                        if (!token.StartsWith('%')) continue;
+                        fieldCodes = $" {token}";
+                        break;
+                    }
+
+                    lines[i] = $"Exec=\"{newExecPath}\"{fieldCodes}";
+                    updated = true;
+                }
+
+                if (updated)
+                {
+                    await File.WriteAllLinesAsync(desktopFilePath, lines);
+                }
+
+                XdgPaths.FixOwnershipIfRoot(desktopFilePath);
+                UpdateDesktopDatabase(desktopDir);
+            }
+            catch (Exception ex)
+            {
+                LogWarning($"Could not migrate desktop entry {desktopFilePath}: {ex.Message}");
+            }
+        }
+        
+        if (!string.IsNullOrEmpty(appImage.IconName))
+        {
+            foreach (var extension in new[] { ".png", ".svg" })
+            {
+                var iconSubDir = extension == ".svg" ? "icons/hicolor/scalable/apps" : "icons/hicolor/256x256/apps";
+                var baseDir = XdgPaths.DataHome();
+                
+                var iconPath = Path.Combine(baseDir, iconSubDir, $"{appImage.IconName}{extension}");
+                if (!File.Exists(iconPath)) continue;
+                XdgPaths.FixOwnershipIfRoot(iconPath);
+                UpdateIconCache(Path.Combine(baseDir, "icons/hicolor"));
+            }
+        }
+    }
+
     #region GitLab
 
     private static string GitLabToReleasesApi(string owner, string repo, bool allowPrerelease)
@@ -1030,4 +1313,6 @@ public class AppImageManagerV2
     }
 
     #endregion
+
+    
 }
