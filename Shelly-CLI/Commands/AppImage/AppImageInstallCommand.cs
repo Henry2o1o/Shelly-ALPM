@@ -30,7 +30,7 @@ public class AppImageInstallCommand : AsyncCommand<AppImageSettings>
             return 1;
         }
         
-        if (await AppImageManager.IsAppImage(settings.PackageLocation))
+        if (await AppImageManagerV2.IsAppImage(settings.PackageLocation))
         {
             var manager = new AppImageManagerV2();
             if (Program.IsUiMode)
