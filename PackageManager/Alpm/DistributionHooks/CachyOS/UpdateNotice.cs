@@ -1,11 +1,9 @@
 using System;
 using System.IO;
 using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using PackageManager.Alpm.Questions;
-using static PackageManager.Alpm.AlpmReference;
 
 namespace PackageManager.Alpm.DistributionHooks.CachyOS;
 
@@ -21,15 +19,11 @@ public sealed class UpdateNotice
     };
 
     public async Task<bool> CheckAsync(
-        IntPtr handle,
         string dbPath,
         Func<AlpmQuestionEventArgs, bool> raiseQuestion)
     {
         try
         {
-            if (!IsCachyOs(handle))
-                return true;
-
             var notice = await FetchNoticeAsync();
             if (notice is null || string.IsNullOrWhiteSpace(notice.Body))
                 return true;
@@ -65,25 +59,6 @@ public sealed class UpdateNotice
         {
             return true;
         }
-    }
-
-    private static bool IsCachyOs(IntPtr handle)
-    {
-        var current = GetSyncDbs(handle);
-        while (current != IntPtr.Zero)
-        {
-            var node = Marshal.PtrToStructure<AlpmList>(current);
-            if (node.Data != IntPtr.Zero)
-            {
-                var name = Marshal.PtrToStringUTF8(DbGetName(node.Data));
-                if (name is not null && name.Contains("cachyos", StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-
-            current = node.Next;
-        }
-
-        return false;
     }
 
     private static async Task<NoticeDto?> FetchNoticeAsync()

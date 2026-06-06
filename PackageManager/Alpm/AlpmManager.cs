@@ -53,6 +53,12 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
     private HashSet<string> _preDownloadedFiles = [];
 
+    private bool? _isCachyOs;
+
+    public bool IsCachyOs =>
+        _isCachyOs ??= DistributionHooks.OsRelease.PrettyName?
+            .Contains("cachyos", StringComparison.OrdinalIgnoreCase) ?? false;
+
     private AlpmFetchCallback _fetchCallback;
     private AlpmEventCallback _eventCallback;
     private AlpmQuestionCallback _questionCallback;
@@ -1589,19 +1595,22 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         var syncDbsPtr = GetSyncDbs(_handle);
         Update(_handle, syncDbsPtr, true);
 
-        var updateNotice = new DistributionHooks.CachyOS.UpdateNotice();
-        var proceed = await updateNotice.CheckAsync(_handle, _config.DbPath, args =>
+        if (IsCachyOs)
         {
-            Question?.Invoke(this, args);
-            args.WaitForResponse();
-            return args.Response.Response == 1;
-        });
+            var updateNotice = new DistributionHooks.CachyOS.UpdateNotice();
+            var proceed = await updateNotice.CheckAsync(_config.DbPath, args =>
+            {
+                Question?.Invoke(this, args);
+                args.WaitForResponse();
+                return args.Response.Response == 1;
+            });
 
-        if (!proceed)
-        {
-            InformationalEvent?.Invoke(this, new InformationalEventArgs(
-                AlpmEventType.InformationalOutput, "Upgrade cancelled by user (update notice)."));
-            return false;
+            if (!proceed)
+            {
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(
+                    AlpmEventType.InformationalOutput, "Upgrade cancelled by user (update notice)."));
+                return false;
+            }
         }
 
         try
