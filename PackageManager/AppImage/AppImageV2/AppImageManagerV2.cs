@@ -157,17 +157,17 @@ public class AppImageManagerV2
         }
     }
 
-    private async Task<bool> RemoveAppImageFromLocalDb(AppImageDto appImage)
+    private async Task<bool> RemoveAppImageFromLocalDb(string appName)
     {
         try
         {
             var appImages = await GetAppImagesFromLocalDb();
             var initialCount = appImages.Count;
-            appImages.RemoveAll(a => string.Equals(a.Name, appImage.Name, StringComparison.OrdinalIgnoreCase));
+            appImages.RemoveAll(a => string.Equals(a.Name, appName, StringComparison.OrdinalIgnoreCase));
 
             if (appImages.Count == initialCount) return true;
             await EnsureDbDirectoryExists();
-            var json = JsonSerializer.Serialize(appImages, AppImageJsonContext.Default.ListAppImageDto);
+            var json = JsonSerializer.Serialize(appImages, AppImageJsonContextV2.Default.ListAppImageDtoV2);
             await File.WriteAllTextAsync(LocalDbPath, json);
 
             return true;
@@ -188,7 +188,7 @@ public class AppImageManagerV2
 
         try
         {
-            await RemoveAppImageFromLocalDb(new AppImageDto { Name = appName });
+            await RemoveAppImageFromLocalDb(appName);
 
             if (File.Exists(appImagePath))
             {
@@ -319,11 +319,12 @@ public class AppImageManagerV2
     private async Task<AppImageDtoV2?> ExtractMetadata(string filePath)
     {
         var appName = Path.GetFileNameWithoutExtension(filePath);
-        var workingDir = Path.Combine(Path.GetTempPath(), "Shelly", $"sync-{appName}");
+        var workingDir = Path.Combine(Path.GetTempPath(), $"Shelly-{Environment.UserName}", $"sync-{appName}-{Guid.NewGuid().ToString("N")[..8]}");
         var appImageVersion = "Unknown";
         var desktopName = "";
         var destIconName = "";
         var description = "";
+        var commandLineArgs = "";
 
         try
         {
@@ -429,6 +430,7 @@ public class AppImageManagerV2
                             {
                                 if (!token.StartsWith('%')) continue;
                                 fieldCodes = $" {token}";
+                                commandLineArgs += $" {token}";
                                 break;
                             }
 
@@ -506,6 +508,7 @@ public class AppImageManagerV2
                 Description = description,
                 DesktopName = string.IsNullOrEmpty(desktopName) ? appName : desktopName,
                 SizeOnDisk = new FileInfo(filePath).Length,
+                CommandLineArgs = commandLineArgs,
                 Path = filePath,
             };
 
@@ -522,9 +525,9 @@ public class AppImageManagerV2
             {
                 if (Directory.Exists(workingDir)) Directory.Delete(workingDir, true);
             }
-            catch
+            catch (Exception ex)
             {
-                /* ignore */
+                LogWarning($"Could not delete working directory {workingDir}: {ex.Message}");
             }
         }
     }
@@ -725,7 +728,7 @@ public class AppImageManagerV2
         }
     }
 
-    #region Github
+ 
 
     public async Task<List<AppImageUpdateDto>> CheckForAppImageUpdates()
     {
@@ -856,82 +859,7 @@ public class AppImageManagerV2
         
         return !allOtherAliases.Any(lowerName.Contains);
     }
-
-    private static string GithubToReleasesApi(string owner, string repo) =>
-        $"https://api.github.com/repos/{owner}/{repo}/releases";
-
-    private static async Task<AppImageUpdateDto?> CheckGitHubUpdate(string owner, string repo, string appName,
-        string currentVersion, bool allowPrerelease = false)
-    {
-        try
-        {
-            var url = GithubToReleasesApi(owner, repo);
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-
-            var response = await client.GetAsync(url);
-            if (!response.IsSuccessStatusCode) return null;
-
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0) return null;
-
-            var release = root.EnumerateArray()
-                .FirstOrDefault(r => allowPrerelease || !r.GetProperty("prerelease").GetBoolean());
-
-            if (release.ValueKind == JsonValueKind.Undefined) return null;
-
-            var latestVersion = release.GetProperty("tag_name").GetString() ?? "";
-
-            string? downloadUrl = null;
-            if (!release.TryGetProperty("assets", out var assets))
-                return new AppImageUpdateDto
-                {
-                    Name = appName,
-                    Version = latestVersion,
-                    DownloadUrl = downloadUrl ?? "",
-                    IsUpdateAvailable = IsVersionUnknownOrDifferent(currentVersion, latestVersion)
-                };
-
-            var appImageAssets = assets.EnumerateArray()
-                .Where(asset =>
-                    (asset.GetProperty("name").GetString() ?? "").EndsWith(".AppImage",
-                        StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            switch (appImageAssets.Count)
-            {
-                case 1:
-                    downloadUrl = appImageAssets[0].GetProperty("browser_download_url").GetString();
-                    break;
-                case > 1:
-                    downloadUrl = appImageAssets
-                        .Where(asset => IsCorrectArchitecture(asset.GetProperty("name").GetString() ?? ""))
-                        .Select(asset => asset.GetProperty("browser_download_url").GetString())
-                        .FirstOrDefault();
-
-                    downloadUrl ??= appImageAssets[0].GetProperty("browser_download_url").GetString();
-                    break;
-            }
-
-            return new AppImageUpdateDto
-            {
-                Name = appName,
-                Version = latestVersion,
-                DownloadUrl = downloadUrl ?? "",
-                IsUpdateAvailable = IsVersionUnknownOrDifferent(currentVersion, latestVersion)
-            };
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    #endregion
-
+    
     public async Task<int> RunUpdate(AppImageUpdateDto update)
     {
         var appImages = await GetAppImagesFromLocalDb();
@@ -1191,14 +1119,85 @@ public class AppImageManagerV2
         }
     }
 
-    #region GitLab
-
-    private static string GitLabToReleasesApi(string owner, string repo)
+    #region Github
+    
+    private static async Task<AppImageUpdateDto?> CheckGitHubUpdate(string owner, string repo, string appName,
+        string currentVersion, bool allowPrerelease = false)
     {
-        var encodedPath = Uri.EscapeDataString($"{owner}/{repo}");
-        return $"https://gitlab.com/api/v4/projects/{encodedPath}/releases";
+        try
+        {
+            var url = GithubToReleasesApi(owner, repo);
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
+
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0) return null;
+
+            var release = root.EnumerateArray()
+                .FirstOrDefault(r => allowPrerelease || !r.GetProperty("prerelease").GetBoolean());
+
+            if (release.ValueKind == JsonValueKind.Undefined) return null;
+
+            var latestVersion = release.GetProperty("tag_name").GetString() ?? "";
+
+            string? downloadUrl = null;
+            if (!release.TryGetProperty("assets", out var assets))
+                return new AppImageUpdateDto
+                {
+                    Name = appName,
+                    Version = latestVersion,
+                    DownloadUrl = downloadUrl ?? "",
+                    IsUpdateAvailable = IsVersionUnknownOrDifferent(currentVersion, latestVersion)
+                };
+
+            var appImageAssets = assets.EnumerateArray()
+                .Where(asset =>
+                    (asset.GetProperty("name").GetString() ?? "").EndsWith(".AppImage",
+                        StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            switch (appImageAssets.Count)
+            {
+                case 1:
+                    downloadUrl = appImageAssets[0].GetProperty("browser_download_url").GetString();
+                    break;
+                case > 1:
+                    downloadUrl = appImageAssets
+                        .Where(asset => IsCorrectArchitecture(asset.GetProperty("name").GetString() ?? ""))
+                        .Select(asset => asset.GetProperty("browser_download_url").GetString())
+                        .FirstOrDefault();
+
+                    downloadUrl ??= appImageAssets[0].GetProperty("browser_download_url").GetString();
+                    break;
+            }
+
+            return new AppImageUpdateDto
+            {
+                Name = appName,
+                Version = latestVersion,
+                DownloadUrl = downloadUrl ?? "",
+                IsUpdateAvailable = IsVersionUnknownOrDifferent(currentVersion, latestVersion)
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
+    private static string GithubToReleasesApi(string owner, string repo) =>
+        $"https://api.github.com/repos/{owner}/{repo}/releases";
+    
+    #endregion
+    
+    #region GitLab
+    
     private static async Task<AppImageUpdateDto?> CheckGitLabUpdate(string owner, string repo, string appName,
         string currentVersion, bool allowPrerelease = false)
     {
@@ -1272,15 +1271,17 @@ public class AppImageManagerV2
             return null;
         }
     }
+    
+    private static string GitLabToReleasesApi(string owner, string repo)
+    {
+        var encodedPath = Uri.EscapeDataString($"{owner}/{repo}");
+        return $"https://gitlab.com/api/v4/projects/{encodedPath}/releases";
+    }
 
     #endregion
 
     #region Codeberg / Forgejo
-
-    private static string GiteaToReleasesApi(string domain, string owner, string repo)
-        => $"https://{domain}/api/v1/repos/{owner}/{repo}/releases";
-
-
+    
     private static async Task<AppImageUpdateDto?> CheckGiteaUpdate(string owner, string repo, string appName,
         string currentVersion,
         string domain, bool allowPrerelease = false)
@@ -1349,6 +1350,9 @@ public class AppImageManagerV2
             return null;
         }
     }
+    
+    private static string GiteaToReleasesApi(string domain, string owner, string repo)
+        => $"https://{domain}/api/v1/repos/{owner}/{repo}/releases";
 
     private static async Task<AppImageUpdateDto?> CheckCodebergUpdate(string repo, string owner, string appName,
         string currentVersion, bool allowPrerelease = false)

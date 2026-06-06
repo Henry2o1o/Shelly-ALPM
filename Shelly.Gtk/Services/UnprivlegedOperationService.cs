@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using System.Text.Json;
 using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services.TrayServices;
@@ -412,6 +411,58 @@ public class UnprivilegedOperationService(
             Console.WriteLine($"Failed to parse Flathub search JSON: {ex.Message}");
             return [];
         }
+    }
+    
+        public async Task<UnprivilegedOperationResult> AppImageInstallAsync(string filePath, string updateUrl = "",
+        AppImageUpdateType updateType = AppImageUpdateType.None)
+    {
+        UnprivilegedOperationResult result;
+        if (updateUrl != "" && updateType != AppImageUpdateType.None)
+        {
+            result = await ExecuteUnprivilegedCommandAsync("Install AppImage", "appimage", "install", "-l",
+                $"\"{filePath}\"", "-u",
+                updateUrl, "-t", updateType.ToString().ToLowerInvariant(), "-n");
+        }
+        else
+        {
+            result = await ExecuteUnprivilegedCommandAsync("Install AppImage", "appimage", "install", "-l",
+                $"\"{filePath}\"", "-n");
+        }
+
+        if (result.Success) dirtyService.MarkDirty(DirtyScopes.AppImage);
+        return result;
+    }
+
+    public async Task<UnprivilegedOperationResult> AppImageUpgradeAsync()
+    {
+        var result = await ExecuteUnprivilegedCommandAsync("Upgrade AppImage's", "appimage", "upgrade", "-n");
+        if (result.Success) dirtyService.MarkDirty(DirtyScopes.AppImage);
+        return result;
+    }
+
+    public async Task<UnprivilegedOperationResult> AppImageRemoveAsync(string name)
+    {
+        var result =
+            await ExecuteUnprivilegedCommandAsync("Remove AppImage's", "appimage", "remove", $"\"{name}\"", "-n");
+        if (result.Success) dirtyService.MarkDirty(DirtyScopes.AppImage);
+        return result;
+    }
+
+    public async Task<UnprivilegedOperationResult> AppImageConfigureUpdatesAsync(string url, string name,
+        AppImageUpdateType updateType)
+    {
+        return await ExecuteUnprivilegedCommandAsync("Set AppImage's Update Config", "appimage", "configure-updates",
+            $"\"{name}\"", "-u", url, "-t", updateType.ToString().ToLowerInvariant());
+    }
+
+    public async Task<UnprivilegedOperationResult> AppImageSyncApp(string name)
+    {
+        return await ExecuteUnprivilegedCommandAsync("Set AppImage's Update Config", "appimage", "sync-meta", name, "-n");
+    }
+
+    public async Task<UnprivilegedOperationResult> AppImageSyncAll()
+    {
+        return await ExecuteUnprivilegedCommandAsync("Set AppImage's Update Config", "appimage", "sync-meta");
     }
 
     private async Task<UnprivilegedOperationResult> ExecuteUnprivilegedCommandAsync(string operationDescription,

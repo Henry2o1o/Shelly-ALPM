@@ -1,6 +1,7 @@
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly_CLI.Utility;
+using Shelly.Utilities;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -20,7 +21,7 @@ public class AppImageRemoveCommand : AsyncCommand<AppImageRemoveSettings>
             return 1;
         }
 
-        const string installDir = "/opt/shelly";
+        var installDir = XdgPaths.BinHome();
         if (!Directory.Exists(installDir))
         {
             AnsiConsole.MarkupLine("[yellow]Info: /opt/shelly directory does not exist. No AppImages to remove.[/]");

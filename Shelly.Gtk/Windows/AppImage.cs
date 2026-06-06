@@ -5,6 +5,7 @@ using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels.AppImage;
 using Shelly.Gtk.Enums;
 using Shelly.Gtk.UiModels;
+using Shelly.Utilities;
 using static Shelly.GTK.Resources.Translations;
 
 namespace Shelly.Gtk.Windows;
@@ -26,6 +27,7 @@ public class AppImage(
     private DropDown _updateTypeDropDown = null!;
     private Entry _updateUrlEntry = null!;
     private Entry _installPathEntry = null!;
+    private Entry _flagsEntry = null!;
     private Label _detailTitleLabel = null!;
     private Label _detailVersionLabel = null!;
     private Label _detailDescriptionLabel = null!;
@@ -42,6 +44,8 @@ public class AppImage(
     private Button _upgradeAllButton = null!;
     private Button _syncButton = null!;
     private Button _syncAllButton = null!;
+    private Button _globalMigrateButton = null!;
+    private LinkButton _updateUrlInfoButton = null!;
 
     public Widget CreateWindow()
     {
@@ -54,6 +58,7 @@ public class AppImage(
         _updateTypeDropDown = (DropDown)builder.GetObject("UpdateTypeDropDown")!;
         _updateUrlEntry = (Entry)builder.GetObject("UpdateUrlEntry")!;
         _installPathEntry = (Entry)builder.GetObject("InstallPathEntry")!;
+        _flagsEntry = (Entry)builder.GetObject("LaunchFlagsEntry")!;
         _detailTitleLabel = (Label)builder.GetObject("DetailTitleLabel")!;
         _detailVersionLabel = (Label)builder.GetObject("DetailVersionLabel")!;
         _detailDescriptionLabel = (Label)builder.GetObject("DetailDescriptionLabel")!;
@@ -62,12 +67,14 @@ public class AppImage(
 
         _syncButton = (Button)builder.GetObject("SyncButton")!;
         _syncAllButton = (Button)builder.GetObject("SyncAllButton")!;
+        _updateUrlInfoButton = (LinkButton)builder.GetObject("UpdateUrlInfoButton")!;
 
         _backButton = (Button)builder.GetObject("BackToListButton")!;
         _saveButton = (Button)builder.GetObject("SaveConfigButton")!;
         _removeButton = (Button)builder.GetObject("RemoveAppImageButton")!;
         _installButton = (Button)builder.GetObject("InstallAppImageButton")!;
         _upgradeAllButton = (Button)builder.GetObject("UpgradeAllButton")!;
+        _globalMigrateButton = (Button)builder.GetObject("GlobalMigrateV2Button")!;
 
         _mainBox = Box.NewWithProperties([]);
         _mainBox.Append(_listPage);
@@ -104,6 +111,7 @@ public class AppImage(
         _installButton.OnClicked += (_, _) => InstallAppImage();
         _upgradeAllButton.OnClicked += (_, _) => UpgradeAll();
         _syncButton.OnClicked += (_, _) => SyncAppImage();
+    //    _globalMigrateButton.OnClicked += (_, _) => MigrateAllToV2();
         _syncAllButton.OnClicked += (_, _) => SyncAllAppImages();
 
         _ = LoadDataAsync();
@@ -258,7 +266,7 @@ public class AppImage(
 
             lockoutService.Show(T("Installing AppImage..."));
 
-            var result = await privilegedOperationService.AppImageInstallAsync(filePath);
+            var result = await unprivilegedOperationService.AppImageInstallAsync(filePath);
 
             if (result.Success)
             {
@@ -298,7 +306,7 @@ public class AppImage(
             lockoutService.Show(T("Running updates..."));
 
             genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(T("Updating AppImages...")));
-            var result = await privilegedOperationService.AppImageUpgradeAsync();
+            var result = await unprivilegedOperationService.AppImageUpgradeAsync();
 
             if (result.Success)
             {
@@ -358,7 +366,9 @@ public class AppImage(
 
         _updateTypeDropDown.Selected = (uint)app.UpdateType;
         _updateUrlEntry.SetText(app.UpdateURl);
-        _installPathEntry.SetText($"/opt/shelly/{app.Name}");
+        _installPathEntry.SetText($"{XdgPaths.BinHome()}/{app.Name}");
+        
+        _flagsEntry.SetText(app.CommandLineArgs ?? "N/a");
 
         _listPage.SetVisible(false);
         _detailPage.SetVisible(true);
@@ -374,7 +384,7 @@ public class AppImage(
             var updateUrl = _updateUrlEntry.GetText();
 
             var result =
-                await privilegedOperationService.AppImageConfigureUpdatesAsync(updateUrl, _selectedApp.Name,
+                await unprivilegedOperationService.AppImageConfigureUpdatesAsync(updateUrl, _selectedApp.Name,
                     updateType);
 
             if (result.Success)
@@ -407,7 +417,7 @@ public class AppImage(
             lockoutService.Show(string.Format(T("Syncing {0}..."), _selectedApp.Name));
 
             var result =
-                await privilegedOperationService.AppImageSyncApp(_selectedApp.Name);
+                await unprivilegedOperationService.AppImageSyncApp(_selectedApp.Name);
 
             if (result.Success)
             {
@@ -438,7 +448,7 @@ public class AppImage(
             lockoutService.Show(T("Syncing all AppImages ..."));
 
             var result =
-                await privilegedOperationService.AppImageSyncAll();
+                await unprivilegedOperationService.AppImageSyncAll();
 
             if (result.Success)
             {
@@ -470,7 +480,7 @@ public class AppImage(
 
             lockoutService.Show(string.Format(T("Removing {0}..."), _selectedApp.Name));
 
-            var result = await privilegedOperationService.AppImageRemoveAsync(_selectedApp.Name);
+            var result = await unprivilegedOperationService.AppImageRemoveAsync(_selectedApp.Name);
 
             if (result.Success)
             {
@@ -488,6 +498,24 @@ public class AppImage(
         catch (Exception ex)
         {
             Console.WriteLine($"Failed to remove AppImage: {ex.Message}");
+        }
+        finally
+        {
+            lockoutService.Hide();
+        }
+    }
+
+    private async void MigrateAllToV2()
+    {
+        try
+        {
+            lockoutService.Show(T("Migrating AppImages to V2..."));
+
+            
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to migrate AppImages: {ex.Message}");
         }
         finally
         {
