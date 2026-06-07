@@ -1,51 +1,52 @@
+using Gdk;
+using Gio;
 using Gtk;
-using Shelly.GTK.Resources;
+using Pango;
+using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
-using Shelly.Gtk.UiModels.AppImage;
-using Shelly.Gtk.Enums;
 using Shelly.Gtk.UiModels;
-using Shelly.Utilities;
+using Shelly.Gtk.UiModels.AppImage;
 using static Shelly.GTK.Resources.Translations;
+using Functions = GLib.Functions;
+using ListStore = Gio.ListStore;
+using Task = System.Threading.Tasks.Task;
 
 namespace Shelly.Gtk.Windows;
 
-public class AppImage(
+public sealed class AppImage(
     IPrivilegedOperationService privilegedOperationService,
     IUnprivilegedOperationService unprivilegedOperationService,
     IGenericQuestionService genericQuestionService,
     ILockoutService lockoutService,
     IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
-    private DirtySubscription? _sub;
-    public string[] ListensTo => [DirtyScopes.AppImage, DirtyScopes.Config];
-    private Box _mainBox = null!;
-    private Box _listPage = null!;
-    private ScrolledWindow _detailPage = null!;
+    private List<AppImageDto> _appImages = [];
     private ListBox _appListBox = null!;
-    private SearchEntry _searchEntry = null!;
-    private DropDown _updateTypeDropDown = null!;
-    private Entry _updateUrlEntry = null!;
-    private Entry _installPathEntry = null!;
-    private Entry _flagsEntry = null!;
+
+    private Label _detailDescriptionLabel = null!;
+    private Image _detailIcon = null!;
+    private ScrolledWindow _detailPage = null!;
+    private Label _detailSizeLabel = null!;
     private Label _detailTitleLabel = null!;
     private Label _detailVersionLabel = null!;
-    private Label _detailDescriptionLabel = null!;
-    private Label _detailSizeLabel = null!;
-    private Image _detailIcon = null!;
-
-    private List<AppImageDto> _appImages = [];
+    private Box _dropZone = null!;
+    private DropTarget _fileDropTarget = null!;
+    private Entry _installPathEntry = null!;
+    private Box _listPage = null!;
+    private ScrolledWindow _appImageListWindow = null!;
+    private SearchEntry _searchEntry = null!;
     private AppImageDto? _selectedApp;
+    private DirtySubscription? _sub;
+    private DropDown _updateTypeDropDown = null!;
+    private Entry _updateUrlEntry = null!;
 
-    private Button _backButton = null!;
-    private Button _saveButton = null!;
-    private Button _removeButton = null!;
-    private Button _installButton = null!;
-    private Button _upgradeAllButton = null!;
-    private Button _syncButton = null!;
-    private Button _syncAllButton = null!;
-    private Button _globalMigrateButton = null!;
-    private LinkButton _updateUrlInfoButton = null!;
+    public string[] ListensTo => [DirtyScopes.AppImage, DirtyScopes.Config];
+
+    public void Reload()
+    {
+        _ = LoadDataAsync();
+    }
 
     public Widget CreateWindow()
     {
@@ -58,31 +59,33 @@ public class AppImage(
         _updateTypeDropDown = (DropDown)builder.GetObject("UpdateTypeDropDown")!;
         _updateUrlEntry = (Entry)builder.GetObject("UpdateUrlEntry")!;
         _installPathEntry = (Entry)builder.GetObject("InstallPathEntry")!;
-        _flagsEntry = (Entry)builder.GetObject("LaunchFlagsEntry")!;
         _detailTitleLabel = (Label)builder.GetObject("DetailTitleLabel")!;
         _detailVersionLabel = (Label)builder.GetObject("DetailVersionLabel")!;
         _detailDescriptionLabel = (Label)builder.GetObject("DetailDescriptionLabel")!;
         _detailSizeLabel = (Label)builder.GetObject("DetailSizeLabel")!;
         _detailIcon = (Image)builder.GetObject("DetailIcon")!;
 
-        _syncButton = (Button)builder.GetObject("SyncButton")!;
-        _syncAllButton = (Button)builder.GetObject("SyncAllButton")!;
-        _updateUrlInfoButton = (LinkButton)builder.GetObject("UpdateUrlInfoButton")!;
+        _appImageListWindow = (ScrolledWindow)builder.GetObject("AppImageListWindow")!;
+        _dropZone = (Box)builder.GetObject("DropZone")!;
 
-        _backButton = (Button)builder.GetObject("BackToListButton")!;
-        _saveButton = (Button)builder.GetObject("SaveConfigButton")!;
-        _removeButton = (Button)builder.GetObject("RemoveAppImageButton")!;
-        _installButton = (Button)builder.GetObject("InstallAppImageButton")!;
-        _upgradeAllButton = (Button)builder.GetObject("UpgradeAllButton")!;
-        _globalMigrateButton = (Button)builder.GetObject("GlobalMigrateV2Button")!;
+        var syncButton = (Button)builder.GetObject("SyncButton")!;
+        var syncAllButton = (Button)builder.GetObject("SyncAllButton")!;
 
-        _mainBox = Box.NewWithProperties([]);
-        _mainBox.Append(_listPage);
+        var backButton = (Button)builder.GetObject("BackToListButton")!;
+        var saveButton = (Button)builder.GetObject("SaveConfigButton")!;
+        var removeButton = (Button)builder.GetObject("RemoveAppImageButton")!;
+        var installButton = (Button)builder.GetObject("InstallAppImageButton")!;
+        var upgradeAllButton = (Button)builder.GetObject("UpgradeAllButton")!;
+
+        var mainBox = Box.NewWithProperties([]);
+        mainBox.Append(_listPage);
         _detailPage.SetVisible(false);
-        _mainBox.Append(_detailPage);
+        mainBox.Append(_detailPage);
+
+        SetupFileDrop();
 
         var model = StringList.New([
-           T("None"),
+            T("None"),
             T("StaticUrl"),
             T("GitHub"),
             T("GitLab"),
@@ -105,36 +108,39 @@ public class AppImage(
             if (index < _appImages.Count)
                 ShowDetailPage(_appImages[index]);
         };
-        _backButton.OnClicked += (_, _) => ShowListPage();
-        _saveButton.OnClicked += (_, _) => SaveConfig();
-        _removeButton.OnClicked += (_, _) => RemoveAppImage();
-        _installButton.OnClicked += (_, _) => InstallAppImage();
-        _upgradeAllButton.OnClicked += (_, _) => UpgradeAll();
-        _syncButton.OnClicked += (_, _) => SyncAppImage();
-    //    _globalMigrateButton.OnClicked += (_, _) => MigrateAllToV2();
-        _syncAllButton.OnClicked += (_, _) => SyncAllAppImages();
+        backButton.OnClicked += (_, _) => ShowListPage();
+        saveButton.OnClicked += (_, _) => SaveConfig();
+        removeButton.OnClicked += (_, _) => RemoveAppImage();
+        installButton.OnClicked += (_, _) => InstallAppImage();
+        upgradeAllButton.OnClicked += (_, _) => UpgradeAll();
+        syncButton.OnClicked += (_, _) => SyncAppImage();
+        syncAllButton.OnClicked += (_, _) => SyncAllAppImages();
 
         _ = LoadDataAsync();
         _sub = DirtySubscription.Attach(dirtyService, this);
 
-        return _mainBox;
+        return mainBox;
     }
 
-    public void Reload() => _ = LoadDataAsync();
+    public void Dispose()
+    {
+        _sub?.Dispose();
+        _appListBox.RemoveAll();
+        _fileDropTarget.Unref();
+    }
 
     private async Task LoadDataAsync()
     {
         var appImages = await unprivilegedOperationService.GetInstallAppImagesAsync();
 
-        GLib.Functions.IdleAdd(0, () =>
+        Functions.IdleAdd(0, () =>
         {
             _appImages = appImages;
             _appListBox.RemoveAll();
 
-            foreach (var row in _appImages.Select(CreateAppRow))
-            {
-                _appListBox.Append(row);
-            }
+            foreach (var row in _appImages.Select(CreateAppRow)) _appListBox.Append(row);
+
+            _dropZone.SetVisible(_appImages.Count == 0);
 
             return false;
         });
@@ -155,10 +161,9 @@ public class AppImage(
 
         var iconFilePath = ResolveIconFilePath(app.IconName);
         if (iconFilePath != null)
-        {
             try
             {
-                var texture = Gdk.Texture.NewFromFilename(iconFilePath);
+                var texture = Texture.NewFromFilename(iconFilePath);
                 icon.SetFromPaintable(texture);
             }
             catch
@@ -167,12 +172,9 @@ public class AppImage(
                     ? "application-x-executable-symbolic"
                     : app.IconName);
             }
-        }
         else
-        {
             icon.SetFromIconName(
                 string.IsNullOrEmpty(app.IconName) ? "application-x-executable-symbolic" : app.IconName);
-        }
 
         hbox.Append(icon);
 
@@ -196,7 +198,7 @@ public class AppImage(
             descriptionLabel.AddCssClass("caption");
             descriptionLabel.AddCssClass("dim-label");
             descriptionLabel.Xalign = 0;
-            descriptionLabel.Ellipsize = Pango.EllipsizeMode.End;
+            descriptionLabel.Ellipsize = EllipsizeMode.End;
             descriptionLabel.MaxWidthChars = 50;
             vbox.Append(descriptionLabel);
         }
@@ -246,14 +248,14 @@ public class AppImage(
     private async void InstallAppImage()
     {
         var fileChooser = FileDialog.New();
-        fileChooser.Title = Translations.T("Select AppImage to Install");
+        fileChooser.Title = T("Select AppImage to Install");
 
         var filter = FileFilter.New();
-        filter.Name = Translations.T("AppImage Files");
+        filter.Name = T("AppImage Files");
         filter.AddPattern("*.AppImage");
         filter.AddPattern("*.appimage");
 
-        var listModel = Gio.ListStore.New(FileFilter.GetGType());
+        var listModel = ListStore.New(FileFilter.GetGType());
         listModel.Append(filter);
         fileChooser.Filters = listModel;
 
@@ -264,29 +266,11 @@ public class AppImage(
             var filePath = file.GetPath();
             if (string.IsNullOrEmpty(filePath)) return;
 
-            lockoutService.Show(T("Installing AppImage..."));
-
-            var result = await unprivilegedOperationService.AppImageInstallAsync(filePath);
-
-            if (result.Success)
-            {
-                genericQuestionService.RaiseToastMessage(
-                    new ToastMessageEventArgs(T("{0} installed successfully!", file.GetBasename())));
-                await LoadDataAsync();
-            }
-            else
-            {
-                genericQuestionService.RaiseToastMessage(
-                    new ToastMessageEventArgs(T("Failed to install {0}: {1}", file.GetBasename(), result.Error)));
-            }
+            await InstallAppImageFromPathAsync(filePath);
         }
         catch (Exception)
         {
             // User cancelled or error
-        }
-        finally
-        {
-            lockoutService.Hide();
         }
     }
 
@@ -306,7 +290,7 @@ public class AppImage(
             lockoutService.Show(T("Running updates..."));
 
             genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(T("Updating AppImages...")));
-            var result = await unprivilegedOperationService.AppImageUpgradeAsync();
+            var result = await privilegedOperationService.AppImageUpgradeAsync();
 
             if (result.Success)
             {
@@ -345,10 +329,9 @@ public class AppImage(
         _detailSizeLabel.SetText(SizeHelpers.FormatSize(app.SizeOnDisk));
         var detailIconFilePath = ResolveIconFilePath(app.IconName);
         if (detailIconFilePath != null)
-        {
             try
             {
-                var texture = Gdk.Texture.NewFromFilename(detailIconFilePath);
+                var texture = Texture.NewFromFilename(detailIconFilePath);
                 _detailIcon.SetFromPaintable(texture);
             }
             catch
@@ -357,18 +340,13 @@ public class AppImage(
                     ? "application-x-executable-symbolic"
                     : app.IconName;
             }
-        }
         else
-        {
             _detailIcon.IconName =
                 string.IsNullOrEmpty(app.IconName) ? "application-x-executable-symbolic" : app.IconName;
-        }
 
         _updateTypeDropDown.Selected = (uint)app.UpdateType;
         _updateUrlEntry.SetText(app.UpdateURl);
-        _installPathEntry.SetText($"{XdgPaths.BinHome()}/{app.Name}");
-        
-        _flagsEntry.SetText(app.CommandLineArgs ?? "N/a");
+        _installPathEntry.SetText($"/opt/shelly/{app.Name}");
 
         _listPage.SetVisible(false);
         _detailPage.SetVisible(true);
@@ -384,7 +362,7 @@ public class AppImage(
             var updateUrl = _updateUrlEntry.GetText();
 
             var result =
-                await unprivilegedOperationService.AppImageConfigureUpdatesAsync(updateUrl, _selectedApp.Name,
+                await privilegedOperationService.AppImageConfigureUpdatesAsync(updateUrl, _selectedApp.Name,
                     updateType);
 
             if (result.Success)
@@ -417,7 +395,7 @@ public class AppImage(
             lockoutService.Show(string.Format(T("Syncing {0}..."), _selectedApp.Name));
 
             var result =
-                await unprivilegedOperationService.AppImageSyncApp(_selectedApp.Name);
+                await privilegedOperationService.AppImageSyncApp(_selectedApp.Name);
 
             if (result.Success)
             {
@@ -448,7 +426,7 @@ public class AppImage(
             lockoutService.Show(T("Syncing all AppImages ..."));
 
             var result =
-                await unprivilegedOperationService.AppImageSyncAll();
+                await privilegedOperationService.AppImageSyncAll();
 
             if (result.Success)
             {
@@ -480,7 +458,7 @@ public class AppImage(
 
             lockoutService.Show(string.Format(T("Removing {0}..."), _selectedApp.Name));
 
-            var result = await unprivilegedOperationService.AppImageRemoveAsync(_selectedApp.Name);
+            var result = await privilegedOperationService.AppImageRemoveAsync(_selectedApp.Name);
 
             if (result.Success)
             {
@@ -505,27 +483,70 @@ public class AppImage(
         }
     }
 
-    private async void MigrateAllToV2()
+    private void SetupFileDrop()
+    {
+        _fileDropTarget = DropTarget.New(FileHelper.GetGType(), DragAction.Copy);
+
+        _fileDropTarget.OnDrop += OnFileDrop;
+        _fileDropTarget.OnEnter += (_, _) =>
+        {
+            _dropZone.AddCssClass("drag-hover");
+            return DragAction.Copy;
+        };
+        _fileDropTarget.OnLeave += (_, _) => { _dropZone.RemoveCssClass("drag-hover"); };
+
+        _appImageListWindow.AddController(_fileDropTarget);
+    }
+
+    private bool OnFileDrop(DropTarget dropTarget, DropTarget.DropSignalArgs args)
+    {
+        var handle = FileHelper.NewFromPointer(args.Value.PeekPointer(), false);
+        var filePath = handle.GetPath();
+
+        if (string.IsNullOrEmpty(filePath))
+            return false;
+
+        if (!filePath.EndsWith(".appimage", StringComparison.OrdinalIgnoreCase))
+        {
+            genericQuestionService.RaiseToastMessage(
+                new ToastMessageEventArgs(T("Only AppImage files are supported")));
+            return false;
+        }
+
+        _ = InstallAppImageFromPathAsync(filePath);
+
+        return true;
+    }
+
+    private async Task InstallAppImageFromPathAsync(string filePath)
     {
         try
         {
-            lockoutService.Show(T("Migrating AppImages to V2..."));
+            lockoutService.Show(T("Installing AppImage..."));
 
-            
+            var result = await privilegedOperationService.AppImageInstallAsync(filePath);
+
+            if (result.Success)
+            {
+                var basename = Path.GetFileName(filePath);
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(T("{0} installed successfully!", basename)));
+                await LoadDataAsync();
+            }
+            else
+            {
+                var basename = Path.GetFileName(filePath);
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(T("Failed to install {0}: {1}", basename, result.Error)));
+            }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"Failed to migrate AppImages: {ex.Message}");
+            // Handle silently
         }
         finally
         {
             lockoutService.Hide();
         }
-    }
-
-    public void Dispose()
-    {
-        _sub?.Dispose();
-        _appListBox.RemoveAll();
     }
 }
