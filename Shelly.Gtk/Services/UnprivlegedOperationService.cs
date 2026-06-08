@@ -314,7 +314,7 @@ public class UnprivilegedOperationService(
         _ = ExecuteNonShellyUnprivilegedCommandAsync("Systemctl", "systemctl", CancellationToken.None,
             "--user daemon-reload");
         _ = ExecuteNonShellyUnprivilegedCommandAsync("Systemctl", "systemctl", CancellationToken.None,
-            $"--user stop {service}");
+            $"--user enable --now {service}");
 
         return Task.FromResult(new OperationResult());
     }
@@ -322,12 +322,14 @@ public class UnprivilegedOperationService(
     public Task<OperationResult> RemoveSystemdServiceTray(string service)
     {
         var dir = XdgPaths.ConfigHome() + "/systemd/user";
+
+        _ = ExecuteNonShellyUnprivilegedCommandAsync("Systemctl", "systemctl", CancellationToken.None,
+            $"--user disable --now {service}");
+
         File.Delete($"{dir}/{service}.service");
 
         _ = ExecuteNonShellyUnprivilegedCommandAsync("Systemctl", "systemctl", CancellationToken.None,
             "--user daemon-reload");
-        _ = ExecuteNonShellyUnprivilegedCommandAsync("Systemctl", "systemctl", CancellationToken.None,
-            $"--user stop {service}");
 
         return Task.FromResult(new OperationResult());
     }
