@@ -9,13 +9,20 @@
         <InvariantGlobalization>true</InvariantGlobalization>
     </PropertyGroup>
 
+    <PropertyGroup>
+        <Version>2.3.2.3</Version>
+        <AssemblyName>shelly</AssemblyName>
+        <AssemblyVersion>2.3.2.3</AssemblyVersion>
+        <AssemblyTitle>Shelly CLI</AssemblyTitle>
+        <Description>Shelly CLI is a arch linux package manager</Description>
+        <Company>Seafoam Labs</Company>
+        <Product>Shelly CLI by Seafoam Labs</Product>
+        <Copyright>2026 Seafoam Labs</Copyright>
+    </PropertyGroup>
+
     <ItemGroup>
       <PackageReference Include="CliFx" Version="3.0.0" />
       <PackageReference Include="Pastel" Version="7.0.1" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Commands\" />
     </ItemGroup>
 
     <ItemGroup>
