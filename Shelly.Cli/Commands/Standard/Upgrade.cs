@@ -1,18 +1,16 @@
 using System.Drawing;
-using CliFx;
 using CliFx.Binding;
 using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using PackageManager.Utilities;
 using Pastel;
-using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
 using Shelly.Utilities.Enums;
 using static System.Enum;
 
-namespace Shelly.Cli.Commands;
+namespace Shelly.Cli.Commands.Standard;
 
 [Command("upgrade", Description = "Perform a full system upgrade")]
 public partial class UpgradeCommand : GlobalSettingsCommand
