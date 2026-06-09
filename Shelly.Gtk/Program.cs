@@ -839,25 +839,6 @@ sealed class Program
                     }
 
                     lockoutService.Show("Upgrading all packages...");
-                    // Commenting out old pkgbuild preview method.
-                    /*
-                    var aurUpdates = packagesNeedingUpdate.Aur;
-                    if (aurUpdates.Count != 0)
-                    {
-                        var aurPackageNames = aurUpdates.Select(p => p.Name).ToList();
-                        //var packageBuilds = await privilegedOperationService.GetAurPackageBuild(aurPackageNames);
-                        /* foreach (var pkgbuild in packageBuilds)
-                         {
-                             if (pkgbuild.PkgBuild == null) continue;
-                             var buildArgs = new PackageBuildEventArgs($"Displaying Package Build {pkgbuild.Name}",
-                                 pkgbuild.PkgBuild);
-                             genericQuestionService.RaisePackageBuild(buildArgs);
-                             if (!await buildArgs.ResponseTask)
-                             {
-                                 return;
-                             }
-                         } 
-                    }*/
 
                     var upgradeResult = await privilegedOperationService.UpgradeAllAsync();
                     if (upgradeResult.NeedsReboot)

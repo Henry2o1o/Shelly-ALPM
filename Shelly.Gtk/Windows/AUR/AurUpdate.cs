@@ -389,27 +389,6 @@ public class AurUpdate(
             try
             {
                 lockoutService.Show(T("Installing..."));
-                
-                // Commenting this block out because the event system already handles this.
-                /*
-                var packageBuilds = await privilegedOperationService.GetAurPackageBuild(selectedPackages);
-
-                if (packageBuilds.Count != 0)
-                {
-                    foreach (var pkgbuild in packageBuilds)
-                    {
-                        if (pkgbuild.PkgBuild == null) continue;
-
-                        var buildArgs = new PackageBuildEventArgs(T("Displaying Package Build {0}", pkgbuild.Name),
-                            pkgbuild.PkgBuild);
-                        genericQuestionService.RaisePackageBuild(buildArgs);
-
-                        if (!await buildArgs.ResponseTask)
-                        {
-                            return;
-                        }
-                    }
-                } */
 
                 var result =
                     await privilegedOperationService.UpdateAurPackagesAsync(selectedPackages,
