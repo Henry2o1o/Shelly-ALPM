@@ -1,5 +1,6 @@
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
+using Shelly_CLI.Configuration;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -32,7 +33,7 @@ public class AppImageInstallCommand : AsyncCommand<AppImageSettings>
         
         if (await AppImageManagerV2.IsAppImage(settings.PackageLocation))
         {
-            var manager = new AppImageManagerV2();
+            var manager = new AppImageManagerV2(ConfigManager.ReadConfig().AppImageInstallPath ?? "");;
             if (Program.IsUiMode)
             {
                 manager.ErrorEvent += (_, args) => UiFrames.Error(args.Error);

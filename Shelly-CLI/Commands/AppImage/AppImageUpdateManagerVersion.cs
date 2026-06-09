@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using PackageManager.AppImage.AppImageV2;
+using Shelly_CLI.Configuration;
 using Shelly_CLI.Utility;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -12,7 +13,7 @@ public class AppImageUpdateManagerVersion : AsyncCommand
     {
         RootElevator.EnsureRootExectuion();
         
-        var manger = new AppImageManagerV2();
+        var manger = new AppImageManagerV2(ConfigManager.ReadConfig().AppImageInstallPath ?? "");;
         if (Program.IsUiMode)
         {
             manger.MessageEvent += (_, e) => UiFrames.Info(e.Message);

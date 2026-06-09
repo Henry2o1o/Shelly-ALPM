@@ -13,10 +13,10 @@ using Shelly.Utilities;
 
 namespace PackageManager.AppImage.AppImageV2;
 
-public class AppImageManagerV2
+public class AppImageManagerV2(string installDirectory = "")
 {
-    private readonly string _installDirectory = XdgPaths.BinHome();
-
+    private readonly string _installDirectory = string.IsNullOrEmpty(installDirectory) ? XdgPaths.DataHome() : installDirectory;
+    
     private static readonly string LocalDbPath =
         XdgPaths.ShellyCache("appimage-local-meta-store", "appimage-metadata-v2.db");
 

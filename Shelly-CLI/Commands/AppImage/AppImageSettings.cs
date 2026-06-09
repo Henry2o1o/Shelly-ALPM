@@ -92,3 +92,10 @@ public class AppImageUpdateSettings : CommandSettings
     [Description("Proceed without asking for user confirmation")]
     public bool NoConfirm { get; set; }
 }
+
+public class AppImageInstallPathSettings : CommandSettings
+{
+    [CommandArgument(0, "[Name]")]
+    [Description("Path to install AppImages.")]
+    public string? Path { get; set; }
+}
