@@ -151,7 +151,7 @@ public static class PackageBuildDiffDialog
                 }
                 else if (line.StartsWith("-"))
                 {
-                    inRemovedBlock = line.Contains('(');
+                    inRemovedBlock = StartArrayBlock(line);
                     inAddedBlock = false;
 
                     buffer.ApplyTag(
@@ -201,5 +201,11 @@ public static class PackageBuildDiffDialog
         scroll.SetHexpand(true);
         
         return scroll;
+    }
+    
+    private static bool StartArrayBlock(string lines)
+    {
+        var trimmed = lines.Trim();
+        return trimmed.Contains("=(") && !trimmed.TrimEnd().EndsWith(")");
     }
 }
