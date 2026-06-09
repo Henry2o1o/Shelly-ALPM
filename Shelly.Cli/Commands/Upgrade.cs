@@ -3,6 +3,7 @@ using CliFx;
 using CliFx.Binding;
 using CliFx.Infrastructure;
 using PackageManager.Alpm;
+using PackageManager.Utilities;
 using Pastel;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Interactions;
@@ -18,7 +19,7 @@ public partial class UpgradeCommand : GlobalSettingsCommand
 {
     public override async ValueTask ExecuteAsync(IConsole console)
     {
-        string message;
+        var message = "";
         var ansiSupport = AnsiUtilities.SupportsAnsi;
         if (UiMode)
         {
@@ -105,7 +106,30 @@ public partial class UpgradeCommand : GlobalSettingsCommand
         UiFrames.Info("Performing full system upgrade...");
 
         using var manager = new AlpmManager();
+        manager.Question += (_, args) => QuestionHandler.HandleQuestion(args, true, NoConfirm);
 
-        throw new NotImplementedException();
+        UiFrames.Info("Initializing and syncing repositories...");
+        manager.IntializeWithSync();
+        var packagesNeedingUpdate = manager.GetPackagesNeedingUpdate();
+        if (packagesNeedingUpdate.Count == 0)
+        {
+            UiFrames.Info("Standard Packages are up to date!");
+            return;
+        }
+
+        UiFrames.TxStart($"Upgrading {packagesNeedingUpdate.Count} packages...");
+        var ok = await UiModeOutput.Run(manager, m => m.SyncSystemUpdate());
+        UiFrames.TxFinish(ok, "System upgraded successfully!", "System upgrade failed.");
+        var (needsReboot, services) = RestartManager.CheckForRequiredRestarts();
+        if (needsReboot)
+        {
+            UiFrames.Info("[RESTART_REQUIRED]reboot");
+        }
+        else if (services.Count > 0)
+        {
+            var failures = await RestartManager.RestartServicesAsync(services);
+            foreach (var (svc, error) in failures)
+                UiFrames.Error($"[RESTART_FAILED]service:{svc}|{error}");
+        }
     }
 }
