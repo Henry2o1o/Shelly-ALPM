@@ -7,9 +7,7 @@ namespace Shelly.Cli.Outputs;
 
 /// <summary>
 /// Multi-sticky animated bottom-bar region, ported from the legacy Spectre implementation
-/// to CliFx's <see cref="IConsole"/> + Pastel. Spectre's <c>Markup.Remove</c>/<c>EscapeMarkup</c>
-/// are replaced by <see cref="AnsiText"/> so visible-width measurement and truncation stay
-/// correct against raw SGR escape sequences.
+/// to CliFx's <see cref="IConsole"/> + Pastel.
 /// </summary>
 public sealed class BottomBarRegion : IDisposable
 {
