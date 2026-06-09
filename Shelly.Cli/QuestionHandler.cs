@@ -27,9 +27,7 @@ public static class QuestionHandler
         if (!uiMode)
         {
             PackageBuilderDiffGenerator.PrintUnifiedDiff(args.OldPkgbuild, args.NewPkgbuild, isUiMode: false);
-            args.ProceedWithUpdate = AnsiConsole.Confirm(
-                $"[yellow]Proceed with update to {args.PackageName.EscapeMarkup()}?[/]",
-                defaultValue: true);
+            args.ProceedWithUpdate = Confirm.Execute("Proceed with update?");
             return;
         }
 
@@ -145,23 +143,15 @@ public static class QuestionHandler
             return;
         }
 
-        var choices = visible.Select(t => t.Option.Name).ToList();
-        var selection = AnsiConsole.Prompt(
-            new MultiSelectionPrompt<string>()
-                .Title($"[yellow]{question.QuestionText}[/]")
-                .NotRequired()
-                .InstructionsText(
-                    "[grey](Press [blue]<space>[/] to toggle, " +
-                    "[green]<enter>[/] to accept — leave empty to install none)[/]")
-                .AddChoices(choices));
+        var visiblOptions = visible.Select(t => t.Option).ToList();
+        var selection = DependussyMultiSelect.Execute("Select optional dependencies", visiblOptions);
 
-        var selectedNames = new HashSet<string>(selection);
-        var selectedOriginal = visible
-            .Where(t => selectedNames.Contains(t.Option.Name))
-            .Select(t => t.OriginalIndex)
+        var selectedNames = selection
+            .Where(o => o.IsSelected)
+            .Select(o => o.Name)
             .ToHashSet();
         var selectedOptions = question.ProviderOptions
-            .Select((o, i) => o with { IsSelected = selectedOriginal.Contains(i) })
+            .Select(o => o with { IsSelected = selectedNames.Contains(o.Name) && !o.IsInstalled })
             .ToList();
 
         question.SetResponse(new QuestionResponse(0, selectedOptions));
@@ -172,7 +162,7 @@ public static class QuestionHandler
         if (string.IsNullOrWhiteSpace(input)) return [];
         try
         {
-            var arr = JsonSerializer.Deserialize(input!, ShellyCLIJsonContext.Default.Int32Array);
+            var arr = JsonSerializer.Deserialize(input!, ShellyCliJsonContext.Default.Int32Array);
             return arr is null ? new HashSet<int>() : new HashSet<int>(arr);
         }
         catch
@@ -226,11 +216,8 @@ public static class QuestionHandler
         }
 
         var providerNames = question.ProviderOptions.Select(o => o.Name).ToList();
-        var selection = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title($"[yellow]{question.QuestionText}[/]")
-                .AddChoices(providerNames));
-        question.SetResponse(new QuestionResponse(providerNames.IndexOf(selection), question.ProviderOptions));
+        var selection = BasicSelection.Execute("Select provider", providerNames);
+        question.SetResponse(new QuestionResponse(selection, question.ProviderOptions));
     }
 
 
