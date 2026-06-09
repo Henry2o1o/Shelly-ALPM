@@ -439,7 +439,7 @@ public class PrivilegedOperationService : IPrivilegedOperationService
         return result;
     }
 
-    public async Task<OperationResult> MigrateAppImagesAsync()
+    public async Task<OperationResult>MigrateAppImagesAsync()
     {
         return await ExecutePrivilegedCommandAsync("Migrate AppImages", "appimage", "migrate-manager");
     }
