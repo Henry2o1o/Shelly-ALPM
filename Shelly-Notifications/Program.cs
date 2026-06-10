@@ -1,7 +1,6 @@
 ﻿using System.Diagnostics;
 using Shelly_Notifications.DbusHandlers;
 using Shelly_Notifications.Resources;
-using Shelly_Notifications.Models;
 using Shelly_Notifications.Services;
 using Tmds.DBus.Protocol;
 using Tmds.DBus.SourceGenerator;
@@ -15,7 +14,8 @@ try
 
     //review later source generated code generated with obsolete 
     //may need to take the source generated code and drop source generation
-    using var connection = new Connection(DBusAddress.Session!);
+    //see https://github.com/affederaffe/Tmds.DBus.SourceGenerator/issues/38
+    using var connection = new DBusConnection(DBusAddress.Session!);
     await connection.ConnectAsync();
 
     const string shellyNotificationsService = "org.shelly.Notifications";
@@ -169,7 +169,7 @@ catch (Exception ex)
     Console.WriteLine($"[Error] Shelly Notifications failed to start: {ex.Message}");
 }
 
-async Task TryRegisterTrayIconAsync(Connection connection, string serviceName)
+async Task TryRegisterTrayIconAsync(DBusConnection connection, string serviceName)
 {
     var watchers = new[]
     {
@@ -184,12 +184,12 @@ async Task TryRegisterTrayIconAsync(Connection connection, string serviceName)
         {
             if (service.Contains("freedesktop"))
             {
-                var watcherProxy = new OrgFreedesktopStatusNotifierWatcherProxy(connection, service, path);
+                var watcherProxy = new OrgFreedesktopStatusNotifierWatcherProxy(connection.AsConnection(), service, path);
                 await watcherProxy.RegisterStatusNotifierItemAsync(serviceName);
             }
             else
             {
-                var watcherProxy = new OrgKdeStatusNotifierWatcherProxy(connection, service, path);
+                var watcherProxy = new OrgKdeStatusNotifierWatcherProxy(connection.AsConnection(), service, path);
                 await watcherProxy.RegisterStatusNotifierItemAsync(serviceName);
             }
 
