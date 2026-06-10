@@ -22,21 +22,26 @@ public class AppImageRemoveCommand : AsyncCommand<AppImageRemoveSettings>
             return 1;
         }
 
-        var installDir = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
-        if (!Directory.Exists(installDir))
+        var config = ConfigManager.ReadConfig();
+        var installDir = config.AppImageInstallPath ?? XdgPaths.BinHome();
+        var oldDefaultPath = XdgPaths.BinHome();
+
+        var searchPaths = new List<string> { installDir };
+        if (installDir != oldDefaultPath)
         {
-            AnsiConsole.MarkupLine($"[yellow]Info: {installDir} directory does not exist. No AppImages to remove.[/]");
-            return 0;
+            searchPaths.Add(oldDefaultPath);
         }
 
-        var appImages = Directory.GetFiles(installDir, "*.AppImage", SearchOption.TopDirectoryOnly);
-        var matches = appImages
-            .Where(f => Path.GetFileName(f).Contains(settings.Name, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var matches = new List<string>();
+        foreach (var appImages in from path in searchPaths where Directory.Exists(path) select Directory.GetFiles(path, "*.AppImage", SearchOption.TopDirectoryOnly))
+        {
+            matches.AddRange(appImages.Where(f =>
+                Path.GetFileName(f).Contains(settings.Name, StringComparison.OrdinalIgnoreCase)));
+        }
 
         if (matches.Count == 0)
         {
-            AnsiConsole.MarkupLine($"[yellow]No AppImage matching \"{settings.Name}\" found in {installDir}[/]");
+            AnsiConsole.MarkupLine($"[yellow]No AppImage matching \"{settings.Name}\" found in searched paths.[/]");
             return 0;
         }
 
