@@ -393,7 +393,7 @@ public class Settings(
                 const string serviceContent = $"""
                                                [Unit]
                                                Description=Shelly Notifications tray service
-                                               PartOf=default.target
+                                               After=graphical-session.target
 
                                                [Service]
                                                Type=simple
@@ -402,7 +402,7 @@ public class Settings(
                                                RestartSec=5s
 
                                                [Install]
-                                               WantedBy=default.target
+                                               WantedBy=graphical-session.target
                                                """;
                 
                 unprivilegedOperationService.AddSystemdServiceTray(serviceContent, "shelly-notifications");
