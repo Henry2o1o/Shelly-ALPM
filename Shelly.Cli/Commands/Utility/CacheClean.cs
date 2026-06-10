@@ -1,5 +1,9 @@
+using System.Drawing;
 using CliFx.Binding;
 using CliFx.Infrastructure;
+using Pastel;
+using Shelly.Cli.Commands.Utility.Helpers;
+using Shelly.Cli.Interactions;
 
 namespace Shelly.Cli.Commands.Utility;
 
@@ -24,7 +28,37 @@ public partial class CacheClean : GlobalSettingsCommand
 
     public override async ValueTask ExecuteAsync(IConsole console)
     {
-        throw new NotImplementedException();
+        var isAnsiSupported = AnsiUtilities.SupportsAnsi;
+        var message = "";
+        if (!Directory.Exists(CacheDir))
+        {
+            message = isAnsiSupported
+                ? $"Cache directory does not exist: {CacheDir}".Pastel(Color.Red)
+                : $"Cache directory does not exist: {CacheDir}";
+            console.WriteLine(message);
+            return;
+        }
+
+        var entries = Directory.EnumerateFiles(CacheDir)
+            .Select(CacheCleanHelper.ParsePackageFilename)
+            .Where(e => e != null)
+            .Cast<CacheEntry>()
+            .ToList();
+        if (entries.Count == 0)
+        {
+            message = isAnsiSupported
+                ? "No package files found in cache directory.".Pastel(Color.Yellow)
+                : "No package files found in cache directory.";
+            console.WriteLine(message);
+            return;
+        }
+
+        var grouped = entries.GroupBy(e => e.Name).ToDictionary(g => g.Key, g => g.ToList());
+        var candidates = new List<CacheEntry>();
+        foreach (var (name, pkgEntries) in grouped)
+        {
+            
+        }
     }
 
     public override async ValueTask ExecuteUiMode()
