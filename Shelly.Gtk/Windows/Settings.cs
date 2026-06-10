@@ -360,20 +360,21 @@ public class Settings(
         {
             if (e.State)
             {
-                const string serviceContent = $"""
-                                               [Unit]
-                                               Description=Shelly Notifications tray service
-                                               After=graphical-session.target
+                const string serviceContent =
+                    """
+                    [Unit]
+                    Description=Shelly Notifications tray service
+                    After=graphical-session.target
 
-                                               [Service]
-                                               Type=simple
-                                               ExecStart=/usr/bin/shelly-notifications
-                                               Restart=on-failure
-                                               RestartSec=5s
+                    [Service]
+                    Type=simple
+                    ExecStart=/usr/bin/shelly-notifications
+                    Restart=on-failure
+                    RestartSec=5s
 
-                                               [Install]
-                                               WantedBy=graphical-session.target
-                                               """;
+                    [Install]
+                    WantedBy=graphical-session.target
+                    """;
                 
                 unprivilegedOperationService.AddSystemdServiceTray(serviceContent, "shelly-notifications");
                 genericQuestionService.RaiseToastMessage(
