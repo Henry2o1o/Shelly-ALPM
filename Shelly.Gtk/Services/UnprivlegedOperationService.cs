@@ -20,9 +20,11 @@ public class UnprivilegedOperationService(
     IPackageUpdateNotifier packageUpdateNotifier,
     IDirtyService dirtyService,
     IAlpmEventService alpmEventService,
-    ILockoutService lockoutService) : IUnprivilegedOperationService
+    ILockoutService lockoutService,
+    IGenericQuestionService genericQuestionService) : IUnprivilegedOperationService
 {
     private readonly string _cliPath = CliPathResolver.FindCliPath();
+
 
     public async Task<List<FlatpakPackageDto>> ListFlatpakPackages()
     {
@@ -521,7 +523,7 @@ public class UnprivilegedOperationService(
                             await stdinWriter.WriteLineAsync(value);
                             await stdinWriter.FlushAsync();
                         }
-                    });
+                    }, genericQuestionService);
                 }
                 catch (Exception ex)
                 {
