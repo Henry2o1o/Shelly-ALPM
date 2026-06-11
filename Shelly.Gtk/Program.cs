@@ -679,15 +679,7 @@ sealed class Program
                     return false;
                 });
             };
-
-            genericQuestionService.PackageBuildDiffRequested += (_, e) =>
-            {
-                GLib.Functions.IdleAdd(0, () =>
-                {
-                    PackageBuildDiffDialog.ShowPackageBuildDiffDialog(mainOverlay, e);
-                    return false;
-                });
-            };
+            
 
 
             window.Show();
