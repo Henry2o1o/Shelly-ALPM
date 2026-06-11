@@ -263,4 +263,174 @@ public class PkgbuildParserTests
 
         Assert.DoesNotThrow(() => PkgbuildParser.ParseContent(pkgbuild));
     }
+
+    // ---- install= / post_install handling ----
+
+    [Test]
+    public void ParseContent_NoInstallDirective_LeavesInstallFileAndPostInstallNull()
+    {
+        var pkgbuild = """
+                       pkgname=myapp
+                       pkgver=1.0
+                       depends=('bash')
+                       """;
+
+        var result = PkgbuildParser.ParseContent(pkgbuild);
+
+        Assert.That(result.InstallFile, Is.Null);
+        Assert.That(result.PostInstall, Is.Null);
+    }
+
+    [Test]
+    public void ParseContent_ResolvesInstallFileWithVariableSubstitution()
+    {
+        var pkgbuild = """
+                       pkgname=myapp
+                       pkgver=1.0
+                       install=${pkgname}.install
+                       """;
+
+        // No baseDir provided -> install file lookup is relative and won't exist,
+        // so PostInstall is null but InstallFile must still be resolved.
+        var result = PkgbuildParser.ParseContent(pkgbuild);
+
+        Assert.That(result.InstallFile, Is.EqualTo("myapp.install"));
+        Assert.That(result.PostInstall, Is.Null);
+    }
+
+    [Test]
+    public void ParseContent_ResolvesQuotedInstallFile()
+    {
+        var pkgbuild = """
+                       pkgname=foo
+                       install="foo.install"
+                       """;
+
+        var result = PkgbuildParser.ParseContent(pkgbuild);
+
+        Assert.That(result.InstallFile, Is.EqualTo("foo.install"));
+    }
+
+    [Test]
+    public void ParseContent_ExtractsPostInstallBody_FromInstallFileInBaseDir()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "shelly_pkgbuild_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var installContent = """
+                                 post_install() {
+                                     echo "installing"
+                                     update-desktop-database -q
+                                 }
+
+                                 post_upgrade() {
+                                     echo "upgrading"
+                                 }
+                                 """;
+            File.WriteAllText(Path.Combine(tempDir, "myapp.install"), installContent);
+
+            var pkgbuild = """
+                           pkgname=myapp
+                           install=${pkgname}.install
+                           """;
+
+            var result = PkgbuildParser.ParseContent(pkgbuild, tempDir);
+
+            Assert.That(result.InstallFile, Is.EqualTo("myapp.install"));
+            Assert.That(result.PostInstall, Is.Not.Null);
+            Assert.That(result.PostInstall, Does.Contain("echo \"installing\""));
+            Assert.That(result.PostInstall, Does.Contain("update-desktop-database -q"));
+            // Body of post_upgrade must not leak into post_install.
+            Assert.That(result.PostInstall, Does.Not.Contain("upgrading"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Test]
+    public void ParseContent_PostInstallNull_WhenFunctionAbsentInInstallFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "shelly_pkgbuild_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, "bar.install"),
+                "post_upgrade() {\n  echo hi\n}\n");
+
+            var pkgbuild = """
+                           pkgname=bar
+                           install=bar.install
+                           """;
+
+            var result = PkgbuildParser.ParseContent(pkgbuild, tempDir);
+
+            Assert.That(result.InstallFile, Is.EqualTo("bar.install"));
+            Assert.That(result.PostInstall, Is.Null);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Test]
+    public void ParseContent_HandlesNestedBracesInPostInstallBody()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "shelly_pkgbuild_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var installContent = """
+                                 post_install() {
+                                     if [ -d /tmp ]; then
+                                         echo "${HOME}"
+                                     fi
+                                 }
+                                 """;
+            File.WriteAllText(Path.Combine(tempDir, "nested.install"), installContent);
+
+            var pkgbuild = """
+                           pkgname=nested
+                           install=nested.install
+                           """;
+
+            var result = PkgbuildParser.ParseContent(pkgbuild, tempDir);
+
+            Assert.That(result.PostInstall, Is.Not.Null);
+            Assert.That(result.PostInstall, Does.Contain("if [ -d /tmp ]; then"));
+            Assert.That(result.PostInstall, Does.Contain("echo \"${HOME}\""));
+            Assert.That(result.PostInstall, Does.Contain("fi"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Test]
+    public void ParseContent_MissingInstallFile_DoesNotThrowAndPostInstallNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "shelly_pkgbuild_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var pkgbuild = """
+                           pkgname=ghost
+                           install=ghost.install
+                           """;
+
+            PkgbuildInfo? result = null;
+            Assert.DoesNotThrow(() => result = PkgbuildParser.ParseContent(pkgbuild, tempDir));
+            Assert.That(result!.InstallFile, Is.EqualTo("ghost.install"));
+            Assert.That(result.PostInstall, Is.Null);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
 }
