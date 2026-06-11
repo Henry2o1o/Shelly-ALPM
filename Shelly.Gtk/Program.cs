@@ -662,15 +662,6 @@ sealed class Program
                 });
             };
 
-            genericQuestionService.PackageBuildRequested += (_, e) =>
-            {
-                GLib.Functions.IdleAdd(0, () =>
-                {
-                    PackageBuildDialog.ShowPackageBuildDialog(mainOverlay, e);
-                    return false;
-                });
-            };
-
             genericQuestionService.ToastMessageRequested += (_, e) =>
             {
                 GLib.Functions.IdleAdd(0, () =>
@@ -840,6 +831,9 @@ sealed class Program
 
                     lockoutService.Show("Upgrading all packages...");
 
+                    // The PKGBUILD review/diff is now surfaced through the unified
+                    // wire-based PkgbuildReviewDialog during the operation, so the
+                    // legacy pre-operation PKGBUILD prompt is no longer raised here.
                     var upgradeResult = await privilegedOperationService.UpgradeAllAsync();
                     if (upgradeResult.NeedsReboot)
                     {
