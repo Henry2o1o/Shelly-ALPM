@@ -126,9 +126,10 @@ public class AppImageManagerV2(string installDirectory = "")
         try
         {
             var appImages = await GetAppImagesFromLocalDb();
-            if (appImages.Any(a => string.Equals(a.Name, appImage.Name, StringComparison.OrdinalIgnoreCase)))
+            
+            if (!string.IsNullOrEmpty(appImage.DesktopName))
             {
-                appImages.RemoveAll(a => string.Equals(a.Name, appImage.Name, StringComparison.OrdinalIgnoreCase));
+                appImages.RemoveAll(a => string.Equals(a.DesktopName, appImage.DesktopName, StringComparison.OrdinalIgnoreCase));
             }
 
             appImages.Add(appImage);
@@ -965,6 +966,8 @@ public class AppImageManagerV2(string installDirectory = "")
         }
     }
 
+    //Bob Ross said we make happy little accidents
+    //Bob never saw me make the decisions around AppImages
     public async Task<bool> MigrateAppImages()
     {
         const string installDir = "/opt/shelly";
@@ -1006,13 +1009,126 @@ public class AppImageManagerV2(string installDirectory = "")
         {
             var json = await File.ReadAllTextAsync(localDbDir);
             var appImages = JsonSerializer.Deserialize(json, AppImageJsonContext.Default.ListAppImageDto) ?? [];
+
+            var existingApps = await GetAppImagesFromLocalDb();
             
+            foreach (var app in appImages)
+            {
+                try
+                {
+                    var cleanName = CleanInvalidNames(app.Name);
+                    var userDataHome = XdgPaths.DataHome();
+
+                    // Fix sin of desktop entry ownership
+                    var desktopDir = Path.Combine(userDataHome, "applications");
+                    if (Directory.Exists(desktopDir))
+                    {
+                        var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
+                        if (File.Exists(desktopFilePath))
+                        {
+                            XdgPaths.FixOwnershipIfRoot(desktopFilePath);
+                        }
+                        else
+                        {
+                            var potentialDesktopFiles = Directory.GetFiles(desktopDir, "*.desktop")
+                                .Where(f => Path.GetFileName(f).Contains(cleanName, StringComparison.OrdinalIgnoreCase))
+                                .ToList();
+
+                            foreach (var df in potentialDesktopFiles)
+                            {
+                                var content = await File.ReadAllLinesAsync(df);
+                                if (!content.Any(l =>
+                                        l.StartsWith("Exec=") &&
+                                        (l.Contains(app.Name + ".AppImage") || l.Contains($"\"{app.Name}.AppImage\""))))
+                                    continue;
+                                XdgPaths.FixOwnershipIfRoot(df);
+                                break;
+                            }
+                        }
+                    }
+
+                    // Fix sin of icon ownership
+                    string[] iconDirs =
+                    [
+                        Path.Combine(userDataHome, "icons/hicolor/scalable/apps"),
+                        Path.Combine(userDataHome, "icons/hicolor/256x256/apps")
+                    ];
+
+                    foreach (var iconDir in iconDirs)
+                    {
+                        if (!Directory.Exists(iconDir)) continue;
+                        XdgPaths.FixOwnershipIfRoot(iconDir);
+                        var potentialIcons = Directory.GetFiles(iconDir, $"{cleanName}.*");
+                        foreach (var icon in potentialIcons)
+                        {
+                            XdgPaths.FixOwnershipIfRoot(icon);
+                        }
+                    }
+
+                    // Cleanse myself of old sys desktops
+                    const string sysDesktopDir = "/usr/share/applications";
+                    var sysDesktopFilePath = Path.Combine(sysDesktopDir, $"{cleanName}.desktop");
+                    if (File.Exists(sysDesktopFilePath))
+                    {
+                        try
+                        {
+                            File.Delete(sysDesktopFilePath);
+                            LogMessage($"Removed old system desktop entry: {sysDesktopFilePath}");
+                            UpdateDesktopDatabase(sysDesktopDir);
+                        }
+                        catch (Exception ex)
+                        {
+                            LogWarning($"Could not remove system desktop entry {sysDesktopFilePath}: {ex.Message}");
+                        }
+                    }
+
+                    // Cleanse myself of old sys icons
+                    if (string.IsNullOrEmpty(app.IconName)) continue;
+                    {
+                        var extensions = new[] { ".png", ".svg" };
+                        foreach (var ext in extensions)
+                        {
+                            var sysIconDirs = new[]
+                            {
+                                "/usr/share/icons/hicolor/scalable/apps",
+                                "/usr/share/icons/hicolor/256x256/apps"
+                            };
+
+                            foreach (var sysIconDir in sysIconDirs)
+                            {
+                                var sysIconPath = Path.Combine(sysIconDir, $"{app.IconName}{ext}");
+                                if (!File.Exists(sysIconPath)) continue;
+                                try
+                                {
+                                    File.Delete(sysIconPath);
+                                    LogMessage($"Removed old system icon: {sysIconPath}");
+                                    UpdateIconCache(Path.GetDirectoryName(sysIconDir)!);
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogWarning($"Could not remove system icon {sysIconPath}: {ex.Message}");
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogWarning($"Error during pre-dedupe cleanup for {app.Name}: {ex.Message}");
+                }
+            }
+
             var uniqueItems = appImages
-                .GroupBy(item => item.Name)
-                .Where(group => group.Count() == 1)
-                .SelectMany(group => group)
+                .GroupBy(item => item.DesktopName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Last())
+                .Where(newApp =>
+                {
+                    if (string.IsNullOrEmpty(newApp.DesktopName)) return true;
+                    return !existingApps.Any(e =>
+                        string.Equals(e.DesktopName, newApp.DesktopName, StringComparison.OrdinalIgnoreCase));
+                })
                 .ToList();
-            
+
             foreach (var newApp in uniqueItems.Select(apps => new AppImageDtoV2()
                      {
                          Name = apps.Name,
@@ -1046,57 +1162,8 @@ public class AppImageManagerV2(string installDirectory = "")
                     await AddAppImageToLocalDb(newApp);
                     LogMessage($"Added {newApp.Name} to new metadata database.");
 
-                    //clean up badly owned desktop
-                    var cleanName = CleanInvalidNames(newApp.Name);
-                    var desktopDir = Path.Combine(XdgPaths.DataHome(), "applications");
-
-                    if (!Directory.Exists(desktopDir)) continue;
-
-                    var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
-                    if (File.Exists(desktopFilePath))
-                    {
-                        XdgPaths.FixOwnershipIfRoot(desktopFilePath);
-                        LogMessage($"Fixed owner of desktop entry: {desktopFilePath}");
-                    }
-                    else
-                    {
-                        var potentialDesktopFiles = Directory.GetFiles(desktopDir, "*.desktop")
-                            .Where(f => Path.GetFileName(f).Contains(cleanName, StringComparison.OrdinalIgnoreCase))
-                            .ToList();
-
-                        foreach (var df in potentialDesktopFiles)
-                        {
-                            var content = await File.ReadAllLinesAsync(df);
-                            if (!content.Any(l =>
-                                    l.StartsWith("Exec=") &&
-                                    l.Contains($"\"{newApp.Path}\""))) continue;
-                            XdgPaths.FixOwnershipIfRoot(desktopFilePath);
-                            LogMessage($"Fixed owner of desktop entry: {desktopFilePath}");
-                            break;
-                        }
-                    }
-
-                    //clean up badly owned icons
-                    string[] iconDirs =
-                    [
-                        Path.Combine(XdgPaths.DataHome(), "icons/hicolor/scalable/apps"),
-                        Path.Combine(XdgPaths.DataHome(), "icons/hicolor/256x256/apps")
-                    ];
-
-                    foreach (var iconDir in iconDirs)
-                    {
-                        if (!Directory.Exists(iconDir)) continue;
-
-                        XdgPaths.FixOwnershipIfRoot(iconDir);
-                        
-                        var potentialIcons = Directory.GetFiles(iconDir, $"{cleanName}.*");
-                        foreach (var icon in potentialIcons)
-                        {
-                            XdgPaths.FixOwnershipIfRoot(icon);
-                        }
-                    }
-
                     await MigrateDesktopEntry(newApp);
+
                     LogMessage($"Finished migrating {newApp.Name}.");
                 }
                 catch (Exception ex)
