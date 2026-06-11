@@ -1,11 +1,8 @@
 using Gtk;
-using Gtk.Internal;
 using Shelly.Gtk.Helpers;
-using Shelly.Gtk.UiModels;
 using Shelly.Gtk.Windows.Dialog;
 using Shelly.Utilities.Eventing;
-using Shelly.Gtk.Services;
-using Shelly.Gtk.Windows.Dialog;
+
 
 namespace Shelly.Gtk.Services.Wire;
 
