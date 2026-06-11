@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace Shelly.Utilities.Eventing;
@@ -10,7 +11,15 @@ public sealed record PkgbuildDiffQuestionDto(
     string QuestionId,
     string PackageName,
     string OldPkgbuild,
-    string NewPkgbuild) : QuestionRequest(QuestionId);
+    string NewPkgbuild,
+    IReadOnlyList<PkgbuildWarningDto> Warnings) : QuestionRequest(QuestionId);
+
+public sealed record PkgbuildWarningDto(
+    string Tool,
+    string Severity,
+    string Hook,
+    string MatchedLine,
+    string Message);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
 [JsonDerivedType(typeof(PkgbuildDiffAnswer), "a.pkgbuilddiff")]

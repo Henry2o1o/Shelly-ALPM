@@ -1,4 +1,6 @@
+using Gtk;
 using Shelly.Gtk.Helpers;
+using Shelly.Gtk.Windows.Dialog;
 using Shelly.Utilities.Eventing;
 
 namespace Shelly.Gtk.Services.Wire;
@@ -12,12 +14,35 @@ internal static class QuestionRouter
 
         QuestionResponseDto resp = req switch
         {
-            PkgbuildDiffQuestionDto d => new PkgbuildDiffAnswer(d.QuestionId, true),
+            PkgbuildDiffQuestionDto d => new PkgbuildDiffAnswer(
+                d.QuestionId,
+                await PromptPkgbuildDiffAsync(d)),
             _ => throw new InvalidOperationException($"Unhandled QuestionRequest {req.GetType()}")
         };
 
         var frame = JsonPackFrame.EncodeFrame<QuestionResponseDto>(resp);
         await writeFrame(frame);
         return true;
+    }
+
+    private static Task<bool> PromptPkgbuildDiffAsync(PkgbuildDiffQuestionDto d)
+    {
+        // No findings → preserve the previous auto-approve behavior.
+        if (d.Warnings.Count == 0)
+            return Task.FromResult(true);
+
+        // GTK widgets must only be touched from the main thread; marshal there
+        // and bridge the dialog result back to this background wire thread.
+        var tcs = new TaskCompletionSource<bool>();
+
+        GLib.Functions.IdleAdd(0, () =>
+        {
+            var parent = (Gio.Application.GetDefault() as Application)?.GetActiveWindow();
+            _ = PkgbuildWarningDialog.ShowAsync(parent, d.PackageName, d.Warnings)
+                .ContinueWith(t => tcs.TrySetResult(t.Result));
+            return false;
+        });
+
+        return tcs.Task;
     }
 }

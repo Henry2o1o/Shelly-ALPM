@@ -35,9 +35,14 @@ public static class QuestionHandler
         }
 
         // UiMode: emit a framed PkgbuildDiffQuestionDto on stdout, block on the matching answer.
+        var warnings = args.Warnings
+            .Select(w => new PkgbuildWarningDto(
+                w.Tool, w.Severity.ToString(), w.Hook, w.MatchedLine, w.Message))
+            .ToList();
+
         var id = Guid.NewGuid().ToString("N");
         JsonPackFrame.WriteToStdout<QuestionRequest>(new PkgbuildDiffQuestionDto(
-            id, args.PackageName, args.OldPkgbuild, args.NewPkgbuild));
+            id, args.PackageName, args.OldPkgbuild, args.NewPkgbuild, warnings));
 
         var resp = ReadAnswer<PkgbuildDiffAnswer>(id);
         args.ProceedWithUpdate = resp.ProceedWithUpdate;
