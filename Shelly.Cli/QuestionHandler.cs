@@ -1,7 +1,10 @@
+using System.Drawing;
 using System.Text.Json;
 using PackageManager.Alpm;
 using PackageManager.Alpm.Questions;
 using PackageManager.Aur;
+using PackageManager.Utilities.PkgBuild;
+using Pastel;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities.Eventing;
 
@@ -20,24 +23,60 @@ public static class QuestionHandler
     {
         if (noConfirm)
         {
-            args.ProceedWithUpdate = true;
+            PrintWarnings(args.Warnings);
+            args.ProceedWithUpdate = args.Warnings.Count <= 0;
             return;
         }
 
         if (!uiMode)
         {
             PackageBuilderDiffGenerator.PrintUnifiedDiff(args.OldPkgbuild, args.NewPkgbuild, isUiMode: false);
-            args.ProceedWithUpdate = Confirm.Execute("Proceed with update?");
+            PrintWarnings(args.Warnings);
+            args.ProceedWithUpdate = Confirm.Execute(
+                $"Proceed with update to {args.PackageName}?",
+                // A careless Enter must not auto-approve a risky scriptlet.
+                defaultValue: args.Warnings.Count == 0);
             return;
         }
 
         // UiMode: emit a framed PkgbuildDiffQuestionDto on stdout, block on the matching answer.
+        var warnings = args.Warnings
+            .Select(w => new PkgbuildWarningDto(
+                w.Tool, w.Severity.ToString(), w.Hook, w.MatchedLine, w.Message))
+            .ToList();
+
         var id = Guid.NewGuid().ToString("N");
+        var diffLines = PackageBuilderDiffGenerator.BuildUnifiedDiffLines(args.OldPkgbuild, args.NewPkgbuild).ToList();
         JsonPackFrame.WriteToStdout<QuestionRequest>(new PkgbuildDiffQuestionDto(
-            id, args.PackageName, args.OldPkgbuild, args.NewPkgbuild));
+            id, args.PackageName, args.OldPkgbuild, args.NewPkgbuild, warnings, diffLines));
 
         var resp = ReadAnswer<PkgbuildDiffAnswer>(id);
         args.ProceedWithUpdate = resp.ProceedWithUpdate;
+    }
+
+    /// <summary>
+    /// Renders PostInstallValidator findings (npm/curl/etc. used in post_install)
+    /// next to the diff so the interactive user sees them before confirming.
+    /// </summary>
+    private static void PrintWarnings(IReadOnlyList<ValidationFinding> warnings)
+    {
+        if (warnings.Count == 0) return;
+
+        var supportsAnsi = AnsiUtilities.SupportsAnsi;
+        var header =
+            "Install scriptlet warnings \u2014 these commands fetch/execute code outside pacman's control:";
+        Console.WriteLine(supportsAnsi ? header.Pastel(Color.Red) : header);
+
+        foreach (var w in warnings)
+        {
+            var color = w.Severity == ValidationSeverity.Critical ? Color.Red : Color.Yellow;
+            var line = $"  \u2022 {w.Tool} used in {w.Hook}";
+            Console.WriteLine(supportsAnsi ? line.Pastel(color) : line);
+            if (!string.IsNullOrWhiteSpace(w.Message))
+                Console.WriteLine($"    {w.Message}");
+            var matched = $"    {w.MatchedLine}";
+            Console.WriteLine(supportsAnsi ? matched.Pastel(Color.Gray) : matched);
+        }
     }
 
     /// <summary>
