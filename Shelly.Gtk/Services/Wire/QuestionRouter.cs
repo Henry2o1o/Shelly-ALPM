@@ -28,7 +28,9 @@ internal static class QuestionRouter
     private static Task<bool> PromptPkgbuildDiffAsync(PkgbuildDiffQuestionDto d)
     {
         // No findings → preserve the previous auto-approve behavior.
-        if (d.Warnings.Count == 0)
+        // Guard against a null list (absent on the wire / fresh install).
+        var warnings = d.Warnings ?? [];
+        if (warnings.Count == 0)
             return Task.FromResult(true);
 
         // GTK widgets must only be touched from the main thread; marshal there
@@ -38,8 +40,8 @@ internal static class QuestionRouter
         GLib.Functions.IdleAdd(0, () =>
         {
             var parent = (Gio.Application.GetDefault() as Application)?.GetActiveWindow();
-            _ = PkgbuildWarningDialog.ShowAsync(parent, d.PackageName, d.Warnings)
-                .ContinueWith(t => tcs.TrySetResult(t.Result));
+            _ = PkgbuildWarningDialog.ShowAsync(parent, d.PackageName, warnings)
+                .ContinueWith(t => tcs.TrySetResult(t.IsCompletedSuccessfully && t.Result));
             return false;
         });
 

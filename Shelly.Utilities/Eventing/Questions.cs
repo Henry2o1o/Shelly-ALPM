@@ -10,9 +10,9 @@ public abstract record QuestionRequest(string QuestionId);
 public sealed record PkgbuildDiffQuestionDto(
     string QuestionId,
     string PackageName,
-    string OldPkgbuild,
+    string? OldPkgbuild,
     string NewPkgbuild,
-    IReadOnlyList<PkgbuildWarningDto> Warnings) : QuestionRequest(QuestionId);
+    List<PkgbuildWarningDto>? Warnings) : QuestionRequest(QuestionId);
 
 public sealed record PkgbuildWarningDto(
     string Tool,
