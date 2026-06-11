@@ -50,7 +50,8 @@ public static class PkgbuildParser
             Md5Sums = ParseArray(pkgbuildContent, "md5sums"),
 
             InstallFile = installFile,
-            PostInstall = ResolvePostInstall(installFile, baseDir),
+            PostInstall = ResolvePostInstall(installFile, baseDir)
+                          ?? ExtractFunctionBody(pkgbuildContent, "post_install")
         };
     }
 

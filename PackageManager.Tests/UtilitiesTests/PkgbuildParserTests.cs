@@ -1,4 +1,5 @@
 using PackageManager.Utilities;
+using PackageManager.Utilities.PkgBuild;
 
 namespace PackageManager.Tests.UtilitiesTests;
 
@@ -348,6 +349,27 @@ public class PkgbuildParserTests
         {
             Directory.Delete(tempDir, true);
         }
+    }
+
+    [Test]
+    public void ParseContent_ExtractsInlinePostInstall_WhenNoInstallFile()
+    {
+        var pkgbuild = """
+                       pkgname=myapp
+                       pkgver=1.0
+
+                       post_install() {
+                           npm install -g foo
+                       }
+                       """;
+
+        var result = PkgbuildParser.ParseContent(pkgbuild);
+
+        Assert.That(result.PostInstall, Is.Not.Null);
+        Assert.That(result.PostInstall, Does.Contain("npm install -g foo"));
+
+        var findings = new PostInstallValidator().Validate(result).Findings;
+        Assert.That(findings, Has.Some.Matches<ValidationFinding>(f => f.Tool == "npm"));
     }
 
     [Test]
