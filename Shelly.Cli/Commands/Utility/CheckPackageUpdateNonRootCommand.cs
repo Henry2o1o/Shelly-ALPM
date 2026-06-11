@@ -88,23 +88,29 @@ public partial class CheckPackageUpdateNonRootCommand : GlobalSettingsCommand
         console.WriteLine(message);
         message = isAnsiSupported ? "Type: Standard".Pastel(Color.Green) : "Type: Standard";
         console.WriteLine(message);
-        BasicTable.Execute(["Name", "New Version", "Current Version", "Download Size"], sync.Packages, p => p.Name,
+        var standardTable = BasicTable.Execute(["Name", "New Version", "Current Version", "Download Size"],
+            sync.Packages, p => p.Name,
             p => p.Version,
             p => p.OldVersion,
             p => p.DownloadSize);
+        console.Write(standardTable);
         console.WriteLine();
         message = isAnsiSupported ? "Type: AUR".Pastel(Color.Green) : "Type: AUR";
         console.WriteLine(message);
-        BasicTable.Execute(["Name", "New Version", "Current Version", "Download Size"], sync.Aur, p => p.Name,
+        var aurTable = BasicTable.Execute(["Name", "New Version", "Current Version", "Download Size"], sync.Aur,
+            p => p.Name,
             p => p.Version,
             p => p.OldVersion,
             p => p.DownloadSize);
+        console.Write(aurTable);
         console.WriteLine();
         message = isAnsiSupported ? "Type: Flatpak".Pastel(Color.Green) : "Type: Flatpak";
         console.WriteLine(message);
-        BasicTable.Execute(["Name", "Id", "Version"], sync.Flatpak, p => p.Name,
+        var flatpakTable = BasicTable.Execute(["Name", "Id", "Version"], sync.Flatpak, p => p.Name,
             p => p.Id,
             p => p.Version);
+        console.Write(flatpakTable);
+        console.WriteLine();
     }
 
     public override async ValueTask ExecuteUiMode()
