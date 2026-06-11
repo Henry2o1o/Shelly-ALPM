@@ -79,7 +79,8 @@ public partial class CacheClean : GlobalSettingsCommand
 
         if (TargetPackages.Length > 0)
         {
-            candidates = candidates.Where(e => TargetPackages.Contains(e.Name)).ToList();
+            candidates = candidates.Where(e =>
+                TargetPackages.Any(package => e.Name.StartsWith(package, StringComparison.OrdinalIgnoreCase))).ToList();
         }
 
         if (candidates.Count == 0)
