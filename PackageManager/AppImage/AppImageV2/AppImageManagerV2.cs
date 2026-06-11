@@ -194,6 +194,7 @@ public class AppImageManagerV2(string installDirectory = "")
         var cleanName = CleanInvalidNames(appName);
         var userDataHome = XdgPaths.DataHome();
         string[] desktopDirs = [Path.Combine(userDataHome, "applications")];
+        string? desktopAppName = null;
 
         try
         {
@@ -212,6 +213,8 @@ public class AppImageManagerV2(string installDirectory = "")
                 var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
                 if (File.Exists(desktopFilePath))
                 {
+                    var lines = await File.ReadAllLinesAsync(desktopFilePath);
+                    desktopAppName ??= lines.FirstOrDefault(l => l.StartsWith("Name="))?.Substring(5).Trim();
                     File.Delete(desktopFilePath);
                     LogMessage($"Removed desktop entry: {desktopFilePath}");
                     UpdateDesktopDatabase(desktopDir);
@@ -228,6 +231,7 @@ public class AppImageManagerV2(string installDirectory = "")
                         if (!content.Any(l =>
                                 l.StartsWith("Exec=") &&
                                 (l.Contains(appImagePath) || l.Contains($"\"{appImagePath}\"")))) continue;
+                        desktopAppName ??= content.FirstOrDefault(l => l.StartsWith("Name="))?.Substring(5).Trim();
                         File.Delete(df);
                         LogMessage($"Removed desktop entry: {df}");
                         UpdateDesktopDatabase(desktopDir);
@@ -258,7 +262,7 @@ public class AppImageManagerV2(string installDirectory = "")
             
             if (removeConfigFiles)
             {
-                RemoveAppConfigDirectories(appName, cleanName);
+                RemoveAppConfigDirectories(desktopAppName);
             }
         }
         catch (Exception ex)
@@ -270,10 +274,16 @@ public class AppImageManagerV2(string installDirectory = "")
         return 0;
     }
 
-    private void RemoveAppConfigDirectories(string appName, string cleanName)
+    private void RemoveAppConfigDirectories(string? desktopAppName = null)
     {
-        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { appName, cleanName };
-        
+        if (string.IsNullOrWhiteSpace(desktopAppName))
+        {
+            LogMessage("No desktop app name available; skipping config directory removal.");
+            return;
+        }
+
+        var normalizedKey = Normalize(desktopAppName);
+
         var searchRoots = new[]
         {
             XdgPaths.ConfigHome(),
@@ -286,18 +296,35 @@ public class AppImageManagerV2(string installDirectory = "")
         {
             if (!Directory.Exists(root)) continue;
 
-            foreach (var dir in candidates.Select(candidate => Path.Combine(root, candidate)).Where(Directory.Exists))
+            try
             {
-                try
+                foreach (var subDir in Directory.GetDirectories(root))
                 {
-                    Directory.Delete(dir, true);
-                    LogMessage($"Removed config directory: {dir}");
-                }
-                catch (Exception ex)
-                {
-                    LogWarning($"Could not remove config directory {dir}: {ex.Message}");
+                    if (Normalize(Path.GetFileName(subDir)) == normalizedKey)
+                        TryDeleteDirectory(subDir);
                 }
             }
+            catch
+            {
+                /* ignore enumeration errors */
+            }
+        }
+    }
+
+    private static string Normalize(string name) =>
+        name.ToLowerInvariant().Replace("-", "").Replace("_", "").Replace(" ", "");
+
+    private void TryDeleteDirectory(string dir)
+    {
+        LogMessage($"Checking {dir}");
+        try
+        {
+            Directory.Delete(dir, true);
+            LogMessage($"Removed config directory: {dir}");
+        }
+        catch (Exception ex)
+        {
+            LogWarning($"Could not remove config directory {dir}: {ex.Message}");
         }
     }
 
