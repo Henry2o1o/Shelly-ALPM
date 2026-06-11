@@ -7,7 +7,9 @@ using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.AppImage;
+using Shelly.Utilities;
 using static Shelly.GTK.Resources.Translations;
+using File = System.IO.File;
 using Functions = GLib.Functions;
 using ListStore = Gio.ListStore;
 using Task = System.Threading.Tasks.Task;
@@ -96,7 +98,7 @@ public sealed class AppImage(
 
         var overlay = (Overlay)builder.GetObject("AppImageOverlay")!;
         var mainBox = (Box)builder.GetObject("AppImagePageMain")!;
-        
+
         _detailPage.SetVisible(false);
         mainBox.Append(_detailPage);
 
@@ -150,21 +152,30 @@ public sealed class AppImage(
 
     private async Task LoadDataAsync()
     {
+        const string legacyInstallDir = "/opt/shelly";
+        var legacyLocalDbDir = XdgPaths.ShellyCache("appimage-local-meta-store", "appimage-metadata.db");
+
+        var needsMigration = Directory.GetFiles(legacyInstallDir).Length != 0 || File.Exists(legacyLocalDbDir);
+
+        if (needsMigration)
         {
             Functions.IdleAdd(0, () =>
             {
+                _appListBox.SetVisible(false);
                 _migrationOverlay.SetVisible(true);
                 SetButtonsSensitive(false);
                 return false;
             });
         }
-        
-        Functions.IdleAdd(0, () =>
+        else
         {
-            _migrationOverlay.SetVisible(false);
-            SetButtonsSensitive(true);
-            return false;
-        });
+            Functions.IdleAdd(0, () =>
+            {
+                _migrationOverlay.SetVisible(false);
+                SetButtonsSensitive(true);
+                return false;
+            });
+        }
 
         var appImages = await unprivilegedOperationService.GetInstallAppImagesAsync();
 
@@ -449,6 +460,7 @@ public sealed class AppImage(
         {
             updateInfo = app.RepoOwner + "/" + app.RepoName;
         }
+
         _updateUrlEntry.SetText(updateInfo);
         _updateUrlErrorLabel.SetVisible(false);
         _updateUrlEntry.RemoveCssClass("error");
@@ -639,6 +651,13 @@ public sealed class AppImage(
             if (result.Success)
             {
                 genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(T("Migration successful!")));
+                Functions.IdleAdd(0, () =>
+                {
+                    _migrationOverlay.SetVisible(false);
+                    _appListBox.SetVisible(true);
+                    SetButtonsSensitive(true);
+                    return false;
+                });
                 await LoadDataAsync();
             }
             else
