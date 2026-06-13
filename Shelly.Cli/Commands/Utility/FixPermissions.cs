@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Drawing;
 using CliFx.Infrastructure;
 using Pastel;
 using Shelly.Cli.Interactions;
+using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.Utility;
 
@@ -21,10 +23,87 @@ public class FixPermissions : GlobalSettingsCommand
                 : "Could not determin invoking user (SUDO_USER not set).";
             console.WriteLine(message);
         }
+
+        string[] paths = [XdgPaths.ShellyConfig(), XdgPaths.ShellyCache(), XdgPaths.ShellyData()];
+
+        var existing = paths.Where(Directory.Exists).ToList();
+        if (existing.Count == 0)
+        {
+            if (UiMode)
+            {
+                UiFrames.Info("No directories to fix permissions for.");
+                return;
+            }
+
+            message = isAnsiSupported
+                ? "No directories to fix permissions for.".Pastel(Color.Green)
+                : "No directories to fix permissions for.";
+            console.WriteLine(message);
+            return;
+        }
+
+        foreach (var path in existing)
+        {
+            var args = new List<string> { "-R", $"{user}:{user}", path };
+            var psi = new ProcessStartInfo
+            {
+                FileName = "chown",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            try
+            {
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                {
+                    message = isAnsiSupported
+                        ? $"Failed to start chown for {path}".Pastel(Color.Red)
+                        : $"Failed to start chown for {path}";
+                    console.WriteLine(message);
+                    continue;
+                }
+
+                await proc.WaitForExitAsync();
+                if (proc.ExitCode != 0)
+                {
+                    var err = await proc.StandardError.ReadToEndAsync();
+                    message = isAnsiSupported
+                        ? $"chown failed for {path} (exit {proc.ExitCode}): {err.Trim()}".Pastel(Color.Red)
+                        : $"chown failed for {path} (exit {proc.ExitCode}): {err.Trim()}";
+                    console.WriteLine(message);
+                }
+
+                if (UiMode)
+                {
+                    UiFrames.Info($"Fixed ownership: {path}");
+                    continue;
+                }
+
+                message = isAnsiSupported ? $"Fixed ownership: {path}".Pastel(Color.Green) : $"Fixed ownership: {path}";
+                console.WriteLine(message);
+            }
+            catch (Exception e)
+            {
+                if (UiMode)
+                {
+                    UiFrames.Error($"Failed to fix ownership for {path}: {e.Message}");
+                    continue;
+                }
+
+                message = isAnsiSupported
+                    ? $"Failed to fix ownership for {path}: {e.Message}".Pastel(Color.Red)
+                    : $"Failed to fix ownership for {path}: {e.Message}";
+                console.WriteLine(message);
+            }
+        }
     }
 
     public override async ValueTask ExecuteUiMode()
     {
+        //Unneeded as the command is not interactive.
         throw new NotImplementedException();
     }
 }
