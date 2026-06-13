@@ -4,7 +4,6 @@ using CliFx.Binding;
 using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using PackageManager.Aur;
-using PackageManager.Aur.Models;
 using PackageManager.Flatpak;
 using Pastel;
 using Shelly.Cli.Interactions;
@@ -40,10 +39,6 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
         var isAnsiSupported = AnsiUtilities.SupportsAnsi;
         var config = ConfigManager.ReadConfig();
         var sizeDisplay = Enum.Parse<SizeDisplay>(config.FileSizeDisplay);
-        List<AlpmPackageUpdateDto> alpmPackages = [];
-        var aurManager = new AurPackageManager();
-        List<AurUpdateDto> aurPackages = [];
-        List<FlatpakPackageDto> flatpakPackages = [];
         var dbPath = XdgPaths.ShellyCache("db");
         Directory.CreateDirectory(dbPath);
         if (Verbose)
