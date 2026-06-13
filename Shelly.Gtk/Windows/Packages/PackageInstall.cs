@@ -6,6 +6,7 @@ using Shelly.Gtk.Helpers;
 using static Shelly.Gtk.Helpers.PackageColumnViewSorter;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.Icons;
+using Shelly.Gtk.Services.PackageTraversal;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
@@ -32,7 +33,6 @@ public sealed class PackageInstall(
     public string[] ListensTo => [DirtyScopes.NativeInstalled];
     private Overlay _overlay = null!;
     private ScrolledWindow _scroller = null!;
-    private ColumnView _columnView = null!;
     private CancellationTokenSource _cts = new();
     private int _loadGeneration;
     private SingleSelection _selectionModel = null!;
@@ -51,6 +51,7 @@ public sealed class PackageInstall(
     private ColumnViewColumn _nameColumn = null!;
     private ColumnViewColumn _versionColumn = null!;
     private ColumnViewColumn _repositoryColumn = null!;
+    private ColumnViewColumn _sizeColumn = null!;
     private ColumnViewSorter _columnViewSorter = null!;
     private DropDown _groupDropDown = null!;
     private CheckButton _upgradeCheck = null!;
@@ -70,15 +71,14 @@ public sealed class PackageInstall(
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Package/PackageWindow.ui"), -1);
         builder.TranslationDomain = Domain;
         _overlay = (Overlay)builder.GetObject("PackageWindow")!;
-        _columnView = (ColumnView)builder.GetObject("package_column_view")!;
-        var columnView = _columnView;
+        var columnView = (ColumnView)builder.GetObject("package_column_view")!;
         _scroller = (ScrolledWindow)columnView.GetParent()!;
         var checkColumn = (ColumnViewColumn)builder.GetObject("check_column")!;
         checkColumn.Resizable = true;
         _nameColumn = (ColumnViewColumn)builder.GetObject("name_column")!;
         _nameColumn.Resizable = true;
-        var sizeColumn = (ColumnViewColumn)builder.GetObject("size_column")!;
-        sizeColumn.Resizable = true;
+        _sizeColumn = (ColumnViewColumn)builder.GetObject("size_column")!;
+        _sizeColumn.Resizable = true;
         _versionColumn = (ColumnViewColumn)builder.GetObject("version_column")!;
         _versionColumn.Resizable = true;
         _repositoryColumn = (ColumnViewColumn)builder.GetObject("repository_column")!;
@@ -93,6 +93,10 @@ public sealed class PackageInstall(
         _upgradeCheck = (CheckButton)builder.GetObject("upgrade_check")!;
         _showHiddenCheck = (CheckButton)builder.GetObject("show_hidden_check")!;
 
+        var config = configService.LoadConfig();
+        _upgradeCheck.Active = config.PackageInstallUpgrade;
+        _showHiddenCheck.Active = config.PackageInstallShowHidden;
+
         _loadingOverlay = (Box)builder.GetObject("loading_overlay")!;
         _loadingSpinner = (Spinner)builder.GetObject("loading_spinner")!;
         _errorLabel = (Label)builder.GetObject("error_label")!;
@@ -105,11 +109,12 @@ public sealed class PackageInstall(
         _selectionModel.Autoselect = false;
         columnView.SetModel(_selectionModel);
 
-        SetupColumns(checkColumn, _nameColumn, sizeColumn, _versionColumn, _repositoryColumn);
+        SetupColumns(checkColumn, _nameColumn, _sizeColumn, _versionColumn, _repositoryColumn);
 
         _nameColumn.Sorter = CustomSorter.New<AlpmPackageGObject>((_, _) => 0);
         _repositoryColumn.Sorter = CustomSorter.New<AlpmPackageGObject>((_, _) => 0);
         _versionColumn.Sorter = CustomSorter.New<AlpmPackageGObject>((_, _) => 0);
+        _sizeColumn.Sorter = CustomSorter.New<AlpmPackageGObject>((_, _) => 0);
 
         _columnViewSorter = (ColumnViewSorter)columnView.GetSorter()!;
 
@@ -205,7 +210,19 @@ public sealed class PackageInstall(
         _overlay.AddController(shortcutController);
 
         localInstallButton.OnClicked += (_, _) => { _ = InstallLocalPackage(); };
-        _showHiddenCheck.OnToggled += (_, _) => { Reload(); };
+        _upgradeCheck.OnToggled += (_, _) =>
+        {
+            var updatedConfig = configService.LoadConfig();
+            updatedConfig.PackageInstallUpgrade = _upgradeCheck.Active;
+            configService.SaveConfig(updatedConfig);
+        };
+        _showHiddenCheck.OnToggled += (_, _) =>
+        {
+            var updatedConfig = configService.LoadConfig();
+            updatedConfig.PackageInstallShowHidden = _showHiddenCheck.Active;
+            configService.SaveConfig(updatedConfig);
+            Reload();
+        };
 
         _groupDropDown.OnNotify += (_, args) =>
         {
@@ -231,6 +248,9 @@ public sealed class PackageInstall(
 
         if (column == _versionColumn)
             return PackageSortColumn.Version;
+        
+        if (column == _sizeColumn)
+            return PackageSortColumn.Size;
 
         return null;
     }
@@ -349,6 +369,12 @@ public sealed class PackageInstall(
             AddChipList(T("Optional Deps"), pkg.OptDepends, true);
         }
 
+        var names = PackageTraversalService.FetchInverseFullDependencyPackageInformation(pkg.Name, _packageData);
+        if (names.Count > 0)
+        {
+            AddChipList(T("Required By"), names);
+        }
+
         if (pkg.Licenses.Count > 0)
             AddDetail(T("Licenses"), string.Join(", ", pkg.Licenses));
         if (pkg.Provides.Count > 0)
@@ -414,9 +440,11 @@ public sealed class PackageInstall(
 
             var flowBox = FlowBox.New();
             flowBox.SelectionMode = SelectionMode.None;
+            flowBox.MarginTop = 8;
+            flowBox.MarginBottom = 2;
             flowBox.ColumnSpacing = 6;
             flowBox.RowSpacing = 6;
-            flowBox.Halign = Align.Start;
+            flowBox.Halign = Align.Fill;
             flowBox.Valign = Align.Start;
             flowBox.MaxChildrenPerLine = isOptional ? 1u : 10u;
             flowBox.MinChildrenPerLine = 1;
@@ -775,7 +803,7 @@ public sealed class PackageInstall(
                     }
                 }
                 return false;
-                
+
             });
         }
         catch (OperationCanceledException)
