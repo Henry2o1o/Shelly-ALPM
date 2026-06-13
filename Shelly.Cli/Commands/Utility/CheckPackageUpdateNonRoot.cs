@@ -16,7 +16,7 @@ using Shelly.Utilities.Eventing;
 namespace Shelly.Cli.Commands.Utility;
 
 [Command("check-updates", Description = "Check for package updates")]
-public partial class CheckPackageUpdateNonRootCommand : GlobalSettingsCommand
+public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
 {
     [CommandOption("aur", 'a', Description = "Check for AUR updates")]
     private bool Aur { get; set; }
