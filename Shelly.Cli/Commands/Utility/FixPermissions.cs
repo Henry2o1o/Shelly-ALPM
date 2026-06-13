@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
+using CliFx.Binding;
 using CliFx.Infrastructure;
 using Pastel;
 using Shelly.Cli.Interactions;
@@ -7,7 +8,8 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.Utility;
 
-public class FixPermissions : GlobalSettingsCommand
+[Command("fix-permissions", Description = "Fix permissions for Shelly directories")]
+public partial class FixPermissions : GlobalSettingsCommand
 {
     public override async ValueTask ExecuteAsync(IConsole console)
     {
