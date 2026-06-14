@@ -594,8 +594,8 @@ public class AurRemove(
                     }
                 }
 
-                var window = new WebWindow(pkgObj.Name, dictionary);
-                _detailBox.Append(window.CreateWindow());
+                var graphWidget = StarfishInterop.CreateDisplayOnlyGraphWidget(pkgObj.Name, dictionary);
+                _detailBox.Append(graphWidget);
             }
         }
 

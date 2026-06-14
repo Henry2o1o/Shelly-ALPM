@@ -386,9 +386,10 @@ public sealed class PackageInstall(
 
         if (configService.LoadConfig().WebViewEnabled && pkg.Depends.Count > 0)
         {
-            var dictionary = new Dictionary<string, List<string>> { { pkg.Name, pkg.Depends } };
+            var cleanDeps = pkg.Depends.Select(StripVersionSpecifier).ToList();
+            var dictionary = new Dictionary<string, List<string>> { { pkg.Name, cleanDeps } };
 
-            foreach (var dep in pkg.Depends)
+            foreach (var depName in cleanDeps)
             {
                 for (uint i = 0; i < _listStore.GetNItems(); i++)
                 {
@@ -396,13 +397,13 @@ public sealed class PackageInstall(
                     if (obj is not AlpmPackageGObject depObj) continue;
                     if (depObj.Index < 0 || depObj.Index >= _packageData.Count) continue;
                     var depPkg = _packageData[depObj.Index];
-                    if (depPkg.Name.Contains(dep))
-                        dictionary.TryAdd(depPkg.Name, depPkg.Depends);
+                    if (depPkg.Name == depName)
+                        dictionary.TryAdd(depPkg.Name, ["test","test1"]);
                 }
             }
 
-            var window = new WebWindow(pkg.Name, dictionary);
-            _detailBox.Append(window.CreateWindow());
+            var graphWidget = StarfishInterop.CreateDisplayOnlyGraphWidget(pkg.Name, dictionary);
+            _detailBox.Append(graphWidget);
         }
 
         _detailRevealer.SetRevealChild(true);
@@ -1057,6 +1058,13 @@ public sealed class PackageInstall(
         }
 
         return false;
+    }
+
+    private static string StripVersionSpecifier(string dep)
+    {
+        var span = dep.AsSpan();
+        var end = span.IndexOfAny(['>', '<', '=', ' ']);
+        return (end >= 0 ? span[..end] : span).ToString();
     }
 
     public void Dispose()

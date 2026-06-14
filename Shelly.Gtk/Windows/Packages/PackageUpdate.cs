@@ -372,21 +372,22 @@ public class PackageUpdate(
         {
             if (pkg.Depends.Count > 0)
             {
-                var dictionary = new Dictionary<string, List<string>> { { pkg.Name, pkg.Depends } };
+                var cleanDeps = pkg.Depends.Select(StripVersionSpecifier).ToList();
+                var dictionary = new Dictionary<string, List<string>> { { pkg.Name, cleanDeps } };
 
-                foreach (var dep in pkg.Depends)
+                foreach (var depName in cleanDeps)
                 {
                     for (uint i = 0; i < _listStore.GetNItems(); i++)
                     {
                         var obj = _listStore.GetObject(i);
                         if (obj is not AlpmUpdateGObject depObj || depObj.Package == null) continue;
-                        if (depObj.Package.Name.Contains(dep))
-                            dictionary.TryAdd(depObj.Package.Name, depObj.Package.Depends);
+                        if (depObj.Package.Name == depName)
+                            dictionary.TryAdd(depObj.Package.Name, depObj.Package.Depends.Select(StripVersionSpecifier).ToList());
                     }
                 }
 
-                var window = new WebWindow(pkg.Name, dictionary);
-                _detailBox.Append(window.CreateWindow());
+                var graphWidget = StarfishInterop.CreateDisplayOnlyGraphWidget(pkg.Name, dictionary);
+                _detailBox.Append(graphWidget);
             }
         }
 
@@ -854,6 +855,13 @@ public class PackageUpdate(
         }
 
         return false;
+    }
+
+    private static string StripVersionSpecifier(string dep)
+    {
+        var span = dep.AsSpan();
+        var end = span.IndexOfAny(['>', '<', '=', ' ']);
+        return (end >= 0 ? span[..end] : span).ToString();
     }
 
     public void Dispose()

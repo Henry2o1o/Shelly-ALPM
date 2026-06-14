@@ -50,7 +50,6 @@ public static class ServiceBuilder
         collection.AddTransient<AlpmEventDialog>();
         collection.AddTransient<AppImage>();
         collection.AddTransient<Recommend>();
-        collection.AddTransient<WebWindow>();
         collection.AddTransient<SetupWindow>();
         return collection.BuildServiceProvider();
     }
