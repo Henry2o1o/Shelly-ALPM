@@ -33,26 +33,9 @@ public class AppImageUpdateCommand : AsyncCommand<AppImageUpdateSettings>
         }
         else
         {
-            var config = ConfigManager.ReadConfig();
             manager.MessageEvent += (_, e) => AnsiConsole.MarkupLine($"[blue][[INFO]][/] {e.Message.EscapeMarkup()}");
             manager.ErrorEvent += (_, e) => AnsiConsole.MarkupLine($"[red][[ERROR]][/] {e.Error.EscapeMarkup()}");
-            manager.ProgressEvent += (sender, e) =>
-            {
-                var sizeDisplay = Enum.TryParse<SizeDisplay>(config.FileSizeDisplay, true, out var parsed) ? parsed : SizeDisplay.Bytes;
-
-                var totalStr = e.TotalBytes.HasValue ? FormatSize(sizeDisplay, e.TotalBytes.Value) : "unknown";
-                var downloadedStr = FormatSize(sizeDisplay, e.DownloadedBytes);
-
-                if (e.ProgressPercentage.HasValue)
-                {
-                    AnsiConsole.Markup($"\r[blue][[INFO]][/] Updating {e.AppName}: {e.ProgressPercentage.Value:F0}% ({downloadedStr}/{totalStr})");
-                    if (e.ProgressPercentage.Value >= 100) AnsiConsole.WriteLine();
-                }
-                else
-                {
-                    AnsiConsole.Markup($"\r[blue][[INFO]][/] Updating {e.AppName}: {downloadedStr} downloaded");
-                }
-            };
+            //not sub to progress events because cli rewrite.
         }
 
         var updates = await manager.CheckForAppImageUpdates();
