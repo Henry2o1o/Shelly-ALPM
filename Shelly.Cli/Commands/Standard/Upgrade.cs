@@ -29,11 +29,11 @@ public partial class UpgradeCommand : GlobalSettingsCommand
         var archNews = new ArchNews();
         await archNews.ExecuteAsync(console);
         message = ansiSupport
-            ? "Performing full system upgrade...".Pastel(ConsoleColor.Yellow)
+            ? "Performing full system upgrade...".Pastel(Color.Yellow)
             : "Performing full system upgrade...";
         console.WriteLine(message);
         message = ansiSupport
-            ? "Initializing and syncing repositories...".Pastel(ConsoleColor.Yellow)
+            ? "Initializing and syncing repositories...".Pastel(Color.Yellow)
             : "Initializing and syncing repositories...";
         console.WriteLine(message);
         var manager = new AlpmManager();
@@ -43,7 +43,7 @@ public partial class UpgradeCommand : GlobalSettingsCommand
         if (packagesNeedingUpdate.Count == 0)
         {
             message = ansiSupport
-                ? "Standard Packages are up to date!".Pastel(ConsoleColor.Green)
+                ? "Standard Packages are up to date!".Pastel(Color.Green)
                 : "Standard Packages are up to date!";
             console.WriteLine(message);
             return;
@@ -79,7 +79,7 @@ public partial class UpgradeCommand : GlobalSettingsCommand
         var result = Confirm.Execute("Proceed with upgrade?", false);
         if (!result)
         {
-            message = ansiSupport ? "Upgrade cancelled.".Pastel(ConsoleColor.Red) : "Upgrade cancelled.";
+            message = ansiSupport ? "Upgrade cancelled.".Pastel(Color.Red) : "Upgrade cancelled.";
             console.WriteLine(message);
             return;
         }
@@ -91,11 +91,11 @@ public partial class UpgradeCommand : GlobalSettingsCommand
         manager.Dispose();
         if (!upgradeResult)
         {
-            message = ansiSupport ? "System upgrade failed.".Pastel(ConsoleColor.Red) : "System upgrade failed.";
+            message = ansiSupport ? "System upgrade failed.".Pastel(Color.Red) : "System upgrade failed.";
             console.WriteLine(message);
         }
 
-        message = ansiSupport ? "System upgrade complete.".Pastel(ConsoleColor.Green) : "System upgrade complete.";
+        message = ansiSupport ? "System upgrade complete.".Pastel(Color.Green) : "System upgrade complete.";
         console.WriteLine(message);
     }
 
