@@ -1,4 +1,6 @@
 using System.CommandLine;
+using System.Drawing;
+using Shelly.Cli.Interactions;
 
 namespace Shelly.Cli.Commands.Standard;
 
@@ -37,6 +39,19 @@ public class Mark : GlobalSettingsCommand
 
     public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
+        if (UiMode)
+        {
+            await ExecuteUiMode();
+            return;
+        }
+
+        if (Package is null)
+        {
+            console.WriteLine(AnsiUtilities.Colorize("Error: No packages specified", Color.Red));
+            return;
+        }
+        
+
         throw new NotImplementedException();
     }
 
