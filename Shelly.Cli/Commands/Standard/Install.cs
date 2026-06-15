@@ -365,9 +365,7 @@ public partial class Install : GlobalSettingsCommand
     {
         if (IsUrl(value))
             return PackageSourceKind.Url;
-        if (IsFilePath(value))
-            return PackageSourceKind.FilePath;
-        return PackageSourceKind.PackageName;
+        return IsFilePath(value) ? PackageSourceKind.FilePath : PackageSourceKind.PackageName;
     }
 
     public static bool IsUrl(string value)
