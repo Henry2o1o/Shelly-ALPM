@@ -1,3 +1,6 @@
+using System.Drawing;
+using Pastel;
+
 namespace Shelly.Cli.Interactions;
 
 internal static class AnsiUtilities
@@ -5,4 +8,9 @@ internal static class AnsiUtilities
     internal static bool SupportsAnsi => !Console.IsOutputRedirected && !Console.IsInputRedirected &&
                                          Environment.GetEnvironmentVariable("TERM") != "dumb" &&
                                          Environment.GetEnvironmentVariable("NO_Color") is null;
+    
+    internal static string Colorize(string text, Color color)
+    {
+         return SupportsAnsi ? text.Pastel(color) : text;
+    }
 }
