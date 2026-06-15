@@ -1,6 +1,5 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
@@ -8,22 +7,43 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-[Command("appimage configure-updates", Description = "Syncs meta data for an AppImage")]
 public partial class AppImageConfigUpdates : GlobalSettingsCommand
 {
-    [CommandParameter(0, Description = "AppImage name to configure updates")]
     public required string AppImage { get; set; }
 
-    [CommandParameter(1, Description = "Update URL")]
     public required string Url { get; set; }
 
-    [CommandParameter(2, Description = "Update Type")]
     public required UpdateType Type { get; set; }
 
-    [CommandOption("prerelease", 'p', Description = "Allow prerelease updates")]
     private bool AllowPrerelease { get; set; }
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var appImage = new Argument<string>("appimage") { Description = "AppImage name to configure updates" };
+        var url = new Argument<string>("url") { Description = "Update URL" };
+        var type = new Argument<UpdateType>("type") { Description = "Update Type" };
+        var prerelease = new Option<bool>("--prerelease", "-p") { Description = "Allow prerelease updates" };
+
+        var command = new Command("configure-updates", "Syncs meta data for an AppImage") { appImage, url, type, prerelease };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new AppImageConfigUpdates
+            {
+                AppImage = parseResult.GetValue(appImage)!,
+                Url = parseResult.GetValue(url)!,
+                Type = parseResult.GetValue(type),
+                AllowPrerelease = parseResult.GetValue(prerelease)
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         if (string.IsNullOrEmpty(AppImage))
         {

@@ -2,9 +2,8 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.CommandLine;
 using System.Xml.Linq;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using Pastel;
 using Shelly.Cli.Models.Standard;
 using Shelly.Utilities;
@@ -12,11 +11,26 @@ using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.Standard;
 
-[Command("news", Description = "Show ArchLinux news")]
 public partial class ArchNews : GlobalSettingsCommand
 {
-    [CommandOption("all", 'a', Description = "Show all news, not just news you haven't seen before.")]
     private bool All { get; set; }
+
+    public static Command Create()
+    {
+        var all = new Option<bool>("--all", "-a") { Description = "Show all news, not just news you haven't seen before." };
+
+        var command = new Command("news", "Show ArchLinux news") { all };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new ArchNews { All = parseResult.GetValue(all) };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
 
     private const string ArchlinuxFeed = "https://archlinux.org/feeds/news/";
 
@@ -24,7 +38,7 @@ public partial class ArchNews : GlobalSettingsCommand
     private static readonly string FeedFolder = XdgPaths.ShellyCache("archNewsFeed");
     private static readonly string FeedPath = Path.Combine(FeedFolder, "Feed.json");
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         List<RssModel> feed = await GetRssFeedAsync(ArchlinuxFeed);
         if (All)

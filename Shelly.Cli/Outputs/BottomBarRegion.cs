@@ -1,4 +1,4 @@
-using CliFx.Infrastructure;
+using Shelly.Cli.Commands;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 using Shelly.Utilities.Enums;
@@ -7,7 +7,7 @@ namespace Shelly.Cli.Outputs;
 
 /// <summary>
 /// Multi-sticky animated bottom-bar region, ported from the legacy Spectre implementation
-/// to CliFx's <see cref="IConsole"/> + Pastel.
+/// to Shelly's <see cref="IShellyConsole"/> + Pastel.
 /// </summary>
 public sealed class BottomBarRegion : IDisposable
 {
@@ -39,7 +39,7 @@ public sealed class BottomBarRegion : IDisposable
     private int _frame;
     private bool _suspended;
 
-    private readonly IConsole _console;
+    private readonly IShellyConsole _console;
     private readonly ProgressBarStyleKind _style;
     private readonly int _barWidth;
     private readonly int _maxStickies;
@@ -49,7 +49,7 @@ public sealed class BottomBarRegion : IDisposable
     private readonly CancellationTokenSource _frameCts = new();
     private readonly Task? _ticker;
 
-    public BottomBarRegion(IConsole console, ProgressBarStyleKind style, int barWidth, int maxStickies, int fps)
+    public BottomBarRegion(IShellyConsole console, ProgressBarStyleKind style, int barWidth, int maxStickies, int fps)
     {
         _console = console;
         _style = style;
@@ -91,7 +91,7 @@ public sealed class BottomBarRegion : IDisposable
         }
     }
 
-    public static BottomBarRegion CreateFromConfig(ShellyConfig cfg, IConsole console)
+    public static BottomBarRegion CreateFromConfig(ShellyConfig cfg, IShellyConsole console)
     {
         var style = ProgressBarRenderer.ParseStyle(cfg.ProgressBarStyle);
         return new BottomBarRegion(console, style, cfg.ProgressBarWidth, cfg.SinglePaneMaxStickies, cfg.ProgressBarFps);

@@ -1,6 +1,5 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using PackageManager.Utilities;
 using Pastel;
@@ -12,10 +11,24 @@ using static System.Enum;
 
 namespace Shelly.Cli.Commands.Standard;
 
-[Command("upgrade", Description = "Perform a full system upgrade")]
 public partial class UpgradeCommand : GlobalSettingsCommand
 {
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var command = new Command("upgrade", "Perform a full system upgrade");
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new UpgradeCommand();
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         var message = "";
         var ansiSupport = AnsiUtilities.SupportsAnsi;

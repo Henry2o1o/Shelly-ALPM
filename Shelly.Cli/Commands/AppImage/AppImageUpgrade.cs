@@ -1,6 +1,5 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
@@ -9,10 +8,24 @@ using Shelly.Utilities.Enums;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-[Command("appimage upgrade", Description = "Upgrades all AppImages")]
 public partial class AppImageUpgrade : GlobalSettingsCommand
 {
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var command = new Command("upgrade", "Upgrades all AppImages");
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new AppImageUpgrade();
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
         var manager = new AppImageManagerV2(installPath);

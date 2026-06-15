@@ -1,6 +1,5 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
@@ -8,13 +7,31 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-[Command("appimage install", Description = "Install an AppImage")]
 public partial class AppImageInstallCommand : GlobalSettingsCommand
 {
-    [CommandParameter(0, Description = "Location of the AppImage")]
     public required string AppImageLocation { get; set; }
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var appImageLocation = new Argument<string>("location") { Description = "Location of the AppImage" };
+
+        var command = new Command("install", "Install an AppImage") { appImageLocation };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new AppImageInstallCommand
+            {
+                AppImageLocation = parseResult.GetValue(appImageLocation)!
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         if (!File.Exists(AppImageLocation))
         {

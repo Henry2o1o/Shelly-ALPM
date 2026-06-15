@@ -1,6 +1,5 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.AppImage.AppImageV2;
 using Pastel;
 using Shelly.Cli.Interactions;
@@ -8,15 +7,33 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-[Command("appimage sync-meta", Description = "Syncs meta data for an AppImage")]
 public partial class AppImageSyncMeta : GlobalSettingsCommand
 {
-    [CommandParameter(0, Description = "The search query for the AppImage")]
     private string? Package { get; set; }
 
     private string? Message { get; set; }
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var package = new Argument<string?>("package") { Description = "The search query for the AppImage", Arity = ArgumentArity.ZeroOrOne };
+
+        var command = new Command("sync-meta", "Syncs meta data for an AppImage") { package };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new AppImageSyncMeta
+            {
+                Package = parseResult.GetValue(package)
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         var ansiSupport = AnsiUtilities.SupportsAnsi;
         var installDir = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();

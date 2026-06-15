@@ -1,7 +1,6 @@
 using System.Drawing;
+using System.CommandLine;
 using System.Text.Json;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using PackageManager.Aur;
 using PackageManager.Flatpak;
@@ -14,20 +13,39 @@ using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.Utility;
 
-[Command("check-updates", Description = "Check for package updates")]
 public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
 {
-    [CommandOption("aur", 'a', Description = "Check for AUR updates")]
     private bool Aur { get; set; }
 
-    [CommandOption("flatpak", 'l', Description = "Check for Flatpak updates")]
     private bool Flatpak { get; set; }
 
-    [CommandOption("count", 'c', Description = "Returns the number of updates")]
     private bool Count { get; set; }
 
+    public static Command Create()
+    {
+        var aur = new Option<bool>("--aur", "-a") { Description = "Check for AUR updates" };
+        var flatpak = new Option<bool>("--flatpak", "-l") { Description = "Check for Flatpak updates" };
+        var count = new Option<bool>("--count", "-c") { Description = "Returns the number of updates" };
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+        var command = new Command("check-updates", "Check for package updates") { aur, flatpak, count };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new CheckPackageUpdateNonRoot
+            {
+                Aur = parseResult.GetValue(aur),
+                Flatpak = parseResult.GetValue(flatpak),
+                Count = parseResult.GetValue(count)
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         if (UiMode)
         {
@@ -146,7 +164,7 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
         JsonPackFrame.WriteToStdout(sync);
     }
 
-    private void CountOutput(IConsole console, bool isAnsiSupported, int standardCount, int aurCount, int flatpakCount)
+    private void CountOutput(IShellyConsole console, bool isAnsiSupported, int standardCount, int aurCount, int flatpakCount)
     {
         var message = isAnsiSupported
             ? $"Updates found: {standardCount + aurCount + flatpakCount} ".Pastel(Color.Green)

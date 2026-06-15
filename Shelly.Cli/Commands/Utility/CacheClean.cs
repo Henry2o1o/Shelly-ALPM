@@ -1,6 +1,5 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using Pastel;
 using Shelly.Cli.Commands.Utility.Helpers;
@@ -10,26 +9,47 @@ using Shelly.Utilities.Enums;
 
 namespace Shelly.Cli.Commands.Utility;
 
-[Command("cache-clean", Description = "Clean the local cache")]
 public partial class CacheClean : GlobalSettingsCommand
 {
-    [CommandOption("keep", 'k', Description = "Keep the specified number of versions in the cache. Defaults to 3.")]
     private int Keep { get; set; } = 3;
 
-    [CommandOption("uninstalled", 'i', Description = "Remove only uninstalled packages from the cache.")]
     private bool TargetUninstalled { get; set; } = false;
 
-    [CommandOption("dry-run", 'd', Description = "Show what would be removed.")]
     private bool DryRun { get; set; } = false;
 
-    [CommandOption("cache-dir", 'c', Description = "Path to the cache directory.")]
     private string? CacheDir { get; set; } = "/var/cache/pacman/pkg";
 
-    [CommandOption("target", 't', Description = "Remove only the specified packages from the cache.")]
     private string[] TargetPackages { get; set; } = Array.Empty<string>();
 
+    public static Command Create()
+    {
+        var keep = new Option<int>("--keep", "-k") { Description = "Keep the specified number of versions in the cache. Defaults to 3.", DefaultValueFactory = _ => 3 };
+        var uninstalled = new Option<bool>("--uninstalled", "-i") { Description = "Remove only uninstalled packages from the cache." };
+        var dryRun = new Option<bool>("--dry-run", "-d") { Description = "Show what would be removed." };
+        var cacheDir = new Option<string?>("--cache-dir", "-c") { Description = "Path to the cache directory.", DefaultValueFactory = _ => "/var/cache/pacman/pkg" };
+        var target = new Option<string[]>("--target", "-t") { Description = "Remove only the specified packages from the cache.", AllowMultipleArgumentsPerToken = true };
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+        var command = new Command("cache-clean", "Clean the local cache") { keep, uninstalled, dryRun, cacheDir, target };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new CacheClean
+            {
+                Keep = parseResult.GetValue(keep),
+                TargetUninstalled = parseResult.GetValue(uninstalled),
+                DryRun = parseResult.GetValue(dryRun),
+                CacheDir = parseResult.GetValue(cacheDir),
+                TargetPackages = parseResult.GetValue(target) ?? Array.Empty<string>()
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         if (!DryRun)
         {

@@ -1,6 +1,5 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using PackageManager.Local;
 using Pastel;
@@ -9,26 +8,50 @@ using Shelly.Cli.Outputs;
 
 namespace Shelly.Cli.Commands.Standard;
 
-[Command("install", Description = "Install a package")]
 public partial class Install : GlobalSettingsCommand
 {
-    [CommandOption("build-deps", 'b', Description = "Install build dependencies")]
     private bool BuildDeps { get; set; }
 
-    [CommandOption("make-deps", 'm', Description = "Install make dependencies")]
     private bool MakeDeps { get; set; }
 
-    [CommandOption("no-deps", 'd', Description = "Install without checking/installing dependencies")]
     private bool NoDeps { get; set; }
 
-    [CommandOption("upgrade", 'u', Description = "Upgrades the package if it is already installed")]
     private bool Upgrade { get; set; }
 
-    [CommandParameter(0, Description = "The packages to install (repo names, local files or URLs)")]
     private string[] Package { get; set; } = Array.Empty<string>();
 
+    public static Command Create()
+    {
+        var buildDeps = new Option<bool>("--build-deps", "-b") { Description = "Install build dependencies" };
+        var makeDeps = new Option<bool>("--make-deps", "-m") { Description = "Install make dependencies" };
+        var noDeps = new Option<bool>("--no-deps", "-d") { Description = "Install without checking/installing dependencies" };
+        var upgrade = new Option<bool>("--upgrade", "-u") { Description = "Upgrades the package if it is already installed" };
+        var package = new Argument<string[]>("package") { Description = "The packages to install (repo names, local files or URLs)", Arity = ArgumentArity.ZeroOrMore };
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+        var command = new Command("install", "Install a package")
+        {
+            buildDeps, makeDeps, noDeps, upgrade, package
+        };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new Install
+            {
+                BuildDeps = parseResult.GetValue(buildDeps),
+                MakeDeps = parseResult.GetValue(makeDeps),
+                NoDeps = parseResult.GetValue(noDeps),
+                Upgrade = parseResult.GetValue(upgrade),
+                Package = parseResult.GetValue(package) ?? Array.Empty<string>()
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         if (UiMode)
         {
@@ -72,7 +95,7 @@ public partial class Install : GlobalSettingsCommand
             await InstallLocalPackage(file, console);
     }
 
-    private async Task InstallRepoPackages(List<string> packageList, IConsole console)
+    private async Task InstallRepoPackages(List<string> packageList, IShellyConsole console)
     {
         console.WriteLine(AnsiUtilities.Colorize(
             $"Packages to install: {string.Join(", ", packageList)}", Color.Yellow));
@@ -147,7 +170,7 @@ public partial class Install : GlobalSettingsCommand
         console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", Color.Green));
     }
 
-    private async Task InstallLocalPackage(string location, IConsole console)
+    private async Task InstallLocalPackage(string location, IShellyConsole console)
     {
         if (!File.Exists(location))
         {
@@ -312,7 +335,7 @@ public partial class Install : GlobalSettingsCommand
         UiFrames.Error("Unsupported local package format.");
     }
 
-    private static async Task<string?> DownloadToTempFile(string url, IConsole console)
+    private static async Task<string?> DownloadToTempFile(string url, IShellyConsole console)
     {
         try
         {

@@ -1,16 +1,29 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-[Command("appimage migrate-manager", Description = "Syncs meta data for an AppImage")]
 public partial class AppImageUpdateManagerVersion : GlobalSettingsCommand
 {
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var command = new Command("migrate-manager", "Syncs meta data for an AppImage");
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new AppImageUpdateManagerVersion();
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         RootElevator.EnsureRootExectuion();
 

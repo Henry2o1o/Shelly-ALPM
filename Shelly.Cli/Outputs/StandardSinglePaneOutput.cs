@@ -1,4 +1,4 @@
-using CliFx.Infrastructure;
+using Shelly.Cli.Commands;
 using PackageManager.Alpm;
 using Pastel;
 using Shelly.Cli.Interactions;
@@ -11,7 +11,7 @@ namespace Shelly.Cli.Outputs;
 public static class StandardSinglePaneOutput
 {
     public static async Task<bool> Output(
-        IConsole console,
+        IShellyConsole console,
         IAlpmManager manager,
         Func<IAlpmManager, Task<bool>> operation,
         bool noConfirm = false)

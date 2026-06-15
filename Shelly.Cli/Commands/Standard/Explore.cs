@@ -1,8 +1,7 @@
 using System.Drawing;
+using System.CommandLine;
 using System.Text;
 using System.Text.Json;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using PackageManager.Local;
 using Shelly.Cli.Interactions;
@@ -12,35 +11,62 @@ using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.Standard;
 
-[Command("explore", Description = "Explore repositories and packages")]
 public partial class Explore : GlobalSettingsCommand
 {
-    [CommandOption("repos", 'r', Description = "List available repositories. This supercedes any other modifiers.")]
     private bool Repos { get; set; }
 
-    [CommandOption("available", 'a', Description = "Include available packages in the search")]
     private bool Available { get; set; }
 
-    [CommandOption("installed", 'i', Description = "Include installed packages in the search")]
     private bool Installed { get; set; }
 
-    [CommandOption("local", 'l', Description = "Include local packages in the search")]
     private bool Local { get; set; }
 
-    [CommandOption("take", 't', Description = "Number of results to return")]
     private int Take { get; set; } = 100;
 
-    [CommandOption("page", 'p', Description = "Page number")]
     private int Page { get; set; } = 1;
 
-    [CommandOption("show-hidden", 'w', Description = "Show hidden packages")]
     private bool ShowHidden { get; set; }
 
-    [CommandParameter(0, Description = "The package to search for")]
     private string? Package { get; set; }
 
+    public static Command Create()
+    {
+        var repos = new Option<bool>("--repos", "-r") { Description = "List available repositories. This supercedes any other modifiers." };
+        var available = new Option<bool>("--available", "-a") { Description = "Include available packages in the search" };
+        var installed = new Option<bool>("--installed", "-i") { Description = "Include installed packages in the search" };
+        var local = new Option<bool>("--local", "-l") { Description = "Include local packages in the search" };
+        var take = new Option<int>("--take", "-t") { Description = "Number of results to return", DefaultValueFactory = _ => 100 };
+        var page = new Option<int>("--page", "-p") { Description = "Page number", DefaultValueFactory = _ => 1 };
+        var showHidden = new Option<bool>("--show-hidden", "-w") { Description = "Show hidden packages" };
+        var package = new Argument<string?>("package") { Description = "The package to search for", Arity = ArgumentArity.ZeroOrOne };
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+        var command = new Command("explore", "Explore repositories and packages")
+        {
+            repos, available, installed, local, take, page, showHidden, package
+        };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new Explore
+            {
+                Repos = parseResult.GetValue(repos),
+                Available = parseResult.GetValue(available),
+                Installed = parseResult.GetValue(installed),
+                Local = parseResult.GetValue(local),
+                Take = parseResult.GetValue(take),
+                Page = parseResult.GetValue(page),
+                ShowHidden = parseResult.GetValue(showHidden),
+                Package = parseResult.GetValue(package)
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         if (UiMode)
         {

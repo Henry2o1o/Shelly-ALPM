@@ -1,7 +1,6 @@
 using System.Drawing;
+using System.CommandLine;
 using System.Text.Json;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using PackageManager.Aur;
 using PackageManager.Flatpak;
@@ -13,16 +12,35 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.Utility;
 
-[Command("export", Description = "Export the current system state to a file")]
 public partial class Export : GlobalSettingsCommand
 {
-    [CommandOption("name", 'a', Description = "The name of the exported file")]
     public string? Name { get; set; }
-    
-    [CommandOption("output",'o',Description = "The default output location for the sync file")]
+
     public string? Output { get; set; }
-    
-    public override async ValueTask ExecuteAsync(IConsole console)
+
+    public static Command Create()
+    {
+        var name = new Option<string?>("--name", "-a") { Description = "The name of the exported file" };
+        var output = new Option<string?>("--output", "-o") { Description = "The default output location for the sync file" };
+
+        var command = new Command("export", "Export the current system state to a file") { name, output };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new Export
+            {
+                Name = parseResult.GetValue(name),
+                Output = parseResult.GetValue(output)
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         var time = DateTimeOffset.Now;
         var fileName = string.IsNullOrEmpty(Name) ? $"{time:yyyyMMddHHmmss}_shelly.sync" : Name + ".sync";

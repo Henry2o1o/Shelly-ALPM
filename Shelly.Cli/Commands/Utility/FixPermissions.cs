@@ -1,17 +1,30 @@
 using System.Diagnostics;
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using Pastel;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.Utility;
 
-[Command("fix-permissions", Description = "Fix permissions for Shelly directories")]
 public partial class FixPermissions : GlobalSettingsCommand
 {
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var command = new Command("fix-permissions", "Fix permissions for Shelly directories");
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new FixPermissions();
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         RootElevator.EnsureRootExectuion();
 

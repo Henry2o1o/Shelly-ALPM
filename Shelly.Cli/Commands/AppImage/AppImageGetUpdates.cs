@@ -1,16 +1,29 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-[Command("appimage list-updates", Description = "Find Updates for an AppImage")]
 public partial class AppImageGetUpdates : GlobalSettingsCommand
 {
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var command = new Command("list-updates", "Find Updates for an AppImage");
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new AppImageGetUpdates();
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
         var manager = new AppImageManagerV2(installPath);

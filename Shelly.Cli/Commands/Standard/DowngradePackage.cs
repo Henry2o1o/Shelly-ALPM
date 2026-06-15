@@ -3,8 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using CliFx.Binding;
-using CliFx.Infrastructure;
+using System.CommandLine;
 using PackageManager.Alpm;
 using Pastel;
 using Shelly.Cli.Interactions;
@@ -14,24 +13,45 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
-[Command("downgrade", Description = "Downgrade a package")]
 public partial class DowngradePackage : GlobalSettingsCommand
 {
-    [CommandOption("oldest", 'o', Description = "Installs the oldest matched version (default newest)")]
     private bool UseOldest { get; set; }
 
-    [CommandOption("ignore", 'i', Description = "Add to IgnorePkg list")]
     private bool AddIgnore { get; set; }
 
-    [CommandOption("list-options", 'l', Description = "List available downgrade versions")]
     private bool ListOptions { get; set; }
 
-    [CommandOption("target", 't',
-        Description = "Install a specific downgrade target by exact version or package filename")]
     private string? Target { get; set; }
 
-    [CommandParameter(0, Description = "The package to downgrade")]
     private string? Package { get; set; }
+
+    public static Command Create()
+    {
+        var oldest = new Option<bool>("--oldest", "-o") { Description = "Installs the oldest matched version (default newest)" };
+        var ignore = new Option<bool>("--ignore", "-i") { Description = "Add to IgnorePkg list" };
+        var listOptions = new Option<bool>("--list-options", "-l") { Description = "List available downgrade versions" };
+        var target = new Option<string?>("--target", "-t") { Description = "Install a specific downgrade target by exact version or package filename" };
+        var package = new Argument<string?>("package") { Description = "The package to downgrade", Arity = ArgumentArity.ZeroOrOne };
+
+        var command = new Command("downgrade", "Downgrade a package") { oldest, ignore, listOptions, target, package };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new DowngradePackage
+            {
+                UseOldest = parseResult.GetValue(oldest),
+                AddIgnore = parseResult.GetValue(ignore),
+                ListOptions = parseResult.GetValue(listOptions),
+                Target = parseResult.GetValue(target),
+                Package = parseResult.GetValue(package)
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
 
     private const string ArchRepo = "https://archive.archlinux.org/packages/";
     private const string CachyosRepo = "https://archive.cachyos.org/archive/cachyos/";
@@ -46,7 +66,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
     [GeneratedRegex("([0-9]+(\\.[0-9]+)?|[a-z0-9]{6,})")]
     private static partial Regex ReleaseOrHashRegex();
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         var isAnsiSupported = AnsiUtilities.SupportsAnsi;
         string message;
@@ -346,7 +366,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
     }
 
 
-    private static async Task<string?> ResolveFilePathCli(PackageInfo selection, IConsole console)
+    private static async Task<string?> ResolveFilePathCli(PackageInfo selection, IShellyConsole console)
     {
         try
         {
@@ -365,7 +385,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
         }
     }
 
-    private static async Task<string> DownloadRemotePackageCli(PackageInfo packageInfo, IConsole console)
+    private static async Task<string> DownloadRemotePackageCli(PackageInfo packageInfo, IShellyConsole console)
     {
         var message = AnsiUtilities.SupportsAnsi
             ? $"Downloading {packageInfo.Filename}".Pastel(Color.Green)

@@ -1,22 +1,40 @@
+using System.CommandLine;
 using System.Drawing;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-[Command("appimage remove", Description = "Remove an AppImage")]
 public partial class AppImageRemoveCommand : GlobalSettingsCommand
 {
-    [CommandParameter(0, Description = "Name of the AppImage")]
     public required string AppImage { get; set; }
 
-    [CommandOption("remove-config", 'c', Description = "Remove Config")]
     private bool RemoveConfig { get; set; }
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public static Command Create()
+    {
+        var appImage = new Argument<string>("appimage") { Description = "Name of the AppImage" };
+        var removeConfig = new Option<bool>("--remove-config", "-c") { Description = "Remove Config" };
+
+        var command = new Command("remove", "Remove an AppImage") { appImage, removeConfig };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new AppImageRemoveCommand
+            {
+                AppImage = parseResult.GetValue(appImage)!,
+                RemoveConfig = parseResult.GetValue(removeConfig)
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
+
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         var config = ConfigManager.ReadConfig();
         var installDir = config.AppImageInstallPath ?? XdgPaths.BinHome();

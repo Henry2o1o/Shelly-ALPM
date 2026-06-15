@@ -1,35 +1,56 @@
 using System.Drawing;
+using System.CommandLine;
 using System.Text.Json;
-using CliFx.Binding;
-using CliFx.Infrastructure;
 using PackageManager.Alpm;
 using Pastel;
 using Shelly.Cli.Interactions;
 
 namespace Shelly.Cli.Commands.Standard;
 
-[Command("ignore", Description = "Manage ignored packages")]
 public partial class Ignore : GlobalSettingsCommand
 {
-    [CommandOption("list", 'l', Description = "List ignored packages")]
     private bool List { get; set; }
 
-    [CommandOption("add", 'a', Description = "Add a package to the ignore list")]
     private bool Add { get; set; }
 
-    [CommandOption("remove", 'r', Description = "Remove a package from the ignore list")]
     private bool Remove { get; set; }
 
-    [CommandOption("clear", 'c', Description = "Clear the ignore list")]
     private bool Clear { get; set; }
 
-    [CommandParameter(0,Description = "The packages to interact with")]
     private string[] Packages { get; set; } = Array.Empty<string>();
+
+    public static Command Create()
+    {
+        var list = new Option<bool>("--list", "-l") { Description = "List ignored packages" };
+        var add = new Option<bool>("--add", "-a") { Description = "Add a package to the ignore list" };
+        var remove = new Option<bool>("--remove", "-r") { Description = "Remove a package from the ignore list" };
+        var clear = new Option<bool>("--clear", "-c") { Description = "Clear the ignore list" };
+        var packages = new Argument<string[]>("packages") { Description = "The packages to interact with", Arity = ArgumentArity.ZeroOrMore };
+
+        var command = new Command("ignore", "Manage ignored packages") { list, add, remove, clear, packages };
+
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            var instance = new Ignore
+            {
+                List = parseResult.GetValue(list),
+                Add = parseResult.GetValue(add),
+                Remove = parseResult.GetValue(remove),
+                Clear = parseResult.GetValue(clear),
+                Packages = parseResult.GetValue(packages) ?? Array.Empty<string>()
+            };
+            GlobalOptions.Apply(instance, parseResult);
+            await instance.ExecuteAsync(new SystemShellyConsole());
+            return 0;
+        });
+
+        return command;
+    }
 
     private string _message = "";
     private bool _isAnsiSupported;
 
-    public override async ValueTask ExecuteAsync(IConsole console)
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
         _isAnsiSupported = AnsiUtilities.SupportsAnsi;
         if (Packages.Length == 0 && !List && !Clear)

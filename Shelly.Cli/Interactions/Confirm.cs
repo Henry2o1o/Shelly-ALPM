@@ -13,8 +13,8 @@ public static class Confirm
         var ansiHint = defaultValue ? defTrue : defFalse;
         var hint = supportsAnsi ? ansiHint : defaultValue ? "Y/n" : "y/N";
         var prompt = supportsAnsi
-            ? $"{question.Pastel(Color.Orange)} {hint}"
-            : $"{question} ({hint})";
+            ? $"{question.Pastel(Color.Orange)} {hint} "
+            : $"{question} ({hint}) ";
         while (true)
         {
             Console.Write(prompt);
