@@ -191,7 +191,7 @@ public partial class ArchNews : GlobalSettingsCommand
             AutomaticDecompression = DecompressionMethods.All,
             AllowAutoRedirect = true,
             MaxAutomaticRedirections = 10,
-            ConnectTimeout = TimeSpan.FromSeconds(30),
+            ConnectTimeout = TimeSpan.FromSeconds(10),
             EnableMultipleHttp2Connections = true,
             EnableMultipleHttp3Connections = true
         })
