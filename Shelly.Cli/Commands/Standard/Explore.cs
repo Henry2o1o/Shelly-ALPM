@@ -163,5 +163,74 @@ public class Explore : GlobalSettingsCommand
                 $"Total: {repos.Count} repositories"));
             return;
         }
+
+        using var manager = new AlpmManager();
+
+        if (Installed)
+        {
+            manager.Initialize(true, showHiddenPackages: ShowHidden);
+
+            var packages = manager.GetInstalledPackages();
+
+            if (!string.IsNullOrWhiteSpace(Package))
+            {
+                packages = packages
+                    .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
+                    .Where(x => x.Score >= 90)
+                    .Select(x => x.Package)
+                    .ToList();
+            }
+
+            var sortedList = packages.OrderBy(p => p.Name).ToList();
+            JsonPackFrame.WriteToStdout(sortedList);
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                AlpmEvents.InformationalOutput, $"Total: {sortedList.Count} packages"));
+        }
+
+        if (Available)
+        {
+            manager.Initialize(showHiddenPackages: ShowHidden);
+
+            var packages = manager.GetAvailablePackages();
+
+            if (!string.IsNullOrWhiteSpace(Package))
+            {
+                packages = packages
+                    .Select(x => new
+                    {
+                        Package = x,
+                        Score = (int)(StringMatcher.PartialRatio(Package, x.Name) * 0.7
+                                      + StringMatcher.PartialRatio(Package, x.Description) * 0.3)
+                    })
+                    .Where(x => x.Score >= 75)
+                    .Select(x => x.Package)
+                    .ToList();
+            }
+
+            var total = packages.Count;
+            var sortedList = packages.OrderBy(p => p.Name).ToList();
+            JsonPackFrame.WriteToStdout(sortedList);
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                AlpmEvents.InformationalOutput, $"Showing {sortedList.Count} of {total} available packages"));
+        }
+
+        if (Local)
+        {
+            var packages = LocalManager.GetInstalledBinaryPackages();
+
+            if (!string.IsNullOrWhiteSpace(Package))
+            {
+                packages = packages
+                    .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
+                    .Where(x => x.Score >= 90)
+                    .Select(x => x.Package)
+                    .ToList();
+            }
+
+            var sortedList = packages.OrderBy(p => p.Name).ToList();
+            JsonPackFrame.WriteToStdout(sortedList);
+            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
+                AlpmEvents.InformationalOutput, $"Total: {sortedList.Count} packages"));
+        }
     }
 }
