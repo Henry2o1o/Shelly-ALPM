@@ -11,7 +11,7 @@ using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.Standard;
 
-public partial class Explore : GlobalSettingsCommand
+public class Explore : GlobalSettingsCommand
 {
     private bool Repos { get; set; }
 
