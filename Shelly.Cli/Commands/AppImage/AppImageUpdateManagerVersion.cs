@@ -1,19 +1,17 @@
 using System.Drawing;
+using CliFx.Binding;
 using CliFx.Infrastructure;
 using PackageManager.AppImage.AppImageV2;
-using Pastel;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-public class AppImageUpdateManagerVersion : GlobalSettingsCommand
+[Command("appimage migrate-manager", Description = "Syncs meta data for an AppImage")]
+public partial class AppImageUpdateManagerVersion : GlobalSettingsCommand
 {
-    private string? Message { get; set; }
-
     public override async ValueTask ExecuteAsync(IConsole console)
     {
-        var ansiSupport = AnsiUtilities.SupportsAnsi;
         RootElevator.EnsureRootExectuion();
 
         var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
@@ -27,13 +25,11 @@ public class AppImageUpdateManagerVersion : GlobalSettingsCommand
         {
             manger.MessageEvent += (_, e) =>
             {
-                Message = ansiSupport ? $"[INFO]{e.Message}".Pastel(Color.Blue) : $"[INFO]{e.Message}";
-                console.WriteLine(Message);
+                console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", Color.Blue));
             };
             manger.ErrorEvent += (_, e) =>
             {
-                Message = ansiSupport ? $"[ERROR]{e.Error}".Pastel(Color.Red) : $"[ERROR]{e.Error}";
-                console.WriteLine(Message);
+                console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Error}", Color.Red));
             };
         }
 
