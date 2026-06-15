@@ -18,6 +18,7 @@ root.Add(CacheClean.Create());
 root.Add(CheckPackageUpdateNonRoot.Create());
 root.Add(Export.Create());
 root.Add(FixPermissions.Create());
+root.Add(Mark.Create());
 
 var appImage = new Command("appimage", "Manage AppImages");
 appImage.Add(AppImageInstallCommand.Create());
