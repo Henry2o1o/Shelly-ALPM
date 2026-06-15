@@ -9,7 +9,7 @@ public abstract class GlobalSettingsCommand : ICommand
     [CommandOption("no-confirm",'n',Description = "Disable confirmation prompts")]
     public bool NoConfirm { get; set; }
     
-    [CommandOption("ui-mode",'u',Description = "Enable UI mode")]
+    [CommandOption("ui-mode",'U',Description = "Enable UI mode")]
     public bool UiMode { get; set; }
     
     [CommandOption("json",'j',Description = "Output results in JSON format for scripting.")]
