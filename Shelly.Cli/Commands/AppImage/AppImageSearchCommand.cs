@@ -7,7 +7,7 @@ using Shelly.Utilities.Enums;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-public partial class AppImageListCommand : GlobalSettingsCommand
+public partial class AppImageList : GlobalSettingsCommand
 {
     public static Command Create()
     {
@@ -15,7 +15,7 @@ public partial class AppImageListCommand : GlobalSettingsCommand
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            var instance = new AppImageListCommand();
+            var instance = new AppImageList();
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
             return 0;

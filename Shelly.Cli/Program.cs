@@ -10,7 +10,7 @@ GlobalOptions.AddToRoot(root);
 
 root.Add(Explore.Create());
 root.Add(Install.Create());
-root.Add(UpgradeCommand.Create());
+root.Add(Upgrade.Create());
 root.Add(DowngradePackage.Create());
 root.Add(Ignore.Create());
 root.Add(ArchNews.Create());
@@ -22,9 +22,9 @@ root.Add(Mark.Create());
 
 var appImage = new Command("appimage", "Manage AppImages")
 {
-    AppImageInstallCommand.Create(),
-    AppImageRemoveCommand.Create(),
-    AppImageListCommand.Create(),
+    AppImageInstall.Create(),
+    AppImageRemove.Create(),
+    AppImageList.Create(),
     AppImageUpgrade.Create(),
     AppImageSyncMeta.Create(),
     AppImageGetUpdates.Create(),

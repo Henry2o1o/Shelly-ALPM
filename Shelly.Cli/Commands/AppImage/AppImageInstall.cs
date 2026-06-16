@@ -7,7 +7,7 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-public partial class AppImageInstallCommand : GlobalSettingsCommand
+public partial class AppImageInstall : GlobalSettingsCommand
 {
     public required string AppImageLocation { get; set; }
 
@@ -19,7 +19,7 @@ public partial class AppImageInstallCommand : GlobalSettingsCommand
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            var instance = new AppImageInstallCommand
+            var instance = new AppImageInstall
             {
                 AppImageLocation = parseResult.GetValue(appImageLocation)!
             };

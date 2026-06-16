@@ -6,7 +6,7 @@ using Shelly.Utilities;
 
 namespace Shelly.Cli.Commands.AppImage;
 
-public partial class AppImageRemoveCommand : GlobalSettingsCommand
+public partial class AppImageRemove : GlobalSettingsCommand
 {
     public required string AppImage { get; set; }
 
@@ -21,7 +21,7 @@ public partial class AppImageRemoveCommand : GlobalSettingsCommand
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            var instance = new AppImageRemoveCommand
+            var instance = new AppImageRemove
             {
                 AppImage = parseResult.GetValue(appImage)!,
                 RemoveConfig = parseResult.GetValue(removeConfig)

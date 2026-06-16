@@ -11,7 +11,7 @@ using static System.Enum;
 
 namespace Shelly.Cli.Commands.Standard;
 
-public partial class UpgradeCommand : GlobalSettingsCommand
+public partial class Upgrade : GlobalSettingsCommand
 {
     public static Command Create()
     {
@@ -19,7 +19,7 @@ public partial class UpgradeCommand : GlobalSettingsCommand
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            var instance = new UpgradeCommand();
+            var instance = new Upgrade();
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
             return 0;
