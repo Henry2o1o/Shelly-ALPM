@@ -20,15 +20,17 @@ root.Add(Export.Create());
 root.Add(FixPermissions.Create());
 root.Add(Mark.Create());
 
-var appImage = new Command("appimage", "Manage AppImages");
-appImage.Add(AppImageInstallCommand.Create());
-appImage.Add(AppImageRemoveCommand.Create());
-appImage.Add(AppImageListCommand.Create());
-appImage.Add(AppImageUpgrade.Create());
-appImage.Add(AppImageSyncMeta.Create());
-appImage.Add(AppImageGetUpdates.Create());
-appImage.Add(AppImageConfigUpdates.Create());
-appImage.Add(AppImageUpdateManagerVersion.Create());
+var appImage = new Command("appimage", "Manage AppImages")
+{
+    AppImageInstallCommand.Create(),
+    AppImageRemoveCommand.Create(),
+    AppImageListCommand.Create(),
+    AppImageUpgrade.Create(),
+    AppImageSyncMeta.Create(),
+    AppImageGetUpdates.Create(),
+    AppImageConfigUpdates.Create(),
+    AppImageUpdateManagerVersion.Create()
+};
 root.Add(appImage);
 
 return await root.Parse(args).InvokeAsync();
