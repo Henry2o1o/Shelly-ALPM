@@ -1,13 +1,14 @@
-using System.Drawing;
 using System.CommandLine;
+using System.Drawing;
 using System.Text.Json;
 using PackageManager.Alpm;
 using Pastel;
 using Shelly.Cli.Interactions;
+using static System.CommandLine.ArgumentArity;
 
 namespace Shelly.Cli.Commands.Standard;
 
-public partial class Ignore : GlobalSettingsCommand
+public class Ignore : GlobalSettingsCommand
 {
     private bool List { get; set; }
 
@@ -17,7 +18,7 @@ public partial class Ignore : GlobalSettingsCommand
 
     private bool Clear { get; set; }
 
-    private string[] Packages { get; set; } = Array.Empty<string>();
+    private string[] Packages { get; set; } = [];
 
     public static Command Create()
     {
@@ -25,11 +26,11 @@ public partial class Ignore : GlobalSettingsCommand
         var add = new Option<bool>("--add", "-a") { Description = "Add a package to the ignore list" };
         var remove = new Option<bool>("--remove", "-r") { Description = "Remove a package from the ignore list" };
         var clear = new Option<bool>("--clear", "-c") { Description = "Clear the ignore list" };
-        var packages = new Argument<string[]>("packages") { Description = "The packages to interact with", Arity = ArgumentArity.ZeroOrMore };
+        var packages = new Argument<string[]>("packages") { Description = "The packages to interact with", Arity = ZeroOrMore };
 
         var command = new Command("ignore", "Manage ignored packages") { list, add, remove, clear, packages };
 
-        command.SetAction(async (parseResult, cancellationToken) =>
+        command.SetAction(async (parseResult, _) =>
         {
             var instance = new Ignore
             {
@@ -37,7 +38,7 @@ public partial class Ignore : GlobalSettingsCommand
                 Add = parseResult.GetValue(add),
                 Remove = parseResult.GetValue(remove),
                 Clear = parseResult.GetValue(clear),
-                Packages = parseResult.GetValue(packages) ?? Array.Empty<string>()
+                Packages = parseResult.GetValue(packages) ?? []
             };
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
@@ -47,33 +48,23 @@ public partial class Ignore : GlobalSettingsCommand
         return command;
     }
 
-    private string _message = "";
-    private bool _isAnsiSupported;
-
     public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
-        _isAnsiSupported = AnsiUtilities.SupportsAnsi;
-        if (Packages.Length == 0 && !List && !Clear)
-        {
-            if (UiMode)
-            {
-                UiFrames.Error("No packages specified");
-            }
-            else
-            {
-                _message = _isAnsiSupported ? $"No packages specified".Pastel(Color.Red) : $"No packages specified";
-                console.WriteLine(_message);
-            }
-
-            return;
-        }
-
         if (UiMode)
         {
             await ExecuteUiMode();
             return;
         }
 
+        var isAnsiSupported = AnsiUtilities.SupportsAnsi;
+        string message;
+        if (Packages.Length == 0 && !List && !Clear)
+        {
+            message = isAnsiSupported ? "No packages specified".Pastel(Color.Red) : "No packages specified";
+            console.WriteLine(message);
+
+            return;
+        }
 
         RootElevator.EnsureRootExectuion();
         using var manager = new AlpmManager();
@@ -81,16 +72,11 @@ public partial class Ignore : GlobalSettingsCommand
         {
             manager.IgnorePackages(Packages);
             var formatPackages = string.Join(", ", Packages);
-            if (UiMode)
-            {
-                UiFrames.Info($"Added to IgnorePkg list: {formatPackages}");
-                return;
-            }
 
-            _message = _isAnsiSupported
+            message = isAnsiSupported
                 ? $"Added to IgnorePkg list: {formatPackages}".Pastel(Color.Green)
                 : $"Added to IgnorePkg list: {formatPackages}";
-            console.WriteLine(_message);
+            console.WriteLine(message);
             return;
         }
 
@@ -98,16 +84,11 @@ public partial class Ignore : GlobalSettingsCommand
         {
             manager.UnignorePackages(Packages);
             var formatPackages = string.Join(", ", Packages);
-            if (UiMode)
-            {
-                UiFrames.Info($"Removed from IgnorePkg list: {formatPackages}");
-                return;
-            }
 
-            _message = _isAnsiSupported
+            message = isAnsiSupported
                 ? $"Removed from IgnorePkg list: {formatPackages}".Pastel(Color.Green)
                 : $"Removed from IgnorePkg list: {formatPackages}";
-            console.WriteLine(_message);
+            console.WriteLine(message);
             return;
         }
 
@@ -115,52 +96,73 @@ public partial class Ignore : GlobalSettingsCommand
         if (Clear)
         {
             manager.UnignorePackages(ignored);
-            if (UiMode)
-            {
-                UiFrames.Info($"Cleared ignored pacakges.");
-                return;
-            }
 
-            _message = _isAnsiSupported
-                ? $"Cleared ignored pacakges.".Pastel(Color.Green)
-                : $"Cleared ignored pacakges.";
-            console.WriteLine(_message);
+            message = isAnsiSupported
+                ? "Cleared ignored packages.".Pastel(Color.Green)
+                : "Cleared ignored packages.";
+            console.WriteLine(message);
             return;
         }
 
         if (List)
         {
-            if (UiMode)
-            {
-                UiFrames.Frame(ignored);
-                UiFrames.Info(ignored.Count == 0 ? "IgnorePkg list is empty." : $"Total: {ignored.Count} ignored packages");
-                return;
-            }
-
             if (JsonOutput)
             {
-                var json = JsonSerializer.Serialize(ignored, ShellyCliJsonContext.Default.ListString);
-                console.WriteLine(json);
-                return;
+                message = JsonSerializer.Serialize(ignored, ShellyCliJsonContext.Default.ListString);
+            }
+            else if (ignored.Count == 0)
+            {
+                message = isAnsiSupported
+                    ? "IgnorePkg list is empty.".Pastel(Color.Yellow)
+                    : "IgnorePkg list is empty.";
+            }
+            else
+            {
+                var formatPackages = string.Join(", ", ignored);
+                message = isAnsiSupported
+                    ? $"Total: {ignored.Count} ignored packages: {formatPackages}".Pastel(Color.Green)
+                    : $"Total: {ignored.Count} ignored packages: {formatPackages}";
             }
 
-            if (ignored.Count == 0)
-            {
-                _message = _isAnsiSupported ? "IgnorePkg list is empty.".Pastel(Color.Yellow) : "IgnorePkg list is empty.";
-                console.WriteLine(_message);
-                return;
-            }
-            var formatPackages = string.Join(", ", ignored);
-            _message = _isAnsiSupported
-                ? $"Total: {ignored.Count} ignored packages: {formatPackages}".Pastel(Color.Green)
-                : $"Total: {ignored.Count} ignored packages: {formatPackages}";
-            console.WriteLine(_message);
+            console.WriteLine(message);
         }
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        //Unneeded as the command is not interactive.
+        if (Packages.Length == 0 && !List && !Clear) UiFrames.Error("No packages specified");
+
+        using var manager = new AlpmManager();
+        if (Add)
+        {
+            manager.IgnorePackages(Packages);
+            var formatPackages = string.Join(", ", Packages);
+            UiFrames.Info($"Added to IgnorePkg list: {formatPackages}");
+            return;
+        }
+
+        if (Remove)
+        {
+            manager.UnignorePackages(Packages);
+            var formatPackages = string.Join(", ", Packages);
+            UiFrames.Info($"Removed from IgnorePkg list: {formatPackages}");
+            return;
+        }
+
+        var ignored = manager.GetIgnoredPackages();
+        if (Clear)
+        {
+            manager.UnignorePackages(ignored);
+            UiFrames.Info("Cleared ignored packages.");
+            return;
+        }
+
+        if (List)
+        {
+            UiFrames.Frame(ignored);
+            UiFrames.Info(ignored.Count == 0
+                ? "IgnorePkg list is empty."
+                : $"Total: {ignored.Count} ignored packages");
+        }
     }
-    
 }
