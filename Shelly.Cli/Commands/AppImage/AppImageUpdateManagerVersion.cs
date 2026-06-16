@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
@@ -38,11 +37,11 @@ public partial class AppImageUpdateManagerVersion : GlobalSettingsCommand
         {
             manger.MessageEvent += (_, e) =>
             {
-                console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", Color.Blue));
+                console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", ConsoleColor.Blue));
             };
             manger.ErrorEvent += (_, e) =>
             {
-                console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Error}", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Error}", ConsoleColor.Red));
             };
         }
 
@@ -54,8 +53,8 @@ public partial class AppImageUpdateManagerVersion : GlobalSettingsCommand
         else
         {
             console.WriteLine(result
-                ? AnsiUtilities.Colorize("AppImage manager version updated successfully.", Color.Green)
-                : AnsiUtilities.Colorize("AppImage manager version updated unsuccessfully.", Color.Red));
+                ? AnsiUtilities.Colorize("AppImage manager version updated successfully.", ConsoleColor.Green)
+                : AnsiUtilities.Colorize("AppImage manager version updated unsuccessfully.", ConsoleColor.Red));
         }
     }
 

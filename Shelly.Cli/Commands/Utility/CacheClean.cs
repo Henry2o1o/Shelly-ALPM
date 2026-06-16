@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.Alpm;
 using Pastel;
 using Shelly.Cli.Commands.Utility.Helpers;
@@ -61,7 +60,7 @@ public partial class CacheClean : GlobalSettingsCommand
         if (!Directory.Exists(CacheDir))
         {
             message = isAnsiSupported
-                ? $"Cache directory does not exist: {CacheDir}".Pastel(Color.Red)
+                ? $"Cache directory does not exist: {CacheDir}".Pastel(ConsoleColor.Red)
                 : $"Cache directory does not exist: {CacheDir}";
             console.WriteLine(message);
             return;
@@ -75,7 +74,7 @@ public partial class CacheClean : GlobalSettingsCommand
         if (entries.Count == 0)
         {
             message = isAnsiSupported
-                ? "No package files found in cache directory.".Pastel(Color.Yellow)
+                ? "No package files found in cache directory.".Pastel(ConsoleColor.Yellow)
                 : "No package files found in cache directory.";
             console.WriteLine(message);
             return;
@@ -106,7 +105,7 @@ public partial class CacheClean : GlobalSettingsCommand
         if (candidates.Count == 0)
         {
             message = isAnsiSupported
-                ? $"No candidate packages to remove.".Pastel(Color.Green)
+                ? $"No candidate packages to remove.".Pastel(ConsoleColor.Green)
                 : "No candidate packages to remove.";
             console.WriteLine(message);
             return;
@@ -120,7 +119,7 @@ public partial class CacheClean : GlobalSettingsCommand
         {
             message = isAnsiSupported
                 ? $"Dry run: {candidates.Count} packages would be removed. Removing a total size amount {sizedTotalSize}."
-                    .Pastel(Color.Yellow)
+                    .Pastel(ConsoleColor.Yellow)
                 : $"Dry run: {candidates.Count} packages would be removed. Removing a total size amount {sizedTotalSize}.";
             console.WriteLine(message);
             BasicTable.Execute(["Package", "Version", "Size"], candidates, c => c.Name,
@@ -134,7 +133,7 @@ public partial class CacheClean : GlobalSettingsCommand
             .Where(File.Exists));
         message = isAnsiSupported
             ? $"Removing {candidates.Count} packages. Removing a total size amount {sizedTotalSize}.".Pastel(
-                Color.Yellow)
+                ConsoleColor.Yellow)
             : $"Removing {candidates.Count} packages. Removing a total size amount {sizedTotalSize}.";
         console.WriteLine(message);
 
@@ -150,7 +149,7 @@ public partial class CacheClean : GlobalSettingsCommand
             if (Verbose)
             {
                 message = isAnsiSupported
-                    ? $"Removing signature file: {sig}".Pastel(Color.Yellow)
+                    ? $"Removing signature file: {sig}".Pastel(ConsoleColor.Yellow)
                     : $"Removing signature file: {sig}";
                 console.WriteLine(message);
             }
@@ -165,7 +164,7 @@ public partial class CacheClean : GlobalSettingsCommand
                 if (Verbose)
                 {
                     message = isAnsiSupported
-                        ? $"Removing package file: {candidate.FullPath}".Pastel(Color.Yellow)
+                        ? $"Removing package file: {candidate.FullPath}".Pastel(ConsoleColor.Yellow)
                         : $"Removing package file: {candidate.FullPath}";
                     console.WriteLine(message);
                 }
@@ -175,7 +174,7 @@ public partial class CacheClean : GlobalSettingsCommand
                 if (Verbose)
                 {
                     message = isAnsiSupported
-                        ? $"Removing signature file: {sigPath}".Pastel(Color.Yellow)
+                        ? $"Removing signature file: {sigPath}".Pastel(ConsoleColor.Yellow)
                         : $"Removing signature file: {sigPath}";
                     console.WriteLine(message);
                 }
@@ -188,14 +187,14 @@ public partial class CacheClean : GlobalSettingsCommand
             catch (Exception e)
             {
                 message = isAnsiSupported
-                    ? $"Failed to remove package file: {candidate.FullPath}".Pastel(Color.Red)
+                    ? $"Failed to remove package file: {candidate.FullPath}".Pastel(ConsoleColor.Red)
                     : $"Failed to remove package file: {candidate.FullPath}";
                 console.WriteLine(message);
                 if (Verbose)
                 {
-                    console.WriteLine(e.Message.Pastel(Color.Red));
+                    console.WriteLine(e.Message.Pastel(ConsoleColor.Red));
                     console.WriteLine(e.StackTrace ?? (isAnsiSupported
-                        ? "No stack trace available.".Pastel(Color.Red)
+                        ? "No stack trace available.".Pastel(ConsoleColor.Red)
                         : "No stack trace available."));
                 }
             }

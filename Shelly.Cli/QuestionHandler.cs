@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.Text.Json;
 using PackageManager.Alpm;
 using PackageManager.Alpm.Questions;
@@ -65,17 +64,17 @@ public static class QuestionHandler
         var supportsAnsi = AnsiUtilities.SupportsAnsi;
         var header =
             "Install scriptlet warnings \u2014 these commands fetch/execute code outside pacman's control:";
-        Console.WriteLine(supportsAnsi ? header.Pastel(Color.Red) : header);
+        Console.WriteLine(supportsAnsi ? header.Pastel(ConsoleColor.Red) : header);
 
         foreach (var w in warnings)
         {
-            var color = w.Severity == ValidationSeverity.Critical ? Color.Red : Color.Yellow;
+            var color = w.Severity == ValidationSeverity.Critical ? ConsoleColor.Red : ConsoleColor.Yellow;
             var line = $"  \u2022 {w.Tool} used in {w.Hook}";
             Console.WriteLine(supportsAnsi ? line.Pastel(color) : line);
             if (!string.IsNullOrWhiteSpace(w.Message))
                 Console.WriteLine($"    {w.Message}");
             var matched = $"    {w.MatchedLine}";
-            Console.WriteLine(supportsAnsi ? matched.Pastel(Color.Gray) : matched);
+            Console.WriteLine(supportsAnsi ? matched.Pastel(ConsoleColor.Gray) : matched);
         }
     }
 

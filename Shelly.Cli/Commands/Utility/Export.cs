@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.CommandLine;
 using System.Text.Json;
 using PackageManager.Alpm;
@@ -82,7 +81,7 @@ public partial class Export : GlobalSettingsCommand
 
         await File.WriteAllTextAsync(path, json);
 
-        console.WriteLine(AnsiUtilities.SupportsAnsi ? $"Sync file exported to: {path}".Pastel(Color.Blue) : $"Sync file exported to: {path}");
+        console.WriteLine(AnsiUtilities.SupportsAnsi ? $"Sync file exported to: {path}".Pastel(ConsoleColor.Blue) : $"Sync file exported to: {path}");
         
     }
 

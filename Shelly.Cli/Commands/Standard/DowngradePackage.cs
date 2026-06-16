@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
@@ -78,19 +77,19 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         if (!string.IsNullOrWhiteSpace(Target) && UseOldest)
         {
-            console.WriteLine(Colorize("Error: Cannot combine --target with --latest or --oldest.", Color.Red));
+            console.WriteLine(Colorize("Error: Cannot combine --target with --latest or --oldest.", ConsoleColor.Red));
             return;
         }
 
         if (!string.IsNullOrWhiteSpace(Target) && ListOptions)
         {
-            console.WriteLine(Colorize("Error: Cannot combine --target with --list-options.", Color.Red));
+            console.WriteLine(Colorize("Error: Cannot combine --target with --list-options.", ConsoleColor.Red));
             return;
         }
 
         if (string.IsNullOrWhiteSpace(Package))
         {
-            console.WriteLine(Colorize("Error: No package specified.", Color.Red));
+            console.WriteLine(Colorize("Error: No package specified.", ConsoleColor.Red));
             return;
         }
 
@@ -101,16 +100,16 @@ public partial class DowngradePackage : GlobalSettingsCommand
         var installedPackages = manager.GetInstalledPackage(Package);
         if (installedPackages == null)
         {
-            console.WriteLine(Colorize("Error: Package must be installed to downgrade", Color.Red));
+            console.WriteLine(Colorize("Error: Package must be installed to downgrade", ConsoleColor.Red));
             return;
         }
 
-        if (!JsonOutput) console.WriteLine(Colorize($"Looking for downgrade options for: {Package}", Color.Green));
+        if (!JsonOutput) console.WriteLine(Colorize($"Looking for downgrade options for: {Package}", ConsoleColor.Green));
 
         var packages = await GatherDowngradeOptions(manager, installedPackages);
         if (packages.Count == 0)
         {
-            console.WriteLine(Colorize($"No downgrade options found for: {Package}", Color.Red));
+            console.WriteLine(Colorize($"No downgrade options found for: {Package}", ConsoleColor.Red));
             return;
         }
 
@@ -122,7 +121,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
                 return;
             }
 
-            console.WriteLine(Colorize($"Available downgrade options for: {Package}", Color.Green));
+            console.WriteLine(Colorize($"Available downgrade options for: {Package}", ConsoleColor.Green));
 
             console.WriteLine(BasicTable.Execute(["Filename", "Location", "Installed"], packages, c => c.Filename,
                 c => c.Location.ToString(), c => c.IsInstalled.ToString()));
@@ -147,8 +146,8 @@ public partial class DowngradePackage : GlobalSettingsCommand
             }
             catch (Exception e)
             {
-                console.WriteLine(Colorize($"Error: {e.Message}", Color.Red));
-                if (Verbose) console.WriteLine(Colorize(e.StackTrace ?? "No stacktrace found.", Color.Red));
+                console.WriteLine(Colorize($"Error: {e.Message}", ConsoleColor.Red));
+                if (Verbose) console.WriteLine(Colorize(e.StackTrace ?? "No stacktrace found.", ConsoleColor.Red));
 
                 return;
             }
@@ -159,11 +158,11 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         if (!NoConfirm && !Confirm.Execute("Do you want to proceed with the installation?"))
         {
-            console.WriteLine(Colorize("Operation Cancelled.", Color.Yellow));
+            console.WriteLine(Colorize("Operation Cancelled.", ConsoleColor.Yellow));
             return;
         }
 
-        console.WriteLine(Colorize($"Installing: {selectedPackage.Filename}", Color.Green));
+        console.WriteLine(Colorize($"Installing: {selectedPackage.Filename}", ConsoleColor.Green));
 
         var isSuccess = await StandardSinglePaneOutput.Output(console, manager, m => m.InstallLocalPackage(path), NoConfirm);
 
@@ -174,33 +173,33 @@ public partial class DowngradePackage : GlobalSettingsCommand
             }
             catch (Exception e)
             {
-                console.WriteLine(Colorize($"Error deleting downloaded file: {e.Message}", Color.Red));
-                if (Verbose) console.WriteLine(Colorize(e.StackTrace ?? "No stacktrace found.", Color.Red));
+                console.WriteLine(Colorize($"Error deleting downloaded file: {e.Message}", ConsoleColor.Red));
+                if (Verbose) console.WriteLine(Colorize(e.StackTrace ?? "No stacktrace found.", ConsoleColor.Red));
             }
 
         if (!isSuccess)
         {
-            console.WriteLine(Colorize("Downgrade failed. See errors above.", Color.Red));
+            console.WriteLine(Colorize("Downgrade failed. See errors above.", ConsoleColor.Red));
             return;
         }
 
         if (AddIgnore || (!NoConfirm && Confirm.Execute("Do you want to add package to IgnorePkg list?")))
         {
-            console.WriteLine(Colorize($"Adding to IgnorePkg: {Package}", Color.Green));
+            console.WriteLine(Colorize($"Adding to IgnorePkg: {Package}", ConsoleColor.Green));
             try
             {
                 manager.IgnorePackage(selectedPackage.Name);
             }
             catch (Exception e)
             {
-                console.WriteLine(Colorize($"Error: {e.Message}", Color.Red));
-                if (Verbose) console.WriteLine(Colorize(e.StackTrace ?? "No stacktrace found.", Color.Red));
+                console.WriteLine(Colorize($"Error: {e.Message}", ConsoleColor.Red));
+                if (Verbose) console.WriteLine(Colorize(e.StackTrace ?? "No stacktrace found.", ConsoleColor.Red));
 
                 return;
             }
         }
 
-        console.WriteLine(Colorize("Downgrade complete.", Color.Green));
+        console.WriteLine(Colorize("Downgrade complete.", ConsoleColor.Green));
     }
 
     public override async ValueTask ExecuteUiMode()
@@ -314,16 +313,16 @@ public partial class DowngradePackage : GlobalSettingsCommand
         }
         catch (Exception e)
         {
-            console.WriteLine(Colorize($"Error: {e.Message}", Color.Red));
+            console.WriteLine(Colorize($"Error: {e.Message}", ConsoleColor.Red));
             return null;
         }
     }
 
     private static async Task<string> DownloadRemotePackageCli(PackageInfo packageInfo, IShellyConsole console)
     {
-        console.WriteLine(Colorize($"Downloading {packageInfo.Filename}", Color.Green));
+        console.WriteLine(Colorize($"Downloading {packageInfo.Filename}", ConsoleColor.Green));
         var path = await FetchRemotePackage(packageInfo);
-        console.WriteLine(Colorize($"Downloaded to {path}", Color.Green));
+        console.WriteLine(Colorize($"Downloaded to {path}", ConsoleColor.Green));
         return path;
     }
 

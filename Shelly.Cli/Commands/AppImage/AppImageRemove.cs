@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
@@ -58,7 +57,7 @@ public partial class AppImageRemove : GlobalSettingsCommand
         if (matches.Count == 0)
         {
             console.WriteLine(AnsiUtilities.Colorize($"No AppImage matching \"{AppImage}\" found in searched paths.",
-                Color.Red));
+                ConsoleColor.Red));
             return;
         }
 
@@ -71,7 +70,7 @@ public partial class AppImageRemove : GlobalSettingsCommand
         {
             console.WriteLine(AnsiUtilities.Colorize(
                 $"Multiple matches found, please refine your input to match a singular installed AppImage.",
-                Color.Red));
+                ConsoleColor.Red));
             return;
         }
 
@@ -90,9 +89,9 @@ public partial class AppImageRemove : GlobalSettingsCommand
         }
         else
         {
-            manager.ErrorEvent += (_, args) => console.WriteLine(AnsiUtilities.Colorize($"{args.Error}", Color.Red));
+            manager.ErrorEvent += (_, args) => console.WriteLine(AnsiUtilities.Colorize($"{args.Error}", ConsoleColor.Red));
             manager.MessageEvent += (_, args) =>
-                console.WriteLine(AnsiUtilities.Colorize($"{args.Message}", Color.Blue));
+                console.WriteLine(AnsiUtilities.Colorize($"{args.Message}", ConsoleColor.Blue));
         }
 
         var result = await manager.RemoveAppImage(targetAppImage, RemoveConfig);

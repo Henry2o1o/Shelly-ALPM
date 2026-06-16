@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.Alpm;
 using Shelly.Cli.Interactions;
 using static System.CommandLine.ArgumentArity;
@@ -46,13 +45,13 @@ public class Mark : GlobalSettingsCommand
 
         if (string.IsNullOrWhiteSpace(Package))
         {
-            console.WriteLine(Colorize("Error: No package specified", Color.Red));
+            console.WriteLine(Colorize("Error: No package specified", ConsoleColor.Red));
             return;
         }
 
         if (Explicit == Depends)
         {
-            console.WriteLine(Colorize("Error: Choose exactly one of --explicit or --depends", Color.Red));
+            console.WriteLine(Colorize("Error: Choose exactly one of --explicit or --depends", ConsoleColor.Red));
             return;
         }
 
@@ -60,7 +59,7 @@ public class Mark : GlobalSettingsCommand
 
         if (!NoConfirm && !Confirm.Execute("Do you want to proceed with the operation?"))
         {
-            console.WriteLine(Colorize("Operation Cancelled.", Color.Yellow));
+            console.WriteLine(Colorize("Operation Cancelled.", ConsoleColor.Yellow));
             return;
         }
 
@@ -69,8 +68,8 @@ public class Mark : GlobalSettingsCommand
 
         var success = Explicit ? manager.MarkPackageAsExplicit(Package) : manager.MarkPackageAsDepend(Package);
         console.WriteLine(success
-            ? Colorize("Package marked successfully!", Color.Green)
-            : Colorize("Error: Marking failed for the package. See messages above.", Color.Red));
+            ? Colorize("Package marked successfully!", ConsoleColor.Green)
+            : Colorize("Error: Marking failed for the package. See messages above.", ConsoleColor.Red));
     }
 
     public override async ValueTask ExecuteUiMode()

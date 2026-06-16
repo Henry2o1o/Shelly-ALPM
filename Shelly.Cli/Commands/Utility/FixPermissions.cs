@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.CommandLine;
-using System.Drawing;
 using Pastel;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
@@ -34,7 +33,7 @@ public partial class FixPermissions : GlobalSettingsCommand
         if (string.IsNullOrEmpty(user) || user == "root")
         {
             message = isAnsiSupported
-                ? "Could not determin invoking user (SUDO_USER not set).".Pastel(Color.Red)
+                ? "Could not determin invoking user (SUDO_USER not set).".Pastel(ConsoleColor.Red)
                 : "Could not determin invoking user (SUDO_USER not set).";
             console.WriteLine(message);
         }
@@ -51,7 +50,7 @@ public partial class FixPermissions : GlobalSettingsCommand
             }
 
             message = isAnsiSupported
-                ? "No directories to fix permissions for.".Pastel(Color.Green)
+                ? "No directories to fix permissions for.".Pastel(ConsoleColor.Green)
                 : "No directories to fix permissions for.";
             console.WriteLine(message);
             return;
@@ -75,7 +74,7 @@ public partial class FixPermissions : GlobalSettingsCommand
                 if (proc == null)
                 {
                     message = isAnsiSupported
-                        ? $"Failed to start chown for {path}".Pastel(Color.Red)
+                        ? $"Failed to start chown for {path}".Pastel(ConsoleColor.Red)
                         : $"Failed to start chown for {path}";
                     console.WriteLine(message);
                     continue;
@@ -86,7 +85,7 @@ public partial class FixPermissions : GlobalSettingsCommand
                 {
                     var err = await proc.StandardError.ReadToEndAsync();
                     message = isAnsiSupported
-                        ? $"chown failed for {path} (exit {proc.ExitCode}): {err.Trim()}".Pastel(Color.Red)
+                        ? $"chown failed for {path} (exit {proc.ExitCode}): {err.Trim()}".Pastel(ConsoleColor.Red)
                         : $"chown failed for {path} (exit {proc.ExitCode}): {err.Trim()}";
                     console.WriteLine(message);
                 }
@@ -97,7 +96,7 @@ public partial class FixPermissions : GlobalSettingsCommand
                     continue;
                 }
 
-                message = isAnsiSupported ? $"Fixed ownership: {path}".Pastel(Color.Green) : $"Fixed ownership: {path}";
+                message = isAnsiSupported ? $"Fixed ownership: {path}".Pastel(ConsoleColor.Green) : $"Fixed ownership: {path}";
                 console.WriteLine(message);
             }
             catch (Exception e)
@@ -109,7 +108,7 @@ public partial class FixPermissions : GlobalSettingsCommand
                 }
 
                 message = isAnsiSupported
-                    ? $"Failed to fix ownership for {path}: {e.Message}".Pastel(Color.Red)
+                    ? $"Failed to fix ownership for {path}: {e.Message}".Pastel(ConsoleColor.Red)
                     : $"Failed to fix ownership for {path}: {e.Message}";
                 console.WriteLine(message);
             }

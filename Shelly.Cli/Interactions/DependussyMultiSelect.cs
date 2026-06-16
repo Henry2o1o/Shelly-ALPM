@@ -1,4 +1,3 @@
-using System.Drawing;
 using PackageManager.Alpm.Questions;
 using Pastel;
 
@@ -19,23 +18,23 @@ public static class DependussyMultiSelect
         var ansiSupport = AnsiUtilities.SupportsAnsi;
         if (options.Count == 0)
         {
-            Console.WriteLine(ansiSupport ? "No options available.".Pastel(Color.Red) : "No options available.");
+            Console.WriteLine(ansiSupport ? "No options available.".Pastel(ConsoleColor.Red) : "No options available.");
             return [];
         }
 
-        Console.WriteLine(ansiSupport ? title.Pastel(Color.Orange) : title);
+        Console.WriteLine(ansiSupport ? title.Pastel(ConsoleColor.DarkYellow) : title);
 
         for (var i = 0; i < options.Count; i++)
         {
             var marker = options[i].IsInstalled ? "[X]" : "[ ]";
             var label = ansiSupport
-                ? $"{i + 1}. {marker} {options[i].Name} : {options[i].Description}".Pastel(Color.Green)
+                ? $"{i + 1}. {marker} {options[i].Name} : {options[i].Description}".Pastel(ConsoleColor.Green)
                 : $"{i + 1}. {marker} {options[i].Name} : {options[i].Description}";
             Console.WriteLine(label);
         }
 
         var hint = ansiSupport
-            ? "Enter numbers separated by space (e.g. 1 3): ".Pastel(Color.Yellow)
+            ? "Enter numbers separated by space (e.g. 1 3): ".Pastel(ConsoleColor.Yellow)
             : "Enter numbers separated by space (e.g. 1 3): ";
 
         while (true)
@@ -62,7 +61,7 @@ public static class DependussyMultiSelect
             }
 
             Console.WriteLine(ansiSupport
-                ? "Invalid input. Please try again.".Pastel(Color.Red)
+                ? "Invalid input. Please try again.".Pastel(ConsoleColor.Red)
                 : "Invalid input. Please try again.");
         }
     }

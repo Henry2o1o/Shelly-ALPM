@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
@@ -53,8 +52,8 @@ public partial class AppImageUpgrade : GlobalSettingsCommand
         else
         {
             manager.MessageEvent += (_, e) =>
-                console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", Color.Blue));
-            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR] {e.Error}", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", ConsoleColor.Blue));
+            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR] {e.Error}", ConsoleColor.Red));
             //not sub to progress events because cli rewrite.
         }
 
@@ -62,13 +61,13 @@ public partial class AppImageUpgrade : GlobalSettingsCommand
 
         if (updates.Count == 0)
         {
-            console.WriteLine(AnsiUtilities.Colorize("No updates available for any AppImage.", Color.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize("No updates available for any AppImage.", ConsoleColor.Yellow));
             return;
         }
 
         foreach (var update in updates)
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Updating {update.Name} to {update.Version}", Color.Green));
+            console.WriteLine(AnsiUtilities.Colorize($"Updating {update.Name} to {update.Version}", ConsoleColor.Green));
             await manager.RunUpdate(update);
         }
     }

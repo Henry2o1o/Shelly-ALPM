@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using System.Text.Json;
 using PackageManager.Alpm;
 using static System.CommandLine.ArgumentArity;
@@ -57,7 +56,7 @@ public class Ignore : GlobalSettingsCommand
 
         if (Packages.Length == 0 && !List && !Clear)
         {
-            console.WriteLine(Colorize("No packages specified", Color.Red));
+            console.WriteLine(Colorize("No packages specified", ConsoleColor.Red));
             return;
         }
 
@@ -67,7 +66,7 @@ public class Ignore : GlobalSettingsCommand
         {
             manager.IgnorePackages(Packages);
             var formatPackages = string.Join(", ", Packages);
-            console.WriteLine(Colorize($"Added to IgnorePkg list: {formatPackages}", Color.Green));
+            console.WriteLine(Colorize($"Added to IgnorePkg list: {formatPackages}", ConsoleColor.Green));
             return;
         }
 
@@ -75,7 +74,7 @@ public class Ignore : GlobalSettingsCommand
         {
             manager.UnignorePackages(Packages);
             var formatPackages = string.Join(", ", Packages);
-            console.WriteLine(Colorize($"Removed from IgnorePkg list: {formatPackages}", Color.Green));
+            console.WriteLine(Colorize($"Removed from IgnorePkg list: {formatPackages}", ConsoleColor.Green));
             return;
         }
 
@@ -83,7 +82,7 @@ public class Ignore : GlobalSettingsCommand
         if (Clear)
         {
             manager.UnignorePackages(ignored);
-            console.WriteLine(Colorize("Cleared ignored packages.", Color.Green));
+            console.WriteLine(Colorize("Cleared ignored packages.", ConsoleColor.Green));
             return;
         }
 
@@ -97,12 +96,12 @@ public class Ignore : GlobalSettingsCommand
             }
             else if (ignored.Count == 0)
             {
-                message = Colorize("IgnorePkg list is empty.", Color.Yellow);
+                message = Colorize("IgnorePkg list is empty.", ConsoleColor.Yellow);
             }
             else
             {
                 var formatPackages = string.Join(", ", ignored);
-                message = Colorize($"Total: {ignored.Count} ignored packages: {formatPackages}", Color.Green);
+                message = Colorize($"Total: {ignored.Count} ignored packages: {formatPackages}", ConsoleColor.Green);
             }
 
             console.WriteLine(message);

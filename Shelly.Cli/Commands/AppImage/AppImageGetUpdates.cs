@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
@@ -35,8 +34,8 @@ public partial class AppImageGetUpdates : GlobalSettingsCommand
         else
         {
             manager.MessageEvent +=
-                (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", Color.Blue));
-            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR]]{e.Error}", Color.Red));
+                (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", ConsoleColor.Blue));
+            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR]]{e.Error}", ConsoleColor.Red));
         }
 
         var result = await manager.CheckForAppImageUpdates();
@@ -50,12 +49,12 @@ public partial class AppImageGetUpdates : GlobalSettingsCommand
         {
             foreach (var update in result)
             {
-                console.WriteLine(AnsiUtilities.Colorize($"{update.Name} {update.Version} is available", Color.Green));
+                console.WriteLine(AnsiUtilities.Colorize($"{update.Name} {update.Version} is available", ConsoleColor.Green));
             }
 
             if (result.Count == 0)
             {
-                console.WriteLine(AnsiUtilities.Colorize("No updates available", Color.Yellow));
+                console.WriteLine(AnsiUtilities.Colorize("No updates available", ConsoleColor.Yellow));
             }
         }
     }

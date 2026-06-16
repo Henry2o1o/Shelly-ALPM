@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
@@ -38,7 +37,7 @@ public partial class AppImageInstall : GlobalSettingsCommand
             if (UiMode)
                 UiFrames.Error("Specified file does not exist.");
             else
-                console.WriteLine(AnsiUtilities.Colorize("Error: Specified file does not exist.", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize("Error: Specified file does not exist.", ConsoleColor.Red));
             return;
         }
 
@@ -54,9 +53,9 @@ public partial class AppImageInstall : GlobalSettingsCommand
             else
             {
                 manager.ErrorEvent += (_, args) =>
-                    console.WriteLine(AnsiUtilities.Colorize($"{args.Error}", Color.Red));
+                    console.WriteLine(AnsiUtilities.Colorize($"{args.Error}", ConsoleColor.Red));
                 manager.MessageEvent += (_, args) =>
-                    console.WriteLine(AnsiUtilities.Colorize($"{args.Message}", Color.Red));
+                    console.WriteLine(AnsiUtilities.Colorize($"{args.Message}", ConsoleColor.Red));
             }
 
             var result = await manager.InstallAppImage(AppImageLocation);
@@ -65,10 +64,10 @@ public partial class AppImageInstall : GlobalSettingsCommand
                 UiFrames.TxFinish(result, "Successfully installed appimage.", "Failed to install appimage.");
             else if (result)
             {
-                console.WriteLine(AnsiUtilities.Colorize("Successfully installed appimage.", Color.Green));
+                console.WriteLine(AnsiUtilities.Colorize("Successfully installed appimage.", ConsoleColor.Green));
             }
 
-            console.WriteLine(AnsiUtilities.Colorize("Failled to install appimage.", Color.Red));
+            console.WriteLine(AnsiUtilities.Colorize("Failled to install appimage.", ConsoleColor.Red));
         }
     }
 

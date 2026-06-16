@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using System.Net;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -64,7 +63,7 @@ public class ArchNews : GlobalSettingsCommand
                 else
                 {
                     DisplayFeed(console, unseenFeed);
-                    if (unseenFeed.Count == 0) console.WriteLine(Colorize("No new news found", Color.Green));
+                    if (unseenFeed.Count == 0) console.WriteLine(Colorize("No new news found", ConsoleColor.Green));
                 }
 
                 if (unseenFeed.Count > 0) await CacheFeed(fullFeed);
@@ -72,8 +71,8 @@ public class ArchNews : GlobalSettingsCommand
         }
         catch (Exception e)
         {
-            console.WriteLine(Colorize($"Error fetching ArchLinux news: {e.Message}", Color.Red));
-            if (Verbose) console.WriteLine(Colorize($"Stack trace: {e.StackTrace}", Color.Red));
+            console.WriteLine(Colorize($"Error fetching ArchLinux news: {e.Message}", ConsoleColor.Red));
+            if (Verbose) console.WriteLine(Colorize($"Stack trace: {e.StackTrace}", ConsoleColor.Red));
         }
     }
 
@@ -106,10 +105,10 @@ public class ArchNews : GlobalSettingsCommand
         foreach (var item in feed)
         {
             console.WriteLine();
-            console.WriteLine(Colorize(item.Title, Color.Yellow));
-            console.WriteLine(Colorize(item.PubDate, Color.Gray));
-            console.WriteLine(Colorize(item.Link, Color.Blue));
-            console.WriteLine(Colorize(item.Description, Color.White));
+            console.WriteLine(Colorize(item.Title, ConsoleColor.Yellow));
+            console.WriteLine(Colorize(item.PubDate, ConsoleColor.Gray));
+            console.WriteLine(Colorize(item.Link, ConsoleColor.Blue));
+            console.WriteLine(Colorize(item.Description, ConsoleColor.White));
             console.WriteLine();
         }
     }

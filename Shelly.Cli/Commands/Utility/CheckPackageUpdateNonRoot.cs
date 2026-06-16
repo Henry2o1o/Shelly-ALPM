@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.CommandLine;
 using System.Text.Json;
 using PackageManager.Alpm;
@@ -61,11 +60,11 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
         Directory.CreateDirectory(dbPath);
         if (Verbose)
         {
-            message = isAnsiSupported ? $"Using {dbPath}".Pastel(Color.Chartreuse) : $"Using {dbPath}";
+            message = isAnsiSupported ? $"Using {dbPath}".Pastel(ConsoleColor.Green) : $"Using {dbPath}";
             console.WriteLine(message);
         }
 
-        message = isAnsiSupported ? "Checking for updates...".Pastel(Color.Green) : "Checking for updates...";
+        message = isAnsiSupported ? "Checking for updates...".Pastel(ConsoleColor.Green) : "Checking for updates...";
         console.WriteLine(message);
 
         var standard = GetSyncStandards(dbPath, sizeDisplay);
@@ -97,9 +96,9 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
             return;
         }
 
-        message = isAnsiSupported ? "Updates found:".Pastel(Color.Green) : "Updates found:";
+        message = isAnsiSupported ? "Updates found:".Pastel(ConsoleColor.Green) : "Updates found:";
         console.WriteLine(message);
-        message = isAnsiSupported ? "Type: Standard".Pastel(Color.Green) : "Type: Standard";
+        message = isAnsiSupported ? "Type: Standard".Pastel(ConsoleColor.Green) : "Type: Standard";
         console.WriteLine(message);
         var standardTable = BasicTable.Execute(["Name", "New Version", "Current Version", "Download Size"],
             sync.Packages, p => p.Name,
@@ -108,7 +107,7 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
             p => p.DownloadSize);
         console.Write(standardTable);
         console.WriteLine();
-        message = isAnsiSupported ? "Type: AUR".Pastel(Color.Green) : "Type: AUR";
+        message = isAnsiSupported ? "Type: AUR".Pastel(ConsoleColor.Green) : "Type: AUR";
         console.WriteLine(message);
         var aurTable = BasicTable.Execute(["Name", "New Version", "Current Version", "Download Size"], sync.Aur,
             p => p.Name,
@@ -117,7 +116,7 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
             p => p.DownloadSize);
         console.Write(aurTable);
         console.WriteLine();
-        message = isAnsiSupported ? "Type: Flatpak".Pastel(Color.Green) : "Type: Flatpak";
+        message = isAnsiSupported ? "Type: Flatpak".Pastel(ConsoleColor.Green) : "Type: Flatpak";
         console.WriteLine(message);
         var flatpakTable = BasicTable.Execute(["Name", "Id", "Version"], sync.Flatpak, p => p.Name,
             p => p.Id,
@@ -167,7 +166,7 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
     private void CountOutput(IShellyConsole console, bool isAnsiSupported, int standardCount, int aurCount, int flatpakCount)
     {
         var message = isAnsiSupported
-            ? $"Updates found: {standardCount + aurCount + flatpakCount} ".Pastel(Color.Green)
+            ? $"Updates found: {standardCount + aurCount + flatpakCount} ".Pastel(ConsoleColor.Green)
             : $"Updates found: {standardCount + aurCount + flatpakCount}";
         console.WriteLine(message);
     }

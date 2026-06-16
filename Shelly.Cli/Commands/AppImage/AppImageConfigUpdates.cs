@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
@@ -47,13 +46,13 @@ public partial class AppImageConfigUpdates : GlobalSettingsCommand
     {
         if (string.IsNullOrEmpty(AppImage))
         {
-            console.WriteLine(AnsiUtilities.Colorize("Error: AppImage name is required)", Color.Red));
+            console.WriteLine(AnsiUtilities.Colorize("Error: AppImage name is required)", ConsoleColor.Red));
             return;
         }
 
         if (string.IsNullOrEmpty(Url))
         {
-            console.WriteLine(AnsiUtilities.Colorize("Error: Update URL is required", Color.Red));
+            console.WriteLine(AnsiUtilities.Colorize("Error: Update URL is required", ConsoleColor.Red));
             return;
         }
 
@@ -79,7 +78,7 @@ public partial class AppImageConfigUpdates : GlobalSettingsCommand
         if (matches.Count == 0)
         {
             console.WriteLine(AnsiUtilities.Colorize($"No AppImage matching \"{AppImage}\" found in searched paths.",
-                Color.Red));
+                ConsoleColor.Red));
             return;
         }
 
@@ -94,8 +93,8 @@ public partial class AppImageConfigUpdates : GlobalSettingsCommand
         else
         {
             manager.MessageEvent += (_, e) =>
-                console.WriteLine(AnsiUtilities.Colorize($"[[INFO]]{e.Message}", Color.Blue));
-            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR] {e.Error}", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize($"[[INFO]]{e.Message}", ConsoleColor.Blue));
+            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR] {e.Error}", ConsoleColor.Red));
         }
 
         var success = await manager.AppImageConfigureUpdates(Url, AppImage, Type,
@@ -103,12 +102,12 @@ public partial class AppImageConfigUpdates : GlobalSettingsCommand
 
         if (success)
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Successfully configured updates for {AppImage}", Color.Green));
+            console.WriteLine(AnsiUtilities.Colorize($"Successfully configured updates for {AppImage}", ConsoleColor.Green));
             return;
         }
 
         console.WriteLine(AnsiUtilities.Colorize($"Failed to configure updates for {AppImage}. Is it installed?",
-            Color.Red));
+            ConsoleColor.Red));
     }
 
     public override async ValueTask ExecuteUiMode()

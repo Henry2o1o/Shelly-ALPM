@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
@@ -36,8 +35,8 @@ public partial class AppImageList : GlobalSettingsCommand
         else
         {
             manager.MessageEvent += (_, e) =>
-                console.WriteLine(AnsiUtilities.Colorize($"[Info] {e.Message}", Color.Blue));
-            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Error}", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize($"[Info] {e.Message}", ConsoleColor.Blue));
+            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Error}", ConsoleColor.Red));
         }
 
         var appImages = await manager.GetAppImagesFromLocalDb();

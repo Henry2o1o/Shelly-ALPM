@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.Text;
 using System.Text.RegularExpressions;
 using Pastel;
@@ -62,7 +61,7 @@ public static class BasicTable
         sb.Append('│');
         for (var c = 0; c < cols; c++)
         {
-            var h = ansi ? headers[c].Pastel(Color.Orange) : headers[c];
+            var h = ansi ? headers[c].Pastel(ConsoleColor.DarkYellow) : headers[c];
             sb.Append(Cell(h, widths[c])).Append('│');
         }
         sb.AppendLine();

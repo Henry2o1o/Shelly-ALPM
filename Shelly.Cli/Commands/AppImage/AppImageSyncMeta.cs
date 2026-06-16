@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.AppImage.AppImageV2;
 using Pastel;
 using Shelly.Cli.Interactions;
@@ -40,7 +39,7 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
         if (!Directory.Exists(installDir))
         {
             Message = ansiSupport
-                ? $"Info: {installDir} directory does not exist. No AppImages to sync.".Pastel(Color.Yellow)
+                ? $"Info: {installDir} directory does not exist. No AppImages to sync.".Pastel(ConsoleColor.Yellow)
                 : $"Info: {installDir} directory does not exist. No AppImages to sync.";
             console.WriteLine(Message);
             return;
@@ -57,12 +56,12 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
         {
             manager.MessageEvent += (_, e) =>
             {
-                Message = ansiSupport ? $"[INFO]{e.Message}".Pastel(Color.Blue) : $"[INFO]{e.Message}";
+                Message = ansiSupport ? $"[INFO]{e.Message}".Pastel(ConsoleColor.Blue) : $"[INFO]{e.Message}";
                 console.WriteLine(Message);
             };
             manager.ErrorEvent += (_, e) =>
             {
-                Message = ansiSupport ? $"[ERROR]{e.Error}".Pastel(Color.Red) : $"[ERROR]{e.Error}";
+                Message = ansiSupport ? $"[ERROR]{e.Error}".Pastel(ConsoleColor.Red) : $"[ERROR]{e.Error}";
                 console.WriteLine(Message);
             };
         }
@@ -77,7 +76,7 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
             if (matches.Count == 0)
             {
                 Message = ansiSupport
-                    ? $"No AppImage matching \"{Package}\" found in {installDir}".Pastel(Color.Yellow)
+                    ? $"No AppImage matching \"{Package}\" found in {installDir}".Pastel(ConsoleColor.Yellow)
                     : $"No AppImage matching \"{Package}\" found in {installDir}";
                 return;
             }

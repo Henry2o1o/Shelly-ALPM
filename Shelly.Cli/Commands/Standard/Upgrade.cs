@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.Alpm;
 using PackageManager.Utilities;
 using Pastel;
@@ -42,11 +41,11 @@ public partial class Upgrade : GlobalSettingsCommand
         var archNews = new ArchNews();
         await archNews.ExecuteAsync(console);
         message = ansiSupport
-            ? "Performing full system upgrade...".Pastel(Color.Yellow)
+            ? "Performing full system upgrade...".Pastel(ConsoleColor.Yellow)
             : "Performing full system upgrade...";
         console.WriteLine(message);
         message = ansiSupport
-            ? "Initializing and syncing repositories...".Pastel(Color.Yellow)
+            ? "Initializing and syncing repositories...".Pastel(ConsoleColor.Yellow)
             : "Initializing and syncing repositories...";
         console.WriteLine(message);
         var manager = new AlpmManager();
@@ -56,7 +55,7 @@ public partial class Upgrade : GlobalSettingsCommand
         if (packagesNeedingUpdate.Count == 0)
         {
             message = ansiSupport
-                ? "Standard Packages are up to date!".Pastel(Color.Green)
+                ? "Standard Packages are up to date!".Pastel(ConsoleColor.Green)
                 : "Standard Packages are up to date!";
             console.WriteLine(message);
             return;
@@ -66,25 +65,25 @@ public partial class Upgrade : GlobalSettingsCommand
         var parsedSize = Parse<SizeDisplay>(config.FileSizeDisplay);
         var headers = new[] { "Repository", "Package", "Old Version", "New Version", "Net Change", "Download Size" };
         var table = BasicTable.Execute(headers, packagesNeedingUpdate, p => p.Repository,
-            p => ansiSupport ? p.Name.Pastel(Color.Cyan) : p.Name,
-            p => ansiSupport ? p.CurrentVersion.Pastel(Color.Cyan) : p.CurrentVersion,
-            p => ansiSupport ? p.NewVersion.Pastel(Color.Cyan) : p.NewVersion,
+            p => ansiSupport ? p.Name.Pastel(ConsoleColor.Cyan) : p.Name,
+            p => ansiSupport ? p.CurrentVersion.Pastel(ConsoleColor.Cyan) : p.CurrentVersion,
+            p => ansiSupport ? p.NewVersion.Pastel(ConsoleColor.Cyan) : p.NewVersion,
             p => ansiSupport
-                ? SizeUtilities.FormatSize(parsedSize, p.SizeDifference).Pastel(Color.Cyan)
+                ? SizeUtilities.FormatSize(parsedSize, p.SizeDifference).Pastel(ConsoleColor.Cyan)
                 : SizeUtilities.FormatSize(parsedSize, p.SizeDifference),
             p => ansiSupport
-                ? SizeUtilities.FormatSize(parsedSize, p.DownloadSize).Pastel(Color.Cyan)
+                ? SizeUtilities.FormatSize(parsedSize, p.DownloadSize).Pastel(ConsoleColor.Cyan)
                 : SizeUtilities.FormatSize(parsedSize, p.DownloadSize));
         console.Write(table);
         console.WriteLine();
         message = ansiSupport
             ? $"Total Download Size: {SizeUtilities.FormatSize(parsedSize, packagesNeedingUpdate.Sum(p => p.DownloadSize))}"
-                .Pastel(Color.DarkGreen)
+                .Pastel(ConsoleColor.DarkGreen)
             : $"Total Download Size: {SizeUtilities.FormatSize(parsedSize, packagesNeedingUpdate.Sum(p => p.DownloadSize))}";
         console.WriteLine(message);
         message = ansiSupport
             ? $"Net Upgrade Size: {SizeUtilities.FormatSize(parsedSize, packagesNeedingUpdate.Sum(p => p.SizeDifference))}"
-                .Pastel(Color.DarkGreen)
+                .Pastel(ConsoleColor.DarkGreen)
             : $"Net Upgrade Size: {SizeUtilities.FormatSize(parsedSize, packagesNeedingUpdate.Sum(p => p.SizeDifference))}";
         console.WriteLine(message);
         console.WriteLine();
@@ -92,23 +91,23 @@ public partial class Upgrade : GlobalSettingsCommand
         var result = Confirm.Execute("Proceed with upgrade?", false);
         if (!result)
         {
-            message = ansiSupport ? "Upgrade cancelled.".Pastel(Color.Red) : "Upgrade cancelled.";
+            message = ansiSupport ? "Upgrade cancelled.".Pastel(ConsoleColor.Red) : "Upgrade cancelled.";
             console.WriteLine(message);
             return;
         }
 
-        message = ansiSupport ? "Starting Systeam Upgrade...".Pastel(Color.Green) : "Starting Systeam Upgrade...";
+        message = ansiSupport ? "Starting Systeam Upgrade...".Pastel(ConsoleColor.Green) : "Starting Systeam Upgrade...";
         console.WriteLine(message);
         var upgradeResult =
             await StandardSinglePaneOutput.Output(console, manager, x => x.SyncSystemUpdate(), NoConfirm);
         manager.Dispose();
         if (!upgradeResult)
         {
-            message = ansiSupport ? "System upgrade failed.".Pastel(Color.Red) : "System upgrade failed.";
+            message = ansiSupport ? "System upgrade failed.".Pastel(ConsoleColor.Red) : "System upgrade failed.";
             console.WriteLine(message);
         }
 
-        message = ansiSupport ? "System upgrade complete.".Pastel(Color.Green) : "System upgrade complete.";
+        message = ansiSupport ? "System upgrade complete.".Pastel(ConsoleColor.Green) : "System upgrade complete.";
         console.WriteLine(message);
     }
 

@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using PackageManager.Alpm;
 using PackageManager.Local;
 using Pastel;
@@ -61,7 +60,7 @@ public partial class Install : GlobalSettingsCommand
 
         if (Package.Length == 0)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Error: No packages specified", Color.Red));
+            console.WriteLine(AnsiUtilities.Colorize("Error: No packages specified", ConsoleColor.Red));
             return;
         }
 
@@ -98,16 +97,16 @@ public partial class Install : GlobalSettingsCommand
     private async Task InstallRepoPackages(List<string> packageList, IShellyConsole console)
     {
         console.WriteLine(AnsiUtilities.Colorize(
-            $"Packages to install: {string.Join(", ", packageList)}", Color.Yellow));
+            $"Packages to install: {string.Join(", ", packageList)}", ConsoleColor.Yellow));
 
         if (!NoConfirm && !Confirm.Execute("Do you want to proceed?"))
         {
-            console.WriteLine(AnsiUtilities.Colorize("Operation cancelled.", Color.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize("Operation cancelled.", ConsoleColor.Yellow));
             return;
         }
 
         using var manager = new AlpmManager();
-        console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", Color.Yellow));
+        console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", ConsoleColor.Yellow));
         manager.Initialize(true);
 
         Task<bool> RunOutput(Func<IAlpmManager, Task<bool>> op) =>
@@ -115,10 +114,10 @@ public partial class Install : GlobalSettingsCommand
 
         if (Upgrade)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Running system upgrade", Color.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize("Running system upgrade", ConsoleColor.Yellow));
             if (!await RunOutput(x => x.SyncSystemUpdate()))
             {
-                console.WriteLine(AnsiUtilities.Colorize("System upgrade failed. See errors above.", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize("System upgrade failed. See errors above.", ConsoleColor.Red));
                 return;
             }
         }
@@ -128,65 +127,65 @@ public partial class Install : GlobalSettingsCommand
             if (packageList.Count > 1)
             {
                 console.WriteLine(AnsiUtilities.Colorize(
-                    "Cannot build dependencies for multiple packages at once.", Color.Yellow));
+                    "Cannot build dependencies for multiple packages at once.", ConsoleColor.Yellow));
                 return;
             }
 
-            console.WriteLine(AnsiUtilities.Colorize("Installing packages...", Color.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize("Installing packages...", ConsoleColor.Yellow));
             var depsResult = await RunOutput(x => x.InstallDependenciesOnly(packageList[0], MakeDeps));
             if (!depsResult)
             {
-                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
                 return;
             }
 
-            console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", Color.Green));
+            console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", ConsoleColor.Green));
             return;
         }
 
         if (NoDeps)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Skipping dependency installation.", Color.Yellow));
-            console.WriteLine(AnsiUtilities.Colorize("Installing packages...", Color.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize("Skipping dependency installation.", ConsoleColor.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize("Installing packages...", ConsoleColor.Yellow));
             if (!await RunOutput(x => x.InstallPackages(packageList, AlpmTransFlag.NoDeps)))
             {
-                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
                 return;
             }
 
-            console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", Color.Green));
+            console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", ConsoleColor.Green));
             return;
         }
 
-        console.WriteLine(AnsiUtilities.Colorize("Installing packages...", Color.Yellow));
+        console.WriteLine(AnsiUtilities.Colorize("Installing packages...", ConsoleColor.Yellow));
         var installResult = await RunOutput(x => x.InstallPackages(packageList));
         console.WriteLine();
         if (!installResult)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", Color.Red));
+            console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
             return;
         }
 
-        console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", Color.Green));
+        console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", ConsoleColor.Green));
     }
 
     private async Task InstallLocalPackage(string location, IShellyConsole console)
     {
         if (!File.Exists(location))
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Error: Specified file does not exist: {location}", Color.Red));
+            console.WriteLine(AnsiUtilities.Colorize($"Error: Specified file does not exist: {location}", ConsoleColor.Red));
             return;
         }
 
         if (await FileInspector.IsArchPackage(location))
         {
             using var manager = new AlpmManager();
-            console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", Color.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", ConsoleColor.Yellow));
             manager.Initialize();
             var result = await StandardSinglePaneOutput.Output(console, manager,
                 x => x.InstallLocalPackage(Path.GetFullPath(location)), NoConfirm);
             if (!result)
-                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", Color.Red));
+                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
             return;
         }
 
@@ -197,11 +196,11 @@ public partial class Install : GlobalSettingsCommand
             {
                 var color = e.Level switch
                 {
-                    LocalManagerMessageLevel.Info => Color.Cyan,
-                    LocalManagerMessageLevel.Warning => Color.Yellow,
-                    LocalManagerMessageLevel.Error => Color.Red,
-                    LocalManagerMessageLevel.Success => Color.Green,
-                    _ => Color.White
+                    LocalManagerMessageLevel.Info => ConsoleColor.Cyan,
+                    LocalManagerMessageLevel.Warning => ConsoleColor.Yellow,
+                    LocalManagerMessageLevel.Error => ConsoleColor.Red,
+                    LocalManagerMessageLevel.Success => ConsoleColor.Green,
+                    _ => ConsoleColor.White
                 };
                 console.WriteLine(AnsiUtilities.Colorize(e.Message, color));
             };
@@ -210,7 +209,7 @@ public partial class Install : GlobalSettingsCommand
             return;
         }
 
-        console.WriteLine(AnsiUtilities.Colorize("Error: Unsupported local package format.", Color.Red));
+        console.WriteLine(AnsiUtilities.Colorize("Error: Unsupported local package format.", ConsoleColor.Red));
     }
 
     public override async ValueTask ExecuteUiMode()
@@ -339,12 +338,12 @@ public partial class Install : GlobalSettingsCommand
     {
         try
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Downloading {url}...", Color.Yellow));
+            console.WriteLine(AnsiUtilities.Colorize($"Downloading {url}...", ConsoleColor.Yellow));
             return await DownloadCore(url);
         }
         catch (Exception ex)
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Error: Failed to download {url}: {ex.Message}", Color.Red));
+            console.WriteLine(AnsiUtilities.Colorize($"Error: Failed to download {url}: {ex.Message}", ConsoleColor.Red));
             return null;
         }
     }

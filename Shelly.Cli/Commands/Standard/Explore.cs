@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Drawing;
 using System.Text;
 using System.Text.Json;
 using PackageManager.Alpm;
@@ -77,7 +76,7 @@ public class Explore : GlobalSettingsCommand
         if (Repos)
         {
             var repo = AlpmManager.GetRepositories();
-            foreach (var r in repo) console.WriteLine(Colorize(r, Color.BlanchedAlmond));
+            foreach (var r in repo) console.WriteLine(Colorize(r, ConsoleColor.White));
 
             return;
         }
@@ -135,7 +134,7 @@ public class Explore : GlobalSettingsCommand
         var stringBuilder = new StringBuilder();
         if (Local) stringBuilder.AppendLine($"Total: {localPackages.Count} local packages");
         if (Available || Installed) stringBuilder.AppendLine($"Total: {packages.Count} packages");
-        console.WriteLine(Colorize(stringBuilder.ToString(), Color.BlanchedAlmond));
+        console.WriteLine(Colorize(stringBuilder.ToString(), ConsoleColor.White));
     }
 
     public override async ValueTask ExecuteUiMode()
