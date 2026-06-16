@@ -1,5 +1,5 @@
-using System.Drawing;
 using System.CommandLine;
+using System.Drawing;
 using System.Text;
 using System.Text.Json;
 using PackageManager.Alpm;
@@ -7,7 +7,9 @@ using PackageManager.Local;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 using Shelly.Utilities.Enums;
-using Shelly.Utilities.Eventing;
+using static System.CommandLine.ArgumentArity;
+using static Shelly.Cli.Interactions.AnsiUtilities;
+using static Shelly.Utilities.SizeUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
@@ -38,14 +40,12 @@ public class Explore : GlobalSettingsCommand
         var take = new Option<int>("--take", "-t") { Description = "Number of results to return", DefaultValueFactory = _ => 100 };
         var page = new Option<int>("--page", "-p") { Description = "Page number", DefaultValueFactory = _ => 1 };
         var showHidden = new Option<bool>("--show-hidden", "-w") { Description = "Show hidden packages" };
-        var package = new Argument<string?>("package") { Description = "The package to search for", Arity = ArgumentArity.ZeroOrOne };
+        var package = new Argument<string?>("package") { Description = "The package to search for", Arity = ZeroOrOne };
 
         var command = new Command("explore", "Explore repositories and packages")
-        {
-            repos, available, installed, local, take, page, showHidden, package
-        };
+            { repos, available, installed, local, take, page, showHidden, package };
 
-        command.SetAction(async (parseResult, cancellationToken) =>
+        command.SetAction(async (parseResult, _) =>
         {
             var instance = new Explore
             {
@@ -77,28 +77,22 @@ public class Explore : GlobalSettingsCommand
         if (Repos)
         {
             var repo = AlpmManager.GetRepositories();
-            foreach (var r in repo)
-            {
-                console.WriteLine(AnsiUtilities.Colorize(r, Color.BlanchedAlmond));
-            }
+            foreach (var r in repo) console.WriteLine(Colorize(r, Color.BlanchedAlmond));
 
             return;
         }
 
-        List<AlpmPackageDto> packages = [];
         using var manager = new AlpmManager();
         manager.Initialize(showHiddenPackages: ShowHidden);
-        List<LocalPackageDto> localPackages = [];
-        if (Installed)
-            packages.AddRange(manager.GetInstalledPackages());
-        if (Available)
-            packages.AddRange(manager.GetAvailablePackages());
-        if (Local)
-            localPackages.AddRange(LocalManager.GetInstalledBinaryPackages());
 
-        var config = ConfigManager.ReadConfig();
-        var sizeDisplay = config.FileSizeDisplay;
-        if (Package != null)
+        List<AlpmPackageDto> packages = [];
+        List<LocalPackageDto> localPackages = [];
+
+        if (Installed) packages.AddRange(manager.GetInstalledPackages());
+        if (Available) packages.AddRange(manager.GetAvailablePackages());
+        if (Local) localPackages.AddRange(LocalManager.GetInstalledBinaryPackages());
+
+        if (!string.IsNullOrWhiteSpace(Package))
         {
             packages = packages
                 .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
@@ -116,41 +110,32 @@ public class Explore : GlobalSettingsCommand
             if (packages.Count > 0)
                 console.WriteLine(JsonSerializer.Serialize(packages, ShellyCliJsonContext.Default.ListAlpmPackageDto));
             if (localPackages.Count > 0)
-                console.WriteLine(JsonSerializer.Serialize(localPackages,
-                    ShellyCliJsonContext.Default.ListLocalPackageDto));
+                console.WriteLine(JsonSerializer.Serialize(localPackages, ShellyCliJsonContext.Default.ListLocalPackageDto));
             return;
         }
+
+        var config = ConfigManager.ReadConfig();
+        var sizeDisplay = Enum.Parse<SizeDisplay>(config.FileSizeDisplay);
 
         if (localPackages.Count > 0)
         {
             var table = BasicTable.Execute(["Name", "Size"], localPackages, c => c.Name,
-                c => SizeUtilities.FormatSize(Enum.Parse<SizeDisplay>(sizeDisplay), c.Size));
+                c => FormatSize(sizeDisplay, c.Size));
             console.WriteLine(table);
         }
 
         if (packages.Count > 0)
         {
             var table = BasicTable.Execute(["Name", "Repository", "Version", "Size", "Description"], packages,
-                c => c.Name,
-                c => c.Repository,
-                c => c.Version,
-                c => SizeUtilities.FormatSize(Enum.Parse<SizeDisplay>(sizeDisplay), c.Size),
-                c => c.Description.Truncate(50));
+                c => c.Name, c => c.Repository, c => c.Version,
+                c => FormatSize(sizeDisplay, c.InstalledSize), c => c.Description.Truncate(50));
             console.WriteLine(table);
         }
 
         var stringBuilder = new StringBuilder();
-        if (packages.Count > 0)
-        {
-            stringBuilder.AppendLine($"Total: {packages.Count} packages");
-        }
-
-        if (localPackages.Count > 0)
-        {
-            stringBuilder.AppendLine($"Total: {localPackages.Count} local packages");
-        }
-
-        console.WriteLine(AnsiUtilities.Colorize(stringBuilder.ToString(), Color.BlanchedAlmond));
+        if (Local) stringBuilder.AppendLine($"Total: {localPackages.Count} local packages");
+        if (Available || Installed) stringBuilder.AppendLine($"Total: {packages.Count} packages");
+        console.WriteLine(Colorize(stringBuilder.ToString(), Color.BlanchedAlmond));
     }
 
     public override async ValueTask ExecuteUiMode()
@@ -158,43 +143,35 @@ public class Explore : GlobalSettingsCommand
         if (Repos)
         {
             var repos = AlpmManager.GetRepositories();
-            JsonPackFrame.WriteToStdout(repos);
-            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(AlpmEvents.InformationalOutput,
-                $"Total: {repos.Count} repositories"));
+            UiFrames.Frame(repos);
+            UiFrames.Info($"Total: {repos.Count} repositories");
             return;
         }
 
         using var manager = new AlpmManager();
+        manager.Initialize(showHiddenPackages: ShowHidden);
 
         if (Installed)
         {
-            manager.Initialize(true, showHiddenPackages: ShowHidden);
-
             var packages = manager.GetInstalledPackages();
 
             if (!string.IsNullOrWhiteSpace(Package))
-            {
                 packages = packages
                     .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
                     .Where(x => x.Score >= 90)
                     .Select(x => x.Package)
                     .ToList();
-            }
 
             var sortedList = packages.OrderBy(p => p.Name).ToList();
-            JsonPackFrame.WriteToStdout(sortedList);
-            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
-                AlpmEvents.InformationalOutput, $"Total: {sortedList.Count} packages"));
+            UiFrames.Frame(sortedList);
+            UiFrames.Info($"Showing {sortedList.Count} of {packages.Count} installed packages");
         }
 
         if (Available)
         {
-            manager.Initialize(showHiddenPackages: ShowHidden);
-
             var packages = manager.GetAvailablePackages();
 
             if (!string.IsNullOrWhiteSpace(Package))
-            {
                 packages = packages
                     .Select(x => new
                     {
@@ -205,13 +182,11 @@ public class Explore : GlobalSettingsCommand
                     .Where(x => x.Score >= 75)
                     .Select(x => x.Package)
                     .ToList();
-            }
 
             var total = packages.Count;
             var sortedList = packages.OrderBy(p => p.Name).ToList();
-            JsonPackFrame.WriteToStdout(sortedList);
-            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
-                AlpmEvents.InformationalOutput, $"Showing {sortedList.Count} of {total} available packages"));
+            UiFrames.Frame(sortedList);
+            UiFrames.Info($"Showing {sortedList.Count} of {total} available packages");
         }
 
         if (Local)
@@ -219,18 +194,15 @@ public class Explore : GlobalSettingsCommand
             var packages = LocalManager.GetInstalledBinaryPackages();
 
             if (!string.IsNullOrWhiteSpace(Package))
-            {
                 packages = packages
                     .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
                     .Where(x => x.Score >= 90)
                     .Select(x => x.Package)
                     .ToList();
-            }
 
             var sortedList = packages.OrderBy(p => p.Name).ToList();
-            JsonPackFrame.WriteToStdout(sortedList);
-            JsonPackFrame.WriteToStdout<Event>(new AlpmInformationalEvent(
-                AlpmEvents.InformationalOutput, $"Total: {sortedList.Count} packages"));
+            UiFrames.Frame(sortedList);
+            UiFrames.Info($"Showing {sortedList.Count} of {packages.Count} local packages");
         }
     }
 }
