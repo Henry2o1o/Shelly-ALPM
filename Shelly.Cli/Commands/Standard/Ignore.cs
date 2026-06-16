@@ -2,9 +2,8 @@ using System.CommandLine;
 using System.Drawing;
 using System.Text.Json;
 using PackageManager.Alpm;
-using Pastel;
-using Shelly.Cli.Interactions;
 using static System.CommandLine.ArgumentArity;
+using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
@@ -56,13 +55,9 @@ public class Ignore : GlobalSettingsCommand
             return;
         }
 
-        var isAnsiSupported = AnsiUtilities.SupportsAnsi;
-        string message;
         if (Packages.Length == 0 && !List && !Clear)
         {
-            message = isAnsiSupported ? "No packages specified".Pastel(Color.Red) : "No packages specified";
-            console.WriteLine(message);
-
+            console.WriteLine(Colorize("No packages specified", Color.Red));
             return;
         }
 
@@ -72,11 +67,7 @@ public class Ignore : GlobalSettingsCommand
         {
             manager.IgnorePackages(Packages);
             var formatPackages = string.Join(", ", Packages);
-
-            message = isAnsiSupported
-                ? $"Added to IgnorePkg list: {formatPackages}".Pastel(Color.Green)
-                : $"Added to IgnorePkg list: {formatPackages}";
-            console.WriteLine(message);
+            console.WriteLine(Colorize($"Added to IgnorePkg list: {formatPackages}", Color.Green));
             return;
         }
 
@@ -84,11 +75,7 @@ public class Ignore : GlobalSettingsCommand
         {
             manager.UnignorePackages(Packages);
             var formatPackages = string.Join(", ", Packages);
-
-            message = isAnsiSupported
-                ? $"Removed from IgnorePkg list: {formatPackages}".Pastel(Color.Green)
-                : $"Removed from IgnorePkg list: {formatPackages}";
-            console.WriteLine(message);
+            console.WriteLine(Colorize($"Removed from IgnorePkg list: {formatPackages}", Color.Green));
             return;
         }
 
@@ -96,32 +83,26 @@ public class Ignore : GlobalSettingsCommand
         if (Clear)
         {
             manager.UnignorePackages(ignored);
-
-            message = isAnsiSupported
-                ? "Cleared ignored packages.".Pastel(Color.Green)
-                : "Cleared ignored packages.";
-            console.WriteLine(message);
+            console.WriteLine(Colorize("Cleared ignored packages.", Color.Green));
             return;
         }
 
+
         if (List)
         {
+            string message;
             if (JsonOutput)
             {
                 message = JsonSerializer.Serialize(ignored, ShellyCliJsonContext.Default.ListString);
             }
             else if (ignored.Count == 0)
             {
-                message = isAnsiSupported
-                    ? "IgnorePkg list is empty.".Pastel(Color.Yellow)
-                    : "IgnorePkg list is empty.";
+                message = Colorize("IgnorePkg list is empty.", Color.Yellow);
             }
             else
             {
                 var formatPackages = string.Join(", ", ignored);
-                message = isAnsiSupported
-                    ? $"Total: {ignored.Count} ignored packages: {formatPackages}".Pastel(Color.Green)
-                    : $"Total: {ignored.Count} ignored packages: {formatPackages}";
+                message = Colorize($"Total: {ignored.Count} ignored packages: {formatPackages}", Color.Green);
             }
 
             console.WriteLine(message);
