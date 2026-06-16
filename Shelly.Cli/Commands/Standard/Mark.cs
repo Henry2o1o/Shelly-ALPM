@@ -1,6 +1,9 @@
 using System.CommandLine;
 using System.Drawing;
+using PackageManager.Alpm;
 using Shelly.Cli.Interactions;
+using static System.CommandLine.ArgumentArity;
+using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
@@ -16,15 +19,11 @@ public class Mark : GlobalSettingsCommand
     {
         var explicitOption = new Option<bool>("--explicit", "-e") { Description = "Mark the package as explicit" };
         var dependsOption = new Option<bool>("--depends", "-d") { Description = "Mark the package as a dependency" };
-        var packageOption = new Argument<string?>("package")
-            { Description = "The package to mark", Arity = ArgumentArity.ZeroOrOne };
-        var command = new Command("mark", "Mark a package as explicit or a dependency")
+        var packageOption = new Argument<string?>("package") { Description = "The package to mark", Arity = ZeroOrOne };
+        var command = new Command("mark", "Mark a package as explicit or a dependency") { explicitOption, dependsOption, packageOption };
+        command.SetAction(async (parseResult, _) =>
         {
-            explicitOption, dependsOption, packageOption
-        };
-        command.SetAction(async (parseResult, cancellationToken) =>
-        {
-            var instance = new Mark()
+            var instance = new Mark
             {
                 Explicit = parseResult.GetValue(explicitOption),
                 Depends = parseResult.GetValue(dependsOption),
@@ -45,18 +44,56 @@ public class Mark : GlobalSettingsCommand
             return;
         }
 
-        if (Package is null)
+        if (string.IsNullOrWhiteSpace(Package))
         {
-            console.WriteLine(AnsiUtilities.Colorize("Error: No packages specified", Color.Red));
+            console.WriteLine(Colorize("Error: No package specified", Color.Red));
             return;
         }
+
+        if (Explicit == Depends)
+        {
+            console.WriteLine(Colorize("Error: Choose exactly one of --explicit or --depends", Color.Red));
+            return;
+        }
+
         RootElevator.EnsureRootExectuion();
 
-        throw new NotImplementedException();
+        if (!NoConfirm && !Confirm.Execute("Do you want to proceed with the operation?"))
+        {
+            console.WriteLine(Colorize("Operation Cancelled.", Color.Yellow));
+            return;
+        }
+
+        using var manager = new AlpmManager();
+        manager.Initialize(true);
+
+        var success = Explicit ? manager.MarkPackageAsExplicit(Package) : manager.MarkPackageAsDepend(Package);
+        console.WriteLine(success
+            ? Colorize("Package marked successfully!", Color.Green)
+            : Colorize("Error: Marking failed for the package. See messages above.", Color.Red));
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        throw new NotImplementedException();
+        if (string.IsNullOrWhiteSpace(Package))
+        {
+            UiFrames.Error("No package specified.");
+            return;
+        }
+
+        if (Explicit == Depends)
+        {
+            UiFrames.Error("Choose exactly one of --explicit or --depends.");
+            return;
+        }
+
+        using var manager = new AlpmManager();
+        manager.Initialize(true);
+
+        UiFrames.TxStart("Marking package...");
+
+        var success = Explicit ? manager.MarkPackageAsExplicit(Package) : manager.MarkPackageAsDepend(Package);
+
+        UiFrames.TxFinish(success, "Package marked successfully!", "Marking failed for the package.");
     }
 }
