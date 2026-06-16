@@ -69,6 +69,7 @@ namespace Shelly.Cli;
 [JsonSerializable(typeof(List<DowngradeOptionDto>))]
 [JsonSerializable(typeof(PackageInfo))]
 [JsonSerializable(typeof(List<PackageInfo>))]
+[JsonSerializable(typeof(Dictionary<string, string?>))]
 internal partial class ShellyCliJsonContext : JsonSerializerContext
 {
     

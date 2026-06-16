@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
+using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
 
@@ -36,5 +37,15 @@ var appImage = new Command("appimage", "Manage AppImages")
     AppImageUpdateManagerVersion.Create()
 };
 root.Add(appImage);
+
+var config = new Command("config", "Manage shelly configuration")
+{
+    ConfigGet.Create(),
+    ConfigSet.Create(),
+    ConfigList.Create(),
+    ConfigReset.Create(),
+    ConfigParallel.Create()
+};
+root.Add(config);
 
 return await root.Parse(args).InvokeAsync();
