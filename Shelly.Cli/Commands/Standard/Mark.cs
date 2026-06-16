@@ -50,7 +50,7 @@ public class Mark : GlobalSettingsCommand
             console.WriteLine(AnsiUtilities.Colorize("Error: No packages specified", Color.Red));
             return;
         }
-        
+        RootElevator.EnsureRootExectuion();
 
         throw new NotImplementedException();
     }
