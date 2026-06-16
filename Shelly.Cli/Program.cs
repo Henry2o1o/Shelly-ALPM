@@ -22,6 +22,7 @@ root.Add(Mark.Create());
 root.Add(PurifyPackages.Create());
 root.Add(Remove.Create());
 root.Add(Sync.Create());
+root.Add(Update.Create());
 
 var appImage = new Command("appimage", "Manage AppImages")
 {
