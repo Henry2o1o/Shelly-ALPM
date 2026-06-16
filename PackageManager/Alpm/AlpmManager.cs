@@ -581,6 +581,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
     {
         // Use a temporary file for atomic writes - prevents corruption if download is interrupted
         string tempPath = localpath + ".part";
+        var isDatabase = fullUrl.EndsWith(".db") || fullUrl.EndsWith(".db.sig");
         InformationalEvent?.Invoke(this,
             new InformationalEventArgs(AlpmEventType.TraceOutput, $"Using temp file {tempPath}"));
         SocketsHttpHandler? handler = null;
@@ -633,7 +634,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                     if (percent == lastPercent) continue;
                     lastPercent = percent;
                     Progress?.Invoke(this, new AlpmProgressEventArgs(
-                        AlpmProgressType.PackageDownload,
+                        isDatabase ? AlpmProgressType.DatabaseDownload : AlpmProgressType.PackageDownload,
                         fileName,
                         percent,
                         (ulong)totalBytes.Value,
@@ -645,7 +646,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 if (lastPercent != 100)
                 {
                     Progress?.Invoke(this, new AlpmProgressEventArgs(
-                        AlpmProgressType.PackageDownload,
+                        isDatabase ? AlpmProgressType.DatabaseDownload : AlpmProgressType.PackageDownload,
                         fileName,
                         100,
                         (ulong)(totalBytes ?? totalRead),
