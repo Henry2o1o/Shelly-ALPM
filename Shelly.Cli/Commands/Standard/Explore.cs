@@ -28,6 +28,8 @@ public class Explore : GlobalSettingsCommand
 
     private bool ShowHidden { get; set; }
 
+    private bool Info { get; set; }
+
     private string? Package { get; set; }
 
     public static Command Create()
@@ -39,10 +41,11 @@ public class Explore : GlobalSettingsCommand
         var take = new Option<int>("--take", "-t") { Description = "Number of results to return", DefaultValueFactory = _ => 100 };
         var page = new Option<int>("--page", "-p") { Description = "Page number", DefaultValueFactory = _ => 1 };
         var showHidden = new Option<bool>("--show-hidden", "-w") { Description = "Show hidden packages" };
+        var info = new Option<bool>("--info", "-I") { Description = "Show detailed information for a single package" };
         var package = new Argument<string?>("package") { Description = "The package to search for", Arity = ZeroOrOne };
 
         var command = new Command("explore", "Explore repositories and packages")
-            { repos, available, installed, local, take, page, showHidden, package };
+            { repos, available, installed, local, take, page, showHidden, info, package };
 
         command.SetAction(async (parseResult, _) =>
         {
@@ -55,6 +58,7 @@ public class Explore : GlobalSettingsCommand
                 Take = parseResult.GetValue(take),
                 Page = parseResult.GetValue(page),
                 ShowHidden = parseResult.GetValue(showHidden),
+                Info = parseResult.GetValue(info),
                 Package = parseResult.GetValue(package)
             };
             GlobalOptions.Apply(instance, parseResult);
@@ -90,6 +94,35 @@ public class Explore : GlobalSettingsCommand
         if (Installed) packages.AddRange(manager.GetInstalledPackages());
         if (Available) packages.AddRange(manager.GetAvailablePackages());
         if (Local) localPackages.AddRange(LocalManager.GetInstalledBinaryPackages());
+
+        if (Info)
+        {
+            if (string.IsNullOrWhiteSpace(Package))
+            {
+                console.WriteLine(Colorize("No package specified", ConsoleColor.Red));
+                return;
+            }
+
+            var match = packages.FirstOrDefault(x =>
+                string.Equals(x.Name, Package, StringComparison.OrdinalIgnoreCase));
+
+            if (match is null)
+            {
+                console.WriteLine(Colorize($"No package named {Package} found", ConsoleColor.Red));
+                return;
+            }
+
+            if (JsonOutput)
+            {
+                console.WriteLine(JsonSerializer.Serialize(match, ShellyCliJsonContext.Default.AlpmPackageDto));
+                return;
+            }
+
+            var infoConfig = ConfigManager.ReadConfig();
+            var infoSizeDisplay = Enum.Parse<SizeDisplay>(infoConfig.FileSizeDisplay);
+            WritePackageInfo(console, match, infoSizeDisplay);
+            return;
+        }
 
         if (!string.IsNullOrWhiteSpace(Package))
         {
@@ -137,8 +170,57 @@ public class Explore : GlobalSettingsCommand
         console.WriteLine(Colorize(stringBuilder.ToString(), ConsoleColor.White));
     }
 
+    private static void WritePackageInfo(IShellyConsole console, AlpmPackageDto p, SizeDisplay sizeDisplay)
+    {
+        console.WriteLine(Colorize($"Name: {p.Name}", ConsoleColor.Green));
+        console.WriteLine(Colorize($"Version: {p.Version}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Description: {p.Description}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"URL: {p.Url}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Licenses: {string.Join(',', p.Licenses)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Groups: {string.Join(',', p.Groups)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Provides: {string.Join(',', p.Provides)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Depends On: {string.Join(',', p.Depends)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Optional Depends: {string.Join(',', p.OptDepends)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Required By: {string.Join(',', p.RequiredBy)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Conflicts With: {string.Join(',', p.Conflicts)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Replaces: {string.Join(',', p.Replaces)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Installed Size: {FormatSize(sizeDisplay, p.InstalledSize)}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Build Date: {p.BuildDate.ToLongDateString()}", ConsoleColor.Blue));
+        var installDate = p.InstallDate.HasValue ? p.InstallDate.Value.ToLongDateString() : "Not Installed";
+        console.WriteLine(Colorize($"Install Date: {installDate}", ConsoleColor.Blue));
+        console.WriteLine(Colorize($"Install Reason: {p.InstallReason}", ConsoleColor.Blue));
+    }
+
     public override async ValueTask ExecuteUiMode()
     {
+        if (Info)
+        {
+            using var infoManager = new AlpmManager();
+            infoManager.Initialize(showHiddenPackages: ShowHidden);
+
+            if (string.IsNullOrWhiteSpace(Package))
+            {
+                UiFrames.Info("No package specified");
+                return;
+            }
+
+            List<AlpmPackageDto> infoPackages = [];
+            if (Installed) infoPackages.AddRange(infoManager.GetInstalledPackages());
+            if (Available) infoPackages.AddRange(infoManager.GetAvailablePackages());
+
+            var match = infoPackages.FirstOrDefault(x =>
+                string.Equals(x.Name, Package, StringComparison.OrdinalIgnoreCase));
+
+            if (match is null)
+            {
+                UiFrames.Info($"No package named {Package} found");
+                return;
+            }
+
+            UiFrames.Frame(new List<AlpmPackageDto> { match });
+            return;
+        }
+
         if (Repos)
         {
             var repos = AlpmManager.GetRepositories();

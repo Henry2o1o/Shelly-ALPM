@@ -19,6 +19,7 @@ root.Add(CheckPackageUpdateNonRoot.Create());
 root.Add(Export.Create());
 root.Add(FixPermissions.Create());
 root.Add(Mark.Create());
+root.Add(PurifyPackages.Create());
 
 var appImage = new Command("appimage", "Manage AppImages")
 {
