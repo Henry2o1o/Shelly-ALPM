@@ -1,20 +1,28 @@
+using System.CommandLine;
 using System.Drawing;
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.CommandLine;
 using PackageManager.Alpm;
 using Pastel;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Models.Standard.Downgrade;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
+using static System.CommandLine.ArgumentArity;
 
 namespace Shelly.Cli.Commands.Standard;
 
 public partial class DowngradePackage : GlobalSettingsCommand
 {
+    private const string ArchRepo = "https://archive.archlinux.org/packages/";
+    private const string CachyosRepo = "https://archive.cachyos.org/archive/cachyos/";
+    private const string CachyosV3Repo = "https://archive.cachyos.org/archive/cachyos-v3/";
+    private const string CachyosV4Repo = "https://archive.cachyos.org/archive/cachyos-v4/";
+
+    private const string PacmanCache = "/var/cache/pacman/pkg/";
+
     private bool UseOldest { get; set; }
 
     private bool AddIgnore { get; set; }
@@ -31,11 +39,11 @@ public partial class DowngradePackage : GlobalSettingsCommand
         var ignore = new Option<bool>("--ignore", "-i") { Description = "Add to IgnorePkg list" };
         var listOptions = new Option<bool>("--list-options", "-l") { Description = "List available downgrade versions" };
         var target = new Option<string?>("--target", "-t") { Description = "Install a specific downgrade target by exact version or package filename" };
-        var package = new Argument<string?>("package") { Description = "The package to downgrade", Arity = ArgumentArity.ZeroOrOne };
+        var package = new Argument<string?>("package") { Description = "The package to downgrade", Arity = ZeroOrOne };
 
         var command = new Command("downgrade", "Downgrade a package") { oldest, ignore, listOptions, target, package };
 
-        command.SetAction(async (parseResult, cancellationToken) =>
+        command.SetAction(async (parseResult, _) =>
         {
             var instance = new DowngradePackage
             {
@@ -53,13 +61,6 @@ public partial class DowngradePackage : GlobalSettingsCommand
         return command;
     }
 
-    private const string ArchRepo = "https://archive.archlinux.org/packages/";
-    private const string CachyosRepo = "https://archive.cachyos.org/archive/cachyos/";
-    private const string CachyosV3Repo = "https://archive.cachyos.org/archive/cachyos-v3/";
-    private const string CachyosV4Repo = "https://archive.cachyos.org/archive/cachyos-v4/";
-
-    private const string PacmanCache = "/var/cache/pacman/pkg/";
-
     [GeneratedRegex("[0-9][a-zA-Z0-9._]+")]
     private static partial Regex VersionRegex();
 
@@ -68,18 +69,19 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
     public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
-        var isAnsiSupported = AnsiUtilities.SupportsAnsi;
-        string message;
         if (UiMode)
         {
             await ExecuteUiMode();
             return;
         }
 
+        var isAnsiSupported = AnsiUtilities.SupportsAnsi;
+        string message;
+
         if (!string.IsNullOrWhiteSpace(Target) && UseOldest)
         {
             message = isAnsiSupported
-                ? $"Error: Cannot combine --target with --latest or --oldest.".Pastel(Color.Red)
+                ? "Error: Cannot combine --target with --latest or --oldest.".Pastel(Color.Red)
                 : "Error: Cannot combine --target with --latest or --oldest.";
             console.WriteLine(message);
             return;
@@ -88,7 +90,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
         if (!string.IsNullOrWhiteSpace(Target) && ListOptions)
         {
             message = isAnsiSupported
-                ? $"Error: Cannot combine --target with --list-options.".Pastel(Color.Red)
+                ? "Error: Cannot combine --target with --list-options.".Pastel(Color.Red)
                 : "Error: Cannot combine --target with --list-options.";
             console.WriteLine(message);
             return;
@@ -97,7 +99,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
         if (string.IsNullOrWhiteSpace(Package))
         {
             message = isAnsiSupported
-                ? $"Error: No package specified.".Pastel(Color.Red)
+                ? "Error: No package specified.".Pastel(Color.Red)
                 : "Error: No package specified.";
             console.WriteLine(message);
             return;
@@ -106,6 +108,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
         RootElevator.EnsureRootExectuion();
         using var manager = new AlpmManager();
         manager.Initialize(true, showHiddenPackages: true);
+
         var installedPackages = manager.GetInstalledPackage(Package);
         if (installedPackages == null)
         {
@@ -117,7 +120,8 @@ public partial class DowngradePackage : GlobalSettingsCommand
         message = isAnsiSupported
             ? $"Looking for downgrade options for: {Package}".Pastel(Color.Green)
             : $"Looking for downgrade options for: {Package}";
-        console.WriteLine(message);
+        if (!JsonOutput) console.WriteLine(message);
+
         var packages = await GatherDowngradeOptions(manager, installedPackages);
         if (packages.Count == 0)
         {
@@ -130,10 +134,6 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         if (ListOptions)
         {
-            message = isAnsiSupported
-                ? $"Available downgrade options for: {Package}".Pastel(Color.Green)
-                : $"Available downgrade options for: {Package}";
-            console.WriteLine(message);
             if (JsonOutput)
             {
                 var json = JsonSerializer.Serialize(packages, ShellyCliJsonContext.Default.ListPackageInfo);
@@ -141,9 +141,13 @@ public partial class DowngradePackage : GlobalSettingsCommand
                 return;
             }
 
+            message = isAnsiSupported
+                ? $"Available downgrade options for: {Package}".Pastel(Color.Green)
+                : $"Available downgrade options for: {Package}";
+            console.WriteLine(message);
+
             message = BasicTable.Execute(["Filename", "Location", "Installed"], packages, c => c.Filename,
-                c => c.Location.ToString(),
-                c => c.IsInstalled.ToString());
+                c => c.Location.ToString(), c => c.IsInstalled.ToString());
             console.WriteLine(message);
             return;
         }
@@ -153,117 +157,110 @@ public partial class DowngradePackage : GlobalSettingsCommand
         {
             selectedPackage = UseOldest ? packages[^1] : packages[0];
         }
+        else if (string.IsNullOrWhiteSpace(Target))
+        {
+            var selection = BasicSelection.Execute("Select Package", packages.Select(x => x.Filename).ToList());
+            selectedPackage = packages[selection];
+        }
         else
         {
-            if (string.IsNullOrWhiteSpace(Target))
+            try
             {
-                var selection = BasicSelection.Execute("Select Package", packages.Select(x => x.Filename).ToList());
-                selectedPackage = packages[selection];
+                selectedPackage = MatchPackageToTargetVersion(packages, installedPackages, Target);
             }
-            else
+            catch (Exception ex)
             {
-                try
-                {
-                    selectedPackage = MatchPackageToTargetVersion(packages, installedPackages, Target);
-                }
-                catch (Exception ex)
-                {
-                    message = isAnsiSupported ? $"Error: {ex.Message}".Pastel(Color.Red) : $"Error: {ex.Message}";
-                    console.WriteLine(message);
-                    if (Verbose)
-                    {
-                        message = isAnsiSupported
-                            ? ex.StackTrace.Pastel(Color.Red) ?? $"No stacktrace found.".Pastel(Color.Red)
-                            : ex.StackTrace ?? "No stacktrace found.";
-                        console.WriteLine(message);
-                    }
-
-                    return;
-                }
-
-                var path = await ResolveFilePathCli(selectedPackage, console);
-
-                if (path == null) return;
-                if (!NoConfirm && !Confirm.Execute("Do you want to proceed with the installation?", true))
-                {
-                    message = isAnsiSupported ? $"Operation Cancelled.".Pastel(Color.Yellow) : $"Operation Cancelled.";
-                    console.WriteLine(message);
-                    return;
-                }
-
-                message = isAnsiSupported
-                    ? $"Installing: {selectedPackage.Filename}".Pastel(Color.Green)
-                    : $"Installing: {selectedPackage.Filename}";
+                message = isAnsiSupported ? $"Error: {ex.Message}".Pastel(Color.Red) : $"Error: {ex.Message}";
                 console.WriteLine(message);
-
-                var isSuccess = await StandardSinglePaneOutput.Output(console, manager,
-                    m => m.InstallLocalPackage(path),
-                    NoConfirm);
-
-                if (selectedPackage.Location == Location.Remote && File.Exists(path))
-                {
-                    try
-                    {
-                        File.Delete(path);
-                    }
-                    catch (Exception e)
-                    {
-                        message = isAnsiSupported ? $"Error: {e.Message}".Pastel(Color.Red) : $"Error: {e.Message}";
-                        console.WriteLine(message);
-                        if (Verbose)
-                        {
-                            message = isAnsiSupported
-                                ? e.StackTrace.Pastel(Color.Red) ?? $"No stacktrace found.".Pastel(Color.Red)
-                                : e.StackTrace ?? "No stacktrace found.";
-                            console.WriteLine(message);
-                        }
-                    }
-                }
-
-                if (!isSuccess)
+                if (Verbose)
                 {
                     message = isAnsiSupported
-                        ? $"Downgrade failed. See errors above.".Pastel(Color.Red)
-                        : $"Downgrade failed. See errors above.";
+                        ? ex.StackTrace.Pastel(Color.Red) ?? "No stacktrace found.".Pastel(Color.Red)
+                        : ex.StackTrace ?? "No stacktrace found.";
                     console.WriteLine(message);
-                    return;
                 }
 
-                if (AddIgnore || (!NoConfirm && Confirm.Execute("Do you want to add package to IgnorePkg list?", true)))
-                {
-                    message = isAnsiSupported
-                        ? $"Adding to IgnorePkg: {Package}".Pastel(Color.Green)
-                        : $"Adding to IgnorePkg: {Package}";
-                    console.WriteLine(message);
-                    try
-                    {
-                        manager.IgnorePackage(selectedPackage.Name);
-                    }
-                    catch (Exception e)
-                    {
-                        message = isAnsiSupported ? $"Error: {e.Message}".Pastel(Color.Red) : $"Error: {e.Message}";
-                        console.WriteLine(message);
-                        if (Verbose)
-                        {
-                            message = isAnsiSupported
-                                ? e.StackTrace.Pastel(Color.Red) ?? $"No stacktrace found.".Pastel(Color.Red)
-                                : e.StackTrace ?? "No stacktrace found.";
-                            console.WriteLine(message);
-                        }
-
-                        return;
-                    }
-                }
-
-                message = isAnsiSupported ? $"Downgrade complete.".Pastel(Color.Green) : $"Downgrade complete.";
-                console.WriteLine(message);
+                return;
             }
         }
+
+        var path = await ResolveFilePathCli(selectedPackage, console);
+        if (path == null) return;
+
+        if (!NoConfirm && !Confirm.Execute("Do you want to proceed with the installation?"))
+        {
+            message = isAnsiSupported ? "Operation Cancelled.".Pastel(Color.Yellow) : "Operation Cancelled.";
+            console.WriteLine(message);
+            return;
+        }
+
+        message = isAnsiSupported
+            ? $"Installing: {selectedPackage.Filename}".Pastel(Color.Green)
+            : $"Installing: {selectedPackage.Filename}";
+        console.WriteLine(message);
+
+        var isSuccess = await StandardSinglePaneOutput.Output(console, manager, m => m.InstallLocalPackage(path), NoConfirm);
+
+        if (selectedPackage.Location == Location.Remote && File.Exists(path))
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception e)
+            {
+                message = isAnsiSupported ? $"Error: {e.Message}".Pastel(Color.Red) : $"Error: {e.Message}";
+                console.WriteLine(message);
+                if (Verbose)
+                {
+                    message = isAnsiSupported
+                        ? e.StackTrace.Pastel(Color.Red) ?? "No stacktrace found.".Pastel(Color.Red)
+                        : e.StackTrace ?? "No stacktrace found.";
+                    console.WriteLine(message);
+                }
+            }
+
+        if (!isSuccess)
+        {
+            message = isAnsiSupported
+                ? "Downgrade failed. See errors above.".Pastel(Color.Red)
+                : "Downgrade failed. See errors above.";
+            console.WriteLine(message);
+            return;
+        }
+
+        if (AddIgnore || (!NoConfirm && Confirm.Execute("Do you want to add package to IgnorePkg list?")))
+        {
+            message = isAnsiSupported
+                ? $"Adding to IgnorePkg: {Package}".Pastel(Color.Green)
+                : $"Adding to IgnorePkg: {Package}";
+            console.WriteLine(message);
+            try
+            {
+                manager.IgnorePackage(selectedPackage.Name);
+            }
+            catch (Exception e)
+            {
+                message = isAnsiSupported ? $"Error: {e.Message}".Pastel(Color.Red) : $"Error: {e.Message}";
+                console.WriteLine(message);
+                if (Verbose)
+                {
+                    message = isAnsiSupported
+                        ? e.StackTrace.Pastel(Color.Red) ?? "No stacktrace found.".Pastel(Color.Red)
+                        : e.StackTrace ?? "No stacktrace found.";
+                    console.WriteLine(message);
+                }
+
+                return;
+            }
+        }
+
+        message = isAnsiSupported ? "Downgrade complete.".Pastel(Color.Green) : "Downgrade complete.";
+        console.WriteLine(message);
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        if (Package == null)
+        if (string.IsNullOrWhiteSpace(Package))
         {
             UiFrames.Error("UI mode downgrade requires exactly one package.");
             return;
@@ -271,6 +268,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         using var manager = new AlpmManager();
         manager.Initialize(true, showHiddenPackages: true);
+
         var package = manager.GetInstalledPackage(Package);
         if (package == null)
         {
@@ -287,8 +285,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         if (ListOptions)
         {
-            var options = packages
-                .Select(p => new DowngradeOptionDto(p.Name, p.Filename, p.Location.ToString(), p.IsInstalled)).ToList();
+            var options = packages.Select(p => new DowngradeOptionDto(p.Name, p.Filename, p.Location.ToString(), p.IsInstalled)).ToList();
             UiFrames.Frame(options);
             return;
         }
@@ -328,13 +325,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         UiFrames.TxStart($"Installing {selection.Name} {selection.Filename}...");
 
-        var isSuccess = await UiModeOutput.Run(manager,
-            m => m.InstallLocalPackage(Path.GetFullPath(filePath)));
-        if (!isSuccess)
-        {
-            UiFrames.TxFailed("Downgrade failed.");
-            return;
-        }
+        var isSuccess = await UiModeOutput.Run(manager, m => m.InstallLocalPackage(Path.GetFullPath(filePath)));
 
         if (selection.Location == Location.Remote && File.Exists(filePath))
             try
@@ -343,11 +334,14 @@ public partial class DowngradePackage : GlobalSettingsCommand
             }
             catch
             {
-                if (Verbose)
-                {
-                    UiFrames.Info("Failed to delete downloaded file.");
-                }
+                if (Verbose) UiFrames.Info("Failed to delete downloaded file.");
             }
+
+        if (!isSuccess)
+        {
+            UiFrames.TxFailed("Downgrade failed.");
+            return;
+        }
 
         if (AddIgnore)
             try
@@ -356,15 +350,11 @@ public partial class DowngradePackage : GlobalSettingsCommand
             }
             catch
             {
-                if (Verbose)
-                {
-                    UiFrames.Info("Failed to add package to IgnorePkg list.");
-                }
+                if (Verbose) UiFrames.Info("Failed to add package to IgnorePkg list.");
             }
 
         UiFrames.TxDone("Package downgraded successfully!");
     }
-
 
     private static async Task<string?> ResolveFilePathCli(PackageInfo selection, IShellyConsole console)
     {
@@ -405,7 +395,6 @@ public partial class DowngradePackage : GlobalSettingsCommand
         return SortDowngradeOptions(packages);
     }
 
-
     private static List<PackageInfo> SortDowngradeOptions(List<PackageInfo> packages)
     {
         var naturalComparer = StringComparer.Create(CultureInfo.InvariantCulture, CompareOptions.NumericOrdering);
@@ -426,7 +415,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
             PooledConnectionLifetime = TimeSpan.FromMinutes(2)
         })
         {
-            Timeout = TimeSpan.FromMinutes(15),
+            Timeout = TimeSpan.FromSeconds(10),
             DefaultRequestHeaders = { UserAgent = { Http.UserAgent } }
         };
     }
