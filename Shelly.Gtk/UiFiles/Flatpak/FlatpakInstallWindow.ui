@@ -92,13 +92,13 @@
                                                 <property name="spacing">8</property>
                                                 <child>
                                                     <object class="GtkImage">
-                                                        <property name="icon-name">edit-delete-symbolic</property>
+                                                        <property name="icon-name">applications-system-symbolic</property>
                                                         <property name="pixel-size">16</property>
                                                     </object>
                                                 </child>
                                                 <child>
                                                     <object class="GtkLabel">
-                                                        <property name="label" translatable="yes">Remove</property>
+                                                        <property name="label" translatable="yes">Manage</property>
                                                         <property name="halign">start</property>
                                                     </object>
                                                 </child>
