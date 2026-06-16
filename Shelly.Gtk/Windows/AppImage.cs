@@ -58,6 +58,8 @@ public sealed class AppImage(
 
     public string[] ListensTo => [DirtyScopes.AppImage, DirtyScopes.Config];
 
+    private List<AppImageDto>? _appImageUpdates;
+
     public void Reload()
     {
         _ = LoadDataAsync();
@@ -156,7 +158,7 @@ public sealed class AppImage(
         const string legacyInstallDir = "/opt/shelly";
         var legacyLocalDbDir = XdgPaths.ShellyCache("appimage-local-meta-store", "appimage-metadata.db");
 
-        var needsMigration =  File.Exists(legacyLocalDbDir);
+        var needsMigration = File.Exists(legacyLocalDbDir);
 
         if (needsMigration)
         {
@@ -190,6 +192,34 @@ public sealed class AppImage(
             _dropZone.SetVisible(_appImages.Count == 0);
 
             return false;
+        });
+
+        //fire and forget
+        _ = Task.Run(async () =>
+        {
+            _appImageUpdates = await unprivilegedOperationService.GetUpdatesAppImagesAsync();
+
+            Functions.IdleAdd(0, () =>
+            {
+                var index = 0;
+                for (var row = _appListBox.GetFirstChild(); row != null; row = row.GetNextSibling())
+                {
+                    if (row is not ListBoxRow listBoxRow) continue;
+                    var app = _appImages[index++];
+
+                    var update = _appImageUpdates.FirstOrDefault(u => u.Name == app.Name);
+                    if (update == null) continue;
+
+                    var hbox = listBoxRow.GetChild() as Box;
+                    var vbox = hbox?.GetFirstChild()?.GetNextSibling() as Box;
+                    var versionHBox = vbox?.GetFirstChild()?.GetNextSibling() as Box;
+                    if (versionHBox?.GetLastChild() is not Label badge) continue;
+                    badge.SetText(T("Update Available: {0}", update.Version));
+                    badge.SetVisible(true);
+                }
+
+                return false;
+            });
         });
     }
 
@@ -292,11 +322,19 @@ public sealed class AppImage(
         nameLabel.Xalign = 0;
         vbox.Append(nameLabel);
 
+        var versionHBox = Box.New(Orientation.Horizontal, 6);
         var versionLabel = Label.New(app.Version);
         versionLabel.AddCssClass("caption");
         versionLabel.AddCssClass("dim-label");
         versionLabel.Xalign = 0;
-        vbox.Append(versionLabel);
+        versionHBox.Append(versionLabel);
+
+        var updateLabel = Label.New(string.Empty);
+        updateLabel.SetVisible(false);
+        updateLabel.Valign = Align.Center;
+        versionHBox.Append(updateLabel);
+
+        vbox.Append(versionHBox);
 
         if (!string.IsNullOrEmpty(app.Description))
         {
@@ -419,7 +457,7 @@ public sealed class AppImage(
             lockoutService.Hide();
         }
     }
-    
+
 
     private void ShowListPage()
     {
