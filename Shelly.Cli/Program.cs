@@ -11,6 +11,7 @@ using AurListUpdates = Shelly.Cli.Commands.Aur.ListUpdates;
 using AurSearch = Shelly.Cli.Commands.Aur.Search;
 using AurSearchPackageBuild = Shelly.Cli.Commands.Aur.SearchPackageBuild;
 using Shelly.Cli.Commands.Config;
+using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
 
@@ -70,5 +71,7 @@ var aur = new Command("aur", "Manage AUR packages")
     AurSearchPackageBuild.Create()
 };
 root.Add(aur);
+
+root.Add(Keyring.Create());
 
 return await root.Parse(args).InvokeAsync();
