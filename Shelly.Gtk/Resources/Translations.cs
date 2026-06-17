@@ -18,11 +18,21 @@ internal static partial class Translations
 
     // ReSharper disable once InconsistentNaming
     private const int LC_ALL = 6;
+    
+    [DllImport("libc", SetLastError = true)]
+    private static extern int setenv(string name, string value, int overwrite);
+    
+    [DllImport("libc", SetLastError = true)]
+    private static extern int unsetenv(string name);
 
     internal static void Init(string? culture = null)
     {
-        var locale = string.IsNullOrWhiteSpace(culture) ? "" : culture;
-        setlocale(LC_ALL, locale);
+        if (string.IsNullOrWhiteSpace(culture))
+            unsetenv("LANGUAGE");   
+        else
+            setenv("LANGUAGE", culture, 1);
+        
+        setlocale(LC_ALL, "");
         const string localeDir = "/usr/share/locale";
         bindtextdomain(Domain, localeDir);
         bind_textdomain_codeset(Domain, "UTF-8");
