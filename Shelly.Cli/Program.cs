@@ -119,6 +119,10 @@ var flatpak = new Command("flatpak", "Manage flatpak")
 };
 root.Add(flatpak);
 
+root.Description = "Shelly — a modern, unified package manager for Arch Linux. " +
+                   "Install, update, search, and manage standard (ALPM) packages, " +
+                   "the AUR, Flatpaks, and AppImages from a single command-line interface.";
+
 var helpOption = root.Options.OfType<HelpOption>().FirstOrDefault();
 if (helpOption is { Action: HelpAction defaultHelp })
     helpOption.Action = new ShortcodeHelpAction(defaultHelp);
