@@ -1,7 +1,7 @@
 using System.CommandLine;
 using PackageManager.Alpm;
-using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
+using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
@@ -36,11 +36,11 @@ public class Sync : GlobalSettingsCommand
 
         RootElevator.EnsureRootExectuion();
 
-        console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", ConsoleColor.Yellow));
+        console.WriteLine(Colorize("Initializing ALPM...", ConsoleColor.Yellow));
         using var manager = new AlpmManager();
         manager.Initialize(true);
 
-        console.WriteLine(AnsiUtilities.Colorize("Synchronizing package databases...", ConsoleColor.Yellow));
+        console.WriteLine(Colorize("Synchronizing package databases...", ConsoleColor.Yellow));
 
         var result = await StandardSinglePaneOutput.Output(
             console, manager, m =>
@@ -50,8 +50,8 @@ public class Sync : GlobalSettingsCommand
             }, NoConfirm);
 
         console.WriteLine(result
-            ? AnsiUtilities.Colorize("Package databases synchronized successfully!", ConsoleColor.Green)
-            : AnsiUtilities.Colorize("Sync failed. See errors above.", ConsoleColor.Red));
+            ? Colorize("Package databases synchronized successfully!", ConsoleColor.Green)
+            : Colorize("Sync failed. See errors above.", ConsoleColor.Red));
     }
 
     public override async ValueTask ExecuteUiMode()
