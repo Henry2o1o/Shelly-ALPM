@@ -332,6 +332,8 @@ public sealed class AppImage(
         var updateLabel = Label.New(string.Empty);
         updateLabel.SetVisible(false);
         updateLabel.Valign = Align.Center;
+        updateLabel.AddCssClass("caption");
+        updateLabel.AddCssClass("dim-label");
         versionHBox.Append(updateLabel);
 
         vbox.Append(versionHBox);
@@ -362,19 +364,15 @@ public sealed class AppImage(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".local/share/icons/hicolor/256x256/apps"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".local/share/icons/hicolor/scalable/apps"),
-            "/usr/share/icons/hicolor/256x256/apps",
-            "/usr/share/icons/hicolor/scalable/apps"
+                ".local/share/icons/hicolor/scalable/apps")
         ];
 
-        foreach (var dir in searchDirs)
-        {
-            if (!Directory.Exists(dir)) continue;
-            var matches = Directory.GetFiles(dir, $"{iconName}.*");
-            if (matches.Length > 0) return matches[0];
-        }
-
-        return null;
+        return (from dir in searchDirs
+            where Directory.Exists(dir)
+            select Directory.GetFiles(dir, $"{iconName}.*")
+            into matches
+            where matches.Length > 0
+            select matches[0]).FirstOrDefault();
     }
 
     private void FilterList()
