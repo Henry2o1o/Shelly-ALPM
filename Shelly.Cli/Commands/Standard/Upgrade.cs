@@ -10,7 +10,7 @@ using static System.Enum;
 
 namespace Shelly.Cli.Commands.Standard;
 
-public partial class Upgrade : GlobalSettingsCommand
+public class Upgrade : GlobalSettingsCommand
 {
     public static Command Create()
     {
@@ -96,7 +96,9 @@ public partial class Upgrade : GlobalSettingsCommand
             return;
         }
 
-        message = ansiSupport ? "Starting Systeam Upgrade...".Pastel(ConsoleColor.Green) : "Starting Systeam Upgrade...";
+        message = ansiSupport
+            ? "Starting Systeam Upgrade...".Pastel(ConsoleColor.Green)
+            : "Starting Systeam Upgrade...";
         console.WriteLine(message);
         var upgradeResult =
             await StandardSinglePaneOutput.Output(console, manager, x => x.SyncSystemUpdate(), NoConfirm);

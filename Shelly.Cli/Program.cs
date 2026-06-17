@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
+using AurUpgrade = Shelly.Cli.Commands.Aur.Upgrade;
 using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
@@ -47,5 +48,11 @@ var config = new Command("config", "Manage shelly configuration")
     ConfigParallel.Create()
 };
 root.Add(config);
+
+var aur = new Command("aur", "Manage AUR packages")
+{
+    AurUpgrade.Create()
+};
+root.Add(aur);
 
 return await root.Parse(args).InvokeAsync();
