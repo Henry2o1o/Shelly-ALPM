@@ -10,6 +10,25 @@ using AurListInstalled = Shelly.Cli.Commands.Aur.ListInstalled;
 using AurListUpdates = Shelly.Cli.Commands.Aur.ListUpdates;
 using AurSearch = Shelly.Cli.Commands.Aur.Search;
 using AurSearchPackageBuild = Shelly.Cli.Commands.Aur.SearchPackageBuild;
+using FlatpakInstall = Shelly.Cli.Commands.Flatpak.Install;
+using FlatpakUpdate = Shelly.Cli.Commands.Flatpak.Update;
+using FlatpakList = Shelly.Cli.Commands.Flatpak.List;
+using FlatpakListUpdates = Shelly.Cli.Commands.Flatpak.ListUpdates;
+using FlatpakRunning = Shelly.Cli.Commands.Flatpak.Running;
+using FlatpakRepair = Shelly.Cli.Commands.Flatpak.Repair;
+using FlatpakRemove = Shelly.Cli.Commands.Flatpak.Remove;
+using FlatpakRun = Shelly.Cli.Commands.Flatpak.Run;
+using FlatpakKill = Shelly.Cli.Commands.Flatpak.Kill;
+using FlatpakSearch = Shelly.Cli.Commands.Flatpak.Search;
+using FlatpakSyncRemoteAppStream = Shelly.Cli.Commands.Flatpak.SyncRemoteAppStream;
+using FlatpakGetRemoteAppStream = Shelly.Cli.Commands.Flatpak.GetRemoteAppStream;
+using FlatpakUpgrade = Shelly.Cli.Commands.Flatpak.Upgrade;
+using FlatpakListRemotes = Shelly.Cli.Commands.Flatpak.ListRemotes;
+using FlatpakAddRemote = Shelly.Cli.Commands.Flatpak.AddRemote;
+using FlatpakRemoveRemote = Shelly.Cli.Commands.Flatpak.RemoveRemote;
+using FlatpakInstallRefFile = Shelly.Cli.Commands.Flatpak.InstallRefFile;
+using FlatpakInstallBundle = Shelly.Cli.Commands.Flatpak.InstallBundle;
+using FlatpakAppRemoteInfo = Shelly.Cli.Commands.Flatpak.AppRemoteInfo;
 using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
@@ -73,5 +92,29 @@ var aur = new Command("aur", "Manage AUR packages")
 root.Add(aur);
 
 root.Add(Keyring.Create());
+
+var flatpak = new Command("flatpak", "Manage flatpak")
+{
+    FlatpakInstall.Create(),
+    FlatpakUpdate.Create(),
+    FlatpakList.Create(),
+    FlatpakListUpdates.Create(),
+    FlatpakRunning.Create(),
+    FlatpakRepair.Create(),
+    FlatpakRemove.Create(),
+    FlatpakRun.Create(),
+    FlatpakKill.Create(),
+    FlatpakSearch.Create(),
+    FlatpakSyncRemoteAppStream.Create(),
+    FlatpakGetRemoteAppStream.Create(),
+    FlatpakUpgrade.Create(),
+    FlatpakListRemotes.Create(),
+    FlatpakAddRemote.Create(),
+    FlatpakRemoveRemote.Create(),
+    FlatpakInstallRefFile.Create(),
+    FlatpakInstallBundle.Create(),
+    FlatpakAppRemoteInfo.Create()
+};
+root.Add(flatpak);
 
 return await root.Parse(args).InvokeAsync();
