@@ -2,6 +2,14 @@
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
 using AurUpgrade = Shelly.Cli.Commands.Aur.Upgrade;
+using AurInstall = Shelly.Cli.Commands.Aur.Install;
+using AurInstallVersion = Shelly.Cli.Commands.Aur.InstallVersion;
+using AurRemove = Shelly.Cli.Commands.Aur.Remove;
+using AurUpdate = Shelly.Cli.Commands.Aur.Update;
+using AurListInstalled = Shelly.Cli.Commands.Aur.ListInstalled;
+using AurListUpdates = Shelly.Cli.Commands.Aur.ListUpdates;
+using AurSearch = Shelly.Cli.Commands.Aur.Search;
+using AurSearchPackageBuild = Shelly.Cli.Commands.Aur.SearchPackageBuild;
 using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
@@ -51,7 +59,15 @@ root.Add(config);
 
 var aur = new Command("aur", "Manage AUR packages")
 {
-    AurUpgrade.Create()
+    AurInstall.Create(),
+    AurInstallVersion.Create(),
+    AurRemove.Create(),
+    AurUpdate.Create(),
+    AurUpgrade.Create(),
+    AurListInstalled.Create(),
+    AurListUpdates.Create(),
+    AurSearch.Create(),
+    AurSearchPackageBuild.Create()
 };
 root.Add(aur);
 
