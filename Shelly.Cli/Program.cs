@@ -1,4 +1,5 @@
 ﻿using System.CommandLine;
+using System.CommandLine.Help;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
 using AurUpgrade = Shelly.Cli.Commands.Aur.Upgrade;
@@ -117,6 +118,10 @@ var flatpak = new Command("flatpak", "Manage flatpak")
     FlatpakAppRemoteInfo.Create()
 };
 root.Add(flatpak);
+
+var helpOption = root.Options.OfType<HelpOption>().FirstOrDefault();
+if (helpOption is { Action: HelpAction defaultHelp })
+    helpOption.Action = new ShortcodeHelpAction(defaultHelp);
 
 try
 {
