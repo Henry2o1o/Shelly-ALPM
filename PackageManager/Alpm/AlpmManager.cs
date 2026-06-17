@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -576,7 +575,6 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
     }
 
-
     private int PerformDownload(string fullUrl, string localpath)
     {
         // Use a temporary file for atomic writes - prevents corruption if download is interrupted
@@ -593,7 +591,6 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             using var response = DownloadClient.GetAsync(fullUrl, HttpCompletionOption.ResponseContentRead)
                 .GetAwaiter()
                 .GetResult();
-
 
             if (!response.IsSuccessStatusCode)
             {
