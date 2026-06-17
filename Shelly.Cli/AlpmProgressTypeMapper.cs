@@ -21,6 +21,7 @@ internal static class AlpmProgressTypeMapper
         AlpmProgressType.MakepkgBuild    => ProgressType.MakepkgBuild,
         AlpmProgressType.MakepkgPackage  => ProgressType.MakepkgPackage,
         AlpmProgressType.AurDownload     => ProgressType.AurDownload,
+        AlpmProgressType.DatabaseDownload => ProgressType.DatabaseDownload,
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown AlpmProgressType")
     };
 }
