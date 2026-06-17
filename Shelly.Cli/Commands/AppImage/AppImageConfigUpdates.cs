@@ -23,7 +23,7 @@ public partial class AppImageConfigUpdates : GlobalSettingsCommand
         var type = new Argument<UpdateType>("type") { Description = "Update Type" };
         var prerelease = new Option<bool>("--prerelease", "-p") { Description = "Allow prerelease updates" };
 
-        var command = new Command("configure-updates", "Syncs meta data for an AppImage") { appImage, url, type, prerelease };
+        var command = new Command("configure-updates", "Configures the update settings for an AppImage") { appImage, url, type, prerelease };
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {

@@ -9,7 +9,7 @@ public partial class AppImageUpdateManagerVersion : GlobalSettingsCommand
 {
     public static Command Create()
     {
-        var command = new Command("migrate-manager", "Syncs meta data for an AppImage");
+        var command = new Command("migrate-manager", "Updates the AppImage manager version");
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
