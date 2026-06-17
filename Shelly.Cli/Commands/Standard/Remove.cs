@@ -3,6 +3,8 @@ using PackageManager.Alpm;
 using PackageManager.Local;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
+using static System.CommandLine.ArgumentArity;
+using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
@@ -18,7 +20,7 @@ public class Remove : GlobalSettingsCommand
 
     private bool Local { get; set; }
 
-    private string[] Package { get; set; } = Array.Empty<string>();
+    private string[] Packages { get; set; } = [];
 
     public static Command Create()
     {
@@ -32,12 +34,12 @@ public class Remove : GlobalSettingsCommand
             { Description = "Removes any files in your ~/.config that can be tied exclusively to the removed package(s). EXPERIMENTAL" };
         var local = new Option<bool>("--local", "-l")
             { Description = "Force removal as a locally-installed binary package" };
-        var package = new Argument<string[]>("package")
-            { Description = "The packages to remove (repo names or local binary packages)", Arity = ArgumentArity.ZeroOrMore };
+        var packages = new Argument<string[]>("packages")
+            { Description = "The packages to remove (repo names or local binary packages)", Arity = ZeroOrMore };
 
         var command = new Command("remove", "Remove packages (repo or local binary)")
         {
-            cascade, optDeps, ripple, removeConfig, local, package
+            cascade, optDeps, ripple, removeConfig, local, packages
         };
 
         command.SetAction(async (parseResult, _) =>
@@ -49,7 +51,7 @@ public class Remove : GlobalSettingsCommand
                 Ripple = parseResult.GetValue(ripple),
                 RemoveConfig = parseResult.GetValue(removeConfig),
                 Local = parseResult.GetValue(local),
-                Package = parseResult.GetValue(package) ?? Array.Empty<string>()
+                Packages = parseResult.GetValue(packages) ?? []
             };
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
@@ -57,23 +59,6 @@ public class Remove : GlobalSettingsCommand
         });
 
         return command;
-    }
-
-    private (List<string> Repo, List<string> Local) PartitionPackages()
-    {
-        if (Local)
-            return ([], Package.ToList());
-
-        var installedBinaries = LocalManager.GetInstalledBinaryPackages()
-            .Select(p => p.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var repo = new List<string>();
-        var local = new List<string>();
-        foreach (var name in Package)
-            (installedBinaries.Contains(name) ? local : repo).Add(name);
-
-        return (repo, local);
     }
 
     public override async ValueTask ExecuteAsync(IShellyConsole console)
@@ -84,9 +69,9 @@ public class Remove : GlobalSettingsCommand
             return;
         }
 
-        if (Package.Length == 0)
+        if (Packages.Length == 0)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Error: No packages specified", ConsoleColor.Red));
+            console.WriteLine(Colorize("Error: No packages specified", ConsoleColor.Red));
             return;
         }
 
@@ -94,12 +79,11 @@ public class Remove : GlobalSettingsCommand
 
         var (repo, local) = PartitionPackages();
 
-        console.WriteLine(AnsiUtilities.Colorize(
-            $"Packages to remove: {string.Join(", ", Package)}", ConsoleColor.Yellow));
+        console.WriteLine(Colorize($"Packages to remove: {string.Join(", ", Packages)}", ConsoleColor.Yellow));
 
         if (!NoConfirm && !Confirm.Execute("Do you want to proceed?"))
         {
-            console.WriteLine(AnsiUtilities.Colorize("Operation cancelled.", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Operation cancelled.", ConsoleColor.Yellow));
             return;
         }
 
@@ -110,16 +94,32 @@ public class Remove : GlobalSettingsCommand
             await RemoveLocalPackages(local, console);
 
         if (RemoveConfig)
-            HandleConfigRemoval(Package, console);
+            HandleConfigRemoval(Packages, console);
     }
 
-    private async Task RemoveRepoPackages(List<string> packageList, IShellyConsole console)
+    private (List<string> Repo, List<string> Local) PartitionPackages()
+    {
+        if (Local) return ([], Packages.ToList());
+
+        var installedBinaries = LocalManager.GetInstalledBinaryPackages()
+            .Select(p => p.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var repo = new List<string>();
+        var local = new List<string>();
+        foreach (var name in Packages)
+            (installedBinaries.Contains(name) ? local : repo).Add(name);
+
+        return (repo, local);
+    }
+
+    private async Task RemoveRepoPackages(List<string> packages, IShellyConsole console)
     {
         using var manager = new AlpmManager();
-        console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", ConsoleColor.Yellow));
+        console.WriteLine(Colorize("Initializing ALPM...", ConsoleColor.Yellow));
         manager.Initialize(true);
 
-        console.WriteLine(AnsiUtilities.Colorize("Removing packages...", ConsoleColor.Yellow));
+        console.WriteLine(Colorize("Removing packages...", ConsoleColor.Yellow));
 
         var flags = AlpmTransFlag.None;
         if (Cascade)
@@ -128,18 +128,18 @@ public class Remove : GlobalSettingsCommand
             flags |= AlpmTransFlag.Cascade;
 
         var result = await StandardSinglePaneOutput.Output(console, manager,
-            x => x.RemovePackages(packageList, flags, OptDeps), NoConfirm);
+            x => x.RemovePackages(packages, flags, OptDeps), NoConfirm);
 
         if (!result)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Removal failed. See errors above.", ConsoleColor.Red));
+            console.WriteLine(Colorize("Removal failed. See errors above.", ConsoleColor.Red));
             return;
         }
 
-        console.WriteLine(AnsiUtilities.Colorize("Packages removed successfully!", ConsoleColor.Green));
+        console.WriteLine(Colorize("Packages removed successfully!", ConsoleColor.Green));
     }
 
-    private async Task RemoveLocalPackages(List<string> packageList, IShellyConsole console)
+    private static async Task RemoveLocalPackages(List<string> packages, IShellyConsole console)
     {
         var localManager = new LocalManager();
         localManager.Message += (_, e) =>
@@ -152,15 +152,15 @@ public class Remove : GlobalSettingsCommand
                 LocalManagerMessageLevel.Success => ConsoleColor.Green,
                 _ => ConsoleColor.White
             };
-            console.WriteLine(AnsiUtilities.Colorize(e.Message, color));
+            console.WriteLine(Colorize(e.Message, color));
         };
 
-        await localManager.RemoveBinaryPackages(packageList);
+        await localManager.RemoveBinaryPackages(packages);
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        if (Package.Length == 0)
+        if (Packages.Length == 0)
         {
             UiFrames.Error("No packages specified");
             return;
@@ -175,10 +175,10 @@ public class Remove : GlobalSettingsCommand
             await RemoveLocalPackagesUi(local);
 
         if (RemoveConfig)
-            HandleConfigRemoval(Package, null);
+            HandleConfigRemoval(Packages, null);
     }
 
-    private async Task RemoveRepoPackagesUi(List<string> packageList)
+    private async Task RemoveRepoPackagesUi(List<string> packages)
     {
         var flags = AlpmTransFlag.None;
         if (Cascade)
@@ -190,14 +190,14 @@ public class Remove : GlobalSettingsCommand
         manager.Question += (_, args) => QuestionHandler.HandleQuestion(args, true, NoConfirm);
         manager.Initialize(true);
 
-        UiFrames.TxStart($"Removing packages: {string.Join(", ", packageList)}");
+        UiFrames.TxStart($"Removing packages: {string.Join(", ", packages)}");
 
-        var ok = await UiModeOutput.Run(manager, m => m.RemovePackages(packageList, flags, OptDeps));
+        var ok = await UiModeOutput.Run(manager, m => m.RemovePackages(packages, flags, OptDeps));
 
         UiFrames.TxFinish(ok, "Packages removed successfully!", "Removal failed.");
     }
 
-    private async Task RemoveLocalPackagesUi(List<string> packageList)
+    private static async Task RemoveLocalPackagesUi(List<string> packageList)
     {
         var localManager = new LocalManager();
         localManager.Message += (_, e) =>
@@ -231,8 +231,7 @@ public class Remove : GlobalSettingsCommand
             }
             catch (Exception)
             {
-                console?.WriteLine(AnsiUtilities.Colorize(
-                    $"Failed to find directory for {package} moving on", ConsoleColor.Yellow));
+                console?.WriteLine(Colorize($"Failed to find directory for {package} moving on", ConsoleColor.Yellow));
             }
         }
     }
