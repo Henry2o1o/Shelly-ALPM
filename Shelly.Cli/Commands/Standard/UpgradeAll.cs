@@ -9,14 +9,46 @@ namespace Shelly.Cli.Commands.Standard;
 
 public class UpgradeAll : GlobalSettingsCommand
 {
+    private static readonly Option<bool> NoRepoOption =
+        new("--no-repo") { Description = "Skip the standard repository (ALPM) upgrade" };
+
+    private static readonly Option<bool> NoAurOption =
+        new("--no-aur") { Description = "Skip the AUR upgrade" };
+
+    private static readonly Option<bool> NoFlatpakOption =
+        new("--no-flatpak") { Description = "Skip the Flatpak upgrade" };
+
+    private static readonly Option<bool> NoAppImageOption =
+        new("--no-appimage") { Description = "Skip the AppImage upgrade" };
+
+    public bool NoRepo { get; set; }
+
+    public bool NoAur { get; set; }
+
+    public bool NoFlatpak { get; set; }
+
+    public bool NoAppImage { get; set; }
+
     public static Command Create()
     {
         var command = new Command("upgrade-all",
-            "Upgrade all packages from every source (repo, AUR, Flatpak, AppImage)");
+            "Upgrade all packages from every source (repo, AUR, Flatpak, AppImage)")
+        {
+            NoRepoOption,
+            NoAurOption,
+            NoFlatpakOption,
+            NoAppImageOption
+        };
 
         command.SetAction(async (parseResult, _) =>
         {
-            var instance = new UpgradeAll();
+            var instance = new UpgradeAll
+            {
+                NoRepo = parseResult.GetValue(NoRepoOption),
+                NoAur = parseResult.GetValue(NoAurOption),
+                NoFlatpak = parseResult.GetValue(NoFlatpakOption),
+                NoAppImage = parseResult.GetValue(NoAppImageOption)
+            };
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
             return 0;
@@ -35,20 +67,28 @@ public class UpgradeAll : GlobalSettingsCommand
 
         RootElevator.EnsureRootExectuion();
 
-        await RunChild(new Upgrade(), console);
-        await RunChild(new AurUpgrade(), console);
-        await RunChild(new FlatpakUpgrade(), console);
-        await RunChild(new AppImageUpgrade(), console);
+        if (!NoRepo)
+            await RunChild(new Upgrade(), console);
+        if (!NoAur)
+            await RunChild(new AurUpgrade(), console);
+        if (!NoFlatpak)
+            await RunChild(new FlatpakUpgrade(), console);
+        if (!NoAppImage)
+            await RunChild(new AppImageUpgrade(), console);
 
         console.WriteLine(Colorize("All upgrades complete.", ConsoleColor.Green));
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        await RunChild(new Upgrade(), null);
-        await RunChild(new AurUpgrade(), null);
-        await RunChild(new FlatpakUpgrade(), null);
-        await RunChild(new AppImageUpgrade(), null);
+        if (!NoRepo)
+            await RunChild(new Upgrade(), null);
+        if (!NoAur)
+            await RunChild(new AurUpgrade(), null);
+        if (!NoFlatpak)
+            await RunChild(new FlatpakUpgrade(), null);
+        if (!NoAppImage)
+            await RunChild(new AppImageUpgrade(), null);
     }
 
     private async ValueTask RunChild(GlobalSettingsCommand child, IShellyConsole? console)
