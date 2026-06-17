@@ -1,18 +1,17 @@
-using System.Diagnostics;
 using System.CommandLine;
-using Pastel;
-using Shelly.Cli.Interactions;
+using System.Diagnostics;
 using Shelly.Utilities;
+using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Utility;
 
-public partial class FixPermissions : GlobalSettingsCommand
+public class FixPermissions : GlobalSettingsCommand
 {
     public static Command Create()
     {
         var command = new Command("fix-permissions", "Fix permissions for Shelly directories");
 
-        command.SetAction(async (parseResult, cancellationToken) =>
+        command.SetAction(async (parseResult, _) =>
         {
             var instance = new FixPermissions();
             GlobalOptions.Apply(instance, parseResult);
@@ -25,99 +24,117 @@ public partial class FixPermissions : GlobalSettingsCommand
 
     public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
-        RootElevator.EnsureRootExectuion();
-
-        var isAnsiSupported = AnsiUtilities.SupportsAnsi;
-        string message;
-        var user = Environment.GetEnvironmentVariable("SUDO_USER");
-        if (string.IsNullOrEmpty(user) || user == "root")
+        if (UiMode)
         {
-            message = isAnsiSupported
-                ? "Could not determin invoking user (SUDO_USER not set).".Pastel(ConsoleColor.Red)
-                : "Could not determin invoking user (SUDO_USER not set).";
-            console.WriteLine(message);
-        }
-
-        string[] paths = [XdgPaths.ShellyConfig(), XdgPaths.ShellyCache(), XdgPaths.ShellyData()];
-
-        var existing = paths.Where(Directory.Exists).ToList();
-        if (existing.Count == 0)
-        {
-            if (UiMode)
-            {
-                UiFrames.Info("No directories to fix permissions for.");
-                return;
-            }
-
-            message = isAnsiSupported
-                ? "No directories to fix permissions for.".Pastel(ConsoleColor.Green)
-                : "No directories to fix permissions for.";
-            console.WriteLine(message);
+            await ExecuteUiMode();
             return;
         }
 
-        foreach (var path in existing)
+        RootElevator.EnsureRootExectuion();
+
+        var user = ResolveInvokingUser();
+        if (user is null)
         {
-            var args = new List<string> { "-R", $"{user}:{user}", path };
-            var psi = new ProcessStartInfo
-            {
-                FileName = "chown",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            foreach (var a in args) psi.ArgumentList.Add(a);
-            try
-            {
-                using var proc = Process.Start(psi);
-                if (proc == null)
-                {
-                    message = isAnsiSupported
-                        ? $"Failed to start chown for {path}".Pastel(ConsoleColor.Red)
-                        : $"Failed to start chown for {path}";
-                    console.WriteLine(message);
-                    continue;
-                }
+            console.WriteLine(Colorize("Could not determine invoking user (SUDO_USER not set).", ConsoleColor.Red));
+            return;
+        }
 
-                await proc.WaitForExitAsync();
-                if (proc.ExitCode != 0)
-                {
-                    var err = await proc.StandardError.ReadToEndAsync();
-                    message = isAnsiSupported
-                        ? $"chown failed for {path} (exit {proc.ExitCode}): {err.Trim()}".Pastel(ConsoleColor.Red)
-                        : $"chown failed for {path} (exit {proc.ExitCode}): {err.Trim()}";
-                    console.WriteLine(message);
-                }
+        var paths = GetExistingShellyPaths();
+        if (paths.Count == 0)
+        {
+            console.WriteLine(Colorize("No directories to fix permissions for.", ConsoleColor.Green));
+            return;
+        }
 
-                if (UiMode)
-                {
-                    UiFrames.Info($"Fixed ownership: {path}");
-                    continue;
-                }
-
-                message = isAnsiSupported ? $"Fixed ownership: {path}".Pastel(ConsoleColor.Green) : $"Fixed ownership: {path}";
-                console.WriteLine(message);
-            }
-            catch (Exception e)
-            {
-                if (UiMode)
-                {
-                    UiFrames.Error($"Failed to fix ownership for {path}: {e.Message}");
-                    continue;
-                }
-
-                message = isAnsiSupported
-                    ? $"Failed to fix ownership for {path}: {e.Message}".Pastel(ConsoleColor.Red)
-                    : $"Failed to fix ownership for {path}: {e.Message}";
-                console.WriteLine(message);
-            }
+        foreach (var path in paths)
+        {
+            var result = await ChownRecursiveAsync(user, path);
+            console.WriteLine(result.IsSuccess
+                ? Colorize($"Fixed ownership: {path}", ConsoleColor.Green)
+                : Colorize($"Failed to fix ownership for {path}: {result.Error}", ConsoleColor.Red));
         }
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        //Unneeded as the command is not interactive.
-        throw new NotImplementedException();
+        var user = ResolveInvokingUser();
+        if (user is null)
+        {
+            UiFrames.Error("Could not determine invoking user (SUDO_USER not set).");
+            return;
+        }
+
+        var paths = GetExistingShellyPaths();
+        if (paths.Count == 0)
+        {
+            UiFrames.Info("No directories to fix permissions for.");
+            return;
+        }
+
+        foreach (var path in paths)
+        {
+            var result = await ChownRecursiveAsync(user, path);
+            if (result.IsSuccess)
+                UiFrames.Info($"Fixed ownership: {path}");
+            else
+                UiFrames.Error($"Failed to fix ownership for {path}: {result.Error}");
+        }
+    }
+
+    private static string? ResolveInvokingUser()
+    {
+        var user = Environment.GetEnvironmentVariable("SUDO_USER");
+        return string.IsNullOrEmpty(user) || user == "root" ? null : user;
+    }
+
+    private static List<string> GetExistingShellyPaths()
+    {
+        string[] paths = [XdgPaths.ShellyConfig(), XdgPaths.ShellyCache(), XdgPaths.ShellyData()];
+        return paths.Where(Directory.Exists).ToList();
+    }
+
+    private static async Task<ChownResult> ChownRecursiveAsync(string user, string path)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "chown",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        psi.ArgumentList.Add("-R");
+        psi.ArgumentList.Add($"{user}:{user}");
+        psi.ArgumentList.Add(path);
+
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc is null) return ChownResult.Failure("Failed to start chown process.");
+
+            await proc.WaitForExitAsync();
+            if (proc.ExitCode == 0) return ChownResult.Success();
+
+            var error = await proc.StandardError.ReadToEndAsync();
+            return ChownResult.Failure($"chown exited with code {proc.ExitCode}: {error.Trim()}");
+        }
+        catch (Exception ex)
+        {
+            return ChownResult.Failure(ex.Message);
+        }
+    }
+
+    private readonly record struct ChownResult(bool IsSuccess, string Error)
+    {
+        public static ChownResult Success()
+        {
+            return new ChownResult(true, string.Empty);
+        }
+
+        public static ChownResult Failure(string error)
+        {
+            return new ChownResult(false, error);
+        }
     }
 }
