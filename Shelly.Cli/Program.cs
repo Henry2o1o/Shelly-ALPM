@@ -33,6 +33,7 @@ using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
+using Shelly.Cli.Shortcodes;
 
 var root = new RootCommand("Shelly CLI");
 
@@ -117,4 +118,13 @@ var flatpak = new Command("flatpak", "Manage flatpak")
 };
 root.Add(flatpak);
 
-return await root.Parse(args).InvokeAsync();
+try
+{
+    var translated = ShortcodeTranslator.Translate(args);
+    return await root.Parse(translated).InvokeAsync();
+}
+catch (ShortcodeException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    return 1;
+}
