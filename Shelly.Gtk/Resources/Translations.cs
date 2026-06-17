@@ -19,9 +19,10 @@ internal static partial class Translations
     // ReSharper disable once InconsistentNaming
     private const int LC_ALL = 6;
 
-    internal static void Init()
+    internal static void Init(string? culture = null)
     {
-        setlocale(LC_ALL, "");
+        var locale = string.IsNullOrWhiteSpace(culture) ? "" : culture;
+        setlocale(LC_ALL, locale);
         const string localeDir = "/usr/share/locale";
         bindtextdomain(Domain, localeDir);
         bind_textdomain_codeset(Domain, "UTF-8");
