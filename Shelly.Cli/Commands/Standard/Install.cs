@@ -1,13 +1,16 @@
 using System.CommandLine;
+using System.Net;
 using PackageManager.Alpm;
 using PackageManager.Local;
-using Pastel;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
+using Shelly.Utilities;
+using static System.CommandLine.ArgumentArity;
+using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
-public partial class Install : GlobalSettingsCommand
+public class Install : GlobalSettingsCommand
 {
     private bool BuildDeps { get; set; }
 
@@ -17,22 +20,23 @@ public partial class Install : GlobalSettingsCommand
 
     private bool Upgrade { get; set; }
 
-    private string[] Package { get; set; } = Array.Empty<string>();
+    private string[] Packages { get; set; } = [];
 
     public static Command Create()
     {
         var buildDeps = new Option<bool>("--build-deps", "-b") { Description = "Install build dependencies" };
         var makeDeps = new Option<bool>("--make-deps", "-m") { Description = "Install make dependencies" };
         var noDeps = new Option<bool>("--no-deps", "-d") { Description = "Install without checking/installing dependencies" };
-        var upgrade = new Option<bool>("--upgrade", "-u") { Description = "Upgrades the package if it is already installed" };
-        var package = new Argument<string[]>("package") { Description = "The packages to install (repo names, local files or URLs)", Arity = ArgumentArity.ZeroOrMore };
+        var upgrade = new Option<bool>("--upgrade", "-u") { Description = "Upgrades the packages if they are already installed" };
+        var packages = new Argument<string[]>("packages")
+            { Description = "The packages to install (repo names, local files or URLs)", Arity = ZeroOrMore };
 
-        var command = new Command("install", "Install a package")
+        var command = new Command("install", "Install packages")
         {
-            buildDeps, makeDeps, noDeps, upgrade, package
+            buildDeps, makeDeps, noDeps, upgrade, packages
         };
 
-        command.SetAction(async (parseResult, cancellationToken) =>
+        command.SetAction(async (parseResult, _) =>
         {
             var instance = new Install
             {
@@ -40,7 +44,7 @@ public partial class Install : GlobalSettingsCommand
                 MakeDeps = parseResult.GetValue(makeDeps),
                 NoDeps = parseResult.GetValue(noDeps),
                 Upgrade = parseResult.GetValue(upgrade),
-                Package = parseResult.GetValue(package) ?? Array.Empty<string>()
+                Packages = parseResult.GetValue(packages) ?? []
             };
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
@@ -58,9 +62,9 @@ public partial class Install : GlobalSettingsCommand
             return;
         }
 
-        if (Package.Length == 0)
+        if (Packages.Length == 0)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Error: No packages specified", ConsoleColor.Red));
+            console.WriteLine(Colorize("Error: No packages specified", ConsoleColor.Red));
             return;
         }
 
@@ -69,8 +73,7 @@ public partial class Install : GlobalSettingsCommand
         var names = new List<string>();
         var files = new List<string>();
 
-        foreach (var entry in Package)
-        {
+        foreach (var entry in Packages)
             switch (Classify(entry))
             {
                 case PackageSourceKind.Url:
@@ -78,14 +81,11 @@ public partial class Install : GlobalSettingsCommand
                     if (downloaded is not null)
                         files.Add(downloaded);
                     break;
+                case PackageSourceKind.PackageName:
                 case PackageSourceKind.FilePath:
                     files.Add(entry);
                     break;
-                default:
-                    names.Add(entry);
-                    break;
             }
-        }
 
         if (names.Count > 0)
             await InstallRepoPackages(names, console);
@@ -96,28 +96,24 @@ public partial class Install : GlobalSettingsCommand
 
     private async Task InstallRepoPackages(List<string> packageList, IShellyConsole console)
     {
-        console.WriteLine(AnsiUtilities.Colorize(
-            $"Packages to install: {string.Join(", ", packageList)}", ConsoleColor.Yellow));
+        console.WriteLine(Colorize($"Packages to install: {string.Join(", ", packageList)}", ConsoleColor.Yellow));
 
         if (!NoConfirm && !Confirm.Execute("Do you want to proceed?"))
         {
-            console.WriteLine(AnsiUtilities.Colorize("Operation cancelled.", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Operation cancelled.", ConsoleColor.Yellow));
             return;
         }
 
         using var manager = new AlpmManager();
-        console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", ConsoleColor.Yellow));
+        console.WriteLine(Colorize("Initializing ALPM...", ConsoleColor.Yellow));
         manager.Initialize(true);
-
-        Task<bool> RunOutput(Func<IAlpmManager, Task<bool>> op) =>
-            StandardSinglePaneOutput.Output(console, manager, op, NoConfirm);
 
         if (Upgrade)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Running system upgrade", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Running system upgrade", ConsoleColor.Yellow));
             if (!await RunOutput(x => x.SyncSystemUpdate()))
             {
-                console.WriteLine(AnsiUtilities.Colorize("System upgrade failed. See errors above.", ConsoleColor.Red));
+                console.WriteLine(Colorize("System upgrade failed. See errors above.", ConsoleColor.Red));
                 return;
             }
         }
@@ -126,66 +122,72 @@ public partial class Install : GlobalSettingsCommand
         {
             if (packageList.Count > 1)
             {
-                console.WriteLine(AnsiUtilities.Colorize(
-                    "Cannot build dependencies for multiple packages at once.", ConsoleColor.Yellow));
+                console.WriteLine(Colorize("Cannot build dependencies for multiple packages at once.", ConsoleColor.Yellow));
                 return;
             }
 
-            console.WriteLine(AnsiUtilities.Colorize("Installing packages...", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Installing packages...", ConsoleColor.Yellow));
             var depsResult = await RunOutput(x => x.InstallDependenciesOnly(packageList[0], MakeDeps));
             if (!depsResult)
             {
-                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
+                console.WriteLine(Colorize("Installation failed. See errors above.", ConsoleColor.Red));
                 return;
             }
 
-            console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", ConsoleColor.Green));
+            console.WriteLine(Colorize("Packages installed successfully!", ConsoleColor.Green));
             return;
         }
 
         if (NoDeps)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Skipping dependency installation.", ConsoleColor.Yellow));
-            console.WriteLine(AnsiUtilities.Colorize("Installing packages...", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Skipping dependency installation.", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Installing packages...", ConsoleColor.Yellow));
             if (!await RunOutput(x => x.InstallPackages(packageList, AlpmTransFlag.NoDeps)))
             {
-                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
+                console.WriteLine(Colorize("Installation failed. See errors above.", ConsoleColor.Red));
                 return;
             }
 
-            console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", ConsoleColor.Green));
+            console.WriteLine(Colorize("Packages installed successfully!", ConsoleColor.Green));
             return;
         }
 
-        console.WriteLine(AnsiUtilities.Colorize("Installing packages...", ConsoleColor.Yellow));
+        console.WriteLine(Colorize("Installing packages...", ConsoleColor.Yellow));
         var installResult = await RunOutput(x => x.InstallPackages(packageList));
         console.WriteLine();
         if (!installResult)
         {
-            console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
+            console.WriteLine(Colorize("Installation failed. See errors above.", ConsoleColor.Red));
             return;
         }
 
-        console.WriteLine(AnsiUtilities.Colorize("Packages installed successfully!", ConsoleColor.Green));
+        console.WriteLine(Colorize("Packages installed successfully!", ConsoleColor.Green));
+
+        return;
+
+        Task<bool> RunOutput(Func<IAlpmManager, Task<bool>> op)
+        {
+            return StandardSinglePaneOutput.Output(console, manager, op, NoConfirm);
+        }
     }
 
     private async Task InstallLocalPackage(string location, IShellyConsole console)
     {
         if (!File.Exists(location))
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Error: Specified file does not exist: {location}", ConsoleColor.Red));
+            console.WriteLine(Colorize($"Error: Specified file does not exist: {location}", ConsoleColor.Red));
             return;
         }
 
         if (await FileInspector.IsArchPackage(location))
         {
             using var manager = new AlpmManager();
-            console.WriteLine(AnsiUtilities.Colorize("Initializing ALPM...", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Initializing ALPM...", ConsoleColor.Yellow));
             manager.Initialize();
             var result = await StandardSinglePaneOutput.Output(console, manager,
                 x => x.InstallLocalPackage(Path.GetFullPath(location)), NoConfirm);
             if (!result)
-                console.WriteLine(AnsiUtilities.Colorize("Installation failed. See errors above.", ConsoleColor.Red));
+                console.WriteLine(Colorize("Installation failed. See errors above.", ConsoleColor.Red));
             return;
         }
 
@@ -202,19 +204,19 @@ public partial class Install : GlobalSettingsCommand
                     LocalManagerMessageLevel.Success => ConsoleColor.Green,
                     _ => ConsoleColor.White
                 };
-                console.WriteLine(AnsiUtilities.Colorize(e.Message, color));
+                console.WriteLine(Colorize(e.Message, color));
             };
 
             await localManager.InstallBinariesPackage(Path.GetFullPath(location));
             return;
         }
 
-        console.WriteLine(AnsiUtilities.Colorize("Error: Unsupported local package format.", ConsoleColor.Red));
+        console.WriteLine(Colorize("Error: Unsupported local package format.", ConsoleColor.Red));
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        if (Package.Length == 0)
+        if (Packages.Length == 0)
         {
             UiFrames.Error("No packages specified");
             return;
@@ -223,8 +225,7 @@ public partial class Install : GlobalSettingsCommand
         var names = new List<string>();
         var files = new List<string>();
 
-        foreach (var entry in Package)
-        {
+        foreach (var entry in Packages)
             switch (Classify(entry))
             {
                 case PackageSourceKind.Url:
@@ -232,14 +233,11 @@ public partial class Install : GlobalSettingsCommand
                     if (downloaded is not null)
                         files.Add(downloaded);
                     break;
+                case PackageSourceKind.PackageName:
                 case PackageSourceKind.FilePath:
                     files.Add(entry);
                     break;
-                default:
-                    names.Add(entry);
-                    break;
             }
-        }
 
         if (names.Count > 0)
             await InstallRepoPackagesUi(names);
@@ -338,12 +336,12 @@ public partial class Install : GlobalSettingsCommand
     {
         try
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Downloading {url}...", ConsoleColor.Yellow));
+            console.WriteLine(Colorize($"Downloading {url}...", ConsoleColor.Yellow));
             return await DownloadCore(url);
         }
         catch (Exception ex)
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Error: Failed to download {url}: {ex.Message}", ConsoleColor.Red));
+            console.WriteLine(Colorize($"Error: Failed to download {url}: {ex.Message}", ConsoleColor.Red));
             return null;
         }
     }
@@ -364,7 +362,7 @@ public partial class Install : GlobalSettingsCommand
 
     private static async Task<string> DownloadCore(string url)
     {
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         var fileName = Path.GetFileName(new Uri(url).LocalPath);
         if (string.IsNullOrWhiteSpace(fileName))
             fileName = Path.GetRandomFileName();
@@ -376,21 +374,16 @@ public partial class Install : GlobalSettingsCommand
         return tempPath;
     }
 
-    public enum PackageSourceKind
-    {
-        Url,
-        FilePath,
-        PackageName
-    }
-
     private static PackageSourceKind Classify(string value)
     {
-        if (IsUrl(value))
-            return PackageSourceKind.Url;
-        return IsFilePath(value) ? PackageSourceKind.FilePath : PackageSourceKind.PackageName;
+        if (IsUrl(value)) return PackageSourceKind.Url;
+
+        return IsFilePath(value)
+            ? PackageSourceKind.FilePath
+            : PackageSourceKind.PackageName;
     }
 
-    public static bool IsUrl(string value)
+    private static bool IsUrl(string value)
     {
         return Uri.TryCreate(value, UriKind.Absolute, out var uri)
                && (uri.Scheme == Uri.UriSchemeHttp
@@ -398,22 +391,44 @@ public partial class Install : GlobalSettingsCommand
                    || uri.Scheme == Uri.UriSchemeFtp);
     }
 
-    public static bool IsFilePath(string value)
+    private static bool IsFilePath(string value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
+        if (string.IsNullOrWhiteSpace(value)) return false;
 
-        if (IsUrl(value))
-            return false;
+        if (IsUrl(value)) return false;
 
         if (value.Contains(Path.DirectorySeparatorChar)
             || value.Contains(Path.AltDirectorySeparatorChar)
             || value.StartsWith('~')
             || Path.IsPathRooted(value))
-        {
             return true;
-        }
 
         return Path.HasExtension(value);
+    }
+
+    private static HttpClient CreateHttpClient()
+    {
+        return new HttpClient(new SocketsHttpHandler
+        {
+            AutomaticDecompression = DecompressionMethods.All,
+            AllowAutoRedirect = true,
+            MaxAutomaticRedirections = 10,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+            EnableMultipleHttp2Connections = true,
+            EnableMultipleHttp3Connections = true
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(10),
+            DefaultRequestHeaders = { UserAgent = { Http.UserAgent } },
+            DefaultRequestVersion = HttpVersion.Version11,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher
+        };
+    }
+
+    private enum PackageSourceKind
+    {
+        Url,
+        FilePath,
+        PackageName
     }
 }
