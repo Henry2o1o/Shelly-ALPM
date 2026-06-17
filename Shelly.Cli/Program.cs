@@ -43,6 +43,7 @@ GlobalOptions.AddToRoot(root);
 root.Add(Explore.Create());
 root.Add(Install.Create());
 root.Add(Upgrade.Create());
+root.Add(UpgradeAll.Create());
 root.Add(DowngradePackage.Create());
 root.Add(Ignore.Create());
 root.Add(ArchNews.Create());
@@ -122,6 +123,14 @@ root.Add(flatpak);
 root.Description = "Shelly — a modern, unified package manager for Arch Linux. " +
                    "Install, update, search, and manage standard (ALPM) packages, " +
                    "the AUR, Flatpaks, and AppImages from a single command-line interface.";
+
+root.SetAction(async (parseResult, _) =>
+{
+    var instance = new UpgradeAll();
+    GlobalOptions.Apply(instance, parseResult);
+    await instance.ExecuteAsync(new SystemShellyConsole());
+    return 0;
+});
 
 var helpOption = root.Options.OfType<HelpOption>().FirstOrDefault();
 if (helpOption is { Action: HelpAction defaultHelp })
