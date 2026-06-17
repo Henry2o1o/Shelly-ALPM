@@ -386,7 +386,7 @@ public class UnprivilegedOperationService(
         try
         {
             if (!result.Success) return new SyncModel();
-            JsonPackFrame.TryDecode<SyncModel>(result.Output, out var framed);
+            JsonPackFrame.TryDecodeLast<SyncModel>(result.Output, out var framed);
             return framed ?? new SyncModel();
         }
         catch (Exception ex)
