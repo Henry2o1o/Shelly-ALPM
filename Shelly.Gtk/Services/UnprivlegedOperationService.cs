@@ -372,21 +372,21 @@ public class UnprivilegedOperationService(
     {
         if (string.IsNullOrWhiteSpace(name))
         {
-            return await ExecuteUnprivilegedCommandAsync("Export Sync", "utility export -o", filePath);
+            return await ExecuteUnprivilegedCommandAsync("Export Sync", "export -o", filePath);
         }
 
-        return await ExecuteUnprivilegedCommandAsync("Export Sync", "utility export -o", filePath, "-n", name);
+        return await ExecuteUnprivilegedCommandAsync("Export Sync", "export -o", filePath, "-a", name);
     }
 
     public async Task<SyncModel> CheckForApplicationUpdates()
     {
         var result =
-            await ExecuteUnprivilegedCommandAsync("Get Available Updates", "utility updates -a -l --json --ui-mode");
+            await ExecuteUnprivilegedCommandAsync("Get Available Updates", "check-updates -a -l --json --ui-mode");
         //SendDbusMessage(result);
         try
         {
             if (!result.Success) return new SyncModel();
-            JsonPackFrame.TryDecode<SyncModel>(result.Output, out var framed);
+            JsonPackFrame.TryDecodeLast<SyncModel>(result.Output, out var framed);
             return framed ?? new SyncModel();
         }
         catch (Exception ex)
