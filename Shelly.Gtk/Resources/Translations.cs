@@ -22,7 +22,7 @@ internal static partial class Translations
     [LibraryImport("libc", EntryPoint = "setenv", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int setenv(string name, string value, int overwrite);
     
-    [LibraryImport("libc", EntryPoint = "setenv", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport("libc", EntryPoint = "unsetenv", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int unsetenv(string name);
 
     internal static void Init(string? culture = null)
