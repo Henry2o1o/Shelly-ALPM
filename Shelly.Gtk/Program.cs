@@ -499,10 +499,11 @@ sealed class Program
 
             settingsStack.SetVisibleChildName(initialPageName);
 
-            if (initialConfig.UseOldMenu)
+            GLib.Functions.IdleAdd(0, () =>
             {
                 SetActiveSidebarButton(initialPageName);
-            }
+                return false;
+            });
 
             settingsWindow.ConfigChanged += (config) =>
             {
@@ -512,10 +513,7 @@ sealed class Program
                 settingsStack.GetPage(appImagePageBox).Visible = config.AppImageEnabled;
                 settingsStack.GetPage(shellySearchPageBox).Visible = config.ShellySearchEnabled;
                 ApplyNavigationStyle(!config.UseOldMenu, config);
-                if (config.UseOldMenu)
-                {
-                    SetActiveSidebarButton(settingsStack.GetVisibleChildName()!);
-                }
+                SetActiveSidebarButton(settingsStack.GetVisibleChildName()!);
             };
             settingsWindow.NavigationToPackages += () =>
             {
@@ -538,10 +536,7 @@ sealed class Program
                     settingsStack.GetPage(appImagePageBox).Visible = c.AppImageEnabled;
                     settingsStack.GetPage(shellySearchPageBox).Visible = c.ShellySearchEnabled;
                     ApplyNavigationStyle(!c.UseOldMenu, c);
-                    if (c.UseOldMenu)
-                    {
-                        SetActiveSidebarButton(settingsStack.GetVisibleChildName()!);
-                    }
+                    SetActiveSidebarButton(settingsStack.GetVisibleChildName()!);
 
                     dirtyService.Clear(DirtyScopes.Config);
                     return false;

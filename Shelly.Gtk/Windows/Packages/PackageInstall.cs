@@ -312,6 +312,7 @@ public sealed class PackageInstall(
 
         var nameLabel = Label.New(pkg.Name);
         nameLabel.AddCssClass("title-2");
+        nameLabel.Selectable = true;
         nameLabel.Halign = Align.Center;
         headerBox.Append(nameLabel);
 

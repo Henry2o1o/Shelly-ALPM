@@ -100,6 +100,7 @@
                                         <property name="icon-name">go-next-symbolic</property>
                                         <property name="halign">start</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                        <property name="margin-bottom">3</property>
                                        <property name="margin-start">6</property>
@@ -112,6 +113,7 @@
                                     <object class="GtkToggleButton" id="SidebarRecommendButton">
                                         <property name="halign">start</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                         <property name="margin-bottom">3</property>
                                         <property name="margin-start">6</property>
@@ -143,6 +145,7 @@
                                     <object class="GtkToggleButton" id="SidebarPackagesButton">
                                         <property name="halign">start</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                         <property name="margin-bottom">3</property>
                                         <property name="margin-start">6</property>
@@ -174,6 +177,7 @@
                                     <object class="GtkToggleButton" id="SidebarAurButton">
                                         <property name="halign">start</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                         <property name="margin-bottom">3</property>
                                         <property name="margin-start">6</property>
@@ -205,6 +209,7 @@
                                     <object class="GtkToggleButton" id="SidebarFlatpakButton">
                                         <property name="halign">start</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                         <property name="margin-bottom">3</property>
                                         <property name="margin-start">6</property>
@@ -236,6 +241,7 @@
                                     <object class="GtkToggleButton" id="SidebarAppImageButton">
                                         <property name="halign">start</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                         <property name="margin-bottom">3</property>
                                         <property name="margin-start">6</property>
@@ -267,6 +273,7 @@
                                     <object class="GtkToggleButton" id="SidebarSearchButton">
                                         <property name="halign">start</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                         <property name="margin-bottom">3</property>
                                         <property name="margin-start">6</property>
@@ -306,6 +313,7 @@
                                         <property name="menu-model">MainMenu</property>
                                         <property name="direction">up</property>
                                         <property name="has-frame">false</property>
+                                        <property name="can-focus">false</property>
                                         <property name="margin-top">3</property>
                                         <property name="margin-bottom">3</property>
                                         <property name="margin-start">6</property>
@@ -325,12 +333,14 @@
                                         <child type="title">
                                             <object class="GtkStackSwitcher" id="MainStackSwitcher">
                                                 <property name="stack">settings_stack</property>
+                                                <property name="can-focus">false</property>
                                             </object>
                                         </child>
                                         <child type="end">
                                             <object class="GtkMenuButton" id="TopMenuButton">
                                                 <property name="icon-name">open-menu-symbolic</property>
                                                 <property name="menu-model">MainMenu</property>
+                                                <property name="can-focus">false</property>
                                             </object>
                                         </child>
                                     </object>
