@@ -465,6 +465,14 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             currentPtr = node.Next;
         }
 
+        // If there's only one option, skip and use first one directly as all options result in the same behavior.
+        if (!(providerOptions.DistinctBy(p => p.Name).Count() > 1))
+        {
+            selectQuestion.UseIndex = 0;
+            Marshal.StructureToPtr(selectQuestion, questionPtr, false);
+            return;
+        }
+
         // Build the question text
         var questionText = $"Select a provider for '{dependencyName ?? "dependency"}':";
 
