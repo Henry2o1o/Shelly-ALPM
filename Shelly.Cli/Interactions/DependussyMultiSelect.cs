@@ -45,7 +45,7 @@ public static class DependussyMultiSelect
             if (string.IsNullOrWhiteSpace(input))
             {
                 return options.Select(option =>
-                    new ProviderOption(option.Name, option.Description, option.IsInstalled, true)).ToList();
+                    new ProviderOption(option.Name, option.Description, option.IsInstalled, false)).ToList();
             }
 
             var selectedIndices = input

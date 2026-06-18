@@ -249,7 +249,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<AppImageDto>> GetInstallAppImagesAsync()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Get Installed AppImages", "appimage list --json");
+        var result = await ExecuteUnprivilegedCommandAsync("Get Installed AppImages", "appimage list --json --ui-mode");
         try
         {
             if (!result.Success || string.IsNullOrEmpty(result.Output)) return [];
@@ -338,7 +338,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<AppImageDto>> GetUpdatesAppImagesAsync()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Get AppImage Updates", "appimage list-updates --json");
+        var result = await ExecuteUnprivilegedCommandAsync("Get AppImage Updates", "appimage list-updates --json --ui-mode");
         try
         {
             JsonPackFrame.TryDecode<List<AppImageDto>>(result.Output, out var framed);

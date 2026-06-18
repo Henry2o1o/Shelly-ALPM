@@ -96,7 +96,7 @@ public static class QuestionHandler
     {
         //This makes questions work for now till we can convert over to standard eventing.
         //There is something broken in the log priming on one of the sides that prevents this from working well
-        Console.WriteLine($"Handling question.");
+        Console.WriteLine($"Presenting Question.");
         switch (question.QuestionType)
         {
             case AlpmQuestionType.SelectProvider:
