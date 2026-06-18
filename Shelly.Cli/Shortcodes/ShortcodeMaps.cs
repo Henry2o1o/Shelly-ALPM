@@ -83,7 +83,7 @@ internal static class ShortcodeMaps
         {
             [('S', 'I')] = new HashSet<char> { 'b', 'm', 'd', 'u' },
             [('S', 'R')] = new HashSet<char> { 'c', 'o', 'i', 'r', 'l' },
-            [('S', 'Q')] = new HashSet<char> { 'r', 'a', 'i', 'l', 't', 'p', 'w', 'I' },
+            [('S', 'Q')] = new HashSet<char> { 'r', 'a', 'i', 'l', 't', 'p', 'w', 'd' },
             [('S', 'M')] = new HashSet<char> { 'e', 'd' },
             [('S', 'Y')] = new HashSet<char> { 'f' },
             [('S', 'P')] = new HashSet<char> { 'd', 'o' },
