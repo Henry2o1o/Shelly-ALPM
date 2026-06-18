@@ -86,6 +86,12 @@ public class Query : GlobalSettingsCommand
             return;
         }
 
+        if (!Repos && !Available && !Installed && !Local && !Info)
+        {
+            Installed = true;
+            Info = !string.IsNullOrWhiteSpace(Package);
+        }
+
         using var manager = new AlpmManager();
         manager.Initialize(showHiddenPackages: ShowHidden);
 
@@ -194,6 +200,12 @@ public class Query : GlobalSettingsCommand
 
     public override async ValueTask ExecuteUiMode()
     {
+        if (!Repos && !Available && !Installed && !Local && !Info)
+        {
+            Installed = true;
+            Info = !string.IsNullOrWhiteSpace(Package);
+        }
+
         if (Info)
         {
             using var infoManager = new AlpmManager();
