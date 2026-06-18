@@ -756,10 +756,10 @@ public class FlatpakInstall(
         var idLabel = Label.New(string.Empty);
         idLabel.SetText(string.Empty);
         idLabel.Halign = Align.Start;
+        idLabel.Hexpand = true;
         idLabel.AddCssClass("dim-label");
-        idLabel.SetWrap(true);
-        idLabel.SetWrapMode(Pango.WrapMode.WordChar);
-        idLabel.SetEllipsize(Pango.EllipsizeMode.None);
+        idLabel.SetWrap(false);
+        idLabel.SetEllipsize(Pango.EllipsizeMode.End);
         idLabel.MaxWidthChars = 35;
         idLabel.WidthChars = -1;
 
