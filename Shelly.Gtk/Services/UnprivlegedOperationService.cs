@@ -21,7 +21,8 @@ public class UnprivilegedOperationService(
     IDirtyService dirtyService,
     IAlpmEventService alpmEventService,
     ILockoutService lockoutService,
-    IGenericQuestionService genericQuestionService) : IUnprivilegedOperationService
+    IGenericQuestionService genericQuestionService)
+    : IUnprivilegedOperationService
 {
     private readonly string _cliPath = CliPathResolver.FindCliPath();
 
@@ -372,21 +373,21 @@ public class UnprivilegedOperationService(
     {
         if (string.IsNullOrWhiteSpace(name))
         {
-            return await ExecuteUnprivilegedCommandAsync("Export Sync", "utility export -o", filePath);
+            return await ExecuteUnprivilegedCommandAsync("Export Sync", "export -o", filePath);
         }
 
-        return await ExecuteUnprivilegedCommandAsync("Export Sync", "utility export -o", filePath, "-n", name);
+        return await ExecuteUnprivilegedCommandAsync("Export Sync", "export -o", filePath, "-a", name);
     }
 
     public async Task<SyncModel> CheckForApplicationUpdates()
     {
         var result =
-            await ExecuteUnprivilegedCommandAsync("Get Available Updates", "utility updates -a -l --json --ui-mode");
+            await ExecuteUnprivilegedCommandAsync("Get Available Updates", "check-updates -a -l --json");
         //SendDbusMessage(result);
         try
         {
             if (!result.Success) return new SyncModel();
-            JsonPackFrame.TryDecode<SyncModel>(result.Output, out var framed);
+            JsonPackFrame.TryDecodeLast<SyncModel>(result.Output, out var framed);
             return framed ?? new SyncModel();
         }
         catch (Exception ex)
@@ -523,13 +524,13 @@ public class UnprivilegedOperationService(
                         if (stdinWriter != null)
                         {
                             await stdinWriter.WriteLineAsync(value);
-                            await stdinWriter.FlushAsync();
+                            await stdinWriter.FlushAsync(ct);
                         }
                     }, genericQuestionService);
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine($"QuestionRouter error: {ex.Message}");
+                    await Console.Error.WriteLineAsync($"QuestionRouter error: {ex.Message}");
                 }
 
                 return;
@@ -548,7 +549,7 @@ public class UnprivilegedOperationService(
                 if (e.Data.StartsWith("[ALPM_QUESTION]"))
                 {
                     var questionText = e.Data.Substring("[ALPM_QUESTION]".Length);
-                    Console.Error.WriteLine($"[Shelly]Question received: {questionText}");
+                    await Console.Error.WriteLineAsync($"[Shelly]Question received: {questionText}");
 
                     // Send response to CLI via stdin
                     if (stdinWriter != null)
@@ -561,7 +562,7 @@ public class UnprivilegedOperationService(
                 else
                 {
                     errorBuilder.AppendLine(e.Data);
-                    Console.Error.WriteLine(e.Data);
+                    await Console.Error.WriteLineAsync(e.Data);
                 }
             }
         };

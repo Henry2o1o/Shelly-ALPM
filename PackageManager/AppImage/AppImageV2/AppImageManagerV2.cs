@@ -46,7 +46,7 @@ public class AppImageManagerV2(string installDirectory = "")
         ProgressEvent?.Invoke(this, new AppImageProgressEventArgs(appName, totalBytes, downloadedBytes, percentage));
     }
 
-    public async Task<int> InstallAppImage(string location)
+    public async Task<bool> InstallAppImage(string location)
     {
         var filePath = Path.GetFullPath(location);
         var appName = Path.GetFileNameWithoutExtension(filePath);
@@ -89,12 +89,12 @@ public class AppImageManagerV2(string installDirectory = "")
         if (appImageDto == null)
         {
             LogError("Failed to extract metadata during installation.");
-            return 1;
+            return false;
         }
 
         await AddAppImageToLocalDb(appImageDto);
 
-        return 0;
+        return true;
     }
 
     public async Task<bool> AppImageConfigureUpdates(string updateInfo, string name, UpdateType updateType,
