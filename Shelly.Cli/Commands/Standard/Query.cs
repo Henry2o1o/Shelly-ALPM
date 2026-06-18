@@ -12,7 +12,7 @@ using static Shelly.Utilities.SizeUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
 
-public class Explore : GlobalSettingsCommand
+public class Query : GlobalSettingsCommand
 {
     private bool Repos { get; set; }
 
@@ -44,12 +44,13 @@ public class Explore : GlobalSettingsCommand
         var info = new Option<bool>("--info", "-I") { Description = "Show detailed information for a single package" };
         var package = new Argument<string?>("package") { Description = "The package to search for", Arity = ZeroOrOne };
 
-        var command = new Command("explore", "Explore repositories and packages")
+        var command = new Command("query", "Query repositories and packages")
             { repos, available, installed, local, take, page, showHidden, info, package };
+        command.Aliases.Add("explore");
 
         command.SetAction(async (parseResult, _) =>
         {
-            var instance = new Explore
+            var instance = new Query
             {
                 Repos = parseResult.GetValue(repos),
                 Available = parseResult.GetValue(available),
