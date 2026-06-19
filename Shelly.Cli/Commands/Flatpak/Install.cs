@@ -54,8 +54,7 @@ public class Install : GlobalSettingsCommand
 
         console.WriteLine(Colorize("Installing flatpak app...", ConsoleColor.Yellow));
         var manager = new FlatpakManager();
-        manager.FlatpakEvent += (_, args) => console.WriteLine(Colorize(args.Message, ConsoleColor.Yellow));
-        var result = await FlatpakSinglePaneOutput.Output(console, manager,
+        await FlatpakSinglePaneOutput.Output(console, manager,
             x => x.InstallApp(Package, Remote, IsUser, Branch ?? "stable", IsRuntime), NoConfirm);
     }
 

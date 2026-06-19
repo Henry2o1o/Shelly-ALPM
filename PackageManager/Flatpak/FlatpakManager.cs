@@ -82,7 +82,8 @@ public class FlatpakManager : IDisposable
     /// <summary>
     /// Helper method to add packages from an installation to the list
     /// </summary>
-    private void AddPackagesFromInstallation(IntPtr installationPtr, List<FlatpakPackageDto> packages, InstallLevel installLevel)
+    private void AddPackagesFromInstallation(IntPtr installationPtr, List<FlatpakPackageDto> packages,
+        InstallLevel installLevel)
     {
         var refsPtr = FlatpakReference.InstallationListInstalledRefs(
             installationPtr, IntPtr.Zero, out IntPtr refsError);
@@ -515,7 +516,7 @@ public class FlatpakManager : IDisposable
 
             var actualPathPtr = FlatpakReference.GFileGetPath(filePtr);
             var actualPath = PtrToStringSafe(actualPathPtr);
-            Console.Error.WriteLine($"[DEBUG_LOG] GFile path: {actualPath}");
+            FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Information, $"GFile path: {actualPath}"));
 
             var transactionPtr = FlatpakReference.TransactionNewForInstallation(
                 installationPtr, IntPtr.Zero, out IntPtr transactionError);
@@ -2463,7 +2464,8 @@ public class FlatpakManager : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine("Error in new operation callback: " + ex.Message);
+            FlatpakEvent.Invoke(this,
+                new FlatpakEventArgs(FlatpakEventEnum.Error, "Error in new operation callback: " + ex.Message));
         }
     }
 
