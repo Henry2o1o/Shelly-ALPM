@@ -6,7 +6,6 @@ using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
-using Shelly.Cli.Interactions;
 using Shelly.Cli.Shortcodes;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 using AurUpgrade = Shelly.Cli.Commands.Aur.Upgrade;
