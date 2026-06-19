@@ -1,5 +1,6 @@
 ﻿using System.CommandLine;
 using System.CommandLine.Help;
+using System.Runtime.InteropServices.ComTypes;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
 using AurUpgrade = Shelly.Cli.Commands.Aur.Upgrade;
@@ -34,8 +35,16 @@ using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
+using Shelly.Cli.Interactions;
 using Shelly.Cli.Shortcodes;
 
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Console.WriteLine();
+    Console.WriteLine(AnsiUtilities.Colorize("Operation Cancelled...Exiting", ConsoleColor.Yellow));
+    Environment.Exit(130);
+};
 var root = new RootCommand("Shelly CLI");
 
 GlobalOptions.AddToRoot(root);
