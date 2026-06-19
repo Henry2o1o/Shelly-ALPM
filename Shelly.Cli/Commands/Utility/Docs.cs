@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Text;
 using System.Text.RegularExpressions;
+using Shelly.Cli.Shortcodes;
 
 namespace Shelly.Cli.Commands.Utility;
 
@@ -33,32 +34,7 @@ public static partial class Docs
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine();
-        sb.AppendLine("### Shortcodes");
-        sb.AppendLine();
-        sb.AppendLine("Grammar: `-<Type><Action><modifiers...>` [positionals]");
-        sb.AppendLine();
-        sb.AppendLine(
-            "Type selects the command group, Action selects the verb, and modifiers are that verb's own short flags (case-sensitive).");
-        sb.AppendLine();
-        sb.AppendLine("| Type | Group |");
-        sb.AppendLine("|------|-------|");
-        sb.AppendLine("| `I`  | appimage |");
-        sb.AppendLine("| `A`  | aur |");
-        sb.AppendLine("| `C`  | config |");
-        sb.AppendLine("| `F`  | flatpak |");
-        sb.AppendLine("| `K`  | keyring |");
-        sb.AppendLine("| `S`  | standard |");
-        sb.AppendLine("| `U`  | utility |");
-        sb.AppendLine();
-        sb.AppendLine("Examples:");
-        sb.AppendLine();
-        sb.AppendLine("```sh");
-        sb.AppendLine("-SIu firefox   ->  install -u firefox");
-        sb.AppendLine("-AS query      ->  aur search query");
-        sb.AppendLine("-KV ABCD       ->  keyring recv ABCD");
-        sb.AppendLine("```");
-        sb.AppendLine();
-        sb.AppendLine("> In shortcode mode use `--ui-mode` instead of `-U`.");
+        WriteShortcodesSection(sb);
 
         sb.AppendLine();
         sb.AppendLine("---");
@@ -73,6 +49,8 @@ public static partial class Docs
     {
         sb.AppendLine();
         sb.AppendLine("## Overview");
+        sb.AppendLine();
+        sb.AppendLine(root.Description);
         sb.AppendLine();
 
         var direct = root.Subcommands
@@ -279,6 +257,80 @@ public static partial class Docs
     private static string Escape(string? text)
     {
         return (text ?? "-").Replace("|", "\\|").Replace("\r\n", " ").Replace("\n", " ").Trim();
+    }
+
+    private static void WriteShortcodesSection(StringBuilder sb)
+    {
+        sb.AppendLine("### Shortcodes");
+        sb.AppendLine();
+        sb.AppendLine("Grammar: `-<Type><Action><modifiers...>` [positionals]");
+        sb.AppendLine();
+        sb.AppendLine(
+            "Type selects the command group, Action selects the verb, and modifiers are that verb's own short flags (case-sensitive).");
+        sb.AppendLine();
+        sb.AppendLine("| Type | Group |");
+        sb.AppendLine("|------|-------|");
+
+        foreach (var (letter, group) in ShortcodeMaps.Types)
+        {
+            var name = string.IsNullOrEmpty(group)
+                ? letter switch { 'S' => "standard", 'U' => "utility", _ => group }
+                : group;
+            sb.AppendLine($"| `{letter}`  | {name} |");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Examples:");
+        sb.AppendLine();
+        sb.AppendLine("```sh");
+        sb.AppendLine("-SIu firefox   ->  install -u firefox");
+        sb.AppendLine("-AS query      ->  aur search query");
+        sb.AppendLine("-KV ABCD       ->  keyring recv ABCD");
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("> In shortcode mode use `--ui-mode` instead of `-U`.");
+        sb.AppendLine();
+        sb.AppendLine("#### Actions by Type");
+
+        foreach (var (typeLetter, group) in ShortcodeMaps.Types)
+        {
+            var typeName = string.IsNullOrEmpty(group)
+                ? typeLetter switch { 'S' => "standard", 'U' => "utility", _ => group }
+                : group;
+
+            sb.AppendLine();
+            sb.AppendLine($"**`{typeLetter}` — {typeName}**");
+            sb.AppendLine();
+
+            if (typeLetter == 'K')
+            {
+                sb.AppendLine("| Action | Verb |");
+                sb.AppendLine("|--------|------|");
+                foreach (var (actionLetter, verb) in ShortcodeMaps.KeyringActions)
+                    sb.AppendLine($"| `{actionLetter}` | {verb} |");
+            }
+            else
+            {
+                var actions = ShortcodeMaps.Actions
+                    .Where(kv => kv.Key.Item1 == typeLetter)
+                    .ToList();
+
+                if (actions.Count == 0)
+                    continue;
+
+                sb.AppendLine("| Action | Verb | Modifiers |");
+                sb.AppendLine("|--------|------|-----------|");
+                foreach (var kv in actions)
+                {
+                    var actionLetter = kv.Key.Item2;
+                    var verb = kv.Value;
+                    var modifiers = ShortcodeMaps.Modifiers.TryGetValue(kv.Key, out var mods) && mods.Count > 0
+                        ? string.Join(", ", mods.Order().Select(m => $"`{m}`"))
+                        : "—";
+                    sb.AppendLine($"| `{actionLetter}` | {verb} | {modifiers} |");
+                }
+            }
+        }
     }
 
     [GeneratedRegex(@"[^a-z0-9\-]+")]
