@@ -69,6 +69,8 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.DefaultPageDropDown), config.DefaultPageDropDown.ToString());
         CallCliConfigSet(nameof(config.SuppressFingerprintWarning), config.SuppressFingerprintWarning.ToString());
         CallCliConfigSet(nameof(config.RemoveCache), config.RemoveCache.ToString());
+        CallCliConfigSet(nameof(config.TrayAutoStart), config.TrayAutoStart.ToString());
+        CallCliConfigSet(nameof(config.PackageDowngradeEnabled), config.PackageDowngradeEnabled.ToString());
         CallCliConfigSet(nameof(config.PackageManagementCascadeDelete), config.PackageManagementCascadeDelete.ToString());
         CallCliConfigSet(nameof(config.PackageManagementRemoveConfigs), config.PackageManagementRemoveConfigs.ToString());
         CallCliConfigSet(nameof(config.PackageManagementRemoveOptionalDeps), config.PackageManagementRemoveOptionalDeps.ToString());
@@ -82,6 +84,7 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.AurRemoveShowHidden), config.AurRemoveShowHidden.ToString());
         CallCliConfigSet(nameof(config.AurUpdateRunChecks), config.AurUpdateRunChecks.ToString());
         CallCliConfigSet(nameof(config.AurUpdateShowHidden), config.AurUpdateShowHidden.ToString());
+        CallCliConfigSet(nameof(config.AppImageInstallPath), config.AppImageInstallPath ?? "");
         ConfigSaved?.Invoke(this, config);
         _suppressInvalidate = true;
         try { _dirtyService.MarkDirty(DirtyScopes.Config); }

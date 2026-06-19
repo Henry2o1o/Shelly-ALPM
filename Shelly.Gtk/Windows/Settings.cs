@@ -13,7 +13,7 @@ using TimeSpan = System.TimeSpan;
 
 namespace Shelly.Gtk.Windows;
 
-public class Settings(
+public sealed class Settings(
     IConfigService configService,
     IPrivilegedOperationService privilegedOperationService,
     IUnprivilegedOperationService unprivilegedOperationService,
@@ -21,6 +21,22 @@ public class Settings(
     IGenericQuestionService genericQuestionService,
     IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    public const string TrayServiceContent =
+        """
+        [Unit]
+        Description=Shelly Notifications tray service
+        After=graphical-session.target
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/bin/shelly-notifications
+        Restart=on-failure
+        RestartSec=5s
+
+        [Install]
+        WantedBy=graphical-session.target
+        """;
+
     private Box _box = null!;
     private ShellyConfig _config = null!;
     private DirtySubscription? _sub;
@@ -130,7 +146,7 @@ public class Settings(
         purifyCorruptionButton.OnClicked += async (_, _) => { await PurifyCorruption(); };
 
         var fixPermissionsButton = (Button)builder.GetObject("fix_permissions_button")!;
-        fixPermissionsButton.OnClicked += async (s, e) => { await FixXdgPermissionsAsync(); };
+        fixPermissionsButton.OnClicked += async (_, _) => { await FixXdgPermissionsAsync(); };
 
         var viewPacfilesButton = (Button)builder.GetObject("view_pacfiles_button")!;
         viewPacfilesButton.OnClicked += async (_, _) => { await ViewPacfilesAsync(); };
@@ -147,6 +163,36 @@ public class Settings(
         {
             trayIconButton.Label = Path.GetFileName(_config.TrayIconPath);
         }
+
+        var appImageInstallPathButton = (Button)builder.GetObject("appimage_install_path_button")!;
+        if (!string.IsNullOrEmpty(_config.AppImageInstallPath))
+        {
+            appImageInstallPathButton.Label = _config.AppImageInstallPath;
+        }
+
+        appImageInstallPathButton.OnClicked += async (_, _) =>
+        {
+            var folderChooser = FileDialog.New();
+            folderChooser.Title = Translations.T("Select AppImage Install Directory");
+            try
+            {
+                var folder = await folderChooser.SelectFolderAsync(null);
+                if (folder != null)
+                {
+                    var path = folder.GetPath();
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        _config.AppImageInstallPath = path;
+                        appImageInstallPathButton.Label = path;
+                        SaveConfig();
+                    }
+                }
+            }
+            catch
+            {
+                // Cancelled
+            }
+        };
 
         trayIconButton.OnClicked += async (_, _) =>
         {
@@ -356,26 +402,11 @@ public class Settings(
     {
         var sw = (Switch)builder.GetObject(id)!;
         sw.Active = initialValue;
-        sw.OnStateSet += (s, e) =>
+        sw.OnStateSet += (_, e) =>
         {
             if (e.State)
             {
-                const string serviceContent = $"""
-                                               [Unit]
-                                               Description=Shelly Notifications tray service
-                                               PartOf=default.target
-
-                                               [Service]
-                                               Type=simple
-                                               ExecStart=/usr/bin/shelly-notifications
-                                               Restart=on-failure
-                                               RestartSec=5s
-
-                                               [Install]
-                                               WantedBy=default.target
-                                               """;
-                
-                unprivilegedOperationService.AddSystemdServiceTray(serviceContent, "shelly-notifications");
+                unprivilegedOperationService.AddSystemdServiceTray(TrayServiceContent, "shelly-notifications");
                 genericQuestionService.RaiseToastMessage(
                     new ToastMessageEventArgs(Translations.T("Systemd startup service added.")));
             }
@@ -395,6 +426,8 @@ public class Settings(
     private void SetupTraySwitch(string id, bool initialValue, Action<bool> updateAction, Builder builder)
     {
         var sw = (Switch)builder.GetObject(id)!;
+        var autoStartBox = (Box)builder.GetObject("tray_auto_switch_box")!;
+        var autoStartSwitch = (Switch)builder.GetObject("tray_auto_switch")!;
         var trayIntervalBox = (Box)builder.GetObject("tray_interval_box")!;
         var symbolicTrayBox = (Box)builder.GetObject("symbolic_tray_box")!;
         var weeklyScheduleSwitchBox = (Box)builder.GetObject("weekly_schedule_switch_box")!;
@@ -403,25 +436,26 @@ public class Settings(
 
         sw.Active = initialValue;
 
-        // Set initial visibility - tray interval is visible only if tray enabled AND weekly schedule disabled
+        // Set initial visibility
         weeklyScheduleSwitchBox.Visible = initialValue;
         symbolicTrayBox.Visible = initialValue;
+        autoStartBox.Visible = initialValue;
+
+        // tray interval is visible only if tray enabled AND weekly schedule disabled
         trayIntervalBox.Visible = initialValue && !weeklyScheduleSwitch.Active;
         weeklyScheduleBox.Visible = initialValue && weeklyScheduleSwitch.Active;
 
         sw.OnStateSet += (_, e) =>
         {
-            if (e.State)
-            {
-                TrayStartService.Start();
-            }
-            else
-            {
-                TrayStartService.End();
-            }
+            if (e.State) TrayStartService.Start();
+            else TrayStartService.End();
 
             weeklyScheduleSwitchBox.Visible = e.State;
             symbolicTrayBox.Visible = e.State;
+
+            autoStartBox.Visible = e.State;
+            if (!e.State) autoStartSwitch.Active = false;
+
             trayIntervalBox.Visible = e.State && !weeklyScheduleSwitch.Active;
             weeklyScheduleBox.Visible = e.State && weeklyScheduleSwitch.Active;
 
@@ -637,7 +671,7 @@ public class Settings(
         }
         else
         {
-            Console.Error.WriteLine($"Failed to remove database lock: {result.Error}");
+            await Console.Error.WriteLineAsync($"Failed to remove database lock: {result.Error}");
         }
     }
 
@@ -654,14 +688,14 @@ public class Settings(
             }
             else
             {
-                Console.Error.WriteLine($"Failed to fix Shelly folder ownership: {result.Error}");
+                await Console.Error.WriteLineAsync($"Failed to fix Shelly folder ownership: {result.Error}");
                 genericQuestionService.RaiseToastMessage(
                     new ToastMessageEventArgs(Translations.T("Failed to fix folder permissions")));
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error fixing Shelly folder permissions: {ex.Message}");
+            await Console.Error.WriteLineAsync($"Error fixing Shelly folder permissions: {ex.Message}");
             genericQuestionService.RaiseToastMessage(
                 new ToastMessageEventArgs(Translations.T("Error fixing folder permissions")));
         }
@@ -901,6 +935,7 @@ public class Settings(
     {
         // Refresh internal config snapshot. Visible switches retain their current
         // state to avoid re-entrant SaveConfig loops; navigating away/back rebuilds the page.
+        // TODO: Find a way to sync setting switches after setup?
         _config = configService.LoadConfig();
     }
 
