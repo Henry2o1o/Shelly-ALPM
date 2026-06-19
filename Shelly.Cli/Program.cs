@@ -1,12 +1,12 @@
 using System.CommandLine;
 using System.CommandLine.Help;
-using System.Runtime.InteropServices.ComTypes;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
 using Shelly.Cli.Commands.Config;
 using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
+using Shelly.Cli.Interactions;
 using Shelly.Cli.Shortcodes;
 using AurUpgrade = Shelly.Cli.Commands.Aur.Upgrade;
 using AurInstall = Shelly.Cli.Commands.Aur.Install;
@@ -39,15 +39,15 @@ using FlatpakAppRemoteInfo = Shelly.Cli.Commands.Flatpak.AppRemoteInfo;
 
 public static class Program
 {
-  Console.CancelKeyPress += (_, e) =>
-{
-    e.Cancel = true;
-    Console.WriteLine();
-    Console.WriteLine(AnsiUtilities.Colorize("Operation Cancelled...Exiting", ConsoleColor.Yellow));
-    Environment.Exit(130);
-};
     public static async Task<int> Main(string[] args)
     {
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            Console.WriteLine();
+            Console.WriteLine(AnsiUtilities.Colorize("Operation Cancelled...Exiting", ConsoleColor.Yellow));
+            Environment.Exit(130);
+        };
         var root = BuildRootCommand();
 
         try
