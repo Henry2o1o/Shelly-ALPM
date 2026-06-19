@@ -16,8 +16,8 @@ public sealed class BottomBarRegion : IDisposable
     public sealed class BarState
     {
         public string Name = "";
-        public ulong Current;
-        public ulong HowMany;
+        public double Current;
+        public double HowMany;
         public int Pct;
         public string ActionType = "";
     }
@@ -34,6 +34,7 @@ public sealed class BottomBarRegion : IDisposable
     private readonly List<string> _order = [];
     private readonly List<StickySlot> _stickies = [];
     private readonly HashSet<(string Name, string Action)> _finalizedBars = [];
+    private readonly List<string> _deferred = [];
     private int _barRowsDrawn;
     private int _stickyDrawnCount;
     private int _frame;
@@ -109,6 +110,12 @@ public sealed class BottomBarRegion : IDisposable
 
     private void EmitLine(string text)
     {
+        if (_suspended)
+        {
+            _deferred.Add(text);
+            return;
+        }
+
         _console.Output.WriteLine(_asciiOnly ? AnsiText.StripAnsi(text) : text);
     }
 
@@ -117,7 +124,7 @@ public sealed class BottomBarRegion : IDisposable
         lock (_ioLock)
         {
             ClearBars();
-            _console.Output.WriteLine(_asciiOnly ? AnsiText.StripAnsi(text) : text);
+            EmitLine(text);
             DrawBars();
         }
     }
@@ -147,7 +154,7 @@ public sealed class BottomBarRegion : IDisposable
         }
     }
 
-    public void UpdateBar(string name, ulong current, ulong howMany, int pct, string actionType)
+    public void UpdateBar(string name, double current, double howMany, int pct, string actionType)
     {
         lock (_ioLock)
         {
@@ -167,14 +174,14 @@ public sealed class BottomBarRegion : IDisposable
                     Pct = pct,
                     ActionType = actionType
                 };
-                _console.Output.WriteLine(AnsiText.StripAnsi(RenderBarLine(rPlain)));
+                EmitLine(RenderBarLine(rPlain));
                 return;
             }
 
             // Animated: dedupe unchanged events for the same key.
             if (_bars.TryGetValue(name, out var existing)
                 && existing.Pct == pct
-                && existing.Current == current
+                && existing.Current.Equals(current)
                 && existing.ActionType == actionType)
                 return;
 
@@ -292,6 +299,13 @@ public sealed class BottomBarRegion : IDisposable
         lock (_ioLock)
         {
             _suspended = false;
+            if (_deferred.Count > 0)
+            {
+                foreach (var line in _deferred)
+                    EmitLine(line);
+                _deferred.Clear();
+            }
+
             DrawBars();
         }
     }
@@ -435,7 +449,7 @@ public sealed class BottomBarRegion : IDisposable
         var bar = _asciiOnly
             ? ProgressBarRenderer.RenderAscii(r.Pct, _frame, _style, _barWidth)
             : ProgressBarRenderer.Render(r.Pct, _frame, _style, _barWidth);
-        var line = $"({r.Current}/{r.HowMany}) {r.ActionType} {r.Name} {bar} {r.Pct,3}%";
+        var line = $"({r.Current:0}/{r.HowMany:0}) {r.ActionType} {r.Name} {bar} {r.Pct,3}%";
 
         var max = Math.Max(20, SafeWindowWidth() - 1);
         if (AnsiText.VisibleLength(line) > max)

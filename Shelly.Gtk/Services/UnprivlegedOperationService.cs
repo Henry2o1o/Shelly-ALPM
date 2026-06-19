@@ -426,13 +426,13 @@ public class UnprivilegedOperationService(
         UnprivilegedOperationResult result;
         if (updateUrl != "" && updateType != AppImageUpdateType.None)
         {
-            result = await ExecuteUnprivilegedCommandAsync("Install AppImage", "appimage", "install", "-l",
+            result = await ExecuteUnprivilegedCommandAsync("Install AppImage", "appimage", "install",
                 $"\"{filePath}\"", "-u",
                 updateUrl, "-t", updateType.ToString().ToLowerInvariant(), "-n");
         }
         else
         {
-            result = await ExecuteUnprivilegedCommandAsync("Install AppImage", "appimage", "install", "-l",
+            result = await ExecuteUnprivilegedCommandAsync("Install AppImage", "appimage", "install",
                 $"\"{filePath}\"", "-n");
         }
 
@@ -460,7 +460,7 @@ public class UnprivilegedOperationService(
         AppImageUpdateType updateType, bool allowPrerelease)
     {
         return await ExecuteUnprivilegedCommandAsync("Set AppImage's Update Config", "appimage", "configure-updates",
-            $"\"{name}\"", "-u", url, "-t", updateType.ToString().ToLowerInvariant(), allowPrerelease ? "-p" : "");
+            $"\"{name}\"", url, updateType.ToString(), allowPrerelease ? "-p" : "");
     }
 
     public async Task<UnprivilegedOperationResult> AppImageSyncApp(string name)
