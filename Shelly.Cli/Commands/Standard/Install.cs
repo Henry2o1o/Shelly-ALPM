@@ -249,6 +249,8 @@ public class Install : GlobalSettingsCommand
                         files.Add(downloaded);
                     break;
                 case PackageSourceKind.PackageName:
+                    names.Add(entry);
+                    break;
                 case PackageSourceKind.FilePath:
                     files.Add(entry);
                     break;
