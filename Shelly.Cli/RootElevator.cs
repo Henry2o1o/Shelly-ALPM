@@ -14,7 +14,7 @@ public static class RootElevator
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo
         {
-            FileName = "sudo",
+            FileName = ResolveElevator(),
             ArgumentList = { exe },
             UseShellExecute = false
         };
