@@ -14,11 +14,11 @@ public class ShortcodeTranslatorTests
     }
 
     [Test]
-    public void Query_PreservesModifierCase()
+    public void Query_ExpandsModifiers()
     {
-        var result = ShortcodeTranslator.Translate(["-SQaI", "query"]);
+        var result = ShortcodeTranslator.Translate(["-SQad", "query"]);
 
-        Assert.That(result, Is.EqualTo(new[] { "query", "-a", "-I", "query" }));
+        Assert.That(result, Is.EqualTo(new[] { "query", "-a", "-d", "query" }));
     }
 
     [Test]

@@ -41,7 +41,7 @@ public class Query : GlobalSettingsCommand
         var take = new Option<int>("--take", "-t") { Description = "Number of results to return", DefaultValueFactory = _ => 100 };
         var page = new Option<int>("--page", "-p") { Description = "Page number", DefaultValueFactory = _ => 1 };
         var showHidden = new Option<bool>("--show-hidden", "-w") { Description = "Show hidden packages" };
-        var info = new Option<bool>("--info", "-I") { Description = "Show detailed information for a single package" };
+        var info = new Option<bool>("--detail", "--info", "-d") { Description = "Show detailed information for a single package" };
         var package = new Argument<string?>("package") { Description = "The package to search for", Arity = ZeroOrOne };
 
         var command = new Command("query", "Query repositories and packages")
@@ -84,6 +84,12 @@ public class Query : GlobalSettingsCommand
             foreach (var r in repo) console.WriteLine(Colorize(r, ConsoleColor.White));
 
             return;
+        }
+
+        if (!Repos && !Available && !Installed && !Local && !Info)
+        {
+            Installed = true;
+            Info = !string.IsNullOrWhiteSpace(Package);
         }
 
         using var manager = new AlpmManager();
@@ -194,6 +200,12 @@ public class Query : GlobalSettingsCommand
 
     public override async ValueTask ExecuteUiMode()
     {
+        if (!Repos && !Available && !Installed && !Local && !Info)
+        {
+            Installed = true;
+            Info = !string.IsNullOrWhiteSpace(Package);
+        }
+
         if (Info)
         {
             using var infoManager = new AlpmManager();
