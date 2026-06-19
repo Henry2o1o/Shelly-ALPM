@@ -1,5 +1,6 @@
-﻿using System.CommandLine;
+using System.CommandLine;
 using System.CommandLine.Help;
+using System.Runtime.InteropServices.ComTypes;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
 using Shelly.Cli.Commands.Config;
@@ -36,10 +37,15 @@ using FlatpakInstallRefFile = Shelly.Cli.Commands.Flatpak.InstallRefFile;
 using FlatpakInstallBundle = Shelly.Cli.Commands.Flatpak.InstallBundle;
 using FlatpakAppRemoteInfo = Shelly.Cli.Commands.Flatpak.AppRemoteInfo;
 
-namespace Shelly.Cli;
-
 public static class Program
 {
+  Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Console.WriteLine();
+    Console.WriteLine(AnsiUtilities.Colorize("Operation Cancelled...Exiting", ConsoleColor.Yellow));
+    Environment.Exit(130);
+};
     public static async Task<int> Main(string[] args)
     {
         var root = BuildRootCommand();
