@@ -1,4 +1,5 @@
 using System.CommandLine;
+using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
@@ -26,47 +27,31 @@ public partial class AppImageList : GlobalSettingsCommand
 
     public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
-        var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
-        var manager = new AppImageManagerV2(installPath);
         if (UiMode)
         {
-            manager.StatusEvent += (_, e) =>
-            {
-                if (e.Severity == AppImageEvents.Error) UiFrames.Error(e.Message);
-                else UiFrames.Info(e.Message);
-            };
-        }
-        else
-        {
-            manager.StatusEvent += (_, e) =>
-            {
-                if (e.Severity == AppImageEvents.Error)
-                    console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Message}", ConsoleColor.Red));
-                else
-                    console.WriteLine(AnsiUtilities.Colorize($"[Info] {e.Message}", ConsoleColor.Blue));
-            };
+            await ExecuteUiMode();
+            return;
         }
 
-        var appImages = await manager.GetAppImagesFromLocalDb();
-
-        if (UiMode)
-        {
-            JsonPackFrame.WriteToStdout(appImages);
-        }
-        else
-        {
-            var displaySize = Enum.Parse<SizeDisplay>(ConfigManager.ReadConfig().FileSizeDisplay);
-            console.WriteLine(BasicTable.Execute(["Name", "Version", "Size", "Update Info"], appImages, c => c.Name,
-                c => c.Version,
-                c => SizeUtilities.FormatSize(displaySize, c.SizeOnDisk),
-                c => string.IsNullOrEmpty(c.UpdateURl)
-                    ? string.IsNullOrEmpty(c.RepoOwner) ? "" : $"{c.RepoOwner}/{c.RepoOwner}"
-                    : c.UpdateURl));
-        }
+        var displaySize = Enum.Parse<SizeDisplay>(ConfigManager.ReadConfig().FileSizeDisplay);
+        console.WriteLine(BasicTable.Execute(["Name", "Version", "Size", "Update Info"],
+            await GetAppImagesFromLocalDb(), c => c.Name,
+            c => c.Version,
+            c => SizeUtilities.FormatSize(displaySize, c.SizeOnDisk),
+            c => string.IsNullOrEmpty(c.UpdateURl)
+                ? string.IsNullOrEmpty(c.RepoOwner) ? "" : $"{c.RepoOwner}/{c.RepoOwner}"
+                : c.UpdateURl));
     }
 
-    public async override ValueTask ExecuteUiMode()
+    public override async ValueTask ExecuteUiMode()
     {
-        //Not Implemented
+        JsonPackFrame.WriteToStdout(await GetAppImagesFromLocalDb());
+    }
+
+    private static async Task<List<AppImageDtoV2>> GetAppImagesFromLocalDb()
+    {
+        var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
+        var manager = new AppImageManagerV2(installPath);
+        return await manager.GetAppImagesFromLocalDb();
     }
 }

@@ -28,15 +28,12 @@ public partial class AppImageUpgrade : GlobalSettingsCommand
 
     public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
-       
-
         if (UiMode)
         {
             await ExecuteUiMode();
             return;
         }
-       
-        
+
         var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
         var manager = new AppImageManagerV2(installPath);
 
@@ -50,34 +47,20 @@ public partial class AppImageUpgrade : GlobalSettingsCommand
 
         foreach (var update in updates)
         {
-            console.WriteLine(AnsiUtilities.Colorize($"Updating {update.Name} to {update.Version}", ConsoleColor.Green));
+            console.WriteLine(AnsiUtilities.Colorize($"Updating {update.Name} to {update.Version}",
+                ConsoleColor.Green));
             await AppImageSinglePaneOutput.Output(console, manager, x => x.RunUpdate(update), NoConfirm);
         }
     }
 
-    public async override ValueTask ExecuteUiMode()
+    public override async ValueTask ExecuteUiMode()
     {
         var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
         var manager = new AppImageManagerV2(installPath);
-        var config = ConfigManager.ReadConfig();
-        manager.StatusEvent += (_, e) =>
+        var updates = await manager.CheckForAppImageUpdates();
+        foreach (var update in updates)
         {
-            if (e.Severity == AppImageEvents.Error) UiFrames.Error(e.Message);
-            else UiFrames.Info(e.Message);
-        };
-        manager.ProgressEvent += (sender, e) =>
-        {
-            var sizeDisplay = Enum.TryParse<SizeDisplay>(config.FileSizeDisplay, true, out var parsed)
-                ? parsed
-                : SizeDisplay.Bytes;
-
-            var totalStr = e.TotalBytes.HasValue
-                ? SizeUtilities.FormatSize(sizeDisplay, e.TotalBytes.Value)
-                : "unknown";
-            var downloadedStr = SizeUtilities.FormatSize(sizeDisplay, e.DownloadedBytes);
-            var progressStr = e.ProgressPercentage.HasValue ? $"{e.ProgressPercentage.Value:F0}%" : "N/A";
-
-            UiFrames.Info($"Updating {e.AppName}: {progressStr} ({downloadedStr}/{totalStr})");
-        };
+            await UiModeOutput.Run(manager, x => x.RunUpdate(update));
+        }
     }
 }
