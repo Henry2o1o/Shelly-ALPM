@@ -900,14 +900,14 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         // This should always exist, but just in case
         Directory.CreateDirectory(syncDirectory);
 
-        var downloadTasks = databaseDownloads.Select(db => Task.Run(() =>
+        var downloadTasks = databaseDownloads.Select(db => Task.Run(async () =>
         {
             var dbFileName = $"{db.dbName}.db";
             var url = $"{db.serverUrl.TrimEnd('/')}/{dbFileName}";
             var localPath = Path.Combine(syncDirectory, dbFileName);
             InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
                 $"Downloading {url} to {localPath}"));
-            PerformDownload(url, localPath);
+            await PerformDownload(url, localPath);
         }));
 
         Task.WhenAll(downloadTasks).Wait();
