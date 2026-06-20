@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using PackageManager.AppImage.Events.EventArgs;
 using Shelly.Utilities;
+using Shelly.Utilities.Eventing;
 
 namespace PackageManager.AppImage.AppImageV2;
 
@@ -21,23 +22,27 @@ public class AppImageManagerV2(string installDirectory = "")
     private static readonly string LocalDbPath =
         XdgPaths.ShellyCache("appimage-local-meta-store", "appimage-metadata-v2.db");
 
-    public event EventHandler<AppImageErrorEventArgs>? ErrorEvent;
-    public event EventHandler<AppImageMessageEventArgs>? MessageEvent;
-    public event EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+    public EventHandler<AppImageStatusEventArgs>? StatusEvent;
+    public EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+
+    private void LogStatus(AppImageEvents severity, string message)
+    {
+        StatusEvent?.Invoke(this, new AppImageStatusEventArgs(severity, message));
+    }
 
     private void LogMessage(string message)
     {
-        MessageEvent?.Invoke(this, new AppImageMessageEventArgs(message));
+        LogStatus(AppImageEvents.Information, message);
     }
 
     private void LogError(string error)
     {
-        ErrorEvent?.Invoke(this, new AppImageErrorEventArgs(error));
+        LogStatus(AppImageEvents.Error, error);
     }
 
     private void LogWarning(string message)
     {
-        MessageEvent?.Invoke(this, new AppImageMessageEventArgs($"Warning: {message}"));
+        LogStatus(AppImageEvents.Warning, message);
     }
 
     private void LogProgress(string appName, long? totalBytes, long downloadedBytes)
@@ -220,12 +225,11 @@ public class AppImageManagerV2(string installDirectory = "")
         }
     }
 
-    public async Task<int> RemoveAppImage(string appImagePath, bool removeConfigFiles = false)
+    public async Task<bool> RemoveAppImage(string appImagePath, bool removeConfigFiles = false)
     {
         var appName = Path.GetFileNameWithoutExtension(appImagePath);
         var cleanName = CleanInvalidNames(appName);
         var userDataHome = XdgPaths.DataHome();
-        string[] desktopDirs = [Path.Combine(userDataHome, "applications")];
 
         try
         {
@@ -267,10 +271,10 @@ public class AppImageManagerV2(string installDirectory = "")
         catch (Exception ex)
         {
             LogError($"Error during removal: {ex.Message}");
-            return 1;
+            return false;
         }
 
-        return 0;
+        return true;
     }
 
     private async Task<string?> CleanDesktopEntries(string appName, string appPath)
