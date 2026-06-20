@@ -142,7 +142,11 @@ sealed class Program
         }
 
         Module.Initialize();
-        Init();
+        ServiceCollection serviceCollection = new();
+        var serviceProvider = ServiceBuilder.CreateDependencyInjection(serviceCollection);
+        var configService = serviceProvider.GetRequiredService<IConfigService>();
+        var initialConfig = configService.LoadConfig();
+        Init(initialConfig.Culture);
         if (preferDark)
         {
             var settings = GtkSettings.GetDefault();
@@ -157,9 +161,6 @@ sealed class Program
                 break;
             }
         }
-
-        ServiceCollection serviceCollection = new();
-        var serviceProvider = ServiceBuilder.CreateDependencyInjection(serviceCollection);
 
         var application = Application.New(ShellyConstants.Service,
             ApplicationFlags.DefaultFlags | ApplicationFlags.HandlesCommandLine);
@@ -177,7 +178,7 @@ sealed class Program
 
         application.OnStartup += (_, _) =>
         {
-            if (serviceProvider!.GetService<IConfigService>()!.LoadConfig().TrayEnabled)
+            if (initialConfig.TrayEnabled)
                 TrayStartService.Start();
 
             var existingWindow = application.GetActiveWindow();
@@ -267,9 +268,6 @@ sealed class Program
             var aboutAction = SimpleAction.New("about", null);
             aboutAction.OnActivate += (_, _) => { new ShellyAboutDialog(mainOverlay).OpenAboutDialog(); };
             application.AddAction(aboutAction);
-
-            var configService = serviceProvider.GetRequiredService<IConfigService>();
-            var initialConfig = configService.LoadConfig();
 
             List<IShellyWindow> currentPackagesWindows = [];
             List<IShellyWindow> currentAurWindows = [];
@@ -404,6 +402,15 @@ sealed class Program
                 sidebarFlatpakLabel.Visible = expanded;
                 sidebarAppImageLabel.Visible = expanded;
                 sidebarSearchLabel.Visible = expanded;
+                
+                var align = expanded ? Align.Fill : Align.Center;
+                sidebarRecommendBtn.Halign = align;
+                sidebarPackagesBtn.Halign = align;
+                sidebarAurBtn.Halign = align;
+                sidebarFlatpakBtn.Halign = align;
+                sidebarAppImageBtn.Halign = align;
+                sidebarSearchBtn.Halign = align;
+                sidebarToggle.Halign = align;
             };
 
             var sidebarButtons = new (ToggleButton btn, string page)[]
@@ -799,7 +806,7 @@ sealed class Program
                     var packagesNeedingUpdate = await unprivilegedOperationService.CheckForApplicationUpdates();
 
                     if (packagesNeedingUpdate.Aur.Count == 0 && packagesNeedingUpdate.Packages.Count == 0 &&
-                        packagesNeedingUpdate.Flatpaks.Count == 0)
+                        packagesNeedingUpdate.Flatpak.Count == 0)
                     {
                         var toastArgs = new ToastMessageEventArgs("No packages need to be upgraded");
                         genericQuestionService.RaiseToastMessage(toastArgs);

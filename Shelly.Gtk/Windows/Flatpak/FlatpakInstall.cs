@@ -22,7 +22,7 @@ public class FlatpakInstall(
     IGenericQuestionService genericQuestionService,
     IFlatHubApiService flatHubApiService,
     FlatpakUpdate flatpakUpdate,
-    FlatpakRemove flatpakRemove,
+    FlatpakManage flatpakManage,
     IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
     private DirtySubscription? _sub;
@@ -65,7 +65,7 @@ public class FlatpakInstall(
     private Box? _overlayScreenshotsBox;
     private Box? _overlayBoxRoot;
     private StringList _remotesStringList = null!;
-    private string _selectedRemote = "Any";
+    private string? _selectedRemote = "Any";
     private DropDown _remoteDropDown = null!;
     private AppstreamApp _selectedPackage = null!;
     private ListView _listRemotes = null!;
@@ -126,6 +126,12 @@ public class FlatpakInstall(
         _overlaySummaryLabel = (Label)builder.GetObject("overlay_summary_label")!;
         _overlayDescriptionLabel = (Label)builder.GetObject("overlay_description_label")!;
         _remoteDropDown = (DropDown)builder.GetObject("overlay_remote_selection")!;
+        _remoteDropDown.OnNotify += (_, args) =>
+        {
+            if (args.Pspec.GetName() != "selected-item") return;
+            var selectedItem = (StringObject)_remoteDropDown.GetSelectedItem()!;
+            _selectedRemote = selectedItem.String;
+        };
 
         _overlayCloseButton = (Button)builder.GetObject("overlay_back_button")!;
         _overlayInstallButton = (Button)builder.GetObject("overlay_install_button")!;
@@ -150,7 +156,7 @@ public class FlatpakInstall(
         var updatePageBox = (Box)builder.GetObject("update_page_box")!;
         var removePageBox = (Box)builder.GetObject("remove_page_box")!;
         updatePageBox.Append(flatpakUpdate.CreateWindow());
-        removePageBox.Append(flatpakRemove.CreateWindow());
+        removePageBox.Append(flatpakManage.CreateWindow());
 
         var sectionNavList = (ListBox)builder.GetObject("section_nav_list")!;
         var navInstallRow = (ListBoxRow)builder.GetObject("nav_install_row")!;
@@ -441,7 +447,7 @@ public class FlatpakInstall(
                     }
                     else if (_activePage == "remove")
                     {
-                        flatpakRemove.SetSearch(text);
+                        flatpakManage.SetSearch(text);
                     }
                     else
                     {
@@ -750,10 +756,10 @@ public class FlatpakInstall(
         var idLabel = Label.New(string.Empty);
         idLabel.SetText(string.Empty);
         idLabel.Halign = Align.Start;
+        idLabel.Hexpand = true;
         idLabel.AddCssClass("dim-label");
-        idLabel.SetWrap(true);
-        idLabel.SetWrapMode(Pango.WrapMode.WordChar);
-        idLabel.SetEllipsize(Pango.EllipsizeMode.None);
+        idLabel.SetWrap(false);
+        idLabel.SetEllipsize(Pango.EllipsizeMode.End);
         idLabel.MaxWidthChars = 35;
         idLabel.WidthChars = -1;
 

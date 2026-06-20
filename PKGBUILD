@@ -1,7 +1,7 @@
 # Maintainer: Zoey Bauer <zoey.erin.bauer@gmail.com>
 # Maintainer: Caroline Snyder <hirpeng@gmail.com>
 pkgname=shelly
-pkgver=2.3.3.4
+pkgver=2.4.0.0
 pkgrel=1
 pkgdesc="Shelly: A Modern Arch Package Manager"
 arch=('x86_64')
@@ -28,6 +28,7 @@ depends=(
 optdepends=(
     'flatpak: For supporting flatpak implementation.'
     'fish: Fish shell completions'
+    'zsh: Zsh shell completions'
 )
 makedepends=('dotnet-sdk-10.0' 'clang' 'gettext')
 
@@ -39,10 +40,14 @@ sha256sums=('5ee0f766be084f50d8967cb2f1e0fee0d1d8d652bae98a0bf38bcdc38305b8b5')
 build() {
   cd "$srcdir/Shelly-ALPM-${pkgver}"
 
-  dotnet publish Shelly-CLI/Shelly-CLI.csproj -c Release -o out-cli --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
+  dotnet publish Shelly.Cli/Shelly.Cli.csproj -c Release -o out-cli --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
   dotnet publish Shelly.Gtk/Shelly.Gtk.csproj -c Release -r linux-x64 -o out --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
   dotnet publish Shelly-Notifications/Shelly-Notifications.csproj -c Release -r linux-x64 -o out-notify --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
   dotnet publish Shelly.Keys/Shelly.Keys.csproj -c Release -r linux-x64 -o out-keys --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
+
+  # Generate shell completions from the freshly built CLI binary
+  ./out-cli/shelly completions fish > shelly.fish
+  ./out-cli/shelly completions zsh  > _shelly
 
   # Compile translations
   for po_file in Shelly.Gtk/po/*.po; do
@@ -70,7 +75,7 @@ package() {
   # Install Shelly-Notifications binary
   install -Dm755 out-notify/Shelly-Notifications "$pkgdir/usr/bin/shelly-notifications"
 
-  # Install Shelly-CLI binary
+  # Install Shelly.Cli binary
   install -Dm755 out-cli/shelly "$pkgdir/usr/bin/shelly"
 
   # Install Shelly.Keys binary
@@ -130,6 +135,9 @@ EOF
 
   # Install fish shell completions
   install -Dm644 shelly.fish "$pkgdir/usr/share/fish/vendor_completions.d/shelly.fish"
+
+  # Install zsh shell completions
+  install -Dm644 _shelly "$pkgdir/usr/share/zsh/site-functions/_shelly"
 
   # Install translations
   for mo_file in shelly-ui-*.mo; do

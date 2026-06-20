@@ -31,10 +31,11 @@ public static class ServiceBuilder
         collection.AddSingleton<IIConDownloadService, IconDownloadService>();
         collection.AddSingleton<IFingerprintAuthDetector, FingerprintAuthDetector>();
         collection.AddSingleton<IFingerprintAuthState, FingerprintAuthState>();
+        collection.AddSingleton<IProcessExecutor, ProcessExecutor>();
         collection.AddScoped<IUpdateService, GitHubUpdateService>();
         collection.AddScoped<ITrayDbus, TrayDBus>();
         collection.AddScoped<IFlatHubApiService, FlatHubApiService>();
-        collection.AddTransient<FlatpakRemove>();
+        collection.AddTransient<FlatpakManage>();
         collection.AddTransient<AurInstall>();
         collection.AddTransient<AurUpdate>();
         collection.AddTransient<AurRemove>();
