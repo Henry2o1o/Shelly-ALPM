@@ -3,6 +3,7 @@ using PackageManager.AppImage.AppImageV2;
 using Pastel;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
+using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.AppImage;
 
@@ -49,19 +50,20 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
         
         if (UiMode)
         {
-            manager.MessageEvent += (_, e) => UiFrames.Info(e.Message);
-            manager.ErrorEvent += (_, e) => UiFrames.Error(e.Error);
+            manager.StatusEvent += (_, e) =>
+            {
+                if (e.Severity == AppImageEvents.Error) UiFrames.Error(e.Message);
+                else UiFrames.Info(e.Message);
+            };
         }
         else
         {
-            manager.MessageEvent += (_, e) =>
+            manager.StatusEvent += (_, e) =>
             {
-                Message = ansiSupport ? $"[INFO]{e.Message}".Pastel(ConsoleColor.Blue) : $"[INFO]{e.Message}";
-                console.WriteLine(Message);
-            };
-            manager.ErrorEvent += (_, e) =>
-            {
-                Message = ansiSupport ? $"[ERROR]{e.Error}".Pastel(ConsoleColor.Red) : $"[ERROR]{e.Error}";
+                if (e.Severity == AppImageEvents.Error)
+                    Message = ansiSupport ? $"[ERROR]{e.Message}".Pastel(ConsoleColor.Red) : $"[ERROR]{e.Message}";
+                else
+                    Message = ansiSupport ? $"[INFO]{e.Message}".Pastel(ConsoleColor.Blue) : $"[INFO]{e.Message}";
                 console.WriteLine(Message);
             };
         }

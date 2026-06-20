@@ -5,6 +5,7 @@ using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
 using Shelly.Utilities.Enums;
+using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.AppImage;
 
@@ -32,6 +33,7 @@ public partial class AppImageUpgrade : GlobalSettingsCommand
         if (UiMode)
         {
             await ExecuteUiMode();
+            return;
         }
        
         
@@ -58,8 +60,11 @@ public partial class AppImageUpgrade : GlobalSettingsCommand
         var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
         var manager = new AppImageManagerV2(installPath);
         var config = ConfigManager.ReadConfig();
-        manager.MessageEvent += (_, e) => UiFrames.Info(e.Message);
-        manager.ErrorEvent += (_, e) => UiFrames.Error(e.Error);
+        manager.StatusEvent += (_, e) =>
+        {
+            if (e.Severity == AppImageEvents.Error) UiFrames.Error(e.Message);
+            else UiFrames.Info(e.Message);
+        };
         manager.ProgressEvent += (sender, e) =>
         {
             var sizeDisplay = Enum.TryParse<SizeDisplay>(config.FileSizeDisplay, true, out var parsed)

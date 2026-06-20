@@ -3,6 +3,7 @@ using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
+using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.AppImage;
 
@@ -47,15 +48,16 @@ public partial class AppImageInstall : GlobalSettingsCommand
             var manager = new AppImageManagerV2(installPath);
             if (UiMode)
             {
-                manager.ErrorEvent += (_, args) => UiFrames.Error(args.Error);
-                manager.MessageEvent += (_, args) => UiFrames.Info(args.Message);
+                manager.StatusEvent += (_, e) =>
+                {
+                    if (e.Severity == AppImageEvents.Error) UiFrames.Error(e.Message);
+                    else UiFrames.Info(e.Message);
+                };
             }
             else
             {
-                manager.ErrorEvent += (_, args) =>
-                    console.WriteLine(AnsiUtilities.Colorize($"{args.Error}", ConsoleColor.Red));
-                manager.MessageEvent += (_, args) =>
-                    console.WriteLine(AnsiUtilities.Colorize($"{args.Message}", ConsoleColor.Red));
+                manager.StatusEvent += (_, e) =>
+                    console.WriteLine(AnsiUtilities.Colorize($"{e.Message}", ConsoleColor.Red));
             }
 
             var result = await manager.InstallAppImage(AppImageLocation);

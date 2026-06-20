@@ -2,6 +2,7 @@ using System.CommandLine;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
+using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.AppImage;
 
@@ -27,25 +28,27 @@ public partial class AppImageUpdateManagerVersion : GlobalSettingsCommand
         RootElevator.EnsureRootExectuion();
 
         var installPath = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
-        var manger = new AppImageManagerV2(installPath);
+        var manager = new AppImageManagerV2(installPath);
         if (UiMode)
         {
-            manger.MessageEvent += (_, e) => UiFrames.Info(e.Message);
-            manger.ErrorEvent += (_, e) => UiFrames.Error(e.Error);
+            manager.StatusEvent += (_, e) =>
+            {
+                if (e.Severity == AppImageEvents.Error) UiFrames.Error(e.Message);
+                else UiFrames.Info(e.Message);
+            };
         }
         else
         {
-            manger.MessageEvent += (_, e) =>
+            manager.StatusEvent += (_, e) =>
             {
-                console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", ConsoleColor.Blue));
-            };
-            manger.ErrorEvent += (_, e) =>
-            {
-                console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Error}", ConsoleColor.Red));
+                if (e.Severity == AppImageEvents.Error)
+                    console.WriteLine(AnsiUtilities.Colorize($"[ERROR]{e.Message}", ConsoleColor.Red));
+                else
+                    console.WriteLine(AnsiUtilities.Colorize($"[INFO]{e.Message}", ConsoleColor.Blue));
             };
         }
 
-        var result = await manger.MigrateAppImages();
+        var result = await manager.MigrateAppImages();
 
         if (UiMode)
             UiFrames.TxFinish(result, "AppImage manager version updated successfully.",

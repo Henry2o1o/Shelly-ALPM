@@ -3,6 +3,7 @@ using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
+using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Commands.AppImage;
 
@@ -87,14 +88,21 @@ public partial class AppImageConfigUpdates : GlobalSettingsCommand
 
         if (UiMode)
         {
-            manager.MessageEvent += (_, e) => UiFrames.Info(e.Message);
-            manager.ErrorEvent += (_, e) => UiFrames.Error(e.Error);
+            manager.StatusEvent += (_, e) =>
+            {
+                if (e.Severity == AppImageEvents.Error) UiFrames.Error(e.Message);
+                else UiFrames.Info(e.Message);
+            };
         }
         else
         {
-            manager.MessageEvent += (_, e) =>
-                console.WriteLine(AnsiUtilities.Colorize($"[[INFO]]{e.Message}", ConsoleColor.Blue));
-            manager.ErrorEvent += (_, e) => console.WriteLine(AnsiUtilities.Colorize($"[ERROR] {e.Error}", ConsoleColor.Red));
+            manager.StatusEvent += (_, e) =>
+            {
+                if (e.Severity == AppImageEvents.Error)
+                    console.WriteLine(AnsiUtilities.Colorize($"[ERROR] {e.Message}", ConsoleColor.Red));
+                else
+                    console.WriteLine(AnsiUtilities.Colorize($"[INFO] {e.Message}", ConsoleColor.Blue));
+            };
         }
 
         var success = await manager.AppImageConfigureUpdates(Url, AppImage, Type,
