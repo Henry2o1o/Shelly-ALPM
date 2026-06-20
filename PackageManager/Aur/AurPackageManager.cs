@@ -2075,7 +2075,9 @@ public sealed class AurPackageManager(string? configPath = null)
         try
         {
             var info = PkgbuildParser.ParseContent(newPkgbuild, baseDir);
-            return new PostInstallValidator().Validate(info).Findings;
+            var findings = new PostInstallValidator().Validate(info).Findings;
+            findings.AddRange(new HomographValidator().Validate(info).Findings);
+            return findings;
         }
         catch (Exception ex)
         {
