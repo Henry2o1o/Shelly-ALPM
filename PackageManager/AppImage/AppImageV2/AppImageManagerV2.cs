@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using PackageManager.AppImage.Events.EventArgs;
 using Shelly.Utilities;
+using Shelly.Utilities.Eventing;
 
 namespace PackageManager.AppImage.AppImageV2;
 
@@ -21,23 +22,27 @@ public class AppImageManagerV2(string installDirectory = "")
     private static readonly string LocalDbPath =
         XdgPaths.ShellyCache("appimage-local-meta-store", "appimage-metadata-v2.db");
 
-    public event EventHandler<AppImageErrorEventArgs>? ErrorEvent;
-    public event EventHandler<AppImageMessageEventArgs>? MessageEvent;
-    public event EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+    public EventHandler<AppImageStatusEventArgs>? StatusEvent;
+    public EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+
+    private void LogStatus(AppImageEvents severity, string message)
+    {
+        StatusEvent?.Invoke(this, new AppImageStatusEventArgs(severity, message));
+    }
 
     private void LogMessage(string message)
     {
-        MessageEvent?.Invoke(this, new AppImageMessageEventArgs(message));
+        LogStatus(AppImageEvents.Information, message);
     }
 
     private void LogError(string error)
     {
-        ErrorEvent?.Invoke(this, new AppImageErrorEventArgs(error));
+        LogStatus(AppImageEvents.Error, error);
     }
 
     private void LogWarning(string message)
     {
-        MessageEvent?.Invoke(this, new AppImageMessageEventArgs($"Warning: {message}"));
+        LogStatus(AppImageEvents.Warning, message);
     }
 
     private void LogProgress(string appName, long? totalBytes, long downloadedBytes)
@@ -46,7 +51,7 @@ public class AppImageManagerV2(string installDirectory = "")
         ProgressEvent?.Invoke(this, new AppImageProgressEventArgs(appName, totalBytes, downloadedBytes, percentage));
     }
 
-    public async Task<int> InstallAppImage(string location)
+    public async Task<bool> InstallAppImage(string location)
     {
         var filePath = Path.GetFullPath(location);
         var appName = Path.GetFileNameWithoutExtension(filePath);
@@ -55,11 +60,31 @@ public class AppImageManagerV2(string installDirectory = "")
         if (!Directory.Exists(_installDirectory))
             Directory.CreateDirectory(_installDirectory);
 
+        var newMetadata = await ExtractMetadata(filePath);
+        newMetadata?.Path = destAppImagePath;
+
         var existingAppImages = await GetAppImagesFromLocalDb();
-        if (existingAppImages.Any(a => string.Equals(a.Name, appName, StringComparison.OrdinalIgnoreCase)) ||
-            File.Exists(destAppImagePath))
+
+        AppImageDtoV2? existingAppImage = null;
+        if (newMetadata != null)
+        {
+            existingAppImage = existingAppImages.FirstOrDefault(a =>
+                string.Equals(a.Name, newMetadata.Name, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a.DesktopName, newMetadata.DesktopName, StringComparison.OrdinalIgnoreCase));
+        }
+        else
+        {
+            existingAppImage =
+                existingAppImages.FirstOrDefault(a =>
+                    string.Equals(a.Name, appName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (existingAppImage != null || File.Exists(destAppImagePath))
         {
             LogWarning($"AppImage {appName} already exists. Overwriting...");
+            var oldName = existingAppImage?.Name ?? appName;
+            var oldPath = existingAppImage?.Path ?? destAppImagePath;
+            await CleanDesktopEntries(oldName, oldPath);
         }
 
         LogMessage($"Installing AppImage {appName}...");
@@ -67,16 +92,16 @@ public class AppImageManagerV2(string installDirectory = "")
         XdgPaths.FixOwnershipIfRoot(destAppImagePath);
         SetFilePermissions(destAppImagePath, "a+x");
 
-        var appImageDto = await ExtractMetadata(destAppImagePath);
+        var appImageDto = newMetadata ?? await ExtractMetadata(destAppImagePath);
         if (appImageDto == null)
         {
             LogError("Failed to extract metadata during installation.");
-            return 1;
+            return false;
         }
 
         await AddAppImageToLocalDb(appImageDto);
 
-        return 0;
+        return true;
     }
 
     public async Task<bool> AppImageConfigureUpdates(string updateInfo, string name, UpdateType updateType,
@@ -98,6 +123,10 @@ public class AppImageManagerV2(string installDirectory = "")
         switch (updateType)
         {
             case UpdateType.None:
+                appImage.UpdateType = UpdateType.None;
+                appImage.UpdateURl = string.Empty;
+                appImage.RepoOwner = null;
+                appImage.RepoName = null;
                 break;
             case UpdateType.StaticUrl:
                 appImage.UpdateType = UpdateType.StaticUrl;
@@ -196,13 +225,11 @@ public class AppImageManagerV2(string installDirectory = "")
         }
     }
 
-    public async Task<int> RemoveAppImage(string appImagePath, bool removeConfigFiles = false)
+    public async Task<bool> RemoveAppImage(string appImagePath, bool removeConfigFiles = false)
     {
         var appName = Path.GetFileNameWithoutExtension(appImagePath);
         var cleanName = CleanInvalidNames(appName);
         var userDataHome = XdgPaths.DataHome();
-        string[] desktopDirs = [Path.Combine(userDataHome, "applications")];
-        string? desktopAppName = null;
 
         try
         {
@@ -214,39 +241,7 @@ public class AppImageManagerV2(string installDirectory = "")
                 LogMessage($"Removed AppImage: {appImagePath}");
             }
 
-            foreach (var desktopDir in desktopDirs)
-            {
-                if (!Directory.Exists(desktopDir)) continue;
-
-                var desktopFilePath = Path.Combine(desktopDir, $"{cleanName}.desktop");
-                if (File.Exists(desktopFilePath))
-                {
-                    var lines = await File.ReadAllLinesAsync(desktopFilePath);
-                    desktopAppName ??= lines.FirstOrDefault(l => l.StartsWith("Name="))?.Substring(5).Trim();
-                    File.Delete(desktopFilePath);
-                    LogMessage($"Removed desktop entry: {desktopFilePath}");
-                    UpdateDesktopDatabase(desktopDir);
-                }
-                else
-                {
-                    var potentialDesktopFiles = Directory.GetFiles(desktopDir, "*.desktop")
-                        .Where(f => Path.GetFileName(f).Contains(cleanName, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-
-                    foreach (var df in potentialDesktopFiles)
-                    {
-                        var content = await File.ReadAllLinesAsync(df);
-                        if (!content.Any(l =>
-                                l.StartsWith("Exec=") &&
-                                (l.Contains(appImagePath) || l.Contains($"\"{appImagePath}\"")))) continue;
-                        desktopAppName ??= content.FirstOrDefault(l => l.StartsWith("Name="))?.Substring(5).Trim();
-                        File.Delete(df);
-                        LogMessage($"Removed desktop entry: {df}");
-                        UpdateDesktopDatabase(desktopDir);
-                        break;
-                    }
-                }
-            }
+            var desktopAppName = await CleanDesktopEntries(appName, appImagePath);
 
             string[] iconDirs =
             [
@@ -267,7 +262,7 @@ public class AppImageManagerV2(string installDirectory = "")
                     LogMessage($"Removed icon: {icon}");
                 }
             }
-            
+
             if (removeConfigFiles)
             {
                 RemoveAppConfigDirectories(desktopAppName);
@@ -276,10 +271,52 @@ public class AppImageManagerV2(string installDirectory = "")
         catch (Exception ex)
         {
             LogError($"Error during removal: {ex.Message}");
-            return 1;
+            return false;
         }
 
-        return 0;
+        return true;
+    }
+
+    private async Task<string?> CleanDesktopEntries(string appName, string appPath)
+    {
+        var cleanName = CleanInvalidNames(appName);
+        var userDataHome = XdgPaths.DataHome();
+        string[] desktopDirs = [Path.Combine(userDataHome, "applications")];
+        string? desktopAppName = null;
+
+        foreach (var desktopDir in desktopDirs)
+        {
+            if (!Directory.Exists(desktopDir)) continue;
+
+            var desktopFiles = Directory.GetFiles(desktopDir, "*.desktop");
+            foreach (var df in desktopFiles)
+            {
+                var fileName = Path.GetFileName(df);
+                var isCleanNameMatch = fileName.Equals($"{cleanName}.desktop", StringComparison.OrdinalIgnoreCase);
+
+                var content = await File.ReadAllLinesAsync(df);
+                var isExecMatch = content.Any(l =>
+                    l.StartsWith("Exec=") &&
+                    (l.Contains(appPath) || l.Contains($"\"{appPath}\"")));
+
+                if (!isCleanNameMatch && !isExecMatch) continue;
+                {
+                    desktopAppName ??= content.FirstOrDefault(l => l.StartsWith("Name="))?.Substring(5).Trim();
+                    try
+                    {
+                        File.Delete(df);
+                        LogMessage($"Removed desktop entry: {df}");
+                        UpdateDesktopDatabase(desktopDir);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWarning($"Failed to remove desktop entry {df}: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        return desktopAppName;
     }
 
     private void RemoveAppConfigDirectories(string? desktopAppName = null)
@@ -401,6 +438,11 @@ public class AppImageManagerV2(string installDirectory = "")
                     {
                         appImageDto.RawUpdateInfo = existing.RawUpdateInfo;
                     }
+
+                    appImageDto.RepoOwner = existing.RepoOwner;
+                    appImageDto.RepoName = existing.RepoName;
+                    appImageDto.UpdateType = existing.UpdateType;
+                    appImageDto.AllowPrerelease = existing.AllowPrerelease;
                 }
                 else
                 {
@@ -426,7 +468,7 @@ public class AppImageManagerV2(string installDirectory = "")
     private async Task<AppImageDtoV2?> ExtractMetadata(string filePath)
     {
         var appName = Path.GetFileNameWithoutExtension(filePath);
-        
+
         //handle Temp Update files
         if (filePath.EndsWith(".rep", StringComparison.OrdinalIgnoreCase))
         {
@@ -434,8 +476,8 @@ public class AppImageManagerV2(string installDirectory = "")
         }
 
         var cleanName = CleanInvalidNames(appName);
-        var execPath = filePath.EndsWith(".rep", StringComparison.OrdinalIgnoreCase) 
-            ? filePath[..^4] 
+        var execPath = filePath.EndsWith(".rep", StringComparison.OrdinalIgnoreCase)
+            ? filePath[..^4]
             : filePath;
 
         var desktopDir = Path.Combine(XdgPaths.DataHome(), "applications");
@@ -484,17 +526,23 @@ public class AppImageManagerV2(string installDirectory = "")
 
             try
             {
-                var extractProcess = Process.Start(new ProcessStartInfo
+                using var extractProcess = new Process
                 {
-                    FileName = filePath,
-                    Arguments = "--appimage-extract",
-                    WorkingDirectory = workingDir,
-                    RedirectStandardOutput = false,
-                    RedirectStandardError = false,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                });
-                await extractProcess!.WaitForExitAsync();
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = filePath,
+                        Arguments = "--appimage-extract",
+                        WorkingDirectory = workingDir,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                extractProcess.Start();
+                _ = extractProcess.StandardOutput.ReadToEndAsync();
+                _ = extractProcess.StandardError.ReadToEndAsync();
+                await extractProcess.WaitForExitAsync();
             }
             catch (Exception ex)
             {
@@ -1004,7 +1052,7 @@ public class AppImageManagerV2(string installDirectory = "")
         return !allOtherAliases.Any(lowerName.Contains);
     }
 
-    public async Task<int> RunUpdate(AppImageUpdateDto update)
+    public async Task<bool> RunUpdate(AppImageUpdateDto update)
     {
         var appImages = await GetAppImagesFromLocalDb();
         var appImage =
@@ -1013,7 +1061,7 @@ public class AppImageManagerV2(string installDirectory = "")
         if (appImage == null)
         {
             LogError($"AppImage '{update.Name}' not found in local database.");
-            return 1;
+            return false;
         }
 
         LogMessage($"Updating {appImage.Name}");
@@ -1021,14 +1069,14 @@ public class AppImageManagerV2(string installDirectory = "")
         if (string.IsNullOrEmpty(update.DownloadUrl))
         {
             LogError($"No download URL found for {update.Name}.");
-            return 1;
+            return false;
         }
 
         var currentPath = Path.Combine(_installDirectory, $"{appImage.Name}.AppImage");
         if (!File.Exists(currentPath))
         {
             LogError($"Current AppImage not found at {currentPath}.");
-            return 1;
+            return false;
         }
 
         var backupDir = XdgPaths.ShellyCache(update.Name);
@@ -1084,7 +1132,7 @@ public class AppImageManagerV2(string installDirectory = "")
             {
                 LogError("Failed to verify downloaded AppImage metadata.");
                 if (File.Exists(downloadPath)) File.Delete(downloadPath);
-                return 1;
+                return false;
             }
 
             if (!IsCorrectArchitecture(Path.GetFileName(update.DownloadUrl) ?? ""))
@@ -1105,7 +1153,7 @@ public class AppImageManagerV2(string installDirectory = "")
             {
                 LogError($"Error installing new version: {ex.Message}. Rolling back...");
                 File.Copy(backupPath, currentPath, true);
-                return 1;
+                return false;
             }
 
             appImage.Version = update.Version;
@@ -1114,7 +1162,7 @@ public class AppImageManagerV2(string installDirectory = "")
 
             await AddAppImageToLocalDb(appImage);
 
-            return 0;
+            return true;
         }
         catch (Exception ex)
         {
@@ -1125,7 +1173,7 @@ public class AppImageManagerV2(string installDirectory = "")
                 File.Copy(backupPath, currentPath);
             }
 
-            return 1;
+            return false;
         }
     }
 
