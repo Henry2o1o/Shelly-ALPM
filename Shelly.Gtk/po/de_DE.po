@@ -379,7 +379,7 @@ msgid "Show Recommended"
 msgstr "Empfehlung anzeigen"
 
 msgid "Recommend"
-msgstr "Empfehlen"
+msgstr "Empfehlungen"
 
 msgid "Show Packages"
 msgstr "Pakete anzeigen"
