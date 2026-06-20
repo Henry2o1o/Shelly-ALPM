@@ -32,6 +32,9 @@ public class UpgradeAll : GlobalSettingsCommand
     private static readonly Option<bool> NoAppImageOption =
         new("--no-appimage") { Description = "Skip the AppImage upgrade" };
 
+    private static readonly Option<bool> ElevatedOption =
+        new("--elevated") { Description = "Internal: plan already approved, run upgrades directly", Hidden = true };
+
     public bool NoRepo { get; set; }
 
     public bool NoAur { get; set; }
@@ -39,6 +42,8 @@ public class UpgradeAll : GlobalSettingsCommand
     public bool NoFlatpak { get; set; }
 
     public bool NoAppImage { get; set; }
+
+    public bool Elevated { get; set; }
 
     public static Command Create()
     {
@@ -48,7 +53,8 @@ public class UpgradeAll : GlobalSettingsCommand
             NoRepoOption,
             NoAurOption,
             NoFlatpakOption,
-            NoAppImageOption
+            NoAppImageOption,
+            ElevatedOption
         };
 
         command.SetAction(async (parseResult, _) =>
@@ -58,7 +64,8 @@ public class UpgradeAll : GlobalSettingsCommand
                 NoRepo = parseResult.GetValue(NoRepoOption),
                 NoAur = parseResult.GetValue(NoAurOption),
                 NoFlatpak = parseResult.GetValue(NoFlatpakOption),
-                NoAppImage = parseResult.GetValue(NoAppImageOption)
+                NoAppImage = parseResult.GetValue(NoAppImageOption),
+                Elevated = parseResult.GetValue(ElevatedOption)
             };
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
@@ -76,23 +83,28 @@ public class UpgradeAll : GlobalSettingsCommand
             return;
         }
 
-        var plan = await BuildPlanAsync();
-
-        if (plan.IsEmpty)
+        if (!Elevated)
         {
-            console.WriteLine(Colorize("Everything is up to date.", ConsoleColor.Green));
-            return;
+            var plan = await BuildPlanAsync();
+
+            if (plan.IsEmpty)
+            {
+                console.WriteLine(Colorize("Everything is up to date.", ConsoleColor.Green));
+                return;
+            }
+
+            RenderPlan(console, plan);
+
+            if (!NoConfirm && !Confirm.Execute("Proceed with all upgrades?", false))
+            {
+                console.WriteLine(Colorize("Upgrade cancelled.", ConsoleColor.Red));
+                return;
+            }
+
+            // Re-exec as root, carrying the marker + no-confirm so the root run skips planning/prompt.
+            RootElevator.EnsureRootExectuion("--elevated", "--no-confirm");
+            // If already root, EnsureRootExectuion returns without exiting and we fall through.
         }
-
-        RenderPlan(console, plan);
-
-        if (!NoConfirm && !Confirm.Execute("Proceed with all upgrades?", false))
-        {
-            console.WriteLine(Colorize("Upgrade cancelled.", ConsoleColor.Red));
-            return;
-        }
-
-        RootElevator.EnsureRootExectuion();
 
         NoConfirm = true;
 
