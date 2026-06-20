@@ -526,7 +526,7 @@ public class UnprivilegedOperationService(
                             await stdinWriter.WriteLineAsync(value);
                             await stdinWriter.FlushAsync(ct);
                         }
-                    }, genericQuestionService);
+                    }, genericQuestionService, alpmEventService);
                 }
                 catch (Exception ex)
                 {
@@ -543,27 +543,8 @@ public class UnprivilegedOperationService(
         {
             if (e.Data != null)
             {
-                // Filter out the password prompt from sudo
-
-                // Check for ALPM question (with Shelly prefix)
-                if (e.Data.StartsWith("[ALPM_QUESTION]"))
-                {
-                    var questionText = e.Data.Substring("[ALPM_QUESTION]".Length);
-                    await Console.Error.WriteLineAsync($"[Shelly]Question received: {questionText}");
-
-                    // Send response to CLI via stdin
-                    if (stdinWriter != null)
-                    {
-                        //await stdinWriter.WriteLineAsync(response ? "y" : "n");
-                        await stdinWriter.WriteLineAsync("y");
-                        await stdinWriter.FlushAsync();
-                    }
-                }
-                else
-                {
-                    errorBuilder.AppendLine(e.Data);
-                    await Console.Error.WriteLineAsync(e.Data);
-                }
+                errorBuilder.AppendLine(e.Data);
+                await Console.Error.WriteLineAsync(e.Data);
             }
         };
 
