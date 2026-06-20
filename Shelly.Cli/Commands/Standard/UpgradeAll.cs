@@ -5,6 +5,7 @@ using PackageManager.AppImage.AppImageV2;
 using PackageManager.Aur;
 using PackageManager.Aur.Models;
 using PackageManager.Flatpak;
+using PackageManager.User;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
@@ -32,9 +33,6 @@ public class UpgradeAll : GlobalSettingsCommand
     private static readonly Option<bool> NoAppImageOption =
         new("--no-appimage") { Description = "Skip the AppImage upgrade" };
 
-    private static readonly Option<bool> ElevatedOption =
-        new("--elevated") { Description = "Internal: plan already approved, run upgrades directly", Hidden = true };
-
     public bool NoRepo { get; set; }
 
     public bool NoAur { get; set; }
@@ -42,8 +40,6 @@ public class UpgradeAll : GlobalSettingsCommand
     public bool NoFlatpak { get; set; }
 
     public bool NoAppImage { get; set; }
-
-    public bool Elevated { get; set; }
 
     public static Command Create()
     {
@@ -53,8 +49,7 @@ public class UpgradeAll : GlobalSettingsCommand
             NoRepoOption,
             NoAurOption,
             NoFlatpakOption,
-            NoAppImageOption,
-            ElevatedOption
+            NoAppImageOption
         };
 
         command.SetAction(async (parseResult, _) =>
@@ -64,8 +59,7 @@ public class UpgradeAll : GlobalSettingsCommand
                 NoRepo = parseResult.GetValue(NoRepoOption),
                 NoAur = parseResult.GetValue(NoAurOption),
                 NoFlatpak = parseResult.GetValue(NoFlatpakOption),
-                NoAppImage = parseResult.GetValue(NoAppImageOption),
-                Elevated = parseResult.GetValue(ElevatedOption)
+                NoAppImage = parseResult.GetValue(NoAppImageOption)
             };
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(new SystemShellyConsole());
@@ -83,7 +77,8 @@ public class UpgradeAll : GlobalSettingsCommand
             return;
         }
 
-        if (!Elevated)
+
+        if (!UserIdentity.IsRoot())
         {
             var plan = await BuildPlanAsync();
 
@@ -101,9 +96,10 @@ public class UpgradeAll : GlobalSettingsCommand
                 return;
             }
 
-            // Re-exec as root, carrying the marker + no-confirm so the root run skips planning/prompt.
-            RootElevator.EnsureRootExectuion("--elevated", "--no-confirm");
-            // If already root, EnsureRootExectuion returns without exiting and we fall through.
+            // Re-exec as root, carrying --no-confirm so the root run skips the prompt.
+            // The root process re-enters ExecuteAsync, IsRoot() is now true, so it
+            // bypasses planning and runs the upgrades directly.
+            RootElevator.EnsureRootExectuion("--no-confirm");
         }
 
         NoConfirm = true;
@@ -122,15 +118,20 @@ public class UpgradeAll : GlobalSettingsCommand
 
     public override async ValueTask ExecuteUiMode()
     {
-        var plan = await BuildPlanAsync();
-
-        if (plan.IsEmpty)
+        if (!UserIdentity.IsRoot())
         {
-            UiFrames.Info("Everything is up to date.");
-            return;
-        }
+            var plan = await BuildPlanAsync();
 
-        EmitPlan(plan);
+            if (plan.IsEmpty)
+            {
+                UiFrames.Info("Everything is up to date.");
+                return;
+            }
+
+            EmitPlan(plan);
+
+            RootElevator.EnsureRootExectuion("--no-confirm");
+        }
 
         NoConfirm = true;
 
@@ -384,3 +385,4 @@ public class UpgradeAll : GlobalSettingsCommand
         }
     }
 }
+
