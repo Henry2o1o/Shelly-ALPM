@@ -219,6 +219,15 @@ msgstr ""
 msgid "Save"
 msgstr ""
 
+msgid "Language"
+msgstr ""
+
+msgid "Follow system language"
+msgstr ""
+
+msgid "Restart Shelly to apply the selected language."
+msgstr ""
+
 msgid "Sync"
 msgstr ""
 
@@ -1493,3 +1502,7 @@ msgstr ""
 
 msgid "<span size='large'>Flatpaks are up to date</span>"
 msgstr ""
+
+msgid "Update Available: {0}"
+msgstr ""
+
