@@ -394,10 +394,29 @@ public class Install : GlobalSettingsCommand
     private static PackageSourceKind Classify(string value)
     {
         if (IsUrl(value)) return PackageSourceKind.Url;
+        if (IsRepoQualifiedName(value)) return PackageSourceKind.PackageName;
 
         return IsFilePath(value)
             ? PackageSourceKind.FilePath
             : PackageSourceKind.PackageName;
+    }
+
+    private static bool IsRepoQualifiedName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        if (value.StartsWith('~') || Path.IsPathRooted(value)) return false;
+
+        var parts = value.Split('/');
+        if (parts.Length != 2) return false;
+        if (parts[0].Length == 0 || parts[1].Length == 0) return false;
+        if (Path.HasExtension(parts[1])) return false;
+
+        return parts[0].All(IsPkgNameChar) && parts[1].All(IsPkgNameChar);
+    }
+
+    private static bool IsPkgNameChar(char c)
+    {
+        return char.IsLetterOrDigit(c) || c is '-' or '_' or '.' or '+' or '@';
     }
 
     private static bool IsUrl(string value)
