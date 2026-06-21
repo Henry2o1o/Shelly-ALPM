@@ -163,7 +163,7 @@ public class PrivilegedOperationService(
     public async Task<List<AlpmPackageDto>> SearchPackagesAsync(string query)
     {
         return await ExecuteJsonCommandAsync<AlpmPackageDto>("search packages",
-            () => processExecutor.RunShellyCliCommandAsync(["query", "--available", $"\"{query}\"", "--no-confirm", "--json"]));
+            () => processExecutor.RunShellyCliCommandAsync(["query", "--available", $"\"{query}\"", "--no-confirm"]));
     }
 
     public async Task<List<PackageBuild>> GetAurPackageBuild(IEnumerable<string> packages)
@@ -179,12 +179,12 @@ public class PrivilegedOperationService(
     public async Task<List<AlpmPackageUpdateDto>> GetPackagesNeedingUpdateAsync()
     {
         return await ExecuteJsonCommandAsync<AlpmPackageUpdateDto>("updates",
-            () => ExecutePrivilegedCommandAsync("Check for Updates", "list-updates", "--json"));
+            () => ExecutePrivilegedCommandAsync("Check for Updates", "list-updates"));
     }
 
     public async Task<List<AlpmPackageDto>> GetAvailablePackagesAsync(bool showHidden = false)
     {
-        var args = new List<string> { "query", "--available", "--json" };
+        var args = new List<string> { "query", "--available" };
         if (showHidden) args.Add("--show-hidden");
 
         return await ExecuteJsonCommandAsync<AlpmPackageDto>("available packages",
@@ -193,7 +193,7 @@ public class PrivilegedOperationService(
 
     public async Task<List<AlpmPackageDto>> GetInstalledPackagesAsync(bool showHidden = false)
     {
-        var args = new List<string> { "query", "--installed", "--json" };
+        var args = new List<string> { "query", "--installed" };
         if (showHidden) args.Add("--show-hidden");
 
         return await ExecuteJsonCommandAsync<AlpmPackageDto>("installed packages",
@@ -203,12 +203,12 @@ public class PrivilegedOperationService(
     public async Task<List<LocalPackageDto>> GetLocalInstalledPackagesAsync()
     {
         return await ExecuteJsonCommandAsync<LocalPackageDto>("local installed packages",
-            () => processExecutor.RunShellyCliCommandAsync(["query", "--local", "--json"]));
+            () => processExecutor.RunShellyCliCommandAsync(["query", "--local"]));
     }
 
     public async Task<List<AurPackageDto>> GetAurInstalledPackagesAsync(bool showHidden = false)
     {
-        var args = new List<string> { "aur", "list", "--json" };
+        var args = new List<string> { "aur", "list" };
         if (showHidden) args.Add("--show-hidden");
 
         return await ExecuteJsonCommandAsync<AurPackageDto>("AUR installed packages",
@@ -217,7 +217,7 @@ public class PrivilegedOperationService(
 
     public async Task<List<AurUpdateDto>> GetAurUpdatePackagesAsync(bool showHidden = false)
     {
-        var args = new List<string> { "aur", "list-updates", "--json" };
+        var args = new List<string> { "aur", "list-updates" };
         if (showHidden) args.Add("--show-hidden");
 
         return await ExecuteJsonCommandAsync<AurUpdateDto>("AUR updates",
@@ -227,7 +227,7 @@ public class PrivilegedOperationService(
     public async Task<List<AurPackageDto>> SearchAurPackagesAsync(string query)
     {
         return await ExecuteJsonCommandAsync<AurPackageDto>("AUR search",
-            () => processExecutor.RunShellyCliCommandAsync(["aur", "search", query, "--json"]));
+            () => processExecutor.RunShellyCliCommandAsync(["aur", "search", query]));
     }
 
     public async Task<List<DowngradeOptionDto>> GetDowngradeOptionsAsync(string packageName)
