@@ -29,7 +29,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<FlatpakPackageDto>> ListFlatpakPackages()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("List packages", "flatpak list", "--json");
+        var result = await ExecuteUnprivilegedCommandAsync("List packages", "flatpak list");
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
         {
@@ -50,7 +50,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<FlatpakPackageDto>> ListFlatpakUpdates()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("List packages", "flatpak list-updates", "--json");
+        var result = await ExecuteUnprivilegedCommandAsync("List packages", "flatpak list-updates");
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
         {
@@ -78,9 +78,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<AppstreamApp>> ListAppstreamFlatpak(CancellationToken ct = default)
     {
-        var result =
-            await ExecuteUnprivilegedCommandAsync("Get local appstream", ct, "flatpak get-remote-appstream", "all",
-                "--json");
+        var result = await ExecuteUnprivilegedCommandAsync("Get local appstream", ct, "flatpak get-remote-appstream", "all");
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
         {
@@ -162,7 +160,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<FlatpakRemoteDto>> FlatpakListRemotes()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("flatpak list remotes", "flatpak list-remotes", "-j");
+        var result = await ExecuteUnprivilegedCommandAsync("flatpak list remotes", "flatpak list-remotes");
         if (!result.Success) return [];
         JsonPackFrame.TryDecode<List<FlatpakRemoteDto>>(result.Output, out var framed);
         return framed ?? [];
@@ -233,9 +231,7 @@ public class UnprivilegedOperationService(
     {
         try
         {
-            var result =
-                await ExecuteUnprivilegedCommandAsync("Sync remote", "flatpak app-remote-info", remote, app, arch,
-                    "-j");
+            var result = await ExecuteUnprivilegedCommandAsync("Sync remote", "flatpak app-remote-info", remote, app, arch);
             if (!result.Success) return new FlatpakRemoteRefInfo();
             JsonPackFrame.TryDecode<FlatpakRemoteRefInfo>(result.Output, out var framed);
             return framed ?? new FlatpakRemoteRefInfo();
@@ -250,7 +246,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<AppImageDto>> GetInstallAppImagesAsync()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Get Installed AppImages", "appimage list --json");
+        var result = await ExecuteUnprivilegedCommandAsync("Get Installed AppImages", "appimage list");
         try
         {
             if (!result.Success || string.IsNullOrEmpty(result.Output)) return [];
@@ -266,7 +262,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<RssModel>> GetArchNewsAsync(bool all = false)
     {
-        var args = all ? "news" + " --json" + " --all" : "news" + " --json";
+        var args = all ? "news --all" : "news";
         var result = await ExecuteUnprivilegedCommandAsync("Fetch Arch News", args);
         if (!result.Success || string.IsNullOrEmpty(result.Output))
         {
@@ -288,7 +284,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<PacfileRecord>> GetPacFiles()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Fetch Pac files", "pacfile --json");
+        var result = await ExecuteUnprivilegedCommandAsync("Fetch Pac files", "pacfile");
         if (!result.Success || string.IsNullOrEmpty(result.Output))
         {
             return [];
@@ -339,7 +335,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<AppImageDto>> GetUpdatesAppImagesAsync()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Get AppImage Updates", "appimage list-updates --json");
+        var result = await ExecuteUnprivilegedCommandAsync("Get AppImage Updates", "appimage list-updates");
         try
         {
             JsonPackFrame.TryDecode<List<AppImageDto>>(result.Output, out var framed);
@@ -354,7 +350,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates(bool showHidden = false)
     {
-        var args = showHidden ? "list-updates --json --show-hidden" : "list-updates --json";
+        var args = showHidden ? "list-updates --show-hidden" : "list-updates";
         var result = await ExecuteUnprivilegedCommandAsync("Get Available Updates", args);
 
         try
@@ -381,8 +377,7 @@ public class UnprivilegedOperationService(
 
     public async Task<SyncModel> CheckForApplicationUpdates()
     {
-        var result =
-            await ExecuteUnprivilegedCommandAsync("Get Available Updates", "check-updates -a -l --json");
+        var result = await ExecuteUnprivilegedCommandAsync("Get Available Updates", "check-updates -a -l");
         //SendDbusMessage(result);
         try
         {
@@ -399,9 +394,7 @@ public class UnprivilegedOperationService(
 
     public async Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query)
     {
-        var result =
-            await ExecuteUnprivilegedCommandAsync("Search Flathub", "flatpak search", query, "--json", "--limit",
-                "100");
+        var result = await ExecuteUnprivilegedCommandAsync("Search Flathub", "flatpak search", query, "--limit", "100");
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.Output))
         {
