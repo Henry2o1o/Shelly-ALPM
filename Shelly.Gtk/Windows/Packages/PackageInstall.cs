@@ -10,7 +10,7 @@ using Shelly.Gtk.Services.PackageTraversal;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
-using Shelly.Gtk.Windows.Dialog;
+using Shelly.Utilities.Enums;
 using static Shelly.GTK.Resources.Translations;
 using ListStore = Gio.ListStore;
 
@@ -130,6 +130,9 @@ public sealed class PackageInstall(
             listViewButton.Active = false;
             detailGridHbox.SetVisible(true);
             detailHbox.SetVisible(false);
+            var updatedConfig = configService.LoadConfig();
+            updatedConfig.PackageInstallView = ViewType.Grid;
+            configService.SaveConfig(updatedConfig);
         };
         listViewButton.OnToggled += (_, _) =>
         {
@@ -137,6 +140,9 @@ public sealed class PackageInstall(
             gridViewButton.Active = false;
             detailHbox.SetVisible(true);
             detailGridHbox.SetVisible(false);
+            var updatedConfig = configService.LoadConfig();
+            updatedConfig.PackageInstallView = ViewType.List;
+            configService.SaveConfig(updatedConfig);
         };
 
         _gridView.SetMaxColumns(4);
@@ -367,6 +373,7 @@ public sealed class PackageInstall(
 
             var frame = Frame.New(null);
             frame.SetChild(contentGrid);
+            frame.SetSizeRequest(300, -1);
             frame.Hexpand = true;
             frame.Halign = Align.Fill;
             frame.AddCssClass("card");
@@ -411,6 +418,10 @@ public sealed class PackageInstall(
                 External = OnExternalToggle
             });
 
+            
+            
+            
+            
             if (pkgObj.Index < 0 || pkgObj.Index >= _packageData.Count) return;
 
             var pkg = _packageData[pkgObj.Index];
@@ -436,6 +447,10 @@ public sealed class PackageInstall(
                 if (pkgObj.IsSelected != sender2.Active)
                     pkgObj.ToggleSelection();
                 UpdateCart();
+                if (sender2.Active)
+                {
+                    ShowPackageDetails(pkgObj);
+                }
             }
         };
         factory.OnUnbind += (_, args) =>
