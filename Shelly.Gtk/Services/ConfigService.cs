@@ -81,6 +81,7 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.AurUpdateRunChecks), config.AurUpdateRunChecks.ToString());
         CallCliConfigSet(nameof(config.AurUpdateShowHidden), config.AurUpdateShowHidden.ToString());
         CallCliConfigSet(nameof(config.AppImageInstallPath), config.AppImageInstallPath ?? "");
+        CallCliConfigSet(nameof(config.PackageInstallView), config.PackageInstallView.ToString());
         ConfigSaved?.Invoke(this, config);
         _suppressInvalidate = true;
         try { _dirtyService.MarkDirty(DirtyScopes.Config); }
