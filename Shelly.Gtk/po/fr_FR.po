@@ -12,9 +12,6 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
-msgid "Any"
-msgstr "Tous"
-
 msgid "Loading..."
 msgstr "Chargement..."
 
@@ -62,6 +59,9 @@ msgstr "hier"
 
 msgid "{0}d ago"
 msgstr "il y a {0}j"
+
+msgid "Any"
+msgstr "Tous"
 
 msgid "<span size='large'>Search for AUR packages</span>"
 msgstr "<span size='large'>Rechercher des paquets AUR</span>"
@@ -606,7 +606,7 @@ msgid "Select File"
 msgstr "Sélectionner un fichier"
 
 msgid "Recommend"
-msgstr "Recommander"
+msgstr "Recommandations"
 
 msgid "AUR"
 msgstr "AUR"
@@ -970,10 +970,10 @@ msgid "Install Local"
 msgstr "Installer en local"
 
 msgid "Perform Upgrade"
-msgstr "Effectuer la mise à niveau"
+msgstr "Effectuer la mise à jour"
 
 msgid "Perform a full system upgrade with install (-u)"
-msgstr "Effectuer une mise à niveau complète du système avec installation (-u)"
+msgstr "Effectuer une mise à jour complète du système avec installation (-u)"
 
 msgid "Install Selected"
 msgstr "Installer la sélection"
@@ -1147,7 +1147,7 @@ msgid "Upgrade all AppImages to their latest versions"
 msgstr "Mettre à jour tous les AppImages vers leurs dernières versions"
 
 msgid "Upgrade All"
-msgstr "Tout mettre à niveau"
+msgstr "Tout mettre à jour"
 
 msgid "Install a new AppImage from a file"
 msgstr "Installer un nouvel AppImage depuis un fichier"
