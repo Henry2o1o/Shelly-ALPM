@@ -271,12 +271,21 @@ public class Install : GlobalSettingsCommand
 
         if (Upgrade)
         {
-            UiFrames.TxStart("Running system upgrade...");
-            var upgradeOk = await UiModeOutput.Run(manager, m => m.SyncSystemUpdate());
-            if (!upgradeOk)
+            manager.Sync();
+            var packagesNeedingUpdate = manager.GetPackagesNeedingUpdate();
+            if (packagesNeedingUpdate.Count == 0)
             {
-                UiFrames.TxFailed("System upgrade failed.");
-                return;
+                UiFrames.Info("System is up to date! Continuing with installation...");
+            }
+            else
+            {
+                UiFrames.TxStart("Running system upgrade...");
+                var upgradeOk = await UiModeOutput.Run(manager, m => m.SyncSystemUpdate());
+                if (!upgradeOk)
+                {
+                    UiFrames.TxFailed("System upgrade failed.");
+                    return;
+                }
             }
         }
 
