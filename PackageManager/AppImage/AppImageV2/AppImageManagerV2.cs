@@ -306,7 +306,7 @@ public class AppImageManagerV2(string installDirectory = "")
                     {
                         File.Delete(df);
                         LogMessage($"Removed desktop entry: {df}");
-                        UpdateDesktopDatabase(desktopDir);
+                        UpdateDesktopDatabase(desktopDir, true);
                     }
                     catch (Exception ex)
                     {
@@ -670,7 +670,7 @@ public class AppImageManagerV2(string installDirectory = "")
                         await File.WriteAllTextAsync(desktopFilePath, desktopContent);
                         XdgPaths.FixOwnershipIfRoot(desktopFilePath);
                         SetFilePermissions(desktopFilePath, "644");
-                        UpdateDesktopDatabase(desktopDir);
+                        UpdateDesktopDatabase(desktopDir, true);
                         LogMessage($"Updated desktop entry: {desktopFilePath}");
                     }
                     catch (Exception ex)
@@ -822,10 +822,14 @@ public class AppImageManagerV2(string installDirectory = "")
         }
     }
 
-    private void UpdateDesktopDatabase(string desktopDir)
+    private void UpdateDesktopDatabase(string desktopDir, bool local = false)
     {
         try
         {
+            if (local)
+            {
+                XdgPaths.FixOwnershipIfRoot($"{desktopDir}/mimeinfo.cache");
+            }
             var process = Process.Start(new ProcessStartInfo
             {
                 FileName = "update-desktop-database",
@@ -874,7 +878,7 @@ public class AppImageManagerV2(string installDirectory = "")
             File.WriteAllText(desktopFilePath, content.ToString());
             XdgPaths.FixOwnershipIfRoot(desktopFilePath);
             SetFilePermissions(desktopFilePath, "644");
-            UpdateDesktopDatabase(desktopDir);
+            UpdateDesktopDatabase(desktopDir, true);
 
             LogMessage($"Desktop entry created: {desktopFilePath}");
         }
@@ -1441,7 +1445,7 @@ public class AppImageManagerV2(string installDirectory = "")
                 }
 
                 XdgPaths.FixOwnershipIfRoot(desktopFilePath);
-                UpdateDesktopDatabase(desktopDir);
+                UpdateDesktopDatabase(desktopDir, true);
             }
             catch (Exception ex)
             {
