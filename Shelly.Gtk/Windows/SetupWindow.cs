@@ -77,6 +77,8 @@ public sealed class SetupWindow(
             config.NewInstallInitSettings = true;
             config.NewInstall = false;
             config.PackageInstallView = ViewType.Grid;
+            config.PackageUpdateView = ViewType.Grid;
+            config.PackageManageView = ViewType.Grid;
 
             try
             {

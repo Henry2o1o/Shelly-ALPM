@@ -72,5 +72,7 @@ public class ShellyConfig
     public string? AppImageInstallPath { get; set; }
     
     public ViewType PackageInstallView { get; set; } = ViewType.List;
+    public ViewType PackageUpdateView { get; set; } = ViewType.List;
+    public ViewType PackageManageView { get; set; } = ViewType.List;
    
 }
