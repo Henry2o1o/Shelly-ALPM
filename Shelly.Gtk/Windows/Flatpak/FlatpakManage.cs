@@ -6,6 +6,7 @@ using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 using Shelly.Gtk.Windows.Dialog;
+using Shelly.Utilities;
 
 // ReSharper disable CollectionNeverQueried.Local
 
@@ -36,7 +37,7 @@ public class FlatpakManage(
 
         _listView = (ListView)builder.GetObject("installed_flatpaks")!;
         var removeButton = (Button)builder.GetObject("remove_button")!;
-        
+
         var flatpakRepairButton = (Button)builder.GetObject("flatpak_repair_button")!;
         _listStore = Gio.ListStore.New(StringObject.GetGType());
         _selectionModel = SingleSelection.New(_listStore);
@@ -107,11 +108,10 @@ public class FlatpakManage(
         var versionLabel = (Label)vbox.GetNextSibling()!;
 
         string path;
-        if (_userOnly)
+        if (package.InstallLevel == InstallLevel.User)
         {
-            var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote,
+                Path.Combine(XdgPaths.DataHome(), "/flatpak/appstream", package.Remote,
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
@@ -129,7 +129,7 @@ public class FlatpakManage(
         idLabel.SetText(package.Id);
         versionLabel.SetText(package.Version);
     }
-    
+
     private async Task FlatpakRepairAsync()
     {
         try

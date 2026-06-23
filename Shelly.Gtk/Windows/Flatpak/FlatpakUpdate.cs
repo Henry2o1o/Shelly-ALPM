@@ -5,6 +5,7 @@ using Shelly.GTK.Resources;
 using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
+using Shelly.Utilities;
 
 // ReSharper disable CollectionNeverQueried.Local
 
@@ -61,7 +62,7 @@ public class FlatpakUpdate(
     {
         var listItem = (ListItem)args.Object;
         var mainVbox = Box.New(Orientation.Vertical, 0);
-        
+
         var hbox = Box.New(Orientation.Horizontal, 10);
         hbox.MarginStart = 10;
         hbox.MarginEnd = 10;
@@ -87,7 +88,7 @@ public class FlatpakUpdate(
         versionLabel.Halign = Align.End;
         versionLabel.Hexpand = true;
         hbox.Append(versionLabel);
-        
+
         mainVbox.Append(hbox);
 
         var permissionExpander = Expander.New(Translations.T("Permission Changes"));
@@ -95,10 +96,10 @@ public class FlatpakUpdate(
         permissionExpander.MarginEnd = 10;
         permissionExpander.MarginBottom = 5;
         permissionExpander.Visible = false;
-        
+
         var permissionVbox = Box.New(Orientation.Vertical, 2);
         permissionExpander.SetChild(permissionVbox);
-        
+
         mainVbox.Append(permissionExpander);
 
         listItem.SetChild(mainVbox);
@@ -125,11 +126,10 @@ public class FlatpakUpdate(
         var permissionVbox = (Box)permissionExpander.GetChild()!;
 
         string path;
-        if (_userOnly)
+        if (package.InstallLevel == InstallLevel.User)
         {
-            var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote,
+                Path.Combine(XdgPaths.DataHome(), "flatpak/appstream", package.Remote,
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
@@ -146,7 +146,7 @@ public class FlatpakUpdate(
         nameLabel.SetText(package.Name);
         idLabel.SetText(package.Id);
         versionLabel.SetText(package.Version);
-        
+
         var child = permissionVbox.GetFirstChild();
         while (child != null)
         {
@@ -170,6 +170,7 @@ public class FlatpakUpdate(
                 {
                     permLabel.AddCssClass("error");
                 }
+
                 permissionVbox.Append(permLabel);
             }
         }
@@ -230,7 +231,6 @@ public class FlatpakUpdate(
         if (_listStore.GetNItems() != 0) return;
         _noUpdatesLabel!.Label_ = (Translations.T("<span size='large'>Flatpaks are up to date</span>"));
         _noUpdatesLabel.Visible = true;
-
     }
 
     private async Task UpdateAllCommand()
