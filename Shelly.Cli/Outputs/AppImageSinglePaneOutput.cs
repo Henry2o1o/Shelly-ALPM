@@ -3,6 +3,7 @@ using PackageManager.Flatpak.Events;
 using Pastel;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Interactions;
+using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli.Outputs;
 
@@ -32,9 +33,11 @@ public class AppImageSinglePaneOutput
             region.UpdateBar(name, (ulong)(e.ProgressPercentage ?? 0), 100, (int)pct, "");
         };
 
-        manager.MessageEvent += (_, e) => { region.WriteLine(Color(e.Message, ConsoleColor.DarkGray)); };
-
-        manager.ErrorEvent += (_, e) => { region.WriteLine(Color(e.Error, ConsoleColor.Red)); };
+        manager.StatusEvent += (_, e) =>
+        {
+            if (e.Severity == AppImageEvents.Error) region.WriteLine(Color(e.Message, ConsoleColor.Red));
+            else region.WriteLine(Color(e.Message, ConsoleColor.DarkGray));
+        };
 
         bool result;
         try

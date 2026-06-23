@@ -39,7 +39,7 @@ public class InstallRefFile : GlobalSettingsCommand
         console.WriteLine(Colorize("Installing flatpak app...", ConsoleColor.Yellow));
         var manager = new FlatpakManager();
         manager.FlatpakEvent += (_, args) => console.WriteLine(Colorize(args.Message, ConsoleColor.Yellow));
-        manager.InstallAppFromRef(RefFilePath, SystemWide);
+        manager.InstallAppFromRef(RefFilePath, SystemWide ? InstallLevel.System : InstallLevel.User);
         return ValueTask.CompletedTask;
     }
 

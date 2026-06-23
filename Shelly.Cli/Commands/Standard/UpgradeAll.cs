@@ -5,6 +5,7 @@ using PackageManager.AppImage.AppImageV2;
 using PackageManager.Aur;
 using PackageManager.Aur.Models;
 using PackageManager.Flatpak;
+using PackageManager.User;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
@@ -39,6 +40,7 @@ public class UpgradeAll : GlobalSettingsCommand
     public bool NoFlatpak { get; set; }
 
     public bool NoAppImage { get; set; }
+    
 
     public static Command Create()
     {
@@ -76,28 +78,31 @@ public class UpgradeAll : GlobalSettingsCommand
             return;
         }
 
-        var plan = await BuildPlanAsync();
 
-        if (plan.IsEmpty)
+        if (!UserIdentity.IsRoot())
         {
-            console.WriteLine(Colorize("Everything is up to date.", ConsoleColor.Green));
-            return;
+            var plan = await BuildPlanAsync();
+
+            if (plan.IsEmpty)
+            {
+                console.WriteLine(Colorize("Everything is up to date.", ConsoleColor.Green));
+                return;
+            }
+
+            RenderPlan(console, plan);
+
+            if (!NoConfirm && !Confirm.Execute("Proceed with all upgrades?", false))
+            {
+                console.WriteLine(Colorize("Upgrade cancelled.", ConsoleColor.Red));
+                return;
+            }
+            
+            RootElevator.EnsureRootExectuion();
         }
-
-        RenderPlan(console, plan);
-
-        if (!NoConfirm && !Confirm.Execute("Proceed with all upgrades?", false))
-        {
-            console.WriteLine(Colorize("Upgrade cancelled.", ConsoleColor.Red));
-            return;
-        }
-
-        RootElevator.EnsureRootExectuion();
-
-        NoConfirm = true;
+        
 
         if (!NoRepo)
-            await RunChild(new Upgrade(), console);
+            await RunChild(new Upgrade(), console, true);
         if (!NoAur)
             await RunChild(new AurUpgrade(), console);
         if (!NoFlatpak)
@@ -110,17 +115,21 @@ public class UpgradeAll : GlobalSettingsCommand
 
     public override async ValueTask ExecuteUiMode()
     {
-        var plan = await BuildPlanAsync();
-
-        if (plan.IsEmpty)
+        if (!UserIdentity.IsRoot())
         {
-            UiFrames.Info("Everything is up to date.");
-            return;
+            var plan = await BuildPlanAsync();
+
+            if (plan.IsEmpty)
+            {
+                UiFrames.Info("Everything is up to date.");
+                return;
+            }
+
+            EmitPlan(plan);
+
+            RootElevator.EnsureRootExectuion();
         }
-
-        EmitPlan(plan);
-
-        NoConfirm = true;
+        
 
         if (!NoRepo)
             await RunChild(new Upgrade(), null);
@@ -349,9 +358,9 @@ public class UpgradeAll : GlobalSettingsCommand
         return args;
     }
 
-    private async ValueTask RunChild(GlobalSettingsCommand child, IShellyConsole? console)
+    private async ValueTask RunChild(GlobalSettingsCommand child, IShellyConsole? console, bool isStandardUpgrade = false)
     {
-        child.NoConfirm = NoConfirm;
+        child.NoConfirm = NoConfirm || isStandardUpgrade;
         child.UiMode = UiMode;
         child.JsonOutput = JsonOutput;
         child.Verbose = Verbose;
@@ -372,3 +381,4 @@ public class UpgradeAll : GlobalSettingsCommand
         }
     }
 }
+

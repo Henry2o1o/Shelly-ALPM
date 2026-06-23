@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using PackageManager.AppImage.Events.EventArgs;
 using Shelly.Utilities;
+using Shelly.Utilities.Eventing;
 
 namespace PackageManager.AppImage.AppImageV2;
 
@@ -21,23 +22,27 @@ public class AppImageManagerV2(string installDirectory = "")
     private static readonly string LocalDbPath =
         XdgPaths.ShellyCache("appimage-local-meta-store", "appimage-metadata-v2.db");
 
-    public event EventHandler<AppImageErrorEventArgs>? ErrorEvent;
-    public event EventHandler<AppImageMessageEventArgs>? MessageEvent;
-    public event EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+    public EventHandler<AppImageStatusEventArgs>? StatusEvent;
+    public EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+
+    private void LogStatus(AppImageEvents severity, string message)
+    {
+        StatusEvent?.Invoke(this, new AppImageStatusEventArgs(severity, message));
+    }
 
     private void LogMessage(string message)
     {
-        MessageEvent?.Invoke(this, new AppImageMessageEventArgs(message));
+        LogStatus(AppImageEvents.Information, message);
     }
 
     private void LogError(string error)
     {
-        ErrorEvent?.Invoke(this, new AppImageErrorEventArgs(error));
+        LogStatus(AppImageEvents.Error, error);
     }
 
     private void LogWarning(string message)
     {
-        MessageEvent?.Invoke(this, new AppImageMessageEventArgs($"Warning: {message}"));
+        LogStatus(AppImageEvents.Warning, message);
     }
 
     private void LogProgress(string appName, long? totalBytes, long downloadedBytes)
@@ -124,14 +129,25 @@ public class AppImageManagerV2(string installDirectory = "")
                 appImage.RepoName = null;
                 break;
             case UpdateType.StaticUrl:
-                appImage.UpdateType = UpdateType.StaticUrl;
                 appImage.UpdateURl = updateInfo;
                 appImage.UpdateType = updateType;
+                break;
+            case UpdateType.Forgejo:
+                if (updateInfo.Contains("//") &&
+                    updateInfo.Split("//")[1].Count(c => c == '/') == 2)
+                {
+                    appImage.UpdateURl = updateInfo;
+                    appImage.UpdateType = updateType;
+                }
+                else
+                {
+                    LogWarning(
+                        "Could not parse update info. Please use the format: https://<domain>/<user>/<repo>");
+                }
                 break;
             case UpdateType.GitHub:
             case UpdateType.GitLab:
             case UpdateType.Codeberg:
-            case UpdateType.Forgejo:
                 if (updateInfo.Count(c => c == '/') == 1)
                 {
                     appImage.RepoOwner = updateInfo.Split('/')[0];
@@ -220,12 +236,11 @@ public class AppImageManagerV2(string installDirectory = "")
         }
     }
 
-    public async Task<int> RemoveAppImage(string appImagePath, bool removeConfigFiles = false)
+    public async Task<bool> RemoveAppImage(string appImagePath, bool removeConfigFiles = false)
     {
         var appName = Path.GetFileNameWithoutExtension(appImagePath);
         var cleanName = CleanInvalidNames(appName);
         var userDataHome = XdgPaths.DataHome();
-        string[] desktopDirs = [Path.Combine(userDataHome, "applications")];
 
         try
         {
@@ -267,10 +282,10 @@ public class AppImageManagerV2(string installDirectory = "")
         catch (Exception ex)
         {
             LogError($"Error during removal: {ex.Message}");
-            return 1;
+            return false;
         }
 
-        return 0;
+        return true;
     }
 
     private async Task<string?> CleanDesktopEntries(string appName, string appPath)
@@ -302,7 +317,7 @@ public class AppImageManagerV2(string installDirectory = "")
                     {
                         File.Delete(df);
                         LogMessage($"Removed desktop entry: {df}");
-                        UpdateDesktopDatabase(desktopDir);
+                        UpdateDesktopDatabase(desktopDir, true);
                     }
                     catch (Exception ex)
                     {
@@ -666,7 +681,7 @@ public class AppImageManagerV2(string installDirectory = "")
                         await File.WriteAllTextAsync(desktopFilePath, desktopContent);
                         XdgPaths.FixOwnershipIfRoot(desktopFilePath);
                         SetFilePermissions(desktopFilePath, "644");
-                        UpdateDesktopDatabase(desktopDir);
+                        UpdateDesktopDatabase(desktopDir, true);
                         LogMessage($"Updated desktop entry: {desktopFilePath}");
                     }
                     catch (Exception ex)
@@ -818,10 +833,14 @@ public class AppImageManagerV2(string installDirectory = "")
         }
     }
 
-    private void UpdateDesktopDatabase(string desktopDir)
+    private void UpdateDesktopDatabase(string desktopDir, bool local = false)
     {
         try
         {
+            if (local)
+            {
+                XdgPaths.FixOwnershipIfRoot($"{desktopDir}/mimeinfo.cache");
+            }
             var process = Process.Start(new ProcessStartInfo
             {
                 FileName = "update-desktop-database",
@@ -870,7 +889,7 @@ public class AppImageManagerV2(string installDirectory = "")
             File.WriteAllText(desktopFilePath, content.ToString());
             XdgPaths.FixOwnershipIfRoot(desktopFilePath);
             SetFilePermissions(desktopFilePath, "644");
-            UpdateDesktopDatabase(desktopDir);
+            UpdateDesktopDatabase(desktopDir, true);
 
             LogMessage($"Desktop entry created: {desktopFilePath}");
         }
@@ -951,10 +970,8 @@ public class AppImageManagerV2(string installDirectory = "")
                 ? await CheckCodebergUpdate(appImage.RepoName, appImage.RepoOwner, appImage.Name, appImage.Version,
                     appImage.AllowPrerelease)
                 : null,
-            UpdateType.Forgejo => appImage.RepoOwner != null && appImage.RepoName != null
-                ? await CheckForgejoUpdate(appImage.RepoName, appImage.Name, appImage.RepoOwner, appImage.Version,
-                    appImage.AllowPrerelease)
-                : null,
+            UpdateType.Forgejo => await CheckForgejoUpdate(appImage.UpdateURl, appImage.Name, appImage.Version,
+                    appImage.AllowPrerelease),
             UpdateType.StaticUrl => await CheckStaticUrlUpdate(appImage.UpdateURl, appImage.Name,
                 appImage.Version),
             _ => null
@@ -1437,7 +1454,7 @@ public class AppImageManagerV2(string installDirectory = "")
                 }
 
                 XdgPaths.FixOwnershipIfRoot(desktopFilePath);
-                UpdateDesktopDatabase(desktopDir);
+                UpdateDesktopDatabase(desktopDir, true);
             }
             catch (Exception ex)
             {
@@ -1702,11 +1719,15 @@ public class AppImageManagerV2(string installDirectory = "")
         return await CheckGiteaUpdate(owner, repo, appName, currentVersion, "codeberg.org", allowPrerelease);
     }
 
-    private static async Task<AppImageUpdateDto?> CheckForgejoUpdate(string repo, string appName, string owner,
+    private static async Task<AppImageUpdateDto?> CheckForgejoUpdate(string updateUrl, string appName,
         string currentVersion, bool allowPrerelease = false)
     {
-        var uri = new Uri(repo);
-        return await CheckGiteaUpdate(owner, repo, appName, currentVersion, uri.Host, allowPrerelease);
+        var uri = new Uri(updateUrl);
+        if (uri.LocalPath.Split('/') is ["", var owner, var repo])
+        {
+            return await CheckGiteaUpdate(owner, repo, appName, currentVersion, uri.Host, allowPrerelease);
+        }
+        return null;
     }
 
     #endregion

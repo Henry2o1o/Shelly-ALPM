@@ -2,6 +2,6 @@ namespace PackageManager.Flatpak;
 
 public enum InstallLevel
 {
-    System,
-    User
+    System = 0,
+    User = 1
 }
