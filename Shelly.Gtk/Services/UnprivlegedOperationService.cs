@@ -39,6 +39,72 @@ public class UnprivilegedOperationService(
         return result;
     }
 
+    public async Task<List<AlpmPackageDto>> SearchPackagesAsync(string query)
+    {
+        return await ExecuteJsonCommandAsync<List<AlpmPackageDto>>("search packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["query", "--available", $"\"{query}\"", "--no-confirm"])));
+    }
+
+    public async Task<List<AlpmPackageDto>> GetAvailablePackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "query", "--available" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AlpmPackageDto>>("available packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<AlpmPackageDto>> GetInstalledPackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "query", "--installed" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AlpmPackageDto>>("installed packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<LocalPackageDto>> GetLocalInstalledPackagesAsync()
+    {
+        return await ExecuteJsonCommandAsync<List<LocalPackageDto>>("local installed packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["query", "--local"])));
+    }
+
+    public async Task<List<AurPackageDto>> GetAurInstalledPackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "aur", "list" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AurPackageDto>>("AUR installed packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<AurUpdateDto>> GetAurUpdatePackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "aur", "list-updates" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AurUpdateDto>>("AUR updates",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<AurPackageDto>> SearchAurPackagesAsync(string query)
+    {
+        return await ExecuteJsonCommandAsync<List<AurPackageDto>>("AUR search",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["aur", "search", query])));
+    }
+
+    public async Task<List<DowngradeOptionDto>> GetDowngradeOptionsAsync(string packageName)
+    {
+        return await ExecuteJsonCommandAsync<List<DowngradeOptionDto>>("downgrade options",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["downgrade", packageName, "--list-options"])));
+    }
+
+    public async Task<bool> IsPackageInstalledOnMachine(string packageName)
+    {
+        var standardPackages = await GetInstalledPackagesAsync();
+        return standardPackages.Any(x => x.Name.Contains(packageName));
+    }
+
     public async Task<UnprivilegedOperationResult> RemoveFlatpakPackage(IEnumerable<string> packages)
     {
         var args = new List<string> { "flatpak", "remove" };
@@ -203,7 +269,7 @@ public class UnprivilegedOperationService(
 
     public async Task<SyncModel> CheckForApplicationUpdates()
     {
-        return await ExecuteJsonCommandAsync<SyncModel>("check application updates",
+        return await ExecuteJsonCommandLastAsync<SyncModel>("check application updates",
             () => RunShellyCommandAsync("check-updates", "-a", "-l"));
     }
 
@@ -266,14 +332,29 @@ public class UnprivilegedOperationService(
         packageUpdateNotifier.NotifyPackagesUpdated();
     }
 
-    private static async Task<T> ExecuteJsonCommandAsync<T>(
+    private static Task<T> ExecuteJsonCommandLastAsync<T>(
         string operationName,
         Func<Task<UnprivilegedOperationResult>> executeCommand) where T : new()
+    {
+        return ExecuteJsonCommandAsync<T>(operationName, executeCommand, JsonPackFrame.TryDecodeLast);
+    }
+
+    private static Task<T> ExecuteJsonCommandAsync<T>(
+        string operationName,
+        Func<Task<UnprivilegedOperationResult>> executeCommand) where T : new()
+    {
+        return ExecuteJsonCommandAsync<T>(operationName, executeCommand, JsonPackFrame.TryDecode);
+    }
+
+    private static async Task<T> ExecuteJsonCommandAsync<T>(
+        string operationName,
+        Func<Task<UnprivilegedOperationResult>> executeCommand,
+        TryDecode<T> decode) where T : new()
     {
         var result = await executeCommand();
         if (!result.Success) return new T();
 
-        if (JsonPackFrame.TryDecode<T>(result.Output, out var framed) && framed is not null)
+        if (decode(result.Output, out var framed) && framed is not null)
             return framed;
 
         Console.WriteLine($"Failed to decode {operationName}");
@@ -282,8 +363,15 @@ public class UnprivilegedOperationService(
 
     private async Task<UnprivilegedOperationResult> RunShellyCommandAsync(params string[] args)
     {
-        var result = await processExecutor.RunShellyInteractiveCommandAsync(args);
+        return await FromOperationResult(processExecutor.RunShellyInteractiveCommandAsync(args));
+    }
 
+    /**
+     * HACK: Should be refactored to more generic OperationResult that works for both Privileged and Unprivileged
+     */
+    private static async Task<UnprivilegedOperationResult> FromOperationResult(Task<OperationResult> resultTask)
+    {
+        var result = await resultTask;
         return new UnprivilegedOperationResult
         {
             Success = result.Success,
@@ -292,4 +380,6 @@ public class UnprivilegedOperationService(
             ExitCode = result.ExitCode
         };
     }
+
+    private delegate bool TryDecode<T>(string input, out T? output);
 }
