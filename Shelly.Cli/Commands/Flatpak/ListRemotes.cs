@@ -42,7 +42,7 @@ public class ListRemotes : GlobalSettingsCommand
         console.WriteLine(Colorize("Remotes:", ConsoleColor.Blue));
         foreach (var remote in remotes)
         {
-            var scopeColor = remote.Scope == "system" ? ConsoleColor.Green : ConsoleColor.Yellow;
+            var scopeColor = remote.Scope == InstallLevel.System ? ConsoleColor.Green : ConsoleColor.Yellow;
             console.WriteLine($"{remote.Name} {Colorize($"({remote.Scope})", scopeColor)}");
         }
 

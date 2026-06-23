@@ -63,7 +63,7 @@ internal sealed class EventRouter
                 Log($"[PROGRESS] {e.Status} {e.Percentage}%");
                 break;
             case FlatpakStatusEvent e:
-                Log($"[STATUS] {e.Status}");
+                Log($"[STATUS] {e.Status} {e.Message}");
                 break;
             case AppImageProgressEvent e:
                 Log($"[PROGRESS] {e.Status} {e.Percentage}%");

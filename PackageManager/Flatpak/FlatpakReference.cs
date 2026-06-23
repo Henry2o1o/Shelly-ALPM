@@ -69,6 +69,11 @@ internal static partial class FlatpakReference
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool FlatpakInstallationModifyRemote(IntPtr installation, IntPtr remote,
         IntPtr cancellable, out IntPtr error);
+    
+    [LibraryImport(LibName, EntryPoint = "flatpak_installation_list_remote_refs_sync_full",
+        StringMarshalling = StringMarshalling.Utf8)]
+    public static partial IntPtr FlatpakInstallationListRemoteRefsSyncFull(IntPtr installation, string remoteOrUri,
+        FlatpakQueryFlags flags, IntPtr cancellable, out IntPtr error);
 
     #endregion
 
@@ -98,6 +103,10 @@ internal static partial class FlatpakReference
     [LibraryImport(LibName, EntryPoint = "flatpak_installed_ref_get_origin",
         StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr InstalledRefGetOrigin(IntPtr @ref);
+
+    [LibraryImport(LibName, EntryPoint = "flatpak_remote_ref_get_remote_name",
+        StringMarshalling = StringMarshalling.Utf8)]
+    public static partial IntPtr RemoteRefGetRemoteName(IntPtr @ref);
 
     [LibraryImport(LibName, EntryPoint = "flatpak_installation_launch", StringMarshalling = StringMarshalling.Utf8)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -139,9 +148,8 @@ internal static partial class FlatpakReference
     public enum FlatpakLaunchFlags : uint
     {
         None = 0,
-        FlatpakLaunchFlagsDoNotReap = 1
+        FlatpakLaunchFlagsDoNotReap = 1 << 0
     }
-
     #endregion
 
     #region GLib/GObject
