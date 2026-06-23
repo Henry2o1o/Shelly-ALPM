@@ -39,6 +39,72 @@ public class UnprivilegedOperationService(
         return result;
     }
 
+    public async Task<List<AlpmPackageDto>> SearchPackagesAsync(string query)
+    {
+        return await ExecuteJsonCommandAsync<List<AlpmPackageDto>>("search packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["query", "--available", $"\"{query}\"", "--no-confirm"])));
+    }
+
+    public async Task<List<AlpmPackageDto>> GetAvailablePackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "query", "--available" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AlpmPackageDto>>("available packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<AlpmPackageDto>> GetInstalledPackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "query", "--installed" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AlpmPackageDto>>("installed packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<LocalPackageDto>> GetLocalInstalledPackagesAsync()
+    {
+        return await ExecuteJsonCommandAsync<List<LocalPackageDto>>("local installed packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["query", "--local"])));
+    }
+
+    public async Task<List<AurPackageDto>> GetAurInstalledPackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "aur", "list" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AurPackageDto>>("AUR installed packages",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<AurUpdateDto>> GetAurUpdatePackagesAsync(bool showHidden = false)
+    {
+        var args = new List<string> { "aur", "list-updates" };
+        if (showHidden) args.Add("--show-hidden");
+
+        return await ExecuteJsonCommandAsync<List<AurUpdateDto>>("AUR updates",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(args.ToArray())));
+    }
+
+    public async Task<List<AurPackageDto>> SearchAurPackagesAsync(string query)
+    {
+        return await ExecuteJsonCommandAsync<List<AurPackageDto>>("AUR search",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["aur", "search", query])));
+    }
+
+    public async Task<List<DowngradeOptionDto>> GetDowngradeOptionsAsync(string packageName)
+    {
+        return await ExecuteJsonCommandAsync<List<DowngradeOptionDto>>("downgrade options",
+            () => FromOperationResult(processExecutor.RunShellyCommandAsync(["downgrade", packageName, "--list-options"])));
+    }
+
+    public async Task<bool> IsPackageInstalledOnMachine(string packageName)
+    {
+        var standardPackages = await GetInstalledPackagesAsync();
+        return standardPackages.Any(x => x.Name.Contains(packageName));
+    }
+
     public async Task<UnprivilegedOperationResult> RemoveFlatpakPackage(IEnumerable<string> packages)
     {
         var args = new List<string> { "flatpak", "remove" };
@@ -50,9 +116,9 @@ public class UnprivilegedOperationService(
     {
         UnprivilegedOperationResult result;
         if (removeConfig)
-            result = await RunShellyCommandAsync("flatpak", "uninstall", package, "-c");
+            result = await RunShellyCommandAsync("flatpak", "uninstall", package, "-cr");
         else
-            result = await RunShellyCommandAsync("flatpak", "uninstall", package);
+            result = await RunShellyCommandAsync("flatpak", "uninstall", package, "-r");
 
         if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
         return result;
@@ -95,19 +161,19 @@ public class UnprivilegedOperationService(
         return await RunShellyCommandAsync("flatpak", "sync-remote-appstream");
     }
 
-    public async Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, string scope)
+    public async Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, InstallLevel scope)
     {
-        if (scope == "user")
+        if (scope == InstallLevel.User)
             return await RunShellyCommandAsync("flatpak", "remove-remotes", remoteName, "--system", "false");
 
         return await RunShellyCommandAsync("flatpak", "remove-remotes", remoteName, "--system", "true");
     }
 
-    public async Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, string scope)
+    public async Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, InstallLevel scope)
     {
         UnprivilegedOperationResult result;
-        if (scope == "user")
-            result = await RunShellyCommandAsync("flatpak", "install-ref-file", path);
+        if (scope == InstallLevel.User)
+            result = await RunShellyCommandAsync("flatpak", "install-ref-file", path, "--system", "false");
         else
             result = await RunShellyCommandAsync("flatpak", "install-ref-file", path, "--system", "true");
 
@@ -117,22 +183,19 @@ public class UnprivilegedOperationService(
 
     public async Task<UnprivilegedOperationResult> FlatpakInstallFromBundle(string path)
     {
-        var result = await RunShellyCommandAsync("flatpak", "install-bundle", path, "--user", "false");
+        var result = await RunShellyCommandAsync("flatpak", "install-bundle", path, "-s", "false");
         if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
         return result;
     }
-
-    public async Task<UnprivilegedOperationResult> RunFlatpakName(string name)
+    
+    public async Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, InstallLevel scope, string url)
     {
-        return await RunShellyCommandAsync("flatpak", "run", name);
-    }
+        if (scope == InstallLevel.User)
+            return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system",
+                "false");
 
-    public async Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, string scope, string url)
-    {
-        if (scope == "user")
-            return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system", "false");
-
-        return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system", "true");
+        return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system",
+            "true");
     }
 
     public async Task<FlatpakRemoteRefInfo> GetFlatpakAppDataAsync(string remote, string app, string arch)
@@ -208,12 +271,6 @@ public class UnprivilegedOperationService(
     {
         return await ExecuteJsonCommandLastAsync<SyncModel>("check application updates",
             () => RunShellyCommandAsync("check-updates", "-a", "-l"));
-    }
-
-    public async Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query)
-    {
-        return await ExecuteJsonCommandAsync<List<FlatpakPackageDto>>("list flathub search ",
-            () => RunShellyCommandAsync("flatpak", "search", query, "--limit", "100"));
     }
 
     public async Task<UnprivilegedOperationResult> AppImageInstallAsync(string filePath, string updateUrl = "",
@@ -306,8 +363,15 @@ public class UnprivilegedOperationService(
 
     private async Task<UnprivilegedOperationResult> RunShellyCommandAsync(params string[] args)
     {
-        var result = await processExecutor.RunShellyInteractiveCommandAsync(args);
+        return await FromOperationResult(processExecutor.RunShellyInteractiveCommandAsync(args));
+    }
 
+    /**
+     * HACK: Should be refactored to more generic OperationResult that works for both Privileged and Unprivileged
+     */
+    private static async Task<UnprivilegedOperationResult> FromOperationResult(Task<OperationResult> resultTask)
+    {
+        var result = await resultTask;
         return new UnprivilegedOperationResult
         {
             Success = result.Success,

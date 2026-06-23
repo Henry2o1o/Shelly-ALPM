@@ -7,6 +7,24 @@ namespace Shelly.Gtk.Services;
 
 public interface IUnprivilegedOperationService
 {
+    Task<List<AlpmPackageDto>> SearchPackagesAsync(string query);
+
+    Task<List<AlpmPackageDto>> GetAvailablePackagesAsync(bool showHidden = false);
+
+    Task<List<AlpmPackageDto>> GetInstalledPackagesAsync(bool showHidden = false);
+
+    Task<List<LocalPackageDto>> GetLocalInstalledPackagesAsync();
+
+    Task<List<AurPackageDto>> GetAurInstalledPackagesAsync(bool showHidden = false);
+
+    Task<List<AurUpdateDto>> GetAurUpdatePackagesAsync(bool showHidden = false);
+
+    Task<List<AurPackageDto>> SearchAurPackagesAsync(string query);
+
+    Task<bool> IsPackageInstalledOnMachine(string packageName);
+
+    Task<List<DowngradeOptionDto>> GetDowngradeOptionsAsync(string packageName);
+
     Task<UnprivilegedOperationResult> RemoveFlatpakPackage(IEnumerable<string> packages);
 
     Task<UnprivilegedOperationResult> RemoveFlatpakPackage(string package, bool removeConfig);
@@ -30,13 +48,11 @@ public interface IUnprivilegedOperationService
 
     Task<UnprivilegedOperationResult> FlatpakSyncRemoteAppstream();
 
-    Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, string scope);
+    Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, InstallLevel scope);
 
-    Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, string scope, string url);
+    Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, InstallLevel scope, string url);
 
-    Task<UnprivilegedOperationResult> RunFlatpakName(string name);
-
-    Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, string scope);
+    Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, InstallLevel scope);
 
     Task<UnprivilegedOperationResult> FlatpakInstallFromBundle(string path);
 
@@ -45,9 +61,7 @@ public interface IUnprivilegedOperationService
     Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates(bool showHidden = false);
 
     Task<UnprivilegedOperationResult> ExportSyncFile(string filePath, string name);
-
-    Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query);
-
+    
     Task<FlatpakRemoteRefInfo> GetFlatpakAppDataAsync(string remote, string app, string arch);
 
     Task<List<AppImageDto>> GetInstallAppImagesAsync();

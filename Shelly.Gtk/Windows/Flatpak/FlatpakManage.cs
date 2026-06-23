@@ -160,7 +160,7 @@ public class FlatpakManage(
 
             GLib.Functions.IdleAdd(0, () =>
             {
-                _userOnly = remotes.Any(r => r.Scope != "system");
+                _userOnly = remotes.Any(r => r.Scope != InstallLevel.System);
                 ApplyFilter();
                 return false;
             });
