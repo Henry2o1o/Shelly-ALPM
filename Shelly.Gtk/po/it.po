@@ -3,7 +3,7 @@ msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
 "POT-Creation-Date: 2026-06-12 11:40+0000\n"
-"PO-Revision-Date: 2026-06-16 16:21+0200\n"
+"PO-Revision-Date: 2026-06-23 19:13+0200\n"
 "Last-Translator: csnyder@seafoamlabs.org\n"
 "Language-Team: csnyder@seafoamlabs.org\n"
 "Language: it\n"
@@ -228,6 +228,15 @@ msgstr "Parametri di avvio"
 
 msgid "Save"
 msgstr "Salva"
+
+msgid "Language"
+msgstr ""
+
+msgid "Follow system language"
+msgstr ""
+
+msgid "Restart Shelly to apply the selected language."
+msgstr ""
 
 msgid "Sync"
 msgstr "Sincronizza"
@@ -1544,6 +1553,12 @@ msgstr "Impossibile rimuovere i pacchetti: {0}"
 
 msgid "App Permissions"
 msgstr "Permessi dell'applicazione"
+
+msgid "<span size='large'>Flatpaks are up to date</span>"
+msgstr "<span size='large'>I pacchetti Flatpak sono aggiornati</span>"
+
+msgid "Update Available: {0}"
+msgstr "Aggiornamento disponibile: {0}"
 
 #~ msgid ""
 #~ "Both tray icons must be set for use, if not it will default to standard "
