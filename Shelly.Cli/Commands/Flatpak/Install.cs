@@ -1,5 +1,6 @@
 using System.CommandLine;
 using PackageManager.Flatpak;
+using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
@@ -15,10 +16,13 @@ public class Install : GlobalSettingsCommand
 
     public static Command Create()
     {
-        var package = new Argument<string>("package") { Description = "Flatpak application ID (e.g., com.spotify.Client)" };
+        var package = new Argument<string>("package")
+            { Description = "Flatpak application ID (e.g., com.spotify.Client)" };
         var user = new Option<bool>("--user") { Description = "Install to user scope instead of system scope" };
-        var remote = new Option<string?>("--remote", "-r") { Description = "Remote to install from (e.g., flathub, flathub-beta)" };
-        var branch = new Option<string?>("--branch", "-b") { Description = "Branch to install (e.g., stable, beta). Defaults to stable" };
+        var remote = new Option<string?>("--remote", "-r")
+            { Description = "Remote to install from (e.g., flathub, flathub-beta)" };
+        var branch = new Option<string?>("--branch", "-b")
+            { Description = "Branch to install (e.g., stable, beta). Defaults to stable" };
         var runtime = new Option<bool>("--runtime") { Description = "Install as a runtime instead of an application" };
 
         var command = new Command("install", "Install flatpak app")
@@ -52,18 +56,66 @@ public class Install : GlobalSettingsCommand
             return;
         }
 
-        console.WriteLine(Colorize("Installing flatpak app...", ConsoleColor.Yellow));
         var manager = new FlatpakManager();
+
+        var packageToInstall = Package;
+        var remoteToUse = Remote;
+
+        if (!Package.Contains('.') && string.IsNullOrEmpty(Remote))
+        {
+            console.WriteLine(Colorize($"Searching for packages matching '{Package}'...", ConsoleColor.Cyan));
+            var matches = manager.SearchRemoteRefs(Package);
+
+            switch (matches.Count)
+            {
+                case 0:
+                    console.WriteLine(Colorize($"No matches found for '{Package}'. Proceeding with literal name.",
+                        ConsoleColor.Yellow));
+                    break;
+                case 1:
+                {
+                    var match = matches[0];
+                    console.WriteLine(Colorize($"Found match: {match.Name} ({match.Id}) from {match.Remote}",
+                        ConsoleColor.Green));
+                    packageToInstall = match.Id;
+                    remoteToUse = match.Remote;
+                    break;
+                }
+                default:
+                {
+                    console.WriteLine(Colorize($"Found multiple matches for '{Package}':", ConsoleColor.Yellow));
+                    var options = matches.Select(m => $"{m.Name} ({m.Id}) [{m.Remote}] [{m.InstallLevel.ToString()}]")
+                        .ToList();
+                    var index = BasicSelection.Execute("Select a package to install:", options);
+
+                    if (index < 0 || index >= matches.Count)
+                    {
+                        console.WriteLine(Colorize("Invalid selection. Aborting.", ConsoleColor.Red));
+                        return;
+                    }
+
+                    var selected = matches[index];
+                    packageToInstall = selected.Id;
+                    remoteToUse = selected.Remote;
+                    break;
+                }
+            }
+        }
+
+        console.WriteLine(Colorize("Installing flatpak app...", ConsoleColor.Yellow));
+
         await FlatpakSinglePaneOutput.Output(console, manager,
-            x => x.InstallApp(Package, Remote, IsUser, Branch ?? "stable", IsRuntime), NoConfirm);
+            x => x.InstallApp(packageToInstall, IsUser ? InstallLevel.User : InstallLevel.System, Branch ?? "stable",
+                remoteToUse, IsRuntime), NoConfirm);
     }
 
-    public async override ValueTask ExecuteUiMode()
+    public override async ValueTask ExecuteUiMode()
     {
         UiFrames.TxStart("Installing flatpak app...");
         var manager = new FlatpakManager();
-        await UiModeOutput.Run(manager, m =>  manager.InstallApp(Package, Remote, IsUser, Branch ?? "stable", IsRuntime));
+        await UiModeOutput.Run(manager,
+            m => manager.InstallApp(Package, IsUser ? InstallLevel.User : InstallLevel.System, Branch ?? "stable",
+                Remote, IsRuntime));
         UiFrames.TxDone("Flatpak install complete.");
-      
     }
 }

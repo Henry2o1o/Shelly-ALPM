@@ -1,4 +1,5 @@
 using Gtk;
+using Shelly.Gtk.Enums;
 using Shelly.Gtk.Helpers;
 using Shelly.GTK.Resources;
 using Shelly.Gtk.Services;
@@ -189,7 +190,7 @@ public class FlatpakUpdate(
 
             GLib.Functions.IdleAdd(0, () =>
             {
-                _userOnly = remotes.Any(r => r.Scope != "system");
+                _userOnly = remotes.Any(r => r.Scope != InstallLevel.System);
                 ApplyFilter();
                 return false;
             });

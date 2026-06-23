@@ -116,9 +116,9 @@ public class UnprivilegedOperationService(
     {
         UnprivilegedOperationResult result;
         if (removeConfig)
-            result = await RunShellyCommandAsync("flatpak", "uninstall", package, "-c");
+            result = await RunShellyCommandAsync("flatpak", "uninstall", package, "-cr");
         else
-            result = await RunShellyCommandAsync("flatpak", "uninstall", package);
+            result = await RunShellyCommandAsync("flatpak", "uninstall", package, "-r");
 
         if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
         return result;
@@ -161,19 +161,19 @@ public class UnprivilegedOperationService(
         return await RunShellyCommandAsync("flatpak", "sync-remote-appstream");
     }
 
-    public async Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, string scope)
+    public async Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, InstallLevel scope)
     {
-        if (scope == "user")
+        if (scope == InstallLevel.User)
             return await RunShellyCommandAsync("flatpak", "remove-remotes", remoteName, "--system", "false");
 
         return await RunShellyCommandAsync("flatpak", "remove-remotes", remoteName, "--system", "true");
     }
 
-    public async Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, string scope)
+    public async Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, InstallLevel scope)
     {
         UnprivilegedOperationResult result;
-        if (scope == "user")
-            result = await RunShellyCommandAsync("flatpak", "install-ref-file", path);
+        if (scope == InstallLevel.User)
+            result = await RunShellyCommandAsync("flatpak", "install-ref-file", path, "--system", "false");
         else
             result = await RunShellyCommandAsync("flatpak", "install-ref-file", path, "--system", "true");
 
@@ -183,22 +183,19 @@ public class UnprivilegedOperationService(
 
     public async Task<UnprivilegedOperationResult> FlatpakInstallFromBundle(string path)
     {
-        var result = await RunShellyCommandAsync("flatpak", "install-bundle", path, "--user", "false");
+        var result = await RunShellyCommandAsync("flatpak", "install-bundle", path, "-s", "false");
         if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
         return result;
     }
-
-    public async Task<UnprivilegedOperationResult> RunFlatpakName(string name)
+    
+    public async Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, InstallLevel scope, string url)
     {
-        return await RunShellyCommandAsync("flatpak", "run", name);
-    }
+        if (scope == InstallLevel.User)
+            return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system",
+                "false");
 
-    public async Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, string scope, string url)
-    {
-        if (scope == "user")
-            return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system", "false");
-
-        return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system", "true");
+        return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system",
+            "true");
     }
 
     public async Task<FlatpakRemoteRefInfo> GetFlatpakAppDataAsync(string remote, string app, string arch)
@@ -274,12 +271,6 @@ public class UnprivilegedOperationService(
     {
         return await ExecuteJsonCommandLastAsync<SyncModel>("check application updates",
             () => RunShellyCommandAsync("check-updates", "-a", "-l"));
-    }
-
-    public async Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query)
-    {
-        return await ExecuteJsonCommandAsync<List<FlatpakPackageDto>>("list flathub search ",
-            () => RunShellyCommandAsync("flatpak", "search", query, "--limit", "100"));
     }
 
     public async Task<UnprivilegedOperationResult> AppImageInstallAsync(string filePath, string updateUrl = "",
