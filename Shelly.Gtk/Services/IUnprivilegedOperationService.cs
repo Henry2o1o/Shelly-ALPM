@@ -34,8 +34,6 @@ public interface IUnprivilegedOperationService
 
     Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, InstallLevel scope, string url);
 
-    Task<UnprivilegedOperationResult> RunFlatpakName(string name);
-
     Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, InstallLevel scope);
 
     Task<UnprivilegedOperationResult> FlatpakInstallFromBundle(string path);
@@ -45,9 +43,7 @@ public interface IUnprivilegedOperationService
     Task<List<AlpmPackageUpdateDto>> CheckForStandardApplicationUpdates(bool showHidden = false);
 
     Task<UnprivilegedOperationResult> ExportSyncFile(string filePath, string name);
-
-    Task<List<FlatpakPackageDto>> SearchFlathubAsync(string query);
-
+    
     Task<FlatpakRemoteRefInfo> GetFlatpakAppDataAsync(string remote, string app, string arch);
 
     Task<List<AppImageDto>> GetInstallAppImagesAsync();

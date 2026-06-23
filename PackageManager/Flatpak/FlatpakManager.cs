@@ -473,10 +473,10 @@ public class FlatpakManager : IDisposable
     /// <summary>
     /// Installs a flatpak package from a local bundle file.
     /// <param name="bundlePath">Path to location of bundle to install</param>
-    /// <param name="isSystem">Whether to install to user installation (true) or system installation (false)</param>
+    /// <param name="level">Whether to install to user installation (true) or system installation (false)</param>
     /// <returns>A result message indicating success or failure</returns>
     /// </summary>
-    public void InstallAppFromBundle(string bundlePath, InstallLevel level)
+    public Task<bool> InstallAppFromBundle(string bundlePath, InstallLevel level)
     {
         IntPtr installationPtr;
 
@@ -488,7 +488,7 @@ public class FlatpakManager : IDisposable
                 FlatpakReference.GErrorFree(userError);
                 FlatpakEvent.Invoke(this,
                     new FlatpakEventArgs(FlatpakEventEnum.Error, $"Failed to get user installation."));
-                return;
+                return Task.FromResult(false);
             }
         }
         else
@@ -500,19 +500,19 @@ public class FlatpakManager : IDisposable
                 FlatpakReference.GErrorFree(error);
                 FlatpakEvent.Invoke(this,
                     new FlatpakEventArgs(FlatpakEventEnum.Error, $"Failed to get system installation."));
-                return;
+                return Task.FromResult(false);
             }
         }
 
         try
         {
             var filePtr = FlatpakReference.GFileNewForPath(bundlePath);
-
+            
             if (filePtr == IntPtr.Zero)
             {
                 FlatpakEvent.Invoke(this,
                     new FlatpakEventArgs(FlatpakEventEnum.Error, $"Failed to create GFile from path: {bundlePath}"));
-                return;
+                return Task.FromResult(false);
             }
 
             var actualPathPtr = FlatpakReference.GFileGetPath(filePtr);
@@ -528,7 +528,7 @@ public class FlatpakManager : IDisposable
                 FlatpakReference.GObjectUnref(filePtr);
                 FlatpakEvent.Invoke(this,
                     new FlatpakEventArgs(FlatpakEventEnum.Error, "Failed to create installation transaction."));
-                return;
+                return Task.FromResult(false);
             }
 
             try
@@ -573,11 +573,11 @@ public class FlatpakManager : IDisposable
                     FlatpakEvent.Invoke(this,
                         new FlatpakEventArgs(FlatpakEventEnum.Error,
                             $"Failed to add bundle to installation queue: {errorMsg}"));
-                    return;
+                    return Task.FromResult(false);
                 }
 
                 var runSuccess = FlatpakReference.TransactionRun(
-                    transactionPtr, IntPtr.Zero, out IntPtr runError);
+                    transactionPtr, IntPtr.Zero, out var runError);
 
                 if (!runSuccess || runError != IntPtr.Zero)
                 {
@@ -588,7 +588,7 @@ public class FlatpakManager : IDisposable
                     FlatpakReference.GObjectUnref(filePtr);
                     FlatpakEvent.Invoke(this,
                         new FlatpakEventArgs(FlatpakEventEnum.Error, $"Installation of bundle failed: {errorMsg}"));
-                    return;
+                    return Task.FromResult(false);
                 }
 
                 if (filePtr != IntPtr.Zero)
@@ -608,6 +608,7 @@ public class FlatpakManager : IDisposable
         {
             FlatpakReference.GObjectUnref(installationPtr);
         }
+        return Task.FromResult(true);
     }
 
     /// <summary>
@@ -695,7 +696,7 @@ public class FlatpakManager : IDisposable
 
             if (transactionError != IntPtr.Zero || transactionPtr == IntPtr.Zero)
             {
-                FlatpakEvent.Invoke(this,
+                FlatpakEvent?.Invoke(this,
                     new FlatpakEventArgs(FlatpakEventEnum.Error, "Failed to create installation transaction."));
                 return Task.FromResult(false);
             }
@@ -715,7 +716,7 @@ public class FlatpakManager : IDisposable
                 {
                     var errorMsg = FlatpakReference.GetErrorMessage(addError);
                     FlatpakReference.GErrorFree(addError);
-                    FlatpakEvent.Invoke(this,
+                    FlatpakEvent?.Invoke(this,
                         new FlatpakEventArgs(FlatpakEventEnum.Error,
                             $"Failed to add {appId} to installation queue: {errorMsg}"));
                     return Task.FromResult(false);
@@ -728,12 +729,12 @@ public class FlatpakManager : IDisposable
                 {
                     var errorMsg = FlatpakReference.GetErrorMessage(runError);
                     FlatpakReference.GErrorFree(runError);
-                    FlatpakEvent.Invoke(this,
+                    FlatpakEvent?.Invoke(this,
                         new FlatpakEventArgs(FlatpakEventEnum.Error, $"Installation of {appId} failed: {errorMsg}"));
                     return Task.FromResult(false);
                 }
-                
-                FlatpakEvent.Invoke(this,
+            
+                FlatpakEvent?.Invoke(this,
                     new FlatpakEventArgs(FlatpakEventEnum.Success, $"Successfully installed {appId} to {level.ToString()}."));
             }
             finally
@@ -812,7 +813,8 @@ public class FlatpakManager : IDisposable
                     var match = FindInstalledApp(installationPtr, nameOrId);
                     if (match == null) continue;
                     var result = UninstallFromInstallation(installationPtr, match, nameOrId, removeUnused, InstallLevel.System);
-                    FlatpakEvent?.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Success, result));
+                    FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Success, result));
+                    return;
                 }
             }
             finally
@@ -837,7 +839,7 @@ public class FlatpakManager : IDisposable
 
         if (userInstallationPtr == IntPtr.Zero)
         {
-            FlatpakEvent?.Invoke(this,
+            FlatpakEvent.Invoke(this,
                 new FlatpakEventArgs(FlatpakEventEnum.Error, $"Could not find installed app matching '{nameOrId}'."));
             return;
         }
@@ -847,13 +849,13 @@ public class FlatpakManager : IDisposable
             var match = FindInstalledApp(userInstallationPtr, nameOrId);
             if (match == null)
             {
-                FlatpakEvent?.Invoke(this,
+                FlatpakEvent.Invoke(this,
                     new FlatpakEventArgs(FlatpakEventEnum.Error, $"Could not find installed app match `{nameOrId}`."));
                 return;
             }
 
             var result = UninstallFromInstallation(userInstallationPtr, match, nameOrId, removeUnused, InstallLevel.User);
-            FlatpakEvent?.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Success, result));
+            FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Success, result));
         }
         finally
         {
@@ -1022,6 +1024,74 @@ public class FlatpakManager : IDisposable
         {
             FlatpakReference.GPtrArrayUnref(unusedRefsPtr);
         }
+    }
+    
+     /// <summary>
+    /// Uninstalls unused flatpak references (dependencies) from all installations.
+    /// </summary>
+    public Task<bool> UninstallUnused()
+    {
+        if (!NativeResolver.IsLibraryAvailable(FlatpakReference.LibName))
+        {
+            FlatpakEvent?.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Error, "Flatpak library is not available."));
+            return Task.FromResult(false);
+        }
+
+        var results = new List<string>();
+
+        // System 
+        var sysInstallationsPtr = FlatpakReference.GetSystemInstallations(IntPtr.Zero, out IntPtr sysError);
+        if (sysError == IntPtr.Zero && sysInstallationsPtr != IntPtr.Zero)
+        {
+            try
+            {
+                var dataPtr = Marshal.ReadIntPtr(sysInstallationsPtr);
+                var length = Marshal.ReadInt32(sysInstallationsPtr + IntPtr.Size);
+                for (var i = 0; i < length; i++)
+                {
+                    var inst = Marshal.ReadIntPtr(dataPtr + i * IntPtr.Size);
+                    if (inst == IntPtr.Zero) continue;
+                    var result = RemoveUnusedDependencies(inst);
+                    results.Add($"System installation:{result}");
+                }
+            }
+            finally
+            {
+                FlatpakReference.GPtrArrayUnref(sysInstallationsPtr);
+            }
+        }
+        else if (sysError != IntPtr.Zero)
+        {
+            var errorMsg = FlatpakReference.GetErrorMessage(sysError);
+            FlatpakReference.GErrorFree(sysError);
+            results.Add($"Failed to get system installations: {errorMsg}");
+        }
+
+        // User 
+        var userInstPtr = FlatpakReference.InstallationNewUser(IntPtr.Zero, out IntPtr userError);
+        if (userError == IntPtr.Zero && userInstPtr != IntPtr.Zero)
+        {
+            try
+            {
+                var result = RemoveUnusedDependencies(userInstPtr);
+                results.Add($"User installation:{result}");
+            }
+            finally
+            {
+                FlatpakReference.GObjectUnref(userInstPtr);
+            }
+        }
+        else if (userError != IntPtr.Zero)
+        {
+            var errorMsg = FlatpakReference.GetErrorMessage(userError);
+            FlatpakReference.GErrorFree(userError);
+            results.Add($"Failed to get user installation: {errorMsg}");
+        }
+
+        var finalMessage = string.Join("\n", results);
+        FlatpakEvent?.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Success, finalMessage));
+        
+        return Task.FromResult(true);
     }
 
     /// <summary>
@@ -1453,8 +1523,7 @@ public class FlatpakManager : IDisposable
                 actualGpgVerify = repoConfig.GpgVerify ?? gpgVerify;
                 actualGpgKey = repoConfig.GpgKey;
 
-                Console.Error.WriteLine(
-                    $"Parsed .flatpakrepo: URL={actualUrl}, GPGVerify={actualGpgVerify}, HasGPGKey={!string.IsNullOrEmpty(actualGpgKey)}");
+                FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Information, $"Parsed .flatpakrepo: URL={actualUrl}, GPGVerify={actualGpgVerify}, HasGPGKey={!string.IsNullOrEmpty(actualGpgKey)}"));
             }
 
             var remotePtr = FlatpakReference.RemoteNew(remoteName);
@@ -1482,9 +1551,9 @@ public class FlatpakManager : IDisposable
                 var result = FlatpakReference.FlatpakInstallationModifyRemote(
                     installationPtr, remotePtr, IntPtr.Zero, out IntPtr error);
 
-                if (error != IntPtr.Zero || result == false)
+                if (error != IntPtr.Zero || !result)
                 {
-                    Console.WriteLine($"Failed to modify remote: {FlatpakReference.GetErrorMessage(error)}");
+                    FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Error, $"Failed to modify remote: {FlatpakReference.GetErrorMessage(error)}"));
                     if (error != IntPtr.Zero)
                     {
                         FlatpakReference.GErrorFree(error);
@@ -2046,7 +2115,7 @@ public class FlatpakManager : IDisposable
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"Failed to parse appstream: {e}");
+            FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Error, $"Failed to parse appstream: {e}"));
         }
 
         return new List<AppstreamApp>();
@@ -2122,7 +2191,7 @@ public class FlatpakManager : IDisposable
     /// <summary>
     /// Helper method to add packages from a remote to the list
     /// </summary>
-    private static void AddPackagesFromRemote(IntPtr installationPtr, string remoteName,
+    private void AddPackagesFromRemote(IntPtr installationPtr, string remoteName,
         List<FlatpakPackageDto> packages)
     {
         var refsPtr = FlatpakReference.InstallationListRemoteRefsSync(
@@ -2132,7 +2201,7 @@ public class FlatpakManager : IDisposable
         {
             if (error == IntPtr.Zero) return;
             var errorMsg = FlatpakReference.GetErrorMessage(error);
-            Console.Error.WriteLine($"Failed to list remote refs for '{remoteName}': {errorMsg}");
+            FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Error, $"Failed to list remote refs for '{remoteName}': {errorMsg}"));
             FlatpakReference.GErrorFree(error);
 
             return;
@@ -2529,10 +2598,7 @@ public class FlatpakManager : IDisposable
         return permissions;
     }
 
-    /// <summary>
-    /// Callback for when a new operation is started in a transaction.
-    /// </summary>
-    private void OnNewOperation(IntPtr transaction, IntPtr operation, IntPtr progress, IntPtr userData)
+        private void OnNewOperation(IntPtr transaction, IntPtr operation, IntPtr progress, IntPtr userData)
     {
         try
         {
@@ -2565,12 +2631,12 @@ public class FlatpakManager : IDisposable
             // Get initial progress info
             var percentage = FlatpakReference.TransactionProgressGetProgress(progress);
             var statusPtr = FlatpakReference.TransactionProgressGetStatus(progress);
-            var status = PtrToStringSafe(statusPtr);
+            var status = PtrToStringSafe(statusPtr) ?? "";
 
             var refParts = refString.Split('/');
             var id = refParts.Length > 1 ? refParts[1] : refString;
             ProgressIdMap[progress] = id;
-            FlatpakProgressEvent.Invoke(this, new FlatpakProgressEventArgs(id, status, percentage));
+            FlatpakProgressEvent?.Invoke(this, new FlatpakProgressEventArgs(id, status, percentage));
 
             // Connect to the progress changed signal for this specific operation
             var progressCallback = new FlatpakReference.TransactionProgressCallback(OnOperationProgress);
@@ -2580,7 +2646,7 @@ public class FlatpakManager : IDisposable
         }
         catch (Exception ex)
         {
-            FlatpakEvent.Invoke(this,
+            FlatpakEvent?.Invoke(this,
                 new FlatpakEventArgs(FlatpakEventEnum.Error, "Error in new operation callback: " + ex.Message));
         }
     }
@@ -2594,10 +2660,10 @@ public class FlatpakManager : IDisposable
 
         var percentage = FlatpakReference.TransactionProgressGetProgress(progress);
         var statusPtr = FlatpakReference.TransactionProgressGetStatus(progress);
-        var status = PtrToStringSafe(statusPtr);
+        var status = PtrToStringSafe(statusPtr) ?? "";
 
         ProgressIdMap.TryGetValue(progress, out var id);
-        FlatpakProgressEvent.Invoke(null, new FlatpakProgressEventArgs(id ?? "", status, percentage));
+        FlatpakProgressEvent?.Invoke(this, new FlatpakProgressEventArgs(id ?? "", status, percentage));
     }
 
     /// <summary>
@@ -2649,7 +2715,7 @@ public class FlatpakManager : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error downloading/parsing .flatpakrepo: {ex.Message}");
+            FlatpakEvent.Invoke(this, new FlatpakEventArgs(FlatpakEventEnum.Error, "Error parsing flatpakrepo: " + ex.Message));
             return null;
         }
     }

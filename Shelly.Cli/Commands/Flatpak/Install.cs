@@ -109,7 +109,7 @@ public class Install : GlobalSettingsCommand
                 remoteToUse, IsRuntime), NoConfirm);
     }
 
-    public async override ValueTask ExecuteUiMode()
+    public override async ValueTask ExecuteUiMode()
     {
         UiFrames.TxStart("Installing flatpak app...");
         var manager = new FlatpakManager();
