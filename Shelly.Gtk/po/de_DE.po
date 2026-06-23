@@ -1557,5 +1557,3 @@ msgstr "<span size='large'>Flatpaks sind auf dem neuesten Stand</span>"
 
 msgid "Update Available: {0}"
 msgstr "Update verfügbar: {0}"
-
-
