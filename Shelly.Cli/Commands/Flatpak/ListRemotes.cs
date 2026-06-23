@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text.Json;
 using PackageManager.Flatpak;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
@@ -26,16 +27,22 @@ public class ListRemotes : GlobalSettingsCommand
         var manager = new FlatpakManager();
         var remotes = manager.ListRemotesWithDetails();
 
-        if (UiMode || JsonOutput)
+        if (UiMode)
         {
             JsonPackFrame.WriteToStdout(remotes);
+            return ValueTask.CompletedTask;
+        }
+
+        if (JsonOutput)
+        {
+            console.WriteLine(JsonSerializer.Serialize(remotes, ShellyCliJsonContext.Default.ListFlatpakRemoteDto));
             return ValueTask.CompletedTask;
         }
 
         console.WriteLine(Colorize("Remotes:", ConsoleColor.Blue));
         foreach (var remote in remotes)
         {
-            var scopeColor = remote.Scope == "system" ? ConsoleColor.Green : ConsoleColor.Yellow;
+            var scopeColor = remote.Scope == InstallLevel.System ? ConsoleColor.Green : ConsoleColor.Yellow;
             console.WriteLine($"{remote.Name} {Colorize($"({remote.Scope})", scopeColor)}");
         }
 
