@@ -86,7 +86,7 @@ public class FlatpakInstall(
 
     private Button _installFromFlatpakRef = null!;
     private DropDown _installFromFlatpakRefDropDown = null!;
-    private string _selectedRefScope = "system";
+    private InstallLevel _selectedRefScope = InstallLevel.System;
 
     private Button _overlayShowPluginButton = null!;
 
@@ -268,7 +268,7 @@ public class FlatpakInstall(
         {
             if (args.Pspec.GetName() != "selected") return;
             var selectedIndex = _installFromFlatpakRefDropDown.GetSelected();
-            _selectedRefScope = selectedIndex == 0 ? "system" : "user";
+            _selectedRefScope = selectedIndex == 0 ? InstallLevel.System :InstallLevel.User;
         };
 
         _addRemoteButton.OnClicked += (_, _) =>
@@ -287,7 +287,7 @@ public class FlatpakInstall(
         {
             var name = _addRemoteNameEntry.GetText();
             var url = _addRemoteUrlEntry.GetText();
-            var scope = _addRemoteScopeDropDown.GetSelected() == 0 ? "user" : "system";
+            var scope = _addRemoteScopeDropDown.GetSelected() == 0 ? InstallLevel.System : InstallLevel.User;
 
             if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url))
             {
@@ -525,7 +525,7 @@ public class FlatpakInstall(
             SetUrlLinks(obj.Urls);
 
             var remotes = obj.Remotes.FirstOrDefault() ?? new FlatpakRemoteDto();
-            if (remotes.Scope == "user")
+            if (remotes.Scope == InstallLevel.User)
             {
                 var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 _overlayIconImage.SetFromFile(
@@ -804,7 +804,7 @@ public class FlatpakInstall(
         var remotes = app.Remotes.FirstOrDefault() ?? new FlatpakRemoteDto();
 
         string path;
-        if (remotes.Scope == "user")
+        if (remotes.Scope == InstallLevel.User)
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
@@ -858,7 +858,7 @@ public class FlatpakInstall(
             await Task.WhenAny(syncTask, Task.Delay(TimeSpan.FromSeconds(5), ct));
 
             ct.ThrowIfCancellationRequested();
-            _allPackages = await unprivilegedOperationService.ListAppstreamFlatpak(ct);
+            _allPackages = await unprivilegedOperationService.ListAppstreamFlatpak();
             ct.ThrowIfCancellationRequested();
 
             await flathubTask;
@@ -1006,12 +1006,12 @@ public class FlatpakInstall(
                 else
                 {
                     var remotes = await unprivilegedOperationService.FlatpakListRemotes();
-                    var hasSystem = remotes.Any(r => r is { Scope: "system" });
+                    var hasSystem = remotes.Any(r => r is { Scope: InstallLevel.System });
 
 
                     //This hoopla is because bundles require resolving their respective deps from the remotes config'd so we must use a flathub that is configured for the right level's.
                     //ex: user level only user trys to install at system level, we must install at user level because that is what their flathub is configured for.
-                    if (hasSystem && _selectedRefScope == "system")
+                    if (hasSystem && _selectedRefScope == InstallLevel.System)
                     {
                         var privResult =
                             await privilegedOperationService.FlatpakInstallFromBundle(file.GetPath()!);
