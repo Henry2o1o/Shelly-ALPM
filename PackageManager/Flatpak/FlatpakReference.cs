@@ -175,13 +175,6 @@ internal static partial class FlatpakReference
     [LibraryImport("gio-2.0", EntryPoint = "g_file_new_for_path", StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr GFileNewForPath(string path);
 
-    [LibraryImport(GObjectName, EntryPoint = "g_type_check_instance_is_a")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool GTypeCheckInstanceIsA(IntPtr instance, IntPtr type);
-
-    [LibraryImport(LibName, EntryPoint = "flatpak_installed_ref_get_type")]
-    public static partial IntPtr FlatpakInstalledRefGetType();
-
     #endregion
 
     #region Remotes
