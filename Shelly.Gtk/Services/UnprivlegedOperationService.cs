@@ -95,18 +95,18 @@ public class UnprivilegedOperationService(
         return await RunShellyCommandAsync("flatpak", "sync-remote-appstream");
     }
 
-    public async Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, string scope)
+    public async Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, InstallLevel scope)
     {
-        if (scope == "user")
+        if (scope == InstallLevel.User)
             return await RunShellyCommandAsync("flatpak", "remove-remotes", remoteName, "--system", "false");
 
         return await RunShellyCommandAsync("flatpak", "remove-remotes", remoteName, "--system", "true");
     }
 
-    public async Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, string scope)
+    public async Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, InstallLevel scope)
     {
         UnprivilegedOperationResult result;
-        if (scope == "user")
+        if (scope == InstallLevel.User)
             result = await RunShellyCommandAsync("flatpak", "install-ref-file", path);
         else
             result = await RunShellyCommandAsync("flatpak", "install-ref-file", path, "--system", "true");
@@ -127,9 +127,9 @@ public class UnprivilegedOperationService(
         return await RunShellyCommandAsync("flatpak", "run", name);
     }
 
-    public async Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, string scope, string url)
+    public async Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, InstallLevel scope, string url)
     {
-        if (scope == "user")
+        if (scope == InstallLevel.User)
             return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system", "false");
 
         return await RunShellyCommandAsync("flatpak", "add-remotes", remoteName, "--remote-url", url, "--system", "true");

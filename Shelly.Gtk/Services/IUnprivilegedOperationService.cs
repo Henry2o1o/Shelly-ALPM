@@ -30,13 +30,13 @@ public interface IUnprivilegedOperationService
 
     Task<UnprivilegedOperationResult> FlatpakSyncRemoteAppstream();
 
-    Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, string scope);
+    Task<UnprivilegedOperationResult> FlatpakRemoveRemote(string remoteName, InstallLevel scope);
 
-    Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, string scope, string url);
+    Task<UnprivilegedOperationResult> FlatpakAddRemote(string remoteName, InstallLevel scope, string url);
 
     Task<UnprivilegedOperationResult> RunFlatpakName(string name);
 
-    Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, string scope);
+    Task<UnprivilegedOperationResult> FlatpakInsallFromRef(string path, InstallLevel scope);
 
     Task<UnprivilegedOperationResult> FlatpakInstallFromBundle(string path);
 

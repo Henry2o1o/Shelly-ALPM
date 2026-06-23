@@ -12,7 +12,8 @@ public class InstallBundle : GlobalSettingsCommand
     public static Command Create()
     {
         var bundlePath = new Argument<string>("BundlePath") { Description = "Path to the .flatpak bundle file" };
-        var system = new Option<bool>("--system", "-s") { Description = "Install system-wide", DefaultValueFactory = _ => true };
+        var system = new Option<bool>("--system", "-s")
+            { Description = "Install system-wide", DefaultValueFactory = _ => true };
 
         var command = new Command("install-bundle", "Installs flatpak app from bundle file")
         {
@@ -39,7 +40,7 @@ public class InstallBundle : GlobalSettingsCommand
         console.WriteLine(Colorize("Installing flatpak bundle...", ConsoleColor.Yellow));
         var manager = new FlatpakManager();
         manager.FlatpakEvent += (_, args) => console.WriteLine(Colorize(args.Message, ConsoleColor.Yellow));
-        manager.InstallAppFromBundle(BundlePath, SystemWide);
+        manager.InstallAppFromBundle(BundlePath, SystemWide ? InstallLevel.System : InstallLevel.User);
         return ValueTask.CompletedTask;
     }
 
