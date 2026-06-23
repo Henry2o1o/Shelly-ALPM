@@ -29,7 +29,6 @@ public class FlatpakUpdate(
     private SignalListItemFactory? _factory;
     private Label? _noUpdatesLabel;
     private readonly List<StringObject> _stringObjectRefs = [];
-    private bool _userOnly;
 
     public Widget CreateWindow()
     {
@@ -63,33 +62,33 @@ public class FlatpakUpdate(
         var listItem = (ListItem)args.Object;
         var mainVbox = Box.New(Orientation.Vertical, 0);
 
-        var hbox = Box.New(Orientation.Horizontal, 10);
-        hbox.MarginStart = 10;
-        hbox.MarginEnd = 10;
-        hbox.MarginTop = 5;
-        hbox.MarginBottom = 5;
+        var contentGrid = Grid.New();
+        contentGrid.MarginStart = 10;
+        contentGrid.MarginEnd = 10;
+        contentGrid.MarginTop = 5;
+        contentGrid.MarginBottom = 5;
+        contentGrid.ColumnSpacing = 10;
+        contentGrid.RowSpacing = 2;
+        contentGrid.Hexpand = true;
 
         var icon = Image.New();
-        hbox.Append(icon);
+        contentGrid.Attach(icon, 0, 0, 1, 2);
 
-        var vbox = Box.New(Orientation.Vertical, 2);
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
+        contentGrid.Attach(nameLabel, 1, 0, 1, 1);
 
         var idLabel = Label.New(string.Empty);
         idLabel.Halign = Align.Start;
         idLabel.AddCssClass("dim-label");
-
-        vbox.Append(nameLabel);
-        vbox.Append(idLabel);
-        hbox.Append(vbox);
+        contentGrid.Attach(idLabel, 1, 1, 1, 1);
 
         var versionLabel = Label.New(string.Empty);
         versionLabel.Halign = Align.End;
         versionLabel.Hexpand = true;
-        hbox.Append(versionLabel);
+        contentGrid.Attach(versionLabel, 2, 0, 1, 2);
 
-        mainVbox.Append(hbox);
+        mainVbox.Append(contentGrid);
 
         var permissionExpander = Expander.New(Translations.T("Permission Changes"));
         permissionExpander.MarginStart = 50;
@@ -115,14 +114,13 @@ public class FlatpakUpdate(
         var package = _allPackages.FirstOrDefault(p => p.Id == packageId);
         if (package == null) return;
 
-        var hbox = (Box)mainVbox.GetFirstChild()!;
-        var icon = (Image)hbox.GetFirstChild()!;
-        var vbox = (Box)icon.GetNextSibling()!;
-        var nameLabel = (Label)vbox.GetFirstChild()!;
-        var idLabel = (Label)nameLabel.GetNextSibling()!;
-        var versionLabel = (Label)hbox.GetLastChild()!;
+        var contentGrid = (Grid)mainVbox.GetFirstChild()!;
+        var icon = (Image)contentGrid.GetChildAt(0, 0)!;
+        var nameLabel = (Label)contentGrid.GetChildAt(1, 0)!;
+        var idLabel = (Label)contentGrid.GetChildAt(1, 1)!;
+        var versionLabel = (Label)contentGrid.GetChildAt(2, 0)!;
 
-        var permissionExpander = (Expander)hbox.GetNextSibling()!;
+        var permissionExpander = (Expander)mainVbox.GetLastChild()!;
         var permissionVbox = (Box)permissionExpander.GetChild()!;
 
         string path;
@@ -187,11 +185,8 @@ public class FlatpakUpdate(
             _allPackages = await unprivilegedOperationService.ListFlatpakUpdates();
             ct.ThrowIfCancellationRequested();
 
-            var remotes = await unprivilegedOperationService.FlatpakListRemotes();
-
             GLib.Functions.IdleAdd(0, () =>
             {
-                _userOnly = remotes.Any(r => r.Scope != InstallLevel.System);
                 ApplyFilter();
                 return false;
             });

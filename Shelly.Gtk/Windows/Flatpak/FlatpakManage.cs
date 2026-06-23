@@ -28,7 +28,7 @@ public class FlatpakManage(
     private string _searchText = string.Empty;
     private SignalListItemFactory? _factory;
     private readonly List<StringObject> _stringObjectRefs = [];
-    private bool _userOnly;
+    private CheckButton _showRuntimesCheck = null!;
 
     public Widget CreateWindow()
     {
@@ -52,6 +52,11 @@ public class FlatpakManage(
         removeButton.OnClicked += (_, _) => { _ = RemoveSelectedAsync(); };
         flatpakRepairButton.OnClicked += (_, _) => { _ = FlatpakRepairAsync(); };
 
+        _showRuntimesCheck = (CheckButton)builder.GetObject("runtime_check")!;
+        _showRuntimesCheck.Active = false;
+
+        _showRuntimesCheck.OnToggled += (_, _) => { Reload(); };
+
         _sub = DirtySubscription.Attach(dirtyService, this);
         return box;
     }
@@ -62,50 +67,53 @@ public class FlatpakManage(
     private static void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
-        var hbox = Box.New(Orientation.Horizontal, 10);
-        hbox.MarginStart = 10;
-        hbox.MarginEnd = 10;
-        hbox.MarginTop = 5;
-        hbox.MarginBottom = 5;
+        
+        var contentGrid = Grid.New();
+        contentGrid.MarginStart = 12;
+        contentGrid.MarginEnd = 12;
+        contentGrid.MarginTop = 6;
+        contentGrid.MarginBottom = 6;
+        contentGrid.ColumnSpacing = 12;
+        contentGrid.RowSpacing = 2;
+        contentGrid.Hexpand = true;
+        contentGrid.Valign = Align.Center;
 
         var icon = Image.New();
-        hbox.Append(icon);
+        icon.PixelSize = 48;
+        icon.Valign = Align.Center;
+        contentGrid.Attach(icon, 0, 0, 1, 2);
 
-        var vbox = Box.New(Orientation.Vertical, 2);
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
+        contentGrid.Attach(nameLabel, 1, 0, 1, 1);
 
         var idLabel = Label.New(string.Empty);
         idLabel.Halign = Align.Start;
         idLabel.AddCssClass("dim-label");
-
-        vbox.Append(nameLabel);
-        vbox.Append(idLabel);
-        hbox.Append(vbox);
+        contentGrid.Attach(idLabel, 1, 1, 1, 1);
 
         var versionLabel = Label.New(string.Empty);
         versionLabel.Halign = Align.End;
         versionLabel.Hexpand = true;
-        hbox.Append(versionLabel);
+        contentGrid.Attach(versionLabel, 2, 0, 1, 2);
 
-        listItem.SetChild(hbox);
+        listItem.SetChild(contentGrid);
     }
 
     private void OnBind(SignalListItemFactory sender, SignalListItemFactory.BindSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
         if (listItem.GetItem() is not StringObject stringObj) return;
-        if (listItem.GetChild() is not Box hbox) return;
+        if (listItem.GetChild() is not Grid contentGrid) return;
 
         var packageId = stringObj.GetString();
         var package = _allPackages.FirstOrDefault(p => p.Id == packageId);
         if (package == null) return;
 
-        var icon = (Image)hbox.GetFirstChild()!;
-        var vbox = (Box)icon.GetNextSibling()!;
-        var nameLabel = (Label)vbox.GetFirstChild()!;
-        var idLabel = (Label)nameLabel.GetNextSibling()!;
-        var versionLabel = (Label)vbox.GetNextSibling()!;
+        var icon = (Image)contentGrid.GetChildAt(0, 0)!;
+        var nameLabel = (Label)contentGrid.GetChildAt(1, 0)!;
+        var idLabel = (Label)contentGrid.GetChildAt(1, 1)!;
+        var versionLabel = (Label)contentGrid.GetChildAt(2, 0)!;
 
         string path;
         if (package.InstallLevel == InstallLevel.User)
@@ -126,7 +134,7 @@ public class FlatpakManage(
             icon.SetFromIconName("application-x-executable");
 
         nameLabel.SetText(package.Name);
-        idLabel.SetText(package.Id);
+        idLabel.SetText(SizeHelpers.FormatSize(package.InstalledSize));
         versionLabel.SetText(package.Version);
     }
 
@@ -153,14 +161,13 @@ public class FlatpakManage(
     {
         try
         {
-            _allPackages = await unprivilegedOperationService.ListFlatpakPackages();
-            ct.ThrowIfCancellationRequested();
+            var packages = await unprivilegedOperationService.ListFlatpakPackages();
+            _allPackages = !_showRuntimesCheck.Active ? packages.Where(p => p.Kind == 0).ToList() : packages;
 
-            var remotes = await unprivilegedOperationService.FlatpakListRemotes();
+            ct.ThrowIfCancellationRequested();
 
             GLib.Functions.IdleAdd(0, () =>
             {
-                _userOnly = remotes.Any(r => r.Scope != InstallLevel.System);
                 ApplyFilter();
                 return false;
             });

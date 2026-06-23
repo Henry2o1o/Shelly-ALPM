@@ -20,4 +20,5 @@ public partial class FlatpakPackageDto
     public string Remote { get; set; } = string.Empty;
     public List<string> Permissions { get; set; } = [];
     public InstallLevel InstallLevel { get; set; }
+    public uint InstalledSize { get; set; }
 }
