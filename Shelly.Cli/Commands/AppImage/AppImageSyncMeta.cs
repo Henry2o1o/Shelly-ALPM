@@ -41,7 +41,9 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
             return;
         }
 
-        var installDir = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
+        var installDir = string.IsNullOrEmpty(ConfigManager.ReadConfig().AppImageInstallPath)
+            ? XdgPaths.BinHome() 
+            : ConfigManager.ReadConfig().AppImageInstallPath;
         if (!Directory.Exists(installDir))
         {
             console.WriteLine(AnsiUtilities.Colorize(
@@ -79,7 +81,9 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
 
     public override async ValueTask ExecuteUiMode()
     {
-        var installDir = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
+        var installDir = string.IsNullOrEmpty(ConfigManager.ReadConfig().AppImageInstallPath)
+            ? XdgPaths.BinHome() 
+            : ConfigManager.ReadConfig().AppImageInstallPath;
         if (!Directory.Exists(installDir))
         {
             UiFrames.Error($"Info: {installDir} directory does not exist. No AppImages to sync.");

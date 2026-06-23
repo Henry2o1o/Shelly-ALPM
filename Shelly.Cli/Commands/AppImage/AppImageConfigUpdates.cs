@@ -111,22 +111,8 @@ public partial class AppImageConfigUpdates : GlobalSettingsCommand
     private async Task<List<string>> GetAppImageMatches()
     {
         var installDir = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
-        var oldDefaultPath = XdgPaths.BinHome();
-        var searchPaths = new List<string> { installDir };
-        if (installDir != oldDefaultPath)
-        {
-            searchPaths.Add(oldDefaultPath);
-        }
-
-        var matches = new List<string>();
-        foreach (var appImages in from path in searchPaths
-                 where Directory.Exists(path)
-                 select Directory.GetFiles(path, "*.AppImage", SearchOption.TopDirectoryOnly))
-        {
-            matches.AddRange(appImages.Where(f =>
-                Path.GetFileName(f).Contains(AppImage, StringComparison.OrdinalIgnoreCase)));
-        }
-
-        return matches;
+        var manager = new AppImageManagerV2(installDir);
+        var results = await manager.GetAppImagesFromLocalDb();
+        return  results.Where(x => x.Name.Equals(AppImage, StringComparison.OrdinalIgnoreCase)).Select(x => x.Name).ToList();
     }
 }
