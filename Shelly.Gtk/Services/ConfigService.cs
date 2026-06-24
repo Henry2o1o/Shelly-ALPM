@@ -85,7 +85,7 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.AurUpdateShowHidden), config.AurUpdateShowHidden.ToString());
         CallCliConfigSet(nameof(config.AppImageInstallPath), config.AppImageInstallPath ?? "");
         CallCliConfigSet(nameof(config.PackageInstallView), config.PackageInstallView.ToString());
-        CallCliConfigSet(nameof(config.PackageInstallUpgrade), config.PackageInstallUpgrade.ToString());
+        CallCliConfigSet(nameof(config.PackageUpdateView), config.PackageUpdateView.ToString());
         CallCliConfigSet(nameof(config.PackageManageView), config.PackageManageView.ToString());
         ConfigSaved?.Invoke(this, config);
         _suppressInvalidate = true;
