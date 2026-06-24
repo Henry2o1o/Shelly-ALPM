@@ -8,6 +8,7 @@
                 <property name="orientation">horizontal</property>
                 <property name="vexpand">true</property>
                 <property name="hexpand">true</property>
+                <property name="margin-end">9</property>
                 <child>
                     <object class="GtkBox">
                         <style>
