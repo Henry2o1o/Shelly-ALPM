@@ -100,10 +100,14 @@ internal static partial class FlatpakReference
         StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr InstalledRefGetAppDataVersion(IntPtr @ref);
 
+    [LibraryImport(LibName, EntryPoint = "flatpak_installed_ref_get_installed_size",
+        StringMarshalling = StringMarshalling.Utf8)]
+    public static partial uint InstalledRefGetInstalledSize(IntPtr @ref);
+    
     [LibraryImport(LibName, EntryPoint = "flatpak_installed_ref_get_origin",
         StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr InstalledRefGetOrigin(IntPtr @ref);
-
+    
     [LibraryImport(LibName, EntryPoint = "flatpak_remote_ref_get_remote_name",
         StringMarshalling = StringMarshalling.Utf8)]
     public static partial IntPtr RemoteRefGetRemoteName(IntPtr @ref);
