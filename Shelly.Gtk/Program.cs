@@ -362,6 +362,7 @@ sealed class Program
             {
                 sidebarBox.Visible = useOldMenu;
                 topHeaderBar.Visible = !useOldMenu;
+                settingsStack.MarginStart = !useOldMenu ? 9 : 0;
 
                 if (!useOldMenu) return;
                 sidebarRecommendBtn.Visible = config.RecommendedEnabled;
