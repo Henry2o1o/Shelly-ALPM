@@ -359,6 +359,7 @@
                                                 <property name="child">
                                                     <object class="GtkBox" id="packages_page_box">
                                                         <property name="orientation">vertical</property>
+                                                        <property name="margin-end">9</property>
                                                         <property name="hexpand">true</property>
                                                         <property name="vexpand">true</property>
                                                     </object>
@@ -371,6 +372,7 @@
                                                 <property name="title" translatable="yes">AUR</property>
                                                 <property name="child">
                                                     <object class="GtkBox" id="aur_page_box">
+                                                        <property name="margin-end">9</property>
                                                         <property name="orientation">vertical</property>
                                                         <property name="hexpand">true</property>
                                                         <property name="vexpand">true</property>
