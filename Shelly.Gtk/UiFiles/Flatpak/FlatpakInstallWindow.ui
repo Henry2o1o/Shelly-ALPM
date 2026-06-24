@@ -8,11 +8,14 @@
                 <property name="orientation">horizontal</property>
                 <property name="vexpand">true</property>
                 <property name="hexpand">true</property>
+                <property name="margin-end">9</property>
                 <child>
                     <object class="GtkBox">
+                        <style>
+                            <class name="flatpak-sidebar"/>
+                        </style>
                         <property name="orientation">vertical</property>
                         <property name="spacing">5</property>
-                        <property name="margin-top">8</property>
                         <property name="margin-end">10</property>
                         <property name="hexpand">false</property>
                         <property name="width-request">120</property>
@@ -38,6 +41,9 @@
                         </child>
                         <child>
                             <object class="GtkListBox" id="section_nav_list">
+                                <style>
+                                    <class name="flatpak-nav"/>
+                                </style>
                                 <property name="selection-mode">single</property>
                                 <property name="width-request">160</property>
                                 <child>
@@ -190,6 +196,9 @@
                         <property name="hexpand">true</property>
                         <child>
                             <object class="GtkOverlay" id="list_overlay">
+                                <style>
+                                    <class name="flatpak-content"/>
+                                </style>
                                 <property name="vexpand">true</property>
                                 <property name="hexpand">true</property>
                                 <child type="overlay">
@@ -210,6 +219,9 @@
                                 </child>
                                 <child type="overlay">
                                     <object class="GtkBox" id="loading_overlay">
+                                        <style>
+                                            <class name="flatpak-content"/>
+                                        </style>
                                         <property name="visible">false</property>
                                         <property name="width-request">500</property>
                                         <property name="height-request">400</property>
@@ -251,6 +263,9 @@
                                 </child>
                                 <child type="overlay">
                                     <object class="GtkBox" id="overlay_panel">
+                                        <style>
+                                            <class name="flatpak-content"/>
+                                        </style>
                                         <property name="visible">false</property>
                                         <property name="width-request">500</property>
                                         <property name="height-request">400</property>
