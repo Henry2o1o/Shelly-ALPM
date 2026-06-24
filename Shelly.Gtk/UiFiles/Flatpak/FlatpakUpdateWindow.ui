@@ -5,9 +5,6 @@
     <property name="orientation">vertical</property>
     <child>
       <object class="GtkBox">
-        <style>
-          <class name="flatpak-content"/>
-        </style>
          <property name="margin-end">9</property>
         <property name="orientation">vertical</property>
         <child>
