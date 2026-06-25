@@ -119,12 +119,14 @@ public sealed class PackageInstall(
         var detailGridHbox = (Box)builder.GetObject("detail_grid_hbox")!;
         var detailHbox = (Box)builder.GetObject("detail_hbox")!;
         
-        var savedView = configService.LoadConfig().PackageManageView;
+        var savedView = configService.LoadConfig().PackageInstallView;
         detailGridHbox.SetVisible(savedView == ViewType.Grid);
         detailHbox.SetVisible(savedView == ViewType.List);
 
         var gridViewButton = (ToggleButton)builder.GetObject("grid_view_button")!;
         var listViewButton = (ToggleButton)builder.GetObject("list_view_button")!;
+        gridViewButton.Active = savedView == ViewType.Grid;
+        listViewButton.Active = savedView == ViewType.List;
 
         gridViewButton.OnToggled += (_, _) =>
         {
@@ -305,6 +307,7 @@ public sealed class PackageInstall(
         old.Dispose();
         Interlocked.Increment(ref _loadGeneration);
         _ = LoadDataAsync(_loadGeneration, _cts.Token);
+        UpdateCart();
     }
 
     private void SetupGridView()
@@ -491,6 +494,7 @@ public sealed class PackageInstall(
 
         var selectedPackages = _packageGObjectRefs.Where(p => p.IsSelected).ToList();
         _cartLabel.SetText(T("{0} Selected", selectedPackages.Count));
+        _installButton.SetSensitive(selectedPackages.Count > 0);
 
         foreach (var pkg in selectedPackages)
         {
@@ -1179,6 +1183,10 @@ public sealed class PackageInstall(
                 lockoutService.Show(T("Installing..."));
                 var performUpgrade = _upgradeCheck.GetActive();
                 result = await privilegedOperationService.InstallPackagesAsync(selectedPackages, performUpgrade);
+                foreach (var pkg in _packageGObjectRefs.Where(p => p.IsSelected))
+                {
+                    pkg.ToggleSelection();
+                }
                 Reload();
             }
             catch (Exception e)
@@ -1188,6 +1196,7 @@ public sealed class PackageInstall(
             }
             finally
             {
+                UpdateCart();
                 lockoutService.Hide();
             }
 
