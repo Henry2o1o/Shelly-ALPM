@@ -156,11 +156,7 @@ sealed class Program
         GLib.Functions.IdleAdd(0, () =>
         {
             if (_settingsStack == null) return false;
-        
-            // Forcing the page to be visible, for now.
-            var page = _settingsStack.GetPage(_flatpakPageBox!);
-            if (page != null) page.Visible = true;
-
+            
             _settingsStack.SetVisibleChildName("flatpak_page");
             _window?.Present();
         
