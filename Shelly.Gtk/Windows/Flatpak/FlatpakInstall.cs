@@ -98,6 +98,7 @@ public class FlatpakInstall(
     private Stack? _mainContentStack;
     private Box? _installSidebarControls;
     private string _activePage = "install";
+    private string? _pendingInstallId;
 
     public Widget CreateWindow()
     {
@@ -888,6 +889,13 @@ public class FlatpakInstall(
                 ApplyFilter();
                 return false;
             });
+            
+            if (!string.IsNullOrEmpty(_pendingInstallId))
+            {
+                var id = _pendingInstallId;
+                _pendingInstallId = null;
+                GLib.Functions.IdleAdd(0, () => { _ = InstallFromIdAsync(id); return false; });
+            }
 
             const int batchSize = 100;
             for (var i = 0; i < _allPackages.Count; i += batchSize)
@@ -1156,6 +1164,7 @@ public class FlatpakInstall(
         {
             UnprivilegedOperationResult result;
             lockoutService.Show(Translations.T("Installing {0}...", id));
+            
             if (_selectedRemote.Contains("user"))
             {
                 result = await unprivilegedOperationService.InstallFlatpakPackage(id,
@@ -1549,7 +1558,30 @@ public class FlatpakInstall(
         return Task.CompletedTask;
     }
 
+    public async Task InstallFromRefId(string appId)
+    {
+        if (string.IsNullOrWhiteSpace(appId))
+            return;
 
+        if (_allPackages.Count == 0)
+        {
+            _pendingInstallId = appId;
+            return;
+        }
+
+        var pkg = _allPackages.FirstOrDefault(x => x.Id == appId);
+
+        if (pkg == null)
+        {
+            _pendingInstallId = appId;
+            return;
+        }
+        
+        await unprivilegedOperationService.InstallFlatpakPackageFromFlathub(
+            pkg.Id,
+            InstallLevel.User);    
+    }
+    
     public void Dispose()
     {
         _sub?.Dispose();

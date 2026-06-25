@@ -140,23 +140,13 @@ sealed class Program
         return raw;
     }
     
-    private static bool IdleNavigateFlatpak()
-    {
-        if (_settingsStack == null || _window == null)
-            return false;
-
-        _settingsStack.SetVisibleChildName("flatpak_page");
-        _window.Present();
-
-        return false;
-    }
-    
     private static void NavigateToFlatpakRef(string appId)
     {
         GLib.Functions.IdleAdd(0, () =>
         {
             if (_settingsStack == null) return false;
-            
+
+            _pendingAppId = appId;
             _settingsStack.SetVisibleChildName("flatpak_page");
             _window?.Present();
         
@@ -225,7 +215,7 @@ sealed class Program
             }
             else
             {
-                GLib.Functions.IdleAdd(0, IdleNavigateFlatpak);
+                NavigateToFlatpakRef(appId);
             }
 
             return 0;
@@ -389,9 +379,16 @@ sealed class Program
 
             void LoadFlatpakPage()
             {
+                if (currentFlatpakWindow != null)
+                    return;
                 var w = serviceProvider.GetRequiredService<FlatpakInstall>();
                 _flatpakPageBox.Append(w.CreateWindow());
                 currentFlatpakWindow = w;
+                if (!string.IsNullOrEmpty(_pendingAppId))
+                {
+                    _ = w.InstallFromRefId(_pendingAppId);
+                    _pendingAppId = null;
+                };
             }
 
             void LoadAppImagePage()
