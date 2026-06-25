@@ -41,7 +41,9 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
             return;
         }
 
-        var installDir = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
+        var installDir = string.IsNullOrEmpty(ConfigManager.ReadConfig().AppImageInstallPath)
+            ? XdgPaths.BinHome() 
+            : ConfigManager.ReadConfig().AppImageInstallPath;
         if (!Directory.Exists(installDir))
         {
             console.WriteLine(AnsiUtilities.Colorize(
@@ -50,36 +52,37 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
         }
 
         var manager = new AppImageManagerV2(ConfigManager.ReadConfig().AppImageInstallPath ?? "");
+        var appImages = await manager.GetAppImagesFromLocalDb();
 
         if (!string.IsNullOrEmpty(Package))
         {
-            var appImages = Directory.GetFiles(installDir, "*.AppImage", SearchOption.TopDirectoryOnly);
             var matches = appImages
-                .Where(f => Path.GetFileName(f).Contains(Package, StringComparison.OrdinalIgnoreCase))
+                .Where(f => f.Name.Contains(Package, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (matches.Count == 0)
             {
-                console.WriteLine(AnsiUtilities.Colorize($"No AppImage matching \"{Package}\" found in {installDir}",
+                console.WriteLine(AnsiUtilities.Colorize($"No AppImage matching \"{Package}\" found in database",
                     ConsoleColor.Yellow));
                 return;
             }
 
             await AppImageSinglePaneOutput.Output(console, manager, x => x.SyncAppImageMeta([
-                Path.GetFileNameWithoutExtension(matches.First())
+                matches.First().Name
             ]));
         }
         else
         {
             await AppImageSinglePaneOutput.Output(console, manager,
-                x => x.SyncAppImageMeta(Directory.GetFiles(installDir, "*.AppImage", SearchOption.TopDirectoryOnly)
-                    .Select(Path.GetFileNameWithoutExtension).Cast<string>().ToList()));
+                x => x.SyncAppImageMeta(appImages.Select(a => a.Name).ToList()));
         }
     }
 
     public override async ValueTask ExecuteUiMode()
     {
-        var installDir = ConfigManager.ReadConfig().AppImageInstallPath ?? XdgPaths.BinHome();
+        var installDir = string.IsNullOrEmpty(ConfigManager.ReadConfig().AppImageInstallPath)
+            ? XdgPaths.BinHome() 
+            : ConfigManager.ReadConfig().AppImageInstallPath;
         if (!Directory.Exists(installDir))
         {
             UiFrames.Error($"Info: {installDir} directory does not exist. No AppImages to sync.");
@@ -87,28 +90,26 @@ public partial class AppImageSyncMeta : GlobalSettingsCommand
         }
 
         var manager = new AppImageManagerV2(ConfigManager.ReadConfig().AppImageInstallPath ?? "");
+        var appImages = await manager.GetAppImagesFromLocalDb();
 
         if (!string.IsNullOrEmpty(Package))
         {
-            var appImages = Directory.GetFiles(installDir, "*.AppImage", SearchOption.TopDirectoryOnly);
             var matches = appImages
-                .Where(f => Path.GetFileName(f).Contains(Package, StringComparison.OrdinalIgnoreCase))
+                .Where(f => f.Name.Contains(Package, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (matches.Count == 0)
             {
-                UiFrames.Info($"No AppImage matching \"{Package}\" found in {installDir}");
+                UiFrames.Info($"No AppImage matching \"{Package}\" found in database");
                 return;
             }
 
             await UiModeOutput.Run(manager,
-                x => x.SyncAppImageMeta([Path.GetFileNameWithoutExtension(matches.First())]));
+                x => x.SyncAppImageMeta([matches.First().Name]));
         }
         else
         {
-            await UiModeOutput.Run(manager, x => x.SyncAppImageMeta(Directory
-                .GetFiles(installDir, "*.AppImage", SearchOption.TopDirectoryOnly)
-                .Select(Path.GetFileNameWithoutExtension).Cast<string>().ToList()));
+            await UiModeOutput.Run(manager, x => x.SyncAppImageMeta(appImages.Select(a => a.Name).ToList()));
         }
     }
 }

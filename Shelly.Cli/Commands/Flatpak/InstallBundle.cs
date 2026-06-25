@@ -1,5 +1,6 @@
 using System.CommandLine;
 using PackageManager.Flatpak;
+using Shelly.Cli.Outputs;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Flatpak;
@@ -12,7 +13,8 @@ public class InstallBundle : GlobalSettingsCommand
     public static Command Create()
     {
         var bundlePath = new Argument<string>("BundlePath") { Description = "Path to the .flatpak bundle file" };
-        var system = new Option<bool>("--system", "-s") { Description = "Install system-wide", DefaultValueFactory = _ => true };
+        var system = new Option<bool>("--system", "-s")
+            { Description = "Install system-wide", DefaultValueFactory = _ => true };
 
         var command = new Command("install-bundle", "Installs flatpak app from bundle file")
         {
@@ -34,14 +36,26 @@ public class InstallBundle : GlobalSettingsCommand
         return command;
     }
 
-    public override ValueTask ExecuteAsync(IShellyConsole console)
+    public override async ValueTask ExecuteAsync(IShellyConsole console)
     {
+        if (UiMode)
+        {
+            await ExecuteUiMode();
+            return;
+        }
+
         console.WriteLine(Colorize("Installing flatpak bundle...", ConsoleColor.Yellow));
         var manager = new FlatpakManager();
-        manager.FlatpakEvent += (_, args) => console.WriteLine(Colorize(args.Message, ConsoleColor.Yellow));
-        manager.InstallAppFromBundle(BundlePath, SystemWide);
-        return ValueTask.CompletedTask;
+        await FlatpakSinglePaneOutput.Output(console, manager,
+            x => x.InstallAppFromBundle(BundlePath, SystemWide ? InstallLevel.System : InstallLevel.User), NoConfirm);
     }
 
-    public override ValueTask ExecuteUiMode() => ValueTask.CompletedTask;
+    public override async ValueTask ExecuteUiMode()
+    {
+        UiFrames.TxStart("Installing flatpak app...");
+        var manager = new FlatpakManager();
+        await UiModeOutput.Run(manager,
+            x => x.InstallAppFromBundle(BundlePath, SystemWide ? InstallLevel.System : InstallLevel.User));
+        UiFrames.TxDone("Flatpak install complete.");
+    }
 }

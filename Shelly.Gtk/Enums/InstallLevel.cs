@@ -1,4 +1,4 @@
-namespace PackageManager.Flatpak;
+namespace Shelly.Gtk.Enums;
 
 public enum InstallLevel
 {

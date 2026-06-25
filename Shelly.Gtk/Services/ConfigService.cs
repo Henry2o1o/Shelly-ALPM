@@ -63,7 +63,6 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.TrayIconPath), config.TrayIconPath ?? "");
         CallCliConfigSet(nameof(config.TrayUpdatesIconPath), config.TrayUpdatesIconPath ?? "");
         CallCliConfigSet(nameof(config.DefaultPageDropDown), config.DefaultPageDropDown.ToString());
-        CallCliConfigSet(nameof(config.SuppressFingerprintWarning), config.SuppressFingerprintWarning.ToString());
         CallCliConfigSet(nameof(config.RemoveCache), config.RemoveCache.ToString());
         CallCliConfigSet(nameof(config.TrayAutoStart), config.TrayAutoStart.ToString());
         CallCliConfigSet(nameof(config.PackageDowngradeEnabled), config.PackageDowngradeEnabled.ToString());
@@ -85,7 +84,7 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.AurUpdateShowHidden), config.AurUpdateShowHidden.ToString());
         CallCliConfigSet(nameof(config.AppImageInstallPath), config.AppImageInstallPath ?? "");
         CallCliConfigSet(nameof(config.PackageInstallView), config.PackageInstallView.ToString());
-        CallCliConfigSet(nameof(config.PackageInstallUpgrade), config.PackageInstallUpgrade.ToString());
+        CallCliConfigSet(nameof(config.PackageUpdateView), config.PackageUpdateView.ToString());
         CallCliConfigSet(nameof(config.PackageManageView), config.PackageManageView.ToString());
         ConfigSaved?.Invoke(this, config);
         _suppressInvalidate = true;

@@ -36,9 +36,8 @@ public class RemoveRemote : GlobalSettingsCommand
 
     public override ValueTask ExecuteAsync(IShellyConsole console)
     {
-        var manager = new FlatpakManager();
         console.WriteLine(Colorize($"Removing remote {RemoteName}", ConsoleColor.Red));
-        var result = manager.RemoveRemote(RemoteName, SystemWide);
+        var result = FlatpakManager.RemoveRemote(RemoteName, SystemWide ? InstallLevel.System : InstallLevel.User);
         console.WriteLine(result);
         return ValueTask.CompletedTask;
     }
