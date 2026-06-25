@@ -20,8 +20,12 @@ public partial class FlatpakPackageDto
     public List<string> Categories { get; set; } = [];
     
     public string Remote { get; set; } = string.Empty;
+    
+    public InstallLevel InstallLevel { get; set; }
 
     public List<string> Permissions { get; set; } = [];
+    
+    public uint InstalledSize { get; set; } = 0;
     
     public string Ref =>
         $"{GetKindString()}/{Id}/{Arch}/{Branch}";

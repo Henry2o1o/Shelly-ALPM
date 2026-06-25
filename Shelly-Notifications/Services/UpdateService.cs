@@ -9,7 +9,7 @@ public class UpdateService(DBusMenuHandler? menuHandler = null)
 {
     public async Task<int> CheckForUpdates()
     {
-        var result = await ExecuteUnprivilegedCommandAsync("Get Available Updates", "utility updates -a -l --json");
+        var result = await ExecuteUnprivilegedCommandAsync("Get Available Updates", "check-updates -al --json");
         try
         {
             var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -179,7 +179,7 @@ public class UpdateService(DBusMenuHandler? menuHandler = null)
 
         var solutionRoot = FindSolutionRoot(AppContext.BaseDirectory);
         var debugPath = solutionRoot != null
-            ? Path.Combine(solutionRoot, "Shelly-CLI", "bin", "Debug", "net10.0", "linux-x64", "shelly")
+            ? Path.Combine(solutionRoot, "Shelly.Cli", "bin", "Debug", "net10.0", "linux-x64", "shelly")
             : string.Empty;
         Console.Error.WriteLine($"Debug path: {debugPath}");
 #endif

@@ -1,3 +1,4 @@
+using System.Text;
 using Gtk;
 using Shelly.Gtk.Helpers;
 using Shelly.GTK.Resources;
@@ -5,15 +6,17 @@ using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.TrayServices;
 using Shelly.Gtk.UiModels;
 using System.Text.Json;
+using Gdk;
 using Shelly.Gtk.Windows.Dialog;
 using Shelly.Utilities;
 using Shelly.Utilities.Enums;
 using DateTime = System.DateTime;
+using Functions = GLib.Functions;
 using TimeSpan = System.TimeSpan;
 
 namespace Shelly.Gtk.Windows;
 
-public class Settings(
+public sealed class Settings(
     IConfigService configService,
     IPrivilegedOperationService privilegedOperationService,
     IUnprivilegedOperationService unprivilegedOperationService,
@@ -21,11 +24,44 @@ public class Settings(
     IGenericQuestionService genericQuestionService,
     IDirtyService dirtyService) : IShellyWindow, IReloadable
 {
+    public const string TrayServiceContent =
+        """
+        [Unit]
+        Description=Shelly Notifications tray service
+        After=graphical-session.target
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/bin/shelly-notifications
+        Restart=on-failure
+        RestartSec=5s
+
+        [Install]
+        WantedBy=graphical-session.target
+        """;
+
     private Box _box = null!;
     private ShellyConfig _config = null!;
     private DirtySubscription? _sub;
     public string[] ListensTo => [DirtyScopes.Config];
     private Overlay? _parentOverlay;
+    private static readonly (string? Culture, string Label)[] LanguageOptions =
+    [
+        (null, "Follow system language"),
+        ("bg_BG", "Bulgarian"),
+        ("ca", "Català"),
+        ("de_DE", "Deutsch"),
+        ("es", "Español"),
+        ("fr_FR", "Français"),
+        ("hu_HU", "Magyar"),
+        ("ja_JP", "日本語"),
+        ("pl", "Polski"),
+        ("pt_BR", "Português (Brasil)"),
+        ("pt_PT", "Português (Portugal)"),
+        ("ru_RU", "Русский"),
+        ("tr_TR", "Türkçe"),
+        ("zh_CN", "中文（简体）")
+    ];
     private static List<ReleaseNotesDialog.ReleaseItem>? _cachedReleaseList;
     private static string? _cachedLatestVersion;
     private static DateTime _lastVersionCheck = DateTime.MinValue;
@@ -139,6 +175,9 @@ public class Settings(
         versionLabel.SetLabel(
             $"v{System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(4) ?? "Unknown"}");
 
+        var languageDropDown = (DropDown)builder.GetObject("language_drop")!;
+        PopulateLanguageDropDown(languageDropDown);
+
         var defaultPageDropDown = (DropDown)builder.GetObject("default_page_drop")!;
         PopulateDefaultPageDropDown(defaultPageDropDown);
 
@@ -229,6 +268,22 @@ public class Settings(
             SaveConfig();
         };
 
+        languageDropDown.OnNotify += (_, args) =>
+        {
+            if (args.Pspec.GetName() != "selected") return;
+            if (_isPopulatingLanguageDropDown) return;
+            if (languageDropDown.Selected >= (uint)LanguageOptions.Length) return;
+
+            var selectedOption = LanguageOptions[(int)languageDropDown.Selected];
+            var normalizedCulture = string.IsNullOrWhiteSpace(selectedOption.Culture) ? null : selectedOption.Culture;
+            if (string.Equals(_config.Culture, normalizedCulture, StringComparison.OrdinalIgnoreCase)) return;
+
+            _config.Culture = normalizedCulture;
+            SaveConfig();
+            genericQuestionService.RaiseToastMessage(
+                new ToastMessageEventArgs(Translations.T("Restart Shelly to apply the selected language.")));
+        };
+
         var aurSwitch = (Switch)builder.GetObject("aur_switch")!;
         var flatpakSwitch = (Switch)builder.GetObject("flatpak_switch")!;
         var appImageSwitch = (Switch)builder.GetObject("appimage_switch")!;
@@ -246,6 +301,38 @@ public class Settings(
 
     private List<ShellyTabs> _availablePages = [];
     private bool _isPopulatingDropDown;
+    private bool _isPopulatingLanguageDropDown;
+
+    private void PopulateLanguageDropDown(DropDown dropDown)
+    {
+        _isPopulatingLanguageDropDown = true;
+        try
+        {
+            var labels = LanguageOptions
+                .Select(option => option.Culture is null ? Translations.T(option.Label) : option.Label)
+                .ToArray();
+            var stringList = StringList.New(labels);
+            dropDown.SetModel(stringList);
+
+            var currentIndex = 0;
+            if (!string.IsNullOrWhiteSpace(_config.Culture))
+            {
+                var matchedIndex = Array.FindIndex(
+                    LanguageOptions,
+                    option => string.Equals(option.Culture, _config.Culture, StringComparison.OrdinalIgnoreCase));
+                if (matchedIndex >= 0)
+                {
+                    currentIndex = matchedIndex;
+                }
+            }
+
+            dropDown.Selected = (uint)currentIndex;
+        }
+        finally
+        {
+            _isPopulatingLanguageDropDown = false;
+        }
+    }
 
     private void PopulateDefaultPageDropDown(DropDown dropDown)
     {
@@ -390,23 +477,7 @@ public class Settings(
         {
             if (e.State)
             {
-                const string serviceContent =
-                    """
-                    [Unit]
-                    Description=Shelly Notifications tray service
-                    After=graphical-session.target
-
-                    [Service]
-                    Type=simple
-                    ExecStart=/usr/bin/shelly-notifications
-                    Restart=on-failure
-                    RestartSec=5s
-
-                    [Install]
-                    WantedBy=graphical-session.target
-                    """;
-                
-                unprivilegedOperationService.AddSystemdServiceTray(serviceContent, "shelly-notifications");
+                unprivilegedOperationService.AddSystemdServiceTray(TrayServiceContent, "shelly-notifications");
                 genericQuestionService.RaiseToastMessage(
                     new ToastMessageEventArgs(Translations.T("Systemd startup service added.")));
             }
@@ -549,7 +620,7 @@ public class Settings(
         genericQuestionService.RaiseQuestion(args);
         var confirmed = await args.ResponseTask;
 
-        GLib.Functions.IdleAdd(0, () =>
+        Functions.IdleAdd(0, () =>
         {
             if (confirmed)
             {
@@ -571,7 +642,7 @@ public class Settings(
 
     private async Task HandleFlatpakMissingAsync(Switch sw, Action<bool> updateAction)
     {
-        var result = await privilegedOperationService.IsPackageInstalledOnMachine("flatpak");
+        var result = await unprivilegedOperationService.IsPackageInstalledOnMachine("flatpak");
 
         if (!result)
         {
@@ -589,7 +660,7 @@ public class Settings(
                 {
                     lockoutService.Show(Translations.T("Installing flatpak..."));
                     await privilegedOperationService.InstallPackagesAsync(["flatpak"]);
-                    GLib.Functions.IdleAdd(0, () =>
+                    Functions.IdleAdd(0, () =>
                     {
                         updateAction(true);
                         SaveConfig();
@@ -601,7 +672,7 @@ public class Settings(
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Error installing flatpak: {ex.Message}");
-                    GLib.Functions.IdleAdd(0, () =>
+                    Functions.IdleAdd(0, () =>
                     {
                         sw.Active = false;
                         sw.State = false;
@@ -617,7 +688,7 @@ public class Settings(
             }
             else
             {
-                GLib.Functions.IdleAdd(0, () =>
+                Functions.IdleAdd(0, () =>
                 {
                     sw.Active = false;
                     sw.State = false;
@@ -627,7 +698,7 @@ public class Settings(
         }
         else
         {
-            GLib.Functions.IdleAdd(0, () =>
+            Functions.IdleAdd(0, () =>
             {
                 updateAction(true);
                 SaveConfig();
@@ -671,7 +742,7 @@ public class Settings(
         }
         else
         {
-            Console.Error.WriteLine($"Failed to remove database lock: {result.Error}");
+            await Console.Error.WriteLineAsync($"Failed to remove database lock: {result.Error}");
         }
     }
 
@@ -688,14 +759,14 @@ public class Settings(
             }
             else
             {
-                Console.Error.WriteLine($"Failed to fix Shelly folder ownership: {result.Error}");
+                await Console.Error.WriteLineAsync($"Failed to fix Shelly folder ownership: {result.Error}");
                 genericQuestionService.RaiseToastMessage(
                     new ToastMessageEventArgs(Translations.T("Failed to fix folder permissions")));
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error fixing Shelly folder permissions: {ex.Message}");
+            await Console.Error.WriteLineAsync($"Error fixing Shelly folder permissions: {ex.Message}");
             genericQuestionService.RaiseToastMessage(
                 new ToastMessageEventArgs(Translations.T("Error fixing folder permissions")));
         }
@@ -747,89 +818,83 @@ public class Settings(
             return;
         }
 
-        var pacfileBox = Box.NewWithProperties([]);
-        pacfileBox.SetOrientation(Orientation.Vertical);
-        pacfileBox.SetSpacing(12);
-        pacfileBox.SetSizeRequest(600, -1);
-
-        var title = Label.NewWithProperties([]);
-        title.SetText(Translations.T("Pacfiles Found"));
-        title.AddCssClass("title-2");
-        title.SetHalign(Align.Center);
-        pacfileBox.Append(title);
-
-        var scroll = ScrolledWindow.NewWithProperties([]);
-        scroll.HscrollbarPolicy = PolicyType.Never;
-        scroll.VscrollbarPolicy = PolicyType.Automatic;
-        scroll.SetOverlayScrolling(false);
-        scroll.SetSizeRequest(-1, 400);
-
-        var list = Box.NewWithProperties([]);
-        list.SetOrientation(Orientation.Vertical);
-        list.SetSpacing(8);
-
-        foreach (var pacfile in pacfiles)
+        Functions.IdleAdd(0, () =>
         {
-            var itemBox = Box.NewWithProperties([]);
-            itemBox.SetOrientation(Orientation.Vertical);
-            itemBox.SetSpacing(4);
-            itemBox.SetMarginBottom(16);
+            var pacfileBox = Box.NewWithProperties([]);
+            pacfileBox.SetOrientation(Orientation.Vertical);
+            pacfileBox.SetSpacing(12);
+            pacfileBox.SetSizeRequest(620, -1);
 
-            var headerBox = Box.NewWithProperties([]);
-            headerBox.SetOrientation(Orientation.Horizontal);
-            headerBox.SetSpacing(8);
+            var title = Label.NewWithProperties([]);
+            title.SetText(Translations.T("Pacfiles Found"));
+            title.AddCssClass("title-2");
+            title.SetHalign(Align.Center);
+            pacfileBox.Append(title);
 
-            var nameLabel = Label.NewWithProperties([]);
-            nameLabel.SetMarkup($"<b>{pacfile.Name}</b>");
-            nameLabel.SetHalign(Align.Start);
-            nameLabel.SetHexpand(true);
-            headerBox.Append(nameLabel);
+            var scroll = ScrolledWindow.NewWithProperties([]);
+            scroll.HscrollbarPolicy = PolicyType.Never;
+            scroll.VscrollbarPolicy = PolicyType.Automatic;
+            scroll.SetOverlayScrolling(false);
+            scroll.SetSizeRequest(-1, 400);
 
-            var copyButton = Button.NewFromIconName("edit-copy-symbolic");
-            copyButton.SetTooltipText(Translations.T("Copy content"));
-            copyButton.AddCssClass("flat");
-            copyButton.OnClicked += (_, _) =>
+            var list = Box.NewWithProperties([]);
+            list.SetOrientation(Orientation.Vertical);
+            list.SetSpacing(8);
+
+            foreach (var pacfile in pacfiles)
             {
-                var clipboard = Gdk.Display.GetDefault()!.GetClipboard();
-                clipboard.SetText(pacfile.Text);
-                genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(Translations.T("Copied to clipboard")));
-            };
-            headerBox.Append(copyButton);
+                var itemBox = Box.NewWithProperties([]);
+                itemBox.SetOrientation(Orientation.Vertical);
+                itemBox.SetSpacing(4);
+                itemBox.SetMarginBottom(16);
 
-            itemBox.Append(headerBox);
+                var headerBox = Box.NewWithProperties([]);
+                headerBox.SetOrientation(Orientation.Horizontal);
+                headerBox.SetSpacing(8);
 
-            var textView = TextView.NewWithProperties([]);
-            textView.Editable = false;
-            textView.CursorVisible = false;
-            textView.WrapMode = WrapMode.None;
-            textView.Monospace = true;
+                var nameLabel = Label.NewWithProperties([]);
+                nameLabel.SetMarkup($"<b>{pacfile.Name}</b>");
+                nameLabel.SetHalign(Align.Start);
+                nameLabel.SetHexpand(true);
+                headerBox.Append(nameLabel);
 
-            var buffer = textView.Buffer;
-            if (buffer != null)
-            {
-                var lines = pacfile.Text.Split('\n');
-                var builder = new System.Text.StringBuilder();
-                for (var i = 0; i < lines.Length; i++)
+                var copyButton = Button.NewFromIconName("edit-copy-symbolic");
+                copyButton.SetTooltipText(Translations.T("Copy content"));
+                copyButton.AddCssClass("flat");
+                copyButton.OnClicked += (_, _) =>
                 {
-                    builder.AppendLine($"{(i + 1).ToString().PadLeft(3)} | {lines[i]}");
-                }
+                    var clipboard = Display.GetDefault()!.GetClipboard();
+                    clipboard.SetText(pacfile.Text);
+                    genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(Translations.T("Copied to clipboard")));
+                };
+                headerBox.Append(copyButton);
 
-                buffer.SetText(builder.ToString(), -1);
+                itemBox.Append(headerBox);
+
+                var textView = TextView.New();
+                textView.Editable = false;
+                textView.CursorVisible = false;
+                textView.WrapMode = WrapMode.None;
+                textView.Monospace = true;
+
+                textView.GetBuffer().SetText(pacfile.Text, pacfile.Text.Length);
+
+                var textScroll = ScrolledWindow.New();
+                textScroll.SetSizeRequest(-1, 200);
+                textScroll.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
+                textScroll.SetChild(textView);
+                textScroll.AddCssClass("rounded-card");
+                textScroll.SetLimitEvents(true);
+
+                itemBox.Append(textScroll);
+                list.Append(itemBox);
             }
 
-            var textScroll = ScrolledWindow.NewWithProperties([]);
-            textScroll.SetSizeRequest(-1, 200);
-            textScroll.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
-            textScroll.SetChild(textView);
-            textScroll.AddCssClass("rounded-card");
-
-            itemBox.Append(textScroll);
-            list.Append(itemBox);
-        }
-
-        scroll.SetChild(list);
-        pacfileBox.Append(scroll);
-        genericQuestionService.RaiseDialog(new GenericDialogEventArgs(pacfileBox));
+            scroll.SetChild(list);
+            pacfileBox.Append(scroll);
+            genericQuestionService.RaiseDialog(new GenericDialogEventArgs(pacfileBox));
+            return false;
+        });
     }
 
     private async Task ShowAppChangelogAsync()
@@ -935,6 +1000,7 @@ public class Settings(
     {
         // Refresh internal config snapshot. Visible switches retain their current
         // state to avoid re-entrant SaveConfig loops; navigating away/back rebuilds the page.
+        // TODO: Find a way to sync setting switches after setup?
         _config = configService.LoadConfig();
     }
 

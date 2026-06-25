@@ -33,20 +33,16 @@ public class ConfigService : IConfigService
     public void SaveConfig(ShellyConfig config)
     {
         _config = config;
-
-        CallCliConfigSet(nameof(config.AccentColor), config.AccentColor ?? "");
+        
         CallCliConfigSet(nameof(config.Culture), config.Culture ?? "");
-        CallCliConfigSet(nameof(config.DarkMode), config.DarkMode.ToString());
         CallCliConfigSet(nameof(config.AurEnabled), config.AurEnabled.ToString());
         CallCliConfigSet(nameof(config.ShellySearchEnabled), config.ShellySearchEnabled.ToString());
         CallCliConfigSet(nameof(config.AurWarningConfirmed), config.AurWarningConfirmed.ToString());
         CallCliConfigSet(nameof(config.FlatPackEnabled), config.FlatPackEnabled.ToString());
         CallCliConfigSet(nameof(config.AppImageEnabled), config.AppImageEnabled.ToString());
-        CallCliConfigSet(nameof(config.ConsoleEnabled), config.ConsoleEnabled.ToString());
         CallCliConfigSet(nameof(config.WindowWidth), config.WindowWidth.ToString(CultureInfo.InvariantCulture));
         CallCliConfigSet(nameof(config.WindowHeight), config.WindowHeight.ToString(CultureInfo.InvariantCulture));
         CallCliConfigSet(nameof(config.DefaultView), config.DefaultView);
-        CallCliConfigSet(nameof(config.UseKdeTheme), config.UseKdeTheme.ToString());
         CallCliConfigSet(nameof(config.UseOldMenu), config.UseOldMenu.ToString());
         CallCliConfigSet(nameof(config.TrayEnabled), config.TrayEnabled.ToString());
         CallCliConfigSet(nameof(config.TrayCheckIntervalHours), config.TrayCheckIntervalHours.ToString());
@@ -67,13 +63,15 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.TrayIconPath), config.TrayIconPath ?? "");
         CallCliConfigSet(nameof(config.TrayUpdatesIconPath), config.TrayUpdatesIconPath ?? "");
         CallCliConfigSet(nameof(config.DefaultPageDropDown), config.DefaultPageDropDown.ToString());
-        CallCliConfigSet(nameof(config.SuppressFingerprintWarning), config.SuppressFingerprintWarning.ToString());
         CallCliConfigSet(nameof(config.RemoveCache), config.RemoveCache.ToString());
         CallCliConfigSet(nameof(config.TrayAutoStart), config.TrayAutoStart.ToString());
         CallCliConfigSet(nameof(config.PackageDowngradeEnabled), config.PackageDowngradeEnabled.ToString());
-        CallCliConfigSet(nameof(config.PackageManagementCascadeDelete), config.PackageManagementCascadeDelete.ToString());
-        CallCliConfigSet(nameof(config.PackageManagementRemoveConfigs), config.PackageManagementRemoveConfigs.ToString());
-        CallCliConfigSet(nameof(config.PackageManagementRemoveOptionalDeps), config.PackageManagementRemoveOptionalDeps.ToString());
+        CallCliConfigSet(nameof(config.PackageManagementCascadeDelete),
+            config.PackageManagementCascadeDelete.ToString());
+        CallCliConfigSet(nameof(config.PackageManagementRemoveConfigs),
+            config.PackageManagementRemoveConfigs.ToString());
+        CallCliConfigSet(nameof(config.PackageManagementRemoveOptionalDeps),
+            config.PackageManagementRemoveOptionalDeps.ToString());
         CallCliConfigSet(nameof(config.PackageManagementShowHidden), config.PackageManagementShowHidden.ToString());
         CallCliConfigSet(nameof(config.PackageInstallUpgrade), config.PackageInstallUpgrade.ToString());
         CallCliConfigSet(nameof(config.PackageInstallShowHidden), config.PackageInstallShowHidden.ToString());
@@ -84,10 +82,20 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.AurRemoveShowHidden), config.AurRemoveShowHidden.ToString());
         CallCliConfigSet(nameof(config.AurUpdateRunChecks), config.AurUpdateRunChecks.ToString());
         CallCliConfigSet(nameof(config.AurUpdateShowHidden), config.AurUpdateShowHidden.ToString());
+        CallCliConfigSet(nameof(config.AppImageInstallPath), config.AppImageInstallPath ?? "");
+        CallCliConfigSet(nameof(config.PackageInstallView), config.PackageInstallView.ToString());
+        CallCliConfigSet(nameof(config.PackageUpdateView), config.PackageUpdateView.ToString());
+        CallCliConfigSet(nameof(config.PackageManageView), config.PackageManageView.ToString());
         ConfigSaved?.Invoke(this, config);
         _suppressInvalidate = true;
-        try { _dirtyService.MarkDirty(DirtyScopes.Config); }
-        finally { _suppressInvalidate = false; }
+        try
+        {
+            _dirtyService.MarkDirty(DirtyScopes.Config);
+        }
+        finally
+        {
+            _suppressInvalidate = false;
+        }
     }
 
     public ShellyConfig LoadConfig()
