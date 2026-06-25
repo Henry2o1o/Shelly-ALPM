@@ -651,7 +651,7 @@ public class FlatpakInstall(
             }
         }
 
-        return PackageSearch.Matches(pkg.Name, pkg.Description, _searchText);
+        return PackageSearch.Matches(pkg.Name, pkg.Summary, _searchText);
     }
 
     private void SetUrlLinks(Dictionary<string, string>? urls)
