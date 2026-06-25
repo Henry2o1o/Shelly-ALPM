@@ -818,6 +818,8 @@ public sealed class PackageManagement(
 
         var selectedPackages = _packageGObjectRefs.Where(p => p.IsSelected).ToList();
         _cartLabel.SetText(T("{0} Selected", selectedPackages.Count));
+        _removeButton.SetSensitive(selectedPackages.Count > 0);
+        _downgradeButton.SetSensitive(selectedPackages.Count > 0);
 
         foreach (var pkg in selectedPackages)
         {
@@ -1176,6 +1178,10 @@ public sealed class PackageManagement(
                     genericQuestionService.RaiseToastMessage(args);
                 }
 
+                foreach (var pkg in _packageGObjectRefs.Where(p => p.IsSelected))
+                {
+                    pkg.ToggleSelection();
+                }
                 Reload();
             }
             catch (Exception e)
@@ -1185,6 +1191,7 @@ public sealed class PackageManagement(
             }
             finally
             {
+                UpdateCart();
                 lockoutService.Hide();
             }
         }
@@ -1276,6 +1283,12 @@ public sealed class PackageManagement(
                 lockoutService.Hide();
             }
         }
+
+        foreach (var pkg in _packageGObjectRefs.Where(p => p.IsSelected))
+        {
+            pkg.ToggleSelection();
+        }
+        UpdateCart();
 
         if (successCount > 0)
         {

@@ -305,6 +305,7 @@ public sealed class PackageInstall(
         old.Dispose();
         Interlocked.Increment(ref _loadGeneration);
         _ = LoadDataAsync(_loadGeneration, _cts.Token);
+        UpdateCart();
     }
 
     private void SetupGridView()
@@ -491,6 +492,7 @@ public sealed class PackageInstall(
 
         var selectedPackages = _packageGObjectRefs.Where(p => p.IsSelected).ToList();
         _cartLabel.SetText(T("{0} Selected", selectedPackages.Count));
+        _installButton.SetSensitive(selectedPackages.Count > 0);
 
         foreach (var pkg in selectedPackages)
         {
@@ -1178,6 +1180,10 @@ public sealed class PackageInstall(
                 lockoutService.Show(T("Installing..."));
                 var performUpgrade = _upgradeCheck.GetActive();
                 result = await privilegedOperationService.InstallPackagesAsync(selectedPackages, performUpgrade);
+                foreach (var pkg in _packageGObjectRefs.Where(p => p.IsSelected))
+                {
+                    pkg.ToggleSelection();
+                }
                 Reload();
             }
             catch (Exception e)
@@ -1187,6 +1193,7 @@ public sealed class PackageInstall(
             }
             finally
             {
+                UpdateCart();
                 lockoutService.Hide();
             }
 
