@@ -31,8 +31,8 @@ sealed class Program
     private static Stack? _settingsStack;
     private static ApplicationWindow? _window;
     private static String? _pendingAppId;
-    private static Box? _flatpakPageBox;
-    private static IShellyWindow? _currentFlatpakWindow;
+    private static FlatpakInstall? _currentFlatpakWindow;
+    public static event Action<string>? FlatpakInstallRequested;
 
     
     private static void EnsureSessionEnvironment()
@@ -146,21 +146,14 @@ sealed class Program
     {
         GLib.Functions.IdleAdd(0, () =>
         {
-            if (_settingsStack == null) return false;
-            
-            _pendingAppId = appId;
-            _settingsStack.SetVisibleChildName("flatpak_page");
+            _settingsStack?.SetVisibleChildName("flatpak_page");
             _window?.Present();
-            
-            if (_currentFlatpakWindow is FlatpakInstall fp)
-                _ = fp.InstallFromRefId(appId);   
-            else
-                _pendingAppId = appId;            
-        
+
+            FlatpakInstallRequested?.Invoke(appId);
+
             return false;
         });
     }    
-    
     public static int Main(string[] args)
     {
         EnsureSessionEnvironment();

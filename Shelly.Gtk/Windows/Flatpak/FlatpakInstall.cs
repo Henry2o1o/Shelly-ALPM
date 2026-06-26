@@ -99,11 +99,15 @@ public class FlatpakInstall(
     private Box? _installSidebarControls;
     private string _activePage = "install";
     public event Action? DataLoaded;
+    private bool _loaded;
+    private string? _pendingInstallId;
 
     public Widget CreateWindow()
     {
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakInstallWindow.ui"), -1);
         var box = (Box)builder.GetObject("FlatpakInstallWindow")!;
+        Program.FlatpakInstallRequested += OnFlatpakInstallRequested;
+
 
         _gridView = (GridView)builder.GetObject("list_flatpaks")!;
         _scroller = _gridView.GetParent() as ScrolledWindow;
@@ -928,6 +932,14 @@ public class FlatpakInstall(
             });
             
             DataLoaded?.Invoke();
+            _loaded = true;
+            if (_pendingInstallId != null)
+            {
+                var id = _pendingInstallId;
+                _pendingInstallId = null;
+
+                await InstallFromRefId(id);
+            }
             
         }
     }
@@ -1619,6 +1631,17 @@ public class FlatpakInstall(
         {
             lockoutService.Hide();
         }
+    }
+    
+    private async void OnFlatpakInstallRequested(string appId)
+    {
+        if (!_loaded)
+        {
+            _pendingInstallId = appId;
+            return;
+        }
+
+        await InstallFromRefId(appId);
     }
     
     public void Dispose()
