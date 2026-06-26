@@ -356,11 +356,6 @@ public static class ConfigManager
                 config.UseWeeklySchedule = weekly.GetBoolean();
             }
 
-            if (root.TryGetProperty("WebViewEnabled", out var webView))
-            {
-                config.WebViewEnabled = webView.GetBoolean();
-            }
-
             if (root.TryGetProperty("DaysOfWeek", out var days) && days.ValueKind == JsonValueKind.Array)
             {
                 config.DaysOfWeek = [];

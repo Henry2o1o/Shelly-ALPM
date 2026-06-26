@@ -412,29 +412,6 @@ public class PackageUpdate(
         if (pkg.Groups.Count > 0)
             AddDetail(T("Groups"), string.Join(", ", pkg.Groups));
 
-        if (configService.LoadConfig().WebViewEnabled)
-        {
-            if (pkg.Depends.Count > 0)
-            {
-                var cleanDeps = pkg.Depends.Select(StripVersionSpecifier).ToList();
-                var dictionary = new Dictionary<string, List<string>> { { pkg.Name, cleanDeps } };
-
-                foreach (var depName in cleanDeps)
-                {
-                    for (uint i = 0; i < _listStore.GetNItems(); i++)
-                    {
-                        var obj = _listStore.GetObject(i);
-                        if (obj is not AlpmUpdateGObject depObj || depObj.Package == null) continue;
-                        if (depObj.Package.Name == depName)
-                            dictionary.TryAdd(depObj.Package.Name, depObj.Package.Depends.Select(StripVersionSpecifier).ToList());
-                    }
-                }
-
-                var graphWidget = StarfishInterop.CreateDisplayOnlyGraphWidget(pkg.Name, dictionary);
-                _detailBox.Append(graphWidget);
-            }
-        }
-
         _detailRevealer.SetRevealChild(true);
         return;
 

@@ -469,28 +469,6 @@ public sealed class PackageManagement(
             _detailBox.Append(fileExpander);
         }
 
-        if (configService.LoadConfig().WebViewEnabled && pkg.Depends.Count > 0)
-        {
-            var cleanDeps = pkg.Depends.Select(StripVersionSpecifier).ToList();
-            var dictionary = new Dictionary<string, List<string>> { { pkg.Name, cleanDeps } };
-
-            foreach (var depName in cleanDeps)
-            {
-                for (uint i = 0; i < _listStore.GetNItems(); i++)
-                {
-                    var obj = _listStore.GetObject(i);
-                    if (obj is not AlpmPackageGObject depObj) continue;
-                    if (depObj.Index < 0 || depObj.Index >= _packageData.Count) continue;
-                    var depPkg = _packageData[depObj.Index];
-                    if (depPkg.Name == depName)
-                        dictionary.TryAdd(depPkg.Name, depPkg.Depends.Select(StripVersionSpecifier).ToList());
-                }
-            }
-
-            var graphWidget = StarfishInterop.CreateDisplayOnlyGraphWidget(pkg.Name, dictionary);
-            _detailBox.Append(graphWidget);
-        }
-
         _detailRevealer.SetRevealChild(true);
         return;
 
