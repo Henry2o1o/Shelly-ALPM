@@ -59,13 +59,13 @@ public static class OptimizedClient
         },
     };
 
-    public static HttpClient CreateClient(long httpTimeoutMinutes = 3, long connectionLifetimeMinutes = 5,
+    public static HttpClient CreateClient(long httpTimeoutSeconds = 30, long connectionLifetimeMinutes = 5,
         long connectionIdleTimeoutMinutes = 2, CancellationToken cancellationToken = default) =>
         new(
             CreateHandler(connectionLifetimeMinutes, connectionIdleTimeoutMinutes,
                 cancellationToken: cancellationToken), true)
         {
-            Timeout = TimeSpan.FromMinutes(httpTimeoutMinutes),
+            Timeout = TimeSpan.FromSeconds(httpTimeoutSeconds),
             DefaultRequestHeaders = { UserAgent = { Http.UserAgent } },
             DefaultRequestVersion = HttpVersion.Version11,
             DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher
