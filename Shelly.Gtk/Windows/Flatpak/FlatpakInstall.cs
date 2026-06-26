@@ -1567,6 +1567,17 @@ public class FlatpakInstall(
 
         if (pkg == null)
             return;
+
+        var installedPackages = await unprivilegedOperationService.ListFlatpakPackages();
+        
+        if (installedPackages.Any(p => p.Id == pkg.Id))
+        {
+            genericQuestionService.RaiseToastMessage(
+                new ToastMessageEventArgs(
+                    Translations.T("Package is already installed")));
+
+            return;
+        }
         
         if (!configService.LoadConfig().NoConfirm)
         {
