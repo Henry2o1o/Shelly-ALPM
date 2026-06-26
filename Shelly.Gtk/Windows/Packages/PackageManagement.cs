@@ -1277,13 +1277,6 @@ public sealed class PackageManagement(
         }
     }
 
-    private static string StripVersionSpecifier(string dep)
-    {
-        var span = dep.AsSpan();
-        var end = span.IndexOfAny(['>', '<', '=', ' ']);
-        return (end >= 0 ? span[..end] : span).ToString();
-    }
-
     public void Dispose()
     {
         _sub?.Dispose();
