@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Shelly-ALPM / Shelly: UI\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
-"POT-Creation-Date: 2026-06-12 11:40+0000\n"
+"POT-Creation-Date: 2026-06-23 22:35+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -143,6 +143,9 @@ msgstr ""
 msgid "Update Aur Package(s)"
 msgstr ""
 
+msgid "Old Version"
+msgstr ""
+
 msgid ""
 "Run the --check function during package build (installs checkdepends)\n"
 "                        "
@@ -219,15 +222,6 @@ msgstr ""
 msgid "Save"
 msgstr ""
 
-msgid "Language"
-msgstr ""
-
-msgid "Follow system language"
-msgstr ""
-
-msgid "Restart Shelly to apply the selected language."
-msgstr ""
-
 msgid "Sync"
 msgstr ""
 
@@ -280,6 +274,9 @@ msgid "Summary"
 msgstr ""
 
 msgid "No description available."
+msgstr ""
+
+msgid "App Permissions"
 msgstr ""
 
 msgid "Version History"
@@ -417,6 +414,18 @@ msgstr ""
 msgid "Remove Local"
 msgstr ""
 
+msgid "Selected Packages"
+msgstr ""
+
+msgid "0 Selected"
+msgstr ""
+
+msgid "Grid View"
+msgstr ""
+
+msgid "List View"
+msgstr ""
+
 msgid "Downgrade Selected"
 msgstr ""
 
@@ -466,9 +475,6 @@ msgstr ""
 msgid "Size Difference"
 msgstr ""
 
-msgid "Old Version"
-msgstr ""
-
 msgid "Loading Recommended Packages..."
 msgstr ""
 
@@ -476,6 +482,9 @@ msgid "General"
 msgstr ""
 
 msgid "Enable AUR"
+msgstr ""
+
+msgid "Language"
 msgstr ""
 
 msgid "Enable Flatpak"
@@ -691,18 +700,6 @@ msgstr ""
 msgid "Installed {0} Package(s)"
 msgstr ""
 
-msgid "Export AUR install log"
-msgstr ""
-
-msgid "Log Files (*.log)"
-msgstr ""
-
-msgid "Exported AUR install log"
-msgstr ""
-
-msgid "Failed to export AUR install log"
-msgstr ""
-
 msgid "Package Build"
 msgstr ""
 
@@ -799,6 +796,10 @@ msgid "Codeberg"
 msgstr ""
 
 msgid "Forgejo"
+msgstr ""
+
+#, csharp-format
+msgid "Update Available: {0}"
 msgstr ""
 
 msgid "Invalid URL. Must start with http:// or https://"
@@ -955,31 +956,6 @@ msgstr ""
 msgid "No news available"
 msgstr ""
 
-msgid "package"
-msgstr ""
-
-msgid "packages"
-msgstr ""
-
-msgid "AUR installation failed"
-msgstr ""
-
-#, csharp-format
-msgid ""
-"Shelly couldn't finish building or installing the selected AUR {0}. Export "
-"the logs and attach them to your report so the team can check whether the "
-"issue came from the PKGBUILD or from Shelly."
-msgstr ""
-
-msgid "Recent output"
-msgstr ""
-
-msgid "Close"
-msgstr ""
-
-msgid "Export Logs"
-msgstr ""
-
 #, csharp-format
 msgid ""
 "Cache directory: {0}\n"
@@ -1046,20 +1022,13 @@ msgstr ""
 msgid "3. Re-enable later"
 msgstr ""
 
+msgid "Close"
+msgstr ""
+
 msgid "Copy"
 msgstr ""
 
 msgid "Operation Complete"
-msgstr ""
-
-#, csharp-format
-msgid "PKGBUILD Diff - {0}"
-msgstr ""
-
-msgid "Review the PKGBUILD changes before continuing."
-msgstr ""
-
-msgid "Accept Changes"
 msgstr ""
 
 msgid "Authentication Required"
@@ -1083,8 +1052,8 @@ msgid "Review PKGBUILD changes for {0}"
 msgstr ""
 
 msgid ""
-"These commands fetch and execute code outside of pacman's control. Review "
-"them before continuing."
+"These commands fetch and execute code outside of shelly and libalpm's "
+"control. Review them before continuing."
 msgstr ""
 
 msgid "Install Anyway"
@@ -1092,6 +1061,13 @@ msgstr ""
 
 #, csharp-format
 msgid "{0} used in {1}"
+msgstr ""
+
+#, csharp-format
+msgid "Security scan completed - {0} warning(s) found."
+msgstr ""
+
+msgid "Security scan completed - no issues found."
 msgstr ""
 
 msgid "What's New"
@@ -1110,16 +1086,6 @@ msgid "Delete user data and configuration"
 msgstr ""
 
 msgid "Keep Config?"
-msgstr ""
-
-msgid "Package installation failed"
-msgstr ""
-
-#, csharp-format
-msgid ""
-"Shelly couldn't finish building or installing the selected {0}. Export the "
-"logs and attach them to your report so the team can check whether the issue "
-"came from the PKGBUILD or from Shelly."
 msgstr ""
 
 msgid "Name and URL are required"
@@ -1246,6 +1212,9 @@ msgstr ""
 msgid "Permission Changes"
 msgstr ""
 
+msgid "<span size='large'>Flatpaks are up to date</span>"
+msgstr ""
+
 msgid "Updating Flatpak packages..."
 msgstr ""
 
@@ -1254,6 +1223,13 @@ msgid "Failed to update packages: {0}"
 msgstr ""
 
 msgid "Updated all Flatpak(s)"
+msgstr ""
+
+msgid "Package is already installed"
+msgstr ""
+
+#, csharp-format
+msgid "{0} Selected"
 msgstr ""
 
 msgid "Installed Size"
@@ -1269,15 +1245,6 @@ msgid "Failed to load packages."
 msgstr ""
 
 msgid "--- Packages to Upgrade ---"
-msgstr ""
-
-msgid "Export Shelly install log"
-msgstr ""
-
-msgid "Exported Shelly install log"
-msgstr ""
-
-msgid "Failed to export Shelly install log"
 msgstr ""
 
 msgid "Install Local Package"
@@ -1362,9 +1329,6 @@ msgid ""
 "again."
 msgstr ""
 
-msgid "Package is already installed"
-msgstr ""
-
 msgid "Remove "
 msgstr ""
 
@@ -1387,6 +1351,9 @@ msgid "Remove corrupted packages"
 msgstr ""
 
 msgid "Select AppImage Install Directory"
+msgstr ""
+
+msgid "Restart Shelly to apply the selected language."
 msgstr ""
 
 msgid "Select Icon File"
@@ -1496,13 +1463,3 @@ msgstr ""
 #, csharp-format
 msgid "Failed to remove packages: {0}"
 msgstr ""
-
-msgid "App Permissions"
-msgstr ""
-
-msgid "<span size='large'>Flatpaks are up to date</span>"
-msgstr ""
-
-msgid "Update Available: {0}"
-msgstr ""
-
