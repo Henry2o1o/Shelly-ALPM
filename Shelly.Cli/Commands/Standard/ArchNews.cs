@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Xml.Linq;
 using Shelly.Cli.Models.Standard;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Standard;
@@ -20,7 +21,8 @@ public class ArchNews : GlobalSettingsCommand
 
     public static Command Create()
     {
-        var all = new Option<bool>("--all", "-a") { Description = "Show all news, not just news you haven't seen before." };
+        var all = new Option<bool>("--all", "-a")
+            { Description = "Show all news, not just news you haven't seen before." };
 
         var command = new Command("news", "Show ArchLinux news") { all };
 
@@ -48,17 +50,20 @@ public class ArchNews : GlobalSettingsCommand
             var fullFeed = await GetRssFeedAsync(ArchlinuxFeed);
             if (All)
             {
-                if (JsonOutput) console.WriteLine(JsonSerializer.Serialize(fullFeed, ShellyCliJsonContext.Default.ListPackageInfo));
+                if (JsonOutput)
+                    console.WriteLine(JsonSerializer.Serialize(fullFeed, ShellyCliJsonContext.Default.ListPackageInfo));
                 else DisplayFeed(console, fullFeed);
                 await CacheFeed(fullFeed);
             }
             else
             {
                 var cachedFeed = await LoadCachedFeed();
-                var unseenFeed = fullFeed.ExceptBy(cachedFeed.Select(model => model.Link), model => model.Link).ToList();
+                var unseenFeed = fullFeed.ExceptBy(cachedFeed.Select(model => model.Link), model => model.Link)
+                    .ToList();
                 if (JsonOutput)
                 {
-                    console.WriteLine(JsonSerializer.Serialize(unseenFeed, ShellyCliJsonContext.Default.ListPackageInfo));
+                    console.WriteLine(
+                        JsonSerializer.Serialize(unseenFeed, ShellyCliJsonContext.Default.ListPackageInfo));
                 }
                 else
                 {
@@ -89,7 +94,8 @@ public class ArchNews : GlobalSettingsCommand
             else
             {
                 var cachedFeed = await LoadCachedFeed();
-                var unseenFeed = fullFeed.ExceptBy(cachedFeed.Select(model => model.Link), model => model.Link).ToList();
+                var unseenFeed = fullFeed.ExceptBy(cachedFeed.Select(model => model.Link), model => model.Link)
+                    .ToList();
                 UiFrames.Frame(unseenFeed);
                 if (unseenFeed.Count > 0) await CacheFeed(fullFeed);
             }
@@ -116,7 +122,8 @@ public class ArchNews : GlobalSettingsCommand
     private static async Task CacheFeed(List<RssModel> feed)
     {
         XdgPaths.EnsureDirectory(FeedFolder);
-        await File.WriteAllTextAsync(FeedPath, JsonSerializer.Serialize(feed, ShellyCliJsonContext.Default.ListRssModel));
+        await File.WriteAllTextAsync(FeedPath,
+            JsonSerializer.Serialize(feed, ShellyCliJsonContext.Default.ListRssModel));
         XdgPaths.FixOwnershipIfRoot(FeedPath);
     }
 
@@ -126,7 +133,8 @@ public class ArchNews : GlobalSettingsCommand
 
         try
         {
-            return JsonSerializer.Deserialize(await File.ReadAllTextAsync(FeedPath), ShellyCliJsonContext.Default.ListRssModel) ?? [];
+            return JsonSerializer.Deserialize(await File.ReadAllTextAsync(FeedPath),
+                ShellyCliJsonContext.Default.ListRssModel) ?? [];
         }
         catch
         {
@@ -149,22 +157,5 @@ public class ArchNews : GlobalSettingsCommand
             .ToList();
     }
 
-    private static HttpClient CreateHttpClient()
-    {
-        return new HttpClient(new SocketsHttpHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All,
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 10,
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            EnableMultipleHttp2Connections = true,
-            EnableMultipleHttp3Connections = true
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(10),
-            DefaultRequestHeaders = { UserAgent = { Http.UserAgent } },
-            DefaultRequestVersion = HttpVersion.Version11,
-            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher
-        };
-    }
+    private static HttpClient CreateHttpClient() => OptimizedClient.CreateClient(10, 1, 1);
 }

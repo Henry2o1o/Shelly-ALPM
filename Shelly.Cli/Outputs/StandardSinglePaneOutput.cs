@@ -62,7 +62,7 @@ public static class StandardSinglePaneOutput
             var line = e.Line.TrimEnd();
             region.WriteLine(Color(
                 string.IsNullOrEmpty(line) ? "Running scriptlet..." : $"Scriptlet: {line}",
-                ConsoleColor.DarkGray));
+                ConsoleColor.DarkMagenta));
         };
 
         manager.HookRun += (_, e) =>
@@ -70,7 +70,7 @@ public static class StandardSinglePaneOutput
             var line = e.Description ?? string.Empty;
             region.WriteLine(Color(
                 string.IsNullOrEmpty(line) ? "Running hook..." : $"Hook: {line}",
-                ConsoleColor.DarkGray));
+                ConsoleColor.DarkMagenta));
         };
 
         manager.Replaces += (_, e) =>
