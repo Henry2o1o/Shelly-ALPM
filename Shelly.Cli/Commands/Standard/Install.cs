@@ -5,6 +5,7 @@ using PackageManager.Local;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
 using static System.CommandLine.ArgumentArity;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
@@ -271,12 +272,21 @@ public class Install : GlobalSettingsCommand
 
         if (Upgrade)
         {
-            UiFrames.TxStart("Running system upgrade...");
-            var upgradeOk = await UiModeOutput.Run(manager, m => m.SyncSystemUpdate());
-            if (!upgradeOk)
+            manager.Sync();
+            var packagesNeedingUpdate = manager.GetPackagesNeedingUpdate();
+            if (packagesNeedingUpdate.Count == 0)
             {
-                UiFrames.TxFailed("System upgrade failed.");
-                return;
+                UiFrames.Info("System is up to date! Continuing with installation...");
+            }
+            else
+            {
+                UiFrames.TxStart("Running system upgrade...");
+                var upgradeOk = await UiModeOutput.Run(manager, m => m.SyncSystemUpdate());
+                if (!upgradeOk)
+                {
+                    UiFrames.TxFailed("System upgrade failed.");
+                    return;
+                }
             }
         }
 
@@ -379,7 +389,7 @@ public class Install : GlobalSettingsCommand
 
     private static async Task<string> DownloadCore(string url)
     {
-        using var client = CreateHttpClient();
+        using var client = OptimizedClient.CreateClient(1, 1, 1);
         var fileName = Path.GetFileName(new Uri(url).LocalPath);
         if (string.IsNullOrWhiteSpace(fileName))
             fileName = Path.GetRandomFileName();
@@ -394,10 +404,29 @@ public class Install : GlobalSettingsCommand
     private static PackageSourceKind Classify(string value)
     {
         if (IsUrl(value)) return PackageSourceKind.Url;
+        if (IsRepoQualifiedName(value)) return PackageSourceKind.PackageName;
 
         return IsFilePath(value)
             ? PackageSourceKind.FilePath
             : PackageSourceKind.PackageName;
+    }
+
+    private static bool IsRepoQualifiedName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        if (value.StartsWith('~') || Path.IsPathRooted(value)) return false;
+
+        var parts = value.Split('/');
+        if (parts.Length != 2) return false;
+        if (parts[0].Length == 0 || parts[1].Length == 0) return false;
+        if (Path.HasExtension(parts[1])) return false;
+
+        return parts[0].All(IsPkgNameChar) && parts[1].All(IsPkgNameChar);
+    }
+
+    private static bool IsPkgNameChar(char c)
+    {
+        return char.IsLetterOrDigit(c) || c is '-' or '_' or '.' or '+' or '@';
     }
 
     private static bool IsUrl(string value)
@@ -422,26 +451,7 @@ public class Install : GlobalSettingsCommand
 
         return Path.HasExtension(value);
     }
-
-    private static HttpClient CreateHttpClient()
-    {
-        return new HttpClient(new SocketsHttpHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All,
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 10,
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            EnableMultipleHttp2Connections = true,
-            EnableMultipleHttp3Connections = true
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(10),
-            DefaultRequestHeaders = { UserAgent = { Http.UserAgent } },
-            DefaultRequestVersion = HttpVersion.Version11,
-            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher
-        };
-    }
-
+    
     private enum PackageSourceKind
     {
         Url,

@@ -40,8 +40,6 @@ public class ShellyConfig
 
     public ShellyTabs DefaultPageDropDown { get; set; } = ShellyTabs.Packages;
 
-    public bool SuppressFingerprintWarning { get; set; }
-
     public bool RecommendedEnabled { get; set; } = true;
 
     public string ProgressBarStyle { get; set; } = nameof(ProgressBarStyleKind.Blocks);
@@ -69,6 +67,10 @@ public class ShellyConfig
     public bool AurRemoveShowHidden { get; set; }
     public bool AurUpdateRunChecks { get; set; }
     public bool AurUpdateShowHidden { get; set; }
-    
     public string? AppImageInstallPath { get; set; }
+    
+    public ViewType PackageInstallView { get; set; } = ViewType.List;
+    public ViewType PackageUpdateView { get; set; } = ViewType.List;
+    public ViewType PackageManageView { get; set; } = ViewType.List;
+   
 }

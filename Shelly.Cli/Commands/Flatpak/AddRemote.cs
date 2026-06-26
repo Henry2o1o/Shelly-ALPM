@@ -14,9 +14,12 @@ public class AddRemote : GlobalSettingsCommand
     public static Command Create()
     {
         var remoteName = new Argument<string>("remote") { Description = "Flatpak remote name ID (e.g., flathub)" };
-        var remoteUrl = new Option<string>("--remote-url", "-u") { Description = "Flatpak remote URL", Required = true };
-        var system = new Option<bool>("--system", "-s") { Description = "Add the remote system-wide", DefaultValueFactory = _ => true };
-        var gpgVerify = new Option<bool>("--gpg-verify", "-g") { Description = "Enable GPG verification for the remote", DefaultValueFactory = _ => true };
+        var remoteUrl = new Option<string>("--remote-url", "-u")
+            { Description = "Flatpak remote URL", Required = true };
+        var system = new Option<bool>("--system", "-s")
+            { Description = "Add the remote system-wide", DefaultValueFactory = _ => true };
+        var gpgVerify = new Option<bool>("--gpg-verify", "-g")
+            { Description = "Enable GPG verification for the remote", DefaultValueFactory = _ => true };
 
         var command = new Command("add-remotes", "Adds a flatpak remote")
         {
@@ -44,7 +47,8 @@ public class AddRemote : GlobalSettingsCommand
     {
         var manager = new FlatpakManager();
         console.WriteLine(Colorize($"Adding remote {RemoteName}", ConsoleColor.Blue));
-        var result = manager.AddRemote(RemoteName, RemoteUrl, SystemWide, GpgVerify);
+        var result = manager.AddRemote(RemoteName, RemoteUrl, SystemWide ? InstallLevel.System : InstallLevel.User,
+            GpgVerify);
         console.WriteLine(result);
         return ValueTask.CompletedTask;
     }

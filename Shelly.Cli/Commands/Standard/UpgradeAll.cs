@@ -40,6 +40,7 @@ public class UpgradeAll : GlobalSettingsCommand
     public bool NoFlatpak { get; set; }
 
     public bool NoAppImage { get; set; }
+    
 
     public static Command Create()
     {
@@ -95,17 +96,13 @@ public class UpgradeAll : GlobalSettingsCommand
                 console.WriteLine(Colorize("Upgrade cancelled.", ConsoleColor.Red));
                 return;
             }
-
-            // Re-exec as root, carrying --no-confirm so the root run skips the prompt.
-            // The root process re-enters ExecuteAsync, IsRoot() is now true, so it
-            // bypasses planning and runs the upgrades directly.
-            RootElevator.EnsureRootExectuion("--no-confirm");
+            
+            RootElevator.EnsureRootExectuion();
         }
-
-        NoConfirm = true;
+        
 
         if (!NoRepo)
-            await RunChild(new Upgrade(), console);
+            await RunChild(new Upgrade(), console, true);
         if (!NoAur)
             await RunChild(new AurUpgrade(), console);
         if (!NoFlatpak)
@@ -130,10 +127,9 @@ public class UpgradeAll : GlobalSettingsCommand
 
             EmitPlan(plan);
 
-            RootElevator.EnsureRootExectuion("--no-confirm");
+            RootElevator.EnsureRootExectuion();
         }
-
-        NoConfirm = true;
+        
 
         if (!NoRepo)
             await RunChild(new Upgrade(), null);
@@ -362,9 +358,9 @@ public class UpgradeAll : GlobalSettingsCommand
         return args;
     }
 
-    private async ValueTask RunChild(GlobalSettingsCommand child, IShellyConsole? console)
+    private async ValueTask RunChild(GlobalSettingsCommand child, IShellyConsole? console, bool isStandardUpgrade = false)
     {
-        child.NoConfirm = NoConfirm;
+        child.NoConfirm = NoConfirm || isStandardUpgrade;
         child.UiMode = UiMode;
         child.JsonOutput = JsonOutput;
         child.Verbose = Verbose;

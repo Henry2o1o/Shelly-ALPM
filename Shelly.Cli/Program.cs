@@ -3,6 +3,7 @@ using System.CommandLine.Help;
 using Shelly.Cli.Commands;
 using Shelly.Cli.Commands.AppImage;
 using Shelly.Cli.Commands.Config;
+using Shelly.Cli.Commands.Flatpak;
 using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
@@ -25,6 +26,7 @@ using FlatpakRunning = Shelly.Cli.Commands.Flatpak.Running;
 using FlatpakRepair = Shelly.Cli.Commands.Flatpak.Repair;
 using FlatpakRemove = Shelly.Cli.Commands.Flatpak.Remove;
 using FlatpakRun = Shelly.Cli.Commands.Flatpak.Run;
+using FlatpakPurify = Shelly.Cli.Commands.Flatpak.Purify;
 using FlatpakKill = Shelly.Cli.Commands.Flatpak.Kill;
 using FlatpakSearch = Shelly.Cli.Commands.Flatpak.Search;
 using FlatpakSyncRemoteAppStream = Shelly.Cli.Commands.Flatpak.SyncRemoteAppStream;
@@ -36,6 +38,11 @@ using FlatpakRemoveRemote = Shelly.Cli.Commands.Flatpak.RemoveRemote;
 using FlatpakInstallRefFile = Shelly.Cli.Commands.Flatpak.InstallRefFile;
 using FlatpakInstallBundle = Shelly.Cli.Commands.Flatpak.InstallBundle;
 using FlatpakAppRemoteInfo = Shelly.Cli.Commands.Flatpak.AppRemoteInfo;
+using Install = Shelly.Cli.Commands.Standard.Install;
+using ListUpdates = Shelly.Cli.Commands.Standard.ListUpdates;
+using Remove = Shelly.Cli.Commands.Standard.Remove;
+using Update = Shelly.Cli.Commands.Standard.Update;
+using Upgrade = Shelly.Cli.Commands.Standard.Upgrade;
 
 namespace Shelly.Cli;
 
@@ -84,6 +91,7 @@ public static class Program
         root.Add(Export.Create());
         root.Add(FixPermissions.Create());
         root.Add(Mark.Create());
+        root.Add(Pacfile.Create());
         root.Add(PurifyPackages.Create());
         root.Add(Remove.Create());
         root.Add(Sync.Create());
@@ -150,7 +158,8 @@ public static class Program
             FlatpakRemoveRemote.Create(),
             FlatpakInstallRefFile.Create(),
             FlatpakInstallBundle.Create(),
-            FlatpakAppRemoteInfo.Create()
+            FlatpakAppRemoteInfo.Create(),
+            FlatpakPurify.Create()
         };
         root.Add(flatpak);
 

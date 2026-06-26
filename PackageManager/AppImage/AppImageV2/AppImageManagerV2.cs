@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using PackageManager.AppImage.Events.EventArgs;
 using Shelly.Utilities;
 using Shelly.Utilities.Eventing;
+using Shelly.Utilities.Networking;
 
 namespace PackageManager.AppImage.AppImageV2;
 
@@ -24,6 +25,8 @@ public class AppImageManagerV2(string installDirectory = "")
 
     public EventHandler<AppImageStatusEventArgs>? StatusEvent;
     public EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+
+    private static readonly HttpClient HttpClient = OptimizedClient.CreateClient(300, 5, 5);
 
     private void LogStatus(AppImageEvents severity, string message)
     {
@@ -129,14 +132,26 @@ public class AppImageManagerV2(string installDirectory = "")
                 appImage.RepoName = null;
                 break;
             case UpdateType.StaticUrl:
-                appImage.UpdateType = UpdateType.StaticUrl;
                 appImage.UpdateURl = updateInfo;
                 appImage.UpdateType = updateType;
+                break;
+            case UpdateType.Forgejo:
+                if (updateInfo.Contains("//") &&
+                    updateInfo.Split("//")[1].Count(c => c == '/') == 2)
+                {
+                    appImage.UpdateURl = updateInfo;
+                    appImage.UpdateType = updateType;
+                }
+                else
+                {
+                    LogWarning(
+                        "Could not parse update info. Please use the format: https://<domain>/<user>/<repo>");
+                }
+
                 break;
             case UpdateType.GitHub:
             case UpdateType.GitLab:
             case UpdateType.Codeberg:
-            case UpdateType.Forgejo:
                 if (updateInfo.Count(c => c == '/') == 1)
                 {
                     appImage.RepoOwner = updateInfo.Split('/')[0];
@@ -306,7 +321,7 @@ public class AppImageManagerV2(string installDirectory = "")
                     {
                         File.Delete(df);
                         LogMessage($"Removed desktop entry: {df}");
-                        UpdateDesktopDatabase(desktopDir);
+                        UpdateDesktopDatabase(desktopDir, true);
                     }
                     catch (Exception ex)
                     {
@@ -670,7 +685,7 @@ public class AppImageManagerV2(string installDirectory = "")
                         await File.WriteAllTextAsync(desktopFilePath, desktopContent);
                         XdgPaths.FixOwnershipIfRoot(desktopFilePath);
                         SetFilePermissions(desktopFilePath, "644");
-                        UpdateDesktopDatabase(desktopDir);
+                        UpdateDesktopDatabase(desktopDir, true);
                         LogMessage($"Updated desktop entry: {desktopFilePath}");
                     }
                     catch (Exception ex)
@@ -822,10 +837,15 @@ public class AppImageManagerV2(string installDirectory = "")
         }
     }
 
-    private void UpdateDesktopDatabase(string desktopDir)
+    private void UpdateDesktopDatabase(string desktopDir, bool local = false)
     {
         try
         {
+            if (local)
+            {
+                XdgPaths.FixOwnershipIfRoot($"{desktopDir}/mimeinfo.cache");
+            }
+
             var process = Process.Start(new ProcessStartInfo
             {
                 FileName = "update-desktop-database",
@@ -874,7 +894,7 @@ public class AppImageManagerV2(string installDirectory = "")
             File.WriteAllText(desktopFilePath, content.ToString());
             XdgPaths.FixOwnershipIfRoot(desktopFilePath);
             SetFilePermissions(desktopFilePath, "644");
-            UpdateDesktopDatabase(desktopDir);
+            UpdateDesktopDatabase(desktopDir, true);
 
             LogMessage($"Desktop entry created: {desktopFilePath}");
         }
@@ -955,10 +975,8 @@ public class AppImageManagerV2(string installDirectory = "")
                 ? await CheckCodebergUpdate(appImage.RepoName, appImage.RepoOwner, appImage.Name, appImage.Version,
                     appImage.AllowPrerelease)
                 : null,
-            UpdateType.Forgejo => appImage.RepoOwner != null && appImage.RepoName != null
-                ? await CheckForgejoUpdate(appImage.RepoName, appImage.Name, appImage.RepoOwner, appImage.Version,
-                    appImage.AllowPrerelease)
-                : null,
+            UpdateType.Forgejo => await CheckForgejoUpdate(appImage.UpdateURl, appImage.Name, appImage.Version,
+                appImage.AllowPrerelease),
             UpdateType.StaticUrl => await CheckStaticUrlUpdate(appImage.UpdateURl, appImage.Name,
                 appImage.Version),
             _ => null
@@ -970,10 +988,8 @@ public class AppImageManagerV2(string installDirectory = "")
     {
         try
         {
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
             var request = new HttpRequestMessage(HttpMethod.Head, url);
-            var response = await client.SendAsync(request);
+            var response = await HttpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode) return null;
 
             var lastModified = response.Content.Headers.LastModified?.ToString() ?? "";
@@ -1088,42 +1104,38 @@ public class AppImageManagerV2(string installDirectory = "")
             if (!Directory.Exists(backupDir)) Directory.CreateDirectory(backupDir);
 
             LogMessage($"Downloading update for {update.Name}...");
-            using (var client = new HttpClient())
+
+            using var response =
+                await HttpClient.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            var totalBytes = response.Content.Headers.ContentLength;
+            await using var fs = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await using var contentStream = await response.Content.ReadAsStreamAsync();
+
+            var buffer = new byte[81920];
+            long totalDownloadedBytes = 0;
+            int bytesRead;
+            var lastReportedProgress = -1;
+
+            while ((bytesRead = await contentStream.ReadAsync(buffer)) != 0)
             {
-                client.Timeout = TimeSpan.FromMinutes(5);
-                client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
+                await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
+                totalDownloadedBytes += bytesRead;
 
-                using var response =
-                    await client.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead);
-                response.EnsureSuccessStatusCode();
-
-                var totalBytes = response.Content.Headers.ContentLength;
-                await using var fs = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                await using var contentStream = await response.Content.ReadAsStreamAsync();
-
-                var buffer = new byte[81920];
-                long totalDownloadedBytes = 0;
-                int bytesRead;
-                var lastReportedProgress = -1;
-
-                while ((bytesRead = await contentStream.ReadAsync(buffer)) != 0)
+                if (totalBytes.HasValue)
                 {
-                    await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
-                    totalDownloadedBytes += bytesRead;
-
-                    if (totalBytes.HasValue)
-                    {
-                        var currentProgress = (int)((double)totalDownloadedBytes / totalBytes.Value * 100);
-                        if (currentProgress <= lastReportedProgress) continue;
-                        LogProgress(update.Name, totalBytes, totalDownloadedBytes);
-                        lastReportedProgress = currentProgress;
-                    }
-                    else
-                    {
-                        LogProgress(update.Name, totalBytes, totalDownloadedBytes);
-                    }
+                    var currentProgress = (int)((double)totalDownloadedBytes / totalBytes.Value * 100);
+                    if (currentProgress <= lastReportedProgress) continue;
+                    LogProgress(update.Name, totalBytes, totalDownloadedBytes);
+                    lastReportedProgress = currentProgress;
+                }
+                else
+                {
+                    LogProgress(update.Name, totalBytes, totalDownloadedBytes);
                 }
             }
+
 
             SetFilePermissions(downloadPath, "a+x");
 
@@ -1441,7 +1453,7 @@ public class AppImageManagerV2(string installDirectory = "")
                 }
 
                 XdgPaths.FixOwnershipIfRoot(desktopFilePath);
-                UpdateDesktopDatabase(desktopDir);
+                UpdateDesktopDatabase(desktopDir, true);
             }
             catch (Exception ex)
             {
@@ -1473,10 +1485,9 @@ public class AppImageManagerV2(string installDirectory = "")
         try
         {
             var url = GithubToReleasesApi(owner, repo);
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
 
-            var response = await client.GetAsync(url);
+
+            var response = await HttpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode) return null;
 
             var json = await response.Content.ReadAsStringAsync();
@@ -1550,9 +1561,8 @@ public class AppImageManagerV2(string installDirectory = "")
         try
         {
             var url = GitLabToReleasesApi(owner, repo);
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-            var response = await client.GetAsync(url);
+
+            var response = await HttpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode) return null;
 
             var json = await response.Content.ReadAsStringAsync();
@@ -1635,9 +1645,8 @@ public class AppImageManagerV2(string installDirectory = "")
         try
         {
             var url = GiteaToReleasesApi(domain, owner, repo);
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-            var response = await client.GetAsync(url);
+
+            var response = await HttpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode) return null;
 
             var json = await response.Content.ReadAsStringAsync();
@@ -1706,11 +1715,16 @@ public class AppImageManagerV2(string installDirectory = "")
         return await CheckGiteaUpdate(owner, repo, appName, currentVersion, "codeberg.org", allowPrerelease);
     }
 
-    private static async Task<AppImageUpdateDto?> CheckForgejoUpdate(string repo, string appName, string owner,
+    private static async Task<AppImageUpdateDto?> CheckForgejoUpdate(string updateUrl, string appName,
         string currentVersion, bool allowPrerelease = false)
     {
-        var uri = new Uri(repo);
-        return await CheckGiteaUpdate(owner, repo, appName, currentVersion, uri.Host, allowPrerelease);
+        var uri = new Uri(updateUrl);
+        if (uri.LocalPath.Split('/') is ["", var owner, var repo])
+        {
+            return await CheckGiteaUpdate(owner, repo, appName, currentVersion, uri.Host, allowPrerelease);
+        }
+
+        return null;
     }
 
     #endregion
