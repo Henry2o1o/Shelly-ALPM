@@ -931,8 +931,8 @@ public class FlatpakInstall(
                 return false;
             });
             
-            DataLoaded?.Invoke();
             _loaded = true;
+            DataLoaded?.Invoke();
             if (_pendingInstallId != null)
             {
                 var id = _pendingInstallId;
@@ -940,7 +940,6 @@ public class FlatpakInstall(
 
                 await InstallFromRefId(id);
             }
-            
         }
     }
 
@@ -1616,7 +1615,7 @@ public class FlatpakInstall(
             {
                 genericQuestionService.RaiseToastMessage(
                     new ToastMessageEventArgs(
-                        Translations.T("Installed Flatpak addon")));
+                        Translations.T("Installed Flatpak")));
             }
             else
             {
@@ -1624,7 +1623,7 @@ public class FlatpakInstall(
                     new ToastMessageEventArgs(
                         Translations.T("Installing Flatpak failed")));
 
-                Console.WriteLine($"Failed to install addon {appId}: {result.Error}");
+                Console.WriteLine($"Failed to install {appId}: {result.Error}");
             }
         }
         finally
