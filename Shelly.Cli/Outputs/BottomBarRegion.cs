@@ -446,16 +446,40 @@ public sealed class BottomBarRegion : IDisposable
 
     private string RenderBarLine(BarState r)
     {
+        var width = Math.Max(20, SafeWindowWidth() - 1);
+
+        // Percentage suffix is fixed width: " 100%" => 5 visible chars (space + 3 digits + %)
+        const int pctWidth = 5;
+
+        // Bar starts at the middle and runs to the edge (minus the percentage text).
+        // Floor at _barWidth so very narrow terminals still get a usable bar.
+        var barWidth = Math.Max(_barWidth, (width / 2) - pctWidth);
+
         var bar = _asciiOnly
-            ? ProgressBarRenderer.RenderAscii(r.Pct, _frame, _style, _barWidth)
-            : ProgressBarRenderer.Render(r.Pct, _frame, _style, _barWidth);
-        var line = $"({r.Current:0}/{r.HowMany:0}) {r.ActionType} {r.Name} {bar} {r.Pct,3}%";
+            ? ProgressBarRenderer.RenderAscii(r.Pct, _frame, _style, barWidth)
+            : ProgressBarRenderer.Render(r.Pct, _frame, _style, barWidth);
+        // Left = textual label, Right = bar + percentage (this is what should touch the edge)
+        var left = $"({r.Current:0}/{r.HowMany:0}) {r.ActionType} {r.Name}";
+        var right = $"{bar} {r.Pct,3}%";
 
-        var max = Math.Max(20, SafeWindowWidth() - 1);
-        if (AnsiText.VisibleLength(line) > max)
-            line = AnsiText.TruncateVisible(line, max);
+        var rightLen = AnsiText.VisibleLength(right);
+        var leftLen = AnsiText.VisibleLength(left);
 
-        return line;
+        // If there isn't room for both, truncate the label (never the bar).
+        var available = width - rightLen;
+        if (available < 1)
+            return AnsiText.TruncateVisible(right, width); // bar alone, right-aligned
+
+        if (leftLen > available - 1)
+        {
+            left = AnsiText.TruncateVisible(left, available - 1);
+            leftLen = AnsiText.VisibleLength(left);
+        }
+
+        var pad = width - leftLen - rightLen; // spaces that push the bar right
+        if (pad < 1) pad = 1;
+
+        return left + new string(' ', pad) + right;
     }
 
     private static string TruncateStickyText(string text)

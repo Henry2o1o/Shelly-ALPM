@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using PackageManager.AppImage.Events.EventArgs;
 using Shelly.Utilities;
 using Shelly.Utilities.Eventing;
+using Shelly.Utilities.Networking;
 
 namespace PackageManager.AppImage.AppImageV2;
 
@@ -24,6 +25,8 @@ public class AppImageManagerV2(string installDirectory = "")
 
     public EventHandler<AppImageStatusEventArgs>? StatusEvent;
     public EventHandler<AppImageProgressEventArgs>? ProgressEvent;
+
+    private static readonly HttpClient HttpClient = OptimizedClient.CreateClient(300, 5, 5);
 
     private void LogStatus(AppImageEvents severity, string message)
     {
@@ -144,6 +147,7 @@ public class AppImageManagerV2(string installDirectory = "")
                     LogWarning(
                         "Could not parse update info. Please use the format: https://<domain>/<user>/<repo>");
                 }
+
                 break;
             case UpdateType.GitHub:
             case UpdateType.GitLab:
@@ -841,6 +845,7 @@ public class AppImageManagerV2(string installDirectory = "")
             {
                 XdgPaths.FixOwnershipIfRoot($"{desktopDir}/mimeinfo.cache");
             }
+
             var process = Process.Start(new ProcessStartInfo
             {
                 FileName = "update-desktop-database",
@@ -971,7 +976,7 @@ public class AppImageManagerV2(string installDirectory = "")
                     appImage.AllowPrerelease)
                 : null,
             UpdateType.Forgejo => await CheckForgejoUpdate(appImage.UpdateURl, appImage.Name, appImage.Version,
-                    appImage.AllowPrerelease),
+                appImage.AllowPrerelease),
             UpdateType.StaticUrl => await CheckStaticUrlUpdate(appImage.UpdateURl, appImage.Name,
                 appImage.Version),
             _ => null
@@ -983,10 +988,8 @@ public class AppImageManagerV2(string installDirectory = "")
     {
         try
         {
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
             var request = new HttpRequestMessage(HttpMethod.Head, url);
-            var response = await client.SendAsync(request);
+            var response = await HttpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode) return null;
 
             var lastModified = response.Content.Headers.LastModified?.ToString() ?? "";
@@ -1101,42 +1104,38 @@ public class AppImageManagerV2(string installDirectory = "")
             if (!Directory.Exists(backupDir)) Directory.CreateDirectory(backupDir);
 
             LogMessage($"Downloading update for {update.Name}...");
-            using (var client = new HttpClient())
+
+            using var response =
+                await HttpClient.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            var totalBytes = response.Content.Headers.ContentLength;
+            await using var fs = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await using var contentStream = await response.Content.ReadAsStreamAsync();
+
+            var buffer = new byte[81920];
+            long totalDownloadedBytes = 0;
+            int bytesRead;
+            var lastReportedProgress = -1;
+
+            while ((bytesRead = await contentStream.ReadAsync(buffer)) != 0)
             {
-                client.Timeout = TimeSpan.FromMinutes(5);
-                client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
+                await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
+                totalDownloadedBytes += bytesRead;
 
-                using var response =
-                    await client.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead);
-                response.EnsureSuccessStatusCode();
-
-                var totalBytes = response.Content.Headers.ContentLength;
-                await using var fs = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                await using var contentStream = await response.Content.ReadAsStreamAsync();
-
-                var buffer = new byte[81920];
-                long totalDownloadedBytes = 0;
-                int bytesRead;
-                var lastReportedProgress = -1;
-
-                while ((bytesRead = await contentStream.ReadAsync(buffer)) != 0)
+                if (totalBytes.HasValue)
                 {
-                    await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
-                    totalDownloadedBytes += bytesRead;
-
-                    if (totalBytes.HasValue)
-                    {
-                        var currentProgress = (int)((double)totalDownloadedBytes / totalBytes.Value * 100);
-                        if (currentProgress <= lastReportedProgress) continue;
-                        LogProgress(update.Name, totalBytes, totalDownloadedBytes);
-                        lastReportedProgress = currentProgress;
-                    }
-                    else
-                    {
-                        LogProgress(update.Name, totalBytes, totalDownloadedBytes);
-                    }
+                    var currentProgress = (int)((double)totalDownloadedBytes / totalBytes.Value * 100);
+                    if (currentProgress <= lastReportedProgress) continue;
+                    LogProgress(update.Name, totalBytes, totalDownloadedBytes);
+                    lastReportedProgress = currentProgress;
+                }
+                else
+                {
+                    LogProgress(update.Name, totalBytes, totalDownloadedBytes);
                 }
             }
+
 
             SetFilePermissions(downloadPath, "a+x");
 
@@ -1486,10 +1485,9 @@ public class AppImageManagerV2(string installDirectory = "")
         try
         {
             var url = GithubToReleasesApi(owner, repo);
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
 
-            var response = await client.GetAsync(url);
+
+            var response = await HttpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode) return null;
 
             var json = await response.Content.ReadAsStringAsync();
@@ -1563,9 +1561,8 @@ public class AppImageManagerV2(string installDirectory = "")
         try
         {
             var url = GitLabToReleasesApi(owner, repo);
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-            var response = await client.GetAsync(url);
+
+            var response = await HttpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode) return null;
 
             var json = await response.Content.ReadAsStringAsync();
@@ -1648,9 +1645,8 @@ public class AppImageManagerV2(string installDirectory = "")
         try
         {
             var url = GiteaToReleasesApi(domain, owner, repo);
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-            var response = await client.GetAsync(url);
+
+            var response = await HttpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode) return null;
 
             var json = await response.Content.ReadAsStringAsync();
@@ -1727,6 +1723,7 @@ public class AppImageManagerV2(string installDirectory = "")
         {
             return await CheckGiteaUpdate(owner, repo, appName, currentVersion, uri.Host, allowPrerelease);
         }
+
         return null;
     }
 

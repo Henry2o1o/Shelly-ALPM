@@ -5,6 +5,7 @@ using PackageManager.Local;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
 using static System.CommandLine.ArgumentArity;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
@@ -388,7 +389,7 @@ public class Install : GlobalSettingsCommand
 
     private static async Task<string> DownloadCore(string url)
     {
-        using var client = CreateHttpClient();
+        using var client = OptimizedClient.CreateClient(1, 1, 1);
         var fileName = Path.GetFileName(new Uri(url).LocalPath);
         if (string.IsNullOrWhiteSpace(fileName))
             fileName = Path.GetRandomFileName();
@@ -450,26 +451,7 @@ public class Install : GlobalSettingsCommand
 
         return Path.HasExtension(value);
     }
-
-    private static HttpClient CreateHttpClient()
-    {
-        return new HttpClient(new SocketsHttpHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All,
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 10,
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            EnableMultipleHttp2Connections = true,
-            EnableMultipleHttp3Connections = true
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(10),
-            DefaultRequestHeaders = { UserAgent = { Http.UserAgent } },
-            DefaultRequestVersion = HttpVersion.Version11,
-            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher
-        };
-    }
-
+    
     private enum PackageSourceKind
     {
         Url,

@@ -45,9 +45,11 @@ public sealed class Settings(
     private DirtySubscription? _sub;
     public string[] ListensTo => [DirtyScopes.Config];
     private Overlay? _parentOverlay;
+
     private static readonly (string? Culture, string Label)[] LanguageOptions =
     [
         (null, "Follow system language"),
+        ("en_US", "English"),
         ("bg_BG", "Bulgarian"),
         ("ca", "Català"),
         ("de_DE", "Deutsch"),
@@ -62,6 +64,7 @@ public sealed class Settings(
         ("tr_TR", "Türkçe"),
         ("zh_CN", "中文（简体）")
     ];
+
     private static List<ReleaseNotesDialog.ReleaseItem>? _cachedReleaseList;
     private static string? _cachedLatestVersion;
     private static DateTime _lastVersionCheck = DateTime.MinValue;
@@ -97,7 +100,8 @@ public sealed class Settings(
         SetupSwitch("symbolic_tray_switch", _config.UseSymbolicTray, (v) => _config.UseSymbolicTray = v, builder);
         SetupSwitch("shelly_search_switch", _config.ShellySearchEnabled, (v) => _config.ShellySearchEnabled = v,
             builder);
-        SetupSwitch("package_downgrade_switch", _config.PackageDowngradeEnabled, (v) => _config.PackageDowngradeEnabled = v,
+        SetupSwitch("package_downgrade_switch", _config.PackageDowngradeEnabled,
+            (v) => _config.PackageDowngradeEnabled = v,
             builder);
         SetupSwitch("use_old_menu_switch", !_config.UseOldMenu, (v) => _config.UseOldMenu = !v, builder);
         SetupTrayAutoStart("tray_auto_switch", _config.TrayAutoStart, (v) => _config.TrayAutoStart = v, builder);
@@ -290,11 +294,26 @@ public sealed class Settings(
         var shellySearchSwitch = (Switch)builder.GetObject("shelly_search_switch")!;
         var recommendedSwitch = (Switch)builder.GetObject("recommended_switch")!;
 
-        aurSwitch.OnNotify += (_, a) => { if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown); };
-        flatpakSwitch.OnNotify += (_, a) => { if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown); };
-        appImageSwitch.OnNotify += (_, a) => { if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown); };
-        shellySearchSwitch.OnNotify += (_, a) => { if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown); };
-        recommendedSwitch.OnNotify += (_, a) => { if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown); };
+        aurSwitch.OnNotify += (_, a) =>
+        {
+            if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown);
+        };
+        flatpakSwitch.OnNotify += (_, a) =>
+        {
+            if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown);
+        };
+        appImageSwitch.OnNotify += (_, a) =>
+        {
+            if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown);
+        };
+        shellySearchSwitch.OnNotify += (_, a) =>
+        {
+            if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown);
+        };
+        recommendedSwitch.OnNotify += (_, a) =>
+        {
+            if (a.Pspec.GetName() == "active") PopulateDefaultPageDropDown(defaultPageDropDown);
+        };
 
         return _box;
     }
@@ -468,7 +487,7 @@ public sealed class Settings(
             return false;
         };
     }
-    
+
     private void SetupTrayAutoStart(string id, bool initialValue, Action<bool> updateAction, Builder builder)
     {
         var sw = (Switch)builder.GetObject(id)!;
@@ -614,7 +633,7 @@ public sealed class Settings(
         var args = new GenericQuestionEventArgs(
             Translations.T("Enable AUR?"),
             Translations.T("The Arch User Repository (AUR) is a community-driven repository. " +
-            "Packages are user-produced and may contain risks. Do you want to enable it?")
+                           "Packages are user-produced and may contain risks. Do you want to enable it?")
         );
 
         genericQuestionService.RaiseQuestion(args);
@@ -738,7 +757,8 @@ public sealed class Settings(
 
         if (result.Success)
         {
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(Translations.T("Database lock removed")));
+            genericQuestionService.RaiseToastMessage(
+                new ToastMessageEventArgs(Translations.T("Database lock removed")));
         }
         else
         {
@@ -794,7 +814,9 @@ public sealed class Settings(
             var list = Box.NewWithProperties([]);
             list.SetOrientation(Orientation.Vertical);
             list.SetSpacing(8);
-            var output = result.Output != "\n" ? result.Output.Split(",").ToList() : [Translations.T("No corrupted packages found")];
+            var output = result.Output != "\n"
+                ? result.Output.Split(",").ToList()
+                : [Translations.T("No corrupted packages found")];
             foreach (var pkg in output)
             {
                 var text = Label.NewWithProperties([]);
@@ -865,7 +887,8 @@ public sealed class Settings(
                 {
                     var clipboard = Display.GetDefault()!.GetClipboard();
                     clipboard.SetText(pacfile.Text);
-                    genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(Translations.T("Copied to clipboard")));
+                    genericQuestionService.RaiseToastMessage(
+                        new ToastMessageEventArgs(Translations.T("Copied to clipboard")));
                 };
                 headerBox.Append(copyButton);
 
