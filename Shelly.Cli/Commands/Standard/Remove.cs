@@ -19,7 +19,7 @@ public class Remove : GlobalSettingsCommand
     private bool RemoveConfig { get; set; }
 
     private bool Local { get; set; }
-    
+
     private bool Force { get; set; }
 
     private string[] Packages { get; set; } = [];
@@ -28,25 +28,35 @@ public class Remove : GlobalSettingsCommand
     {
         var cascade = new Option<bool>("--cascade", "-c")
         {
-            Description = "Removes all things the removed package(s) are dependent on that have no other uses (default: true)",
+            Description =
+                "Removes all things the removed package(s) are dependent on that have no other uses (default: true)",
             DefaultValueFactory = _ => true
         };
         var optDeps = new Option<bool>("--opt-deps", "-o")
-            { Description = "Removes optional dependencies installed with the package, that don't depend on other packages" };
+        {
+            Description =
+                "Removes optional dependencies installed with the package, that don't depend on other packages"
+        };
         var ripple = new Option<bool>("--ripple", "-i")
             { Description = "Removes packages that depend on the package being removed" };
         var removeConfig = new Option<bool>("--remove-config", "-r")
-            { Description = "Removes any files in your ~/.config that can be tied exclusively to the removed package(s). EXPERIMENTAL" };
+        {
+            Description =
+                "Removes any files in your ~/.config that can be tied exclusively to the removed package(s). EXPERIMENTAL"
+        };
         var local = new Option<bool>("--local", "-l")
             { Description = "Force removal as a locally-installed binary package" };
         var force = new Option<bool>("--force", "-f")
-            { Description = "Force removal of packages regardless of dependency. Is dangerous and should be used with caution. No-Op with -c and -i." };
+        {
+            Description =
+                "Force removal of packages regardless of dependency. Is dangerous and should be used with caution. No-Op with -c and -i."
+        };
         var packages = new Argument<string[]>("packages")
             { Description = "The packages to remove (repo names or local binary packages)", Arity = ZeroOrMore };
 
         var command = new Command("remove", "Remove packages (repo or local binary)")
         {
-            cascade, optDeps, ripple, removeConfig, local,force, packages
+            cascade, optDeps, ripple, removeConfig, local, force, packages
         };
 
         command.SetAction(async (parseResult, _) =>
@@ -123,7 +133,6 @@ public class Remove : GlobalSettingsCommand
 
     private async Task RemoveRepoPackages(List<string> packages, IShellyConsole console)
     {
-      
         using var manager = new AlpmManager();
         console.WriteLine(Colorize("Initializing ALPM...", ConsoleColor.Yellow));
         manager.Initialize(true);
@@ -133,15 +142,18 @@ public class Remove : GlobalSettingsCommand
         var flags = AlpmTransFlag.None;
         if (Force && (Cascade || Ripple))
         {
-            console.WriteLine(Colorize("Warning: Force flag is ignored when cascade or ripple flags are set.", ConsoleColor.Yellow));
+            console.WriteLine(Colorize("Warning: Force flag overides cascade or ripple flags that are set.",
+                ConsoleColor.Yellow));
         }
+
         if (Cascade)
             flags |= AlpmTransFlag.NoSave | AlpmTransFlag.Recurse;
         else if (Ripple)
             flags |= AlpmTransFlag.Cascade;
 
-        if (Force && !(Cascade || Ripple))
+        if (Force)
         {
+            flags = AlpmTransFlag.None;
             flags |= AlpmTransFlag.NoDeps | AlpmTransFlag.NoDepVersion;
         }
 
