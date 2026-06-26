@@ -7,6 +7,7 @@ using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.FlatHub;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
+using Shelly.Utilities;
 
 // ReSharper disable NotAccessedField.Local
 
@@ -201,7 +202,6 @@ public class FlatpakInstall(
         var triggers = new[] { "Return", "KP_Enter", "space", "<Control>f" };
         foreach (var triggerStr in triggers)
         {
-            
             var action = CallbackAction.New((_, _) =>
             {
                 if (triggerStr == "<Control>f")
@@ -209,6 +209,7 @@ public class FlatpakInstall(
                     searchEntry.GrabFocus();
                     return true;
                 }
+
                 if (!_overlay.GetVisible() || !_overlayInstallButton.GetSensitive()) return false;
                 if (OverlayHelper.HasActiveOverlay(box)) return false;
 
@@ -248,8 +249,11 @@ public class FlatpakInstall(
         }
 
         box.AddController(shortcutController);
-        
-        _remoteRefBackButton.OnClicked += (_, _) => { _mainContentStack?.SetVisibleChild((Widget)builder.GetObject("list_overlay")!); };
+
+        _remoteRefBackButton.OnClicked += (_, _) =>
+        {
+            _mainContentStack?.SetVisibleChild((Widget)builder.GetObject("list_overlay")!);
+        };
         _installFromFlatpakRef.OnClicked += (_, _) => { _ = InstallFromFlatpakRef(); };
 
         _listStore = Gio.ListStore.New(FlatpakGObject.GetGType());
@@ -268,7 +272,7 @@ public class FlatpakInstall(
         {
             if (args.Pspec.GetName() != "selected") return;
             var selectedIndex = _installFromFlatpakRefDropDown.GetSelected();
-            _selectedRefScope = selectedIndex == 0 ? InstallLevel.System :InstallLevel.User;
+            _selectedRefScope = selectedIndex == 0 ? InstallLevel.System : InstallLevel.User;
         };
 
         _addRemoteButton.OnClicked += (_, _) =>
@@ -278,10 +282,7 @@ public class FlatpakInstall(
             _mainContentStack?.SetVisibleChild(_addRemoteOverlay);
         };
 
-        _addRemoteBackButton.OnClicked += (_, _) =>
-        {
-            _mainContentStack?.SetVisibleChild(_remoteRefOverlay);
-        };
+        _addRemoteBackButton.OnClicked += (_, _) => { _mainContentStack?.SetVisibleChild(_remoteRefOverlay); };
 
         _addRemoteConfirmButton.OnClicked += (_, _) =>
         {
@@ -291,13 +292,15 @@ public class FlatpakInstall(
 
             if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url))
             {
-                genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(Translations.T("Name and URL are required")));
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(Translations.T("Name and URL are required")));
                 return;
             }
 
             if (!url.EndsWith(".flatpakrepo"))
             {
-                genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(Translations.T("URL must end with .flatpakrepo")));
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(Translations.T("URL must end with .flatpakrepo")));
                 return;
             }
 
@@ -310,7 +313,8 @@ public class FlatpakInstall(
                 return;
             }
 
-            genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(Translations.T("Added Remote: {0}", name)));
+            genericQuestionService.RaiseToastMessage(
+                new ToastMessageEventArgs(Translations.T("Added Remote: {0}", name)));
             _ = RefreshRemotesList();
             _ = LoadDataAsync();
             _mainContentStack?.SetVisibleChild(_remoteRefOverlay);
@@ -549,24 +553,24 @@ public class FlatpakInstall(
 
             if (_versionHistoryHandler is not null)
                 _versionHistoryButton.OnClicked -= _versionHistoryHandler;
-            
+
             _versionHistoryHandler = (_, _) =>
             {
                 _overlayBoxRoot?.Dispose();
                 ShowVersionHistory(obj.Releases);
             };
-            
+
             _versionHistoryButton.OnClicked += _versionHistoryHandler;
-            
+
             if (_permissionHistoryHandler is not null)
                 _permissionsButton.OnClicked -= _permissionHistoryHandler;
-            
+
             _permissionHistoryHandler = (_, _) =>
             {
                 _overlayBoxRoot?.Dispose();
                 ShowPermissions(result.Permissions);
             };
-            
+
             _permissionsButton.OnClicked += _permissionHistoryHandler;
 
             if (obj.Addons.Count > 0)
@@ -647,7 +651,7 @@ public class FlatpakInstall(
             }
         }
 
-        return PackageSearch.Matches(pkg.Name, pkg.Description, _searchText);
+        return PackageSearch.Matches(pkg.Name, pkg.Summary, _searchText);
     }
 
     private void SetUrlLinks(Dictionary<string, string>? urls)
@@ -721,58 +725,73 @@ public class FlatpakInstall(
     private static void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
-        var hbox = Box.New(Orientation.Horizontal, 10);
-        hbox.MarginStart = 10;
-        hbox.MarginEnd = 10;
-        hbox.MarginTop = 5;
-        hbox.MarginBottom = 5;
-        hbox.Hexpand = false;
-        hbox.Vexpand = false;
-        hbox.Halign = Align.Start;
+
+        var contentGrid = Grid.New();
+        contentGrid.MarginStart = 12;
+        contentGrid.MarginEnd = 12;
+        contentGrid.MarginTop = 6;
+        contentGrid.MarginBottom = 6;
+        contentGrid.ColumnSpacing = 6;
+        contentGrid.RowSpacing = 0;
+        contentGrid.Hexpand = false;
+        contentGrid.Halign = Align.Start;
+        contentGrid.Valign = Align.Center;
 
         var icon = Image.New();
         icon.PixelSize = 64;
-        icon.WidthRequest = 64;
-        icon.HeightRequest = 64;
         icon.Valign = Align.Center;
-        hbox.Append(icon);
+        icon.Halign = Align.Center;
+        contentGrid.Attach(icon, 0, 0, 1, 2);
 
-        var vbox = Box.New(Orientation.Vertical, 2);
-        var nameBox = Box.New(Orientation.Horizontal, 4);
-        nameBox.Halign = Align.Start;
+        var rightBox = Box.New(Orientation.Vertical, 0);
+        rightBox.Valign = Align.Center;
+        rightBox.Halign = Align.Start;
+
+        var titleGrid = Grid.New();
+        titleGrid.ColumnSpacing = 4;
+        titleGrid.Halign = Align.Start;
+
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
-        nameLabel.SetWrap(true);
-        nameLabel.SetWrapMode(Pango.WrapMode.WordChar);
+        nameLabel.UseMarkup = true;
+        nameLabel.SetWrap(false);
+        nameLabel.SetEllipsize(Pango.EllipsizeMode.End);
+        nameLabel.Hexpand = false;
+        nameLabel.Vexpand = false;
         nameLabel.MaxWidthChars = 30;
-        nameBox.Append(nameLabel);
+        titleGrid.Attach(nameLabel, 0, 0, 1, 1);
 
         var verifiedIcon = Image.NewFromIconName("security-high-symbolic");
         verifiedIcon.PixelSize = 14;
         verifiedIcon.Valign = Align.Center;
+        verifiedIcon.Halign = Align.Start;
+        verifiedIcon.Hexpand = false;
+        verifiedIcon.Vexpand = false;
         verifiedIcon.TooltipText = "Verified";
-        nameBox.Append(verifiedIcon);
+        titleGrid.Attach(verifiedIcon, 1, 0, 1, 1);
+        
+        rightBox.Append(titleGrid);
 
         var idLabel = Label.New(string.Empty);
-        idLabel.SetText(string.Empty);
         idLabel.Halign = Align.Start;
         idLabel.Hexpand = true;
-        idLabel.AddCssClass("dim-label");
         idLabel.SetWrap(false);
         idLabel.SetEllipsize(Pango.EllipsizeMode.End);
         idLabel.MaxWidthChars = 35;
         idLabel.WidthChars = -1;
-
-        vbox.Append(nameBox);
-        vbox.Append(idLabel);
-        vbox.Valign = Align.Center;
-        hbox.Append(vbox);
+        rightBox.Append(idLabel);
+        
+        contentGrid.Attach(rightBox, 1, 0, 1, 2);
 
         var frame = Frame.New(null);
-        frame.SetChild(hbox);
-        frame.WidthRequest = 300;
+        frame.SetChild(contentGrid);
+        frame.SetSizeRequest(300, -1);
         frame.Hexpand = false;
         frame.Halign = Align.Fill;
+        frame.SetMarginStart(2);
+        frame.SetMarginEnd(2);
+        frame.SetMarginTop(1);
+        frame.SetMarginBottom(1);
         frame.AddCssClass("card");
 
         listItem.SetChild(frame);
@@ -789,15 +808,15 @@ public class FlatpakInstall(
         if (app == null) return;
 
         var frame = (Frame)listItem.GetChild()!;
-        var hbox = (Box)frame.GetChild()!;
-        var icon = (Image)hbox.GetFirstChild()!;
-        var vbox = (Box)icon.GetNextSibling()!;
-        var nameBox = (Box)vbox.GetFirstChild()!;
-        var nameLabel = (Label)nameBox.GetFirstChild()!;
-        var verifiedIcon = (Image)nameLabel.GetNextSibling()!;
-        var idLabel = (Label)nameBox.GetNextSibling()!;
+        var contentGrid = (Grid)frame.GetChild()!;
+        var icon = (Image)contentGrid.GetChildAt(0, 0)!;
+        var rightBox = (Box)contentGrid.GetChildAt(1, 0)!;
+        var titleGrid = (Grid)rightBox.GetFirstChild()!;
+        var nameLabel = (Label)titleGrid.GetChildAt(0, 0)!;
+        var verifiedIcon = (Image)titleGrid.GetChildAt(1, 0)!;
+        var idLabel = (Label)rightBox.GetLastChild()!;
 
-        nameLabel.SetText(app.Name);
+        nameLabel.SetMarkup($"<b>{GLib.Markup.EscapeText(app.Name)}</b>");
         idLabel.SetText(app.Summary);
         verifiedIcon.SetVisible(app.IsVerified);
 
@@ -806,9 +825,8 @@ public class FlatpakInstall(
         string path;
         if (remotes.Scope == InstallLevel.User)
         {
-            var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, $".local/share/flatpak/appstream", app.Remotes.FirstOrDefault()?.Name ?? "",
+                Path.Combine(XdgPaths.DataHome(), $"/flatpak/appstream", app.Remotes.FirstOrDefault()?.Name ?? "",
                     "x86_64/active/icons/64x64", $"{app.Id}.png");
         }
         else
@@ -913,13 +931,13 @@ public class FlatpakInstall(
     {
         var listItem = (ListItem)args.Object;
         var frame = (Frame)listItem.GetChild()!;
-        var hbox = (Box)frame.GetChild()!;
-        var icon = (Image)hbox.GetFirstChild()!;
-        var vbox = (Box)icon.GetNextSibling()!;
-        var nameBox = (Box)vbox.GetFirstChild()!;
-        var nameLabel = (Label)nameBox.GetFirstChild()!;
-        var verifiedIcon = (Image)nameLabel.GetNextSibling()!;
-        var idLabel = (Label)nameBox.GetNextSibling()!;
+        var contentGrid = (Grid)frame.GetChild()!;
+        var icon = (Image)contentGrid.GetChildAt(0, 0)!;
+        var rightBox = (Box)contentGrid.GetChildAt(1, 0)!;
+        var titleGrid = (Grid)rightBox.GetFirstChild()!;
+        var nameLabel = (Label)titleGrid.GetChildAt(0, 0)!;
+        var verifiedIcon = (Image)titleGrid.GetChildAt(1, 0)!;
+        var idLabel = (Label)rightBox.GetLastChild()!;
 
         nameLabel.SetText(string.Empty);
         idLabel.SetText(string.Empty);
@@ -1228,7 +1246,7 @@ public class FlatpakInstall(
 
         genericQuestionService.RaiseDialog(new GenericDialogEventArgs(_overlayBoxRoot));
     }
-    
+
     private void ShowPermissions(List<string> permissions)
     {
         _overlayBoxRoot = Box.New(Orientation.Vertical, 12);
@@ -1442,33 +1460,33 @@ public class FlatpakInstall(
     private static void OnSetupRemote(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
-        var box = Box.New(Orientation.Horizontal, 12);
-        box.MarginStart = 12;
-        box.MarginEnd = 12;
-        box.MarginTop = 6;
-        box.MarginBottom = 6;
+        var grid = Grid.New();
+        grid.MarginStart = 12;
+        grid.MarginEnd = 12;
+        grid.MarginTop = 6;
+        grid.MarginBottom = 6;
+        grid.ColumnSpacing = 12;
 
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
         nameLabel.Xalign = 0;
         nameLabel.Hexpand = true;
         nameLabel.AddCssClass("bold");
+        grid.Attach(nameLabel, 0, 0, 1, 1);
 
         var scopeLabel = Label.New(string.Empty);
         scopeLabel.Halign = Align.Start;
         scopeLabel.Xalign = 0;
         scopeLabel.AddCssClass("dim-label");
+        grid.Attach(scopeLabel, 1, 0, 1, 1);
 
         var urlLabel = Label.New(string.Empty);
         urlLabel.Halign = Align.Start;
         urlLabel.Xalign = 0;
         urlLabel.AddCssClass("dim-label");
+        grid.Attach(urlLabel, 2, 0, 1, 1);
 
-        box.Append(nameLabel);
-        box.Append(scopeLabel);
-        box.Append(urlLabel);
-
-        listItem.SetChild(box);
+        listItem.SetChild(grid);
     }
 
     private static void OnBindRemote(SignalListItemFactory sender, SignalListItemFactory.BindSignalArgs args)
@@ -1477,10 +1495,10 @@ public class FlatpakInstall(
         if (listItem.GetItem() is not FlatpakRemoteGObject remoteGObject) return;
         if (remoteGObject.Remote == null) return;
 
-        var box = (Box)listItem.GetChild()!;
-        var nameLabel = (Label)box.GetFirstChild()!;
-        var scopeLabel = (Label)nameLabel.GetNextSibling()!;
-        var urlLabel = (Label)scopeLabel.GetNextSibling()!;
+        var grid = (Grid)listItem.GetChild()!;
+        var nameLabel = (Label)grid.GetChildAt(0, 0)!;
+        var scopeLabel = (Label)grid.GetChildAt(1, 0)!;
+        var urlLabel = (Label)grid.GetChildAt(2, 0)!;
 
         nameLabel.SetText(remoteGObject.Remote.Name);
         scopeLabel.SetText($"({remoteGObject.Remote.Scope})");

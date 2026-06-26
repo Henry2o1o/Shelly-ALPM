@@ -25,6 +25,8 @@ public partial class FlatpakPackageDto
 
     public List<string> Permissions { get; set; } = [];
     
+    public uint InstalledSize { get; set; } = 0;
+    
     public string Ref =>
         $"{GetKindString()}/{Id}/{Arch}/{Branch}";
 

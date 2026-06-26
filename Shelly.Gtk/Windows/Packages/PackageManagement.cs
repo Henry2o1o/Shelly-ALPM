@@ -180,7 +180,7 @@ public sealed class PackageManagement(
         _box.AddController(shortcutController);
         shortcutController.AddShortcut(Shortcut.New(ShortcutTrigger.ParseString("<Control>f"), action));
 
-        columnView.OnRealize += (_, _) => { Reload(); };
+        Reload();
         columnView.OnActivate += (_, _) =>
         {
             var item = _selectionModel.GetSelectedItem();
@@ -646,44 +646,43 @@ public sealed class PackageManagement(
             var item = (ListItem)args.Object;
 
             var contentGrid = Grid.New();
-            contentGrid.SetMarginTop(10);
-            contentGrid.SetMarginBottom(10);
-            contentGrid.SetMarginStart(12);
-            contentGrid.SetMarginEnd(12);
-            contentGrid.SetColumnSpacing(12);
-            contentGrid.SetRowSpacing(4);
-            contentGrid.SetHexpand(true);
-            contentGrid.SetValign(Align.Center);
+            contentGrid.MarginStart = 12;
+            contentGrid.MarginEnd = 12;
+            contentGrid.MarginTop = 6;
+            contentGrid.MarginBottom = 6;
+            contentGrid.ColumnSpacing = 6;
+            contentGrid.RowSpacing = 0;
+            contentGrid.Hexpand = true;
+            contentGrid.Halign = Align.Fill;
+            contentGrid.Valign = Align.Center;
 
             var image = Image.NewFromIconName("package-x-generic");
-            image.SetPixelSize(48);
+            image.SetPixelSize(64);
             image.SetValign(Align.Center);
             image.SetHalign(Align.Center);
-            image.AddCssClass("icon-dropshadow");
-
+            
             contentGrid.Attach(image, 0, 0, 1, 2);
+
+            var rightBox = Box.New(Orientation.Vertical, 0);
+            rightBox.Valign = Align.Center;
+            rightBox.Halign = Align.Fill;
+            rightBox.Hexpand = true;
 
             var titleLabel = Label.New("");
             titleLabel.SetHalign(Align.Start);
             titleLabel.SetValign(Align.Center);
             titleLabel.Vexpand = false;
             titleLabel.Hexpand = false;
+            titleLabel.UseMarkup = true;
             titleLabel.SetEllipsize(Pango.EllipsizeMode.End);
+            titleLabel.MaxWidthChars = 30;
 
-            var versionLabel = Label.New("");
-            versionLabel.SetHalign(Align.End);
-            versionLabel.SetValign(Align.Center);
-            versionLabel.SetHexpand(true);
-            versionLabel.AddCssClass("dim-label");
+            var titleGrid = Grid.New();
+            titleGrid.ColumnSpacing = 4;
+            titleGrid.Halign = Align.Start;
+            titleGrid.Attach(titleLabel, 0, 0, 1, 1);
 
-            var selectionCheck = CheckButton.New();
-            selectionCheck.SetValign(Align.Center);
-            selectionCheck.SetHalign(Align.End);
-            selectionCheck.SetHexpand(false);
-
-            contentGrid.Attach(titleLabel, 1, 0, 1, 1);
-            contentGrid.Attach(versionLabel, 2, 0, 1, 1);
-            contentGrid.Attach(selectionCheck, 3, 0, 1, 2);
+            rightBox.Append(titleGrid);
 
             var descLabel = Label.New("");
             descLabel.SetHalign(Align.Start);
@@ -692,15 +691,27 @@ public sealed class PackageManagement(
             descLabel.Hexpand = true;
             descLabel.AddCssClass("dim-label");
             descLabel.SetEllipsize(Pango.EllipsizeMode.End);
-            descLabel.SetHexpand(true);
+            descLabel.MaxWidthChars = 35;
+            descLabel.WidthChars = -1;
+            rightBox.Append(descLabel);
 
-            contentGrid.Attach(descLabel, 1, 1, 2, 1);
+            contentGrid.Attach(rightBox, 1, 0, 1, 2);
+            
+            var selectionCheck = CheckButton.New();
+            selectionCheck.SetValign(Align.Center);
+            selectionCheck.SetHalign(Align.End);
+            selectionCheck.SetHexpand(false);
+            contentGrid.Attach(selectionCheck, 2, 0, 1, 2);
 
             var frame = Frame.New(null);
             frame.SetChild(contentGrid);
             frame.SetSizeRequest(300, -1);
-            frame.Hexpand = true;
+            frame.Hexpand = false;
             frame.Halign = Align.Fill;
+            frame.SetMarginStart(2);
+            frame.SetMarginEnd(2);
+            frame.SetMarginTop(1);
+            frame.SetMarginBottom(1);
             frame.AddCssClass("card");
 
             item.Child = frame;
@@ -712,10 +723,11 @@ public sealed class PackageManagement(
             var frame = (Frame)item.Child!;
             var contentGrid = (Grid)frame.GetChild()!;
             var iconImage = (Image)contentGrid.GetChildAt(0, 0)!;
-            var titleLabel = (Label)contentGrid.GetChildAt(1, 0)!;
-            var versionLabel = (Label)contentGrid.GetChildAt(2, 0)!;
-            var selectionCheck = (CheckButton)contentGrid.GetChildAt(3, 0)!;
-            var descLabel = (Label)contentGrid.GetChildAt(1, 1)!;
+            var rightBox = (Box)contentGrid.GetChildAt(1, 0)!;
+            var titleGrid = (Grid)rightBox.GetFirstChild()!;
+            var titleLabel = (Label)titleGrid.GetChildAt(0, 0)!;
+            var descLabel = (Label)rightBox.GetLastChild()!;
+            var selectionCheck = (CheckButton)contentGrid.GetChildAt(2, 0)!;
 
             if (CheckState.TryGetValue(selectionCheck, out var old))
             {
@@ -750,8 +762,7 @@ public sealed class PackageManagement(
                 iconImage.SetFromIconName("package-x-generic");
             }
 
-            titleLabel.SetText(pkg.Name);
-            versionLabel.SetText(pkg.Version);
+            titleLabel.SetMarkup($"<b>{GLib.Markup.EscapeText(pkg.Name)}</b>");
             descLabel.SetText(pkg.Description);
             return;
 
@@ -781,7 +792,7 @@ public sealed class PackageManagement(
             var item = (ListItem)args.Object;
             var frame = (Frame?)item.Child;
             var contentGrid = (Grid?)frame?.GetChild();
-            var selectionCheck = (CheckButton?)contentGrid?.GetChildAt(3, 0);
+            var selectionCheck = (CheckButton?)contentGrid?.GetChildAt(2, 0);
             if (selectionCheck is null) return;
             if (!CheckState.TryGetValue(selectionCheck, out var state)) return;
             if (state.Toggled is not null) selectionCheck.OnToggled -= state.Toggled;
@@ -807,6 +818,8 @@ public sealed class PackageManagement(
 
         var selectedPackages = _packageGObjectRefs.Where(p => p.IsSelected).ToList();
         _cartLabel.SetText(T("{0} Selected", selectedPackages.Count));
+        _removeButton.SetSensitive(selectedPackages.Count > 0);
+        _downgradeButton.SetSensitive(selectedPackages.Count > 0);
 
         foreach (var pkg in selectedPackages)
         {
@@ -1165,6 +1178,10 @@ public sealed class PackageManagement(
                     genericQuestionService.RaiseToastMessage(args);
                 }
 
+                foreach (var pkg in _packageGObjectRefs.Where(p => p.IsSelected))
+                {
+                    pkg.ToggleSelection();
+                }
                 Reload();
             }
             catch (Exception e)
@@ -1174,6 +1191,7 @@ public sealed class PackageManagement(
             }
             finally
             {
+                UpdateCart();
                 lockoutService.Hide();
             }
         }
@@ -1265,6 +1283,12 @@ public sealed class PackageManagement(
                 lockoutService.Hide();
             }
         }
+
+        foreach (var pkg in _packageGObjectRefs.Where(p => p.IsSelected))
+        {
+            pkg.ToggleSelection();
+        }
+        UpdateCart();
 
         if (successCount > 0)
         {
