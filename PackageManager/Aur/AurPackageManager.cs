@@ -16,6 +16,7 @@ using PackageManager.Aur.Models;
 using PackageManager.Utilities;
 using PackageManager.Utilities.PkgBuild;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -44,15 +45,8 @@ public sealed class AurPackageManager(string? configPath = null)
     private readonly HttpClient _httpClient = CreateAurHttpClient();
     private readonly Dictionary<string, string> _pkgbaseCache = new(StringComparer.Ordinal);
 
-    private static HttpClient CreateAurHttpClient()
-    {
-        var client = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(20),
-        };
-        client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-        return client;
-    }
+    private static HttpClient CreateAurHttpClient() => OptimizedClient.CreateClient(50, 5, 5);
+
 
     private readonly HashSet<string> _currentlyInstallingAurDeps = [];
     private bool _useChroot;
@@ -972,7 +966,8 @@ public sealed class AurPackageManager(string? configPath = null)
 
     private static string BuildExecutionPath()
     {
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin";
+        var path = Environment.GetEnvironmentVariable("PATH") ??
+                   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin";
         if (!path.Contains("core_perl", StringComparison.Ordinal))
             path = $"/usr/bin/core_perl:/usr/bin/vendor_perl:/usr/bin/site_perl:{path}";
 
@@ -1195,7 +1190,8 @@ public sealed class AurPackageManager(string? configPath = null)
                     return false;
                 }
 
-                var (cc, _, cerr) = await RunProcessAsync(CreateAsInvokingUserStartInfo("git", ["clone", expectedRemote, tempPath]));
+                var (cc, _, cerr) =
+                    await RunProcessAsync(CreateAsInvokingUserStartInfo("git", ["clone", expectedRemote, tempPath]));
                 if (cc != 0)
                 {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
@@ -1263,7 +1259,8 @@ public sealed class AurPackageManager(string? configPath = null)
     /// not necessarily an installed pkgname. We resolve the real pkgbase from
     /// the clone and only import when an installed foreign package maps to it.
     /// </summary>
-    private async Task ImportFromAurHelperCache(string sourceCachePath, string shellyCachePath, HashSet<string> foreignPackages)
+    private async Task ImportFromAurHelperCache(string sourceCachePath, string shellyCachePath,
+        HashSet<string> foreignPackages)
     {
         try
         {
