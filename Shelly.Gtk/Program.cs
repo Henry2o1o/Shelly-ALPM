@@ -32,6 +32,8 @@ sealed class Program
     private static ApplicationWindow? _window;
     private static String? _pendingAppId;
     private static Box? _flatpakPageBox;
+    private static IShellyWindow? _currentFlatpakWindow;
+
     
     private static void EnsureSessionEnvironment()
     {
@@ -145,16 +147,20 @@ sealed class Program
         GLib.Functions.IdleAdd(0, () =>
         {
             if (_settingsStack == null) return false;
-
+            
             _pendingAppId = appId;
             _settingsStack.SetVisibleChildName("flatpak_page");
             _window?.Present();
-        
-            // Still have to add logic to handle installing flatpak from ref.
+            
+            if (_currentFlatpakWindow is FlatpakInstall fp)
+                _ = fp.InstallFromRefId(appId);   
+            else
+                _pendingAppId = appId;            
         
             return false;
         });
     }    
+    
     public static int Main(string[] args)
     {
         EnsureSessionEnvironment();
@@ -322,7 +328,6 @@ sealed class Program
             List<IShellyWindow> currentPackagesWindows = [];
             List<IShellyWindow> currentAurWindows = [];
             IShellyWindow? currentRecommendWindow = null;
-            IShellyWindow? currentFlatpakWindow = null;
             IShellyWindow? currentAppImageWindow = null;
             IShellyWindow? currentShellySearchWindow = null;
 
@@ -379,16 +384,21 @@ sealed class Program
 
             void LoadFlatpakPage()
             {
-                if (currentFlatpakWindow != null)
-                    return;
                 var w = serviceProvider.GetRequiredService<FlatpakInstall>();
-                _flatpakPageBox.Append(w.CreateWindow());
-                currentFlatpakWindow = w;
-                if (!string.IsNullOrEmpty(_pendingAppId))
+                
+                w.DataLoaded += async () =>
                 {
-                    _ = w.InstallFromRefId(_pendingAppId);
-                    _pendingAppId = null;
+                    if (_pendingAppId != null)
+                    {
+                        var id = _pendingAppId;
+                        _pendingAppId = null;
+
+                        await w.InstallFromRefId(id);
+                    }
                 };
+                
+                _flatpakPageBox.Append(w.CreateWindow());
+                _currentFlatpakWindow = w;
             }
 
             void LoadAppImagePage()
@@ -631,10 +641,10 @@ sealed class Program
 
                         break;
                     case "flatpak_page":
-                        if (currentFlatpakWindow != null)
+                        if (_currentFlatpakWindow != null)
                         {
-                            UnloadPage(_flatpakPageBox, [currentFlatpakWindow]);
-                            currentFlatpakWindow = null;
+                            UnloadPage(_flatpakPageBox, [_currentFlatpakWindow]);
+                            _currentFlatpakWindow = null;
                         }
 
                         break;

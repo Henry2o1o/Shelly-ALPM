@@ -98,7 +98,7 @@ public class FlatpakInstall(
     private Stack? _mainContentStack;
     private Box? _installSidebarControls;
     private string _activePage = "install";
-    private string? _pendingInstallId;
+    public event Action? DataLoaded;
 
     public Widget CreateWindow()
     {
@@ -890,13 +890,6 @@ public class FlatpakInstall(
                 return false;
             });
             
-            if (!string.IsNullOrEmpty(_pendingInstallId))
-            {
-                var id = _pendingInstallId;
-                _pendingInstallId = null;
-                GLib.Functions.IdleAdd(0, () => { _ = InstallFromIdAsync(id); return false; });
-            }
-
             const int batchSize = 100;
             for (var i = 0; i < _allPackages.Count; i += batchSize)
             {
@@ -915,6 +908,7 @@ public class FlatpakInstall(
                 });
                 await Task.Delay(10, ct);
             }
+            
         }
         catch (OperationCanceledException)
         {
@@ -932,6 +926,9 @@ public class FlatpakInstall(
                 _loadingSpinner?.Stop();
                 return false;
             });
+            
+            DataLoaded?.Invoke();
+            
         }
     }
 
@@ -1564,22 +1561,53 @@ public class FlatpakInstall(
             return;
 
         if (_allPackages.Count == 0)
-        {
-            _pendingInstallId = appId;
-            return;
-        }
+            return;    
 
         var pkg = _allPackages.FirstOrDefault(x => x.Id == appId);
 
         if (pkg == null)
-        {
-            _pendingInstallId = appId;
             return;
+        
+        if (!configService.LoadConfig().NoConfirm)
+        {
+            var question = new GenericQuestionEventArgs(
+                Translations.T("Install Package?"),
+                $"{pkg.Name}"
+            );
+
+            genericQuestionService.RaiseQuestion(question);
+
+            if (!await question.ResponseTask)
+                return;
         }
         
-        await unprivilegedOperationService.InstallFlatpakPackageFromFlathub(
-            pkg.Id,
-            InstallLevel.User);    
+        try
+        {
+            lockoutService.Show(Translations.T("Installing {0}...", appId));
+
+            var result = await unprivilegedOperationService.InstallFlatpakPackageFromFlathub(
+                pkg.Id,
+                InstallLevel.User);
+
+            if (result.Success)
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(
+                        Translations.T("Installed Flatpak addon")));
+            }
+            else
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(
+                        Translations.T("Installing Flatpak failed")));
+
+                Console.WriteLine($"Failed to install addon {appId}: {result.Error}");
+            }
+        }
+        finally
+        {
+            lockoutService.Hide();
+        }
     }
     
     public void Dispose()

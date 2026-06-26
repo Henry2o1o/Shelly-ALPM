@@ -145,13 +145,9 @@ public class UnprivilegedOperationService(
         {
             "flatpak",
             "install",
-            "flathub",
             appId
         };
-
-        if (level == InstallLevel.User)
-            args.Add("--user");
-
+        
         var result = await RunShellyCommandAsync(args.ToArray());
 
         if (result.Success)
