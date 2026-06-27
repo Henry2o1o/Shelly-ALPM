@@ -49,7 +49,7 @@ public class Remove : GlobalSettingsCommand
         var force = new Option<bool>("--force", "-f")
         {
             Description =
-                "Force removal of packages regardless of dependency. Is dangerous and should be used with caution. No-Op with -c and -i."
+                "Force removal of packages regardless of dependency. Is dangerous and should be used with caution. Overrides with -c and -i."
         };
         var packages = new Argument<string[]>("packages")
             { Description = "The packages to remove (repo names or local binary packages)", Arity = ZeroOrMore };

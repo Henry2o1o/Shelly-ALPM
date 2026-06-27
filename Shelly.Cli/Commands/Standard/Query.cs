@@ -30,22 +30,32 @@ public class Query : GlobalSettingsCommand
 
     private bool Info { get; set; }
 
+    private bool Group { get; set; }
+
     private string? Package { get; set; }
 
     public static Command Create()
     {
-        var repos = new Option<bool>("--repos", "-r") { Description = "List available repositories. This supercedes any other modifiers." };
-        var available = new Option<bool>("--available", "-a") { Description = "Include available packages in the search" };
-        var installed = new Option<bool>("--installed", "-i") { Description = "Include installed packages in the search" };
+        var repos = new Option<bool>("--repos", "-r")
+            { Description = "List available repositories. This supercedes any other modifiers." };
+        var available = new Option<bool>("--available", "-a")
+            { Description = "Include available packages in the search" };
+        var installed = new Option<bool>("--installed", "-i")
+            { Description = "Include installed packages in the search" };
         var local = new Option<bool>("--local", "-l") { Description = "Include local packages in the search" };
-        var take = new Option<int>("--take", "-t") { Description = "Number of results to return", DefaultValueFactory = _ => 100 };
+        var take = new Option<int>("--take", "-t")
+            { Description = "Number of results to return", DefaultValueFactory = _ => 100 };
         var page = new Option<int>("--page", "-p") { Description = "Page number", DefaultValueFactory = _ => 1 };
         var showHidden = new Option<bool>("--show-hidden", "-w") { Description = "Show hidden packages" };
-        var info = new Option<bool>("--detail", "--info", "-d") { Description = "Show detailed information for a single package" };
+        var info = new Option<bool>("--detail", "--info", "-d")
+            { Description = "Show detailed information for a single package" };
+        var group = new Option<bool>("--group", "-g")
+            { Description = "Query packages by group will default search available." };
         var package = new Argument<string?>("package") { Description = "The package to search for", Arity = ZeroOrOne };
 
-        var command = new Command("query", "Query repositories and packages. Includes installed and available by default.")
-            { repos, available, installed, local, take, page, showHidden, info, package };
+        var command = new Command("query",
+                "Query repositories and packages. Includes installed and available by default.")
+            { repos, available, installed, local, take, page, showHidden, info, group, package };
 
         command.SetAction(async (parseResult, _) =>
         {
@@ -59,6 +69,7 @@ public class Query : GlobalSettingsCommand
                 Page = parseResult.GetValue(page),
                 ShowHidden = parseResult.GetValue(showHidden),
                 Info = parseResult.GetValue(info),
+                Group = parseResult.GetValue(group),
                 Package = parseResult.GetValue(package)
             };
             GlobalOptions.Apply(instance, parseResult);
@@ -85,6 +96,7 @@ public class Query : GlobalSettingsCommand
             return;
         }
 
+
         if (!Repos && !Available && !Installed && !Local && !Info)
         {
             Installed = true;
@@ -98,11 +110,16 @@ public class Query : GlobalSettingsCommand
         List<AlpmPackageDto> packages = [];
         List<LocalPackageDto> localPackages = [];
 
+        if (Group)
+        {
+            Available = true;
+        }
+
         if (Installed) packages.AddRange(manager.GetInstalledPackages());
         if (Available) packages.AddRange(manager.GetAvailablePackages());
         if (Local) localPackages.AddRange(LocalManager.GetInstalledBinaryPackages());
 
-        if (Info)
+        if (Info && !Group)
         {
             if (string.IsNullOrWhiteSpace(Package))
             {
@@ -131,7 +148,7 @@ public class Query : GlobalSettingsCommand
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(Package))
+        if (!string.IsNullOrWhiteSpace(Package) && !Group)
         {
             packages = packages
                 .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
@@ -144,12 +161,26 @@ public class Query : GlobalSettingsCommand
                 .Where(x => x.Score >= 90).Select(x => x.Package).ToList();
         }
 
+        if (!string.IsNullOrWhiteSpace(Package) && Group)
+        {
+            packages = packages.Where(x => x.Groups.Contains(Package)).ToList();
+        }
+
+        if (Group && string.IsNullOrWhiteSpace(Package))
+        {
+            var groups = packages.SelectMany(x => x.Groups).Distinct().ToList();
+            var table = BasicTable.Execute(["Group"], groups, c => c);
+            console.WriteLine(table);
+            return;
+        }
+
         if (JsonOutput)
         {
             if (packages.Count > 0)
                 console.WriteLine(JsonSerializer.Serialize(packages, ShellyCliJsonContext.Default.ListAlpmPackageDto));
             if (localPackages.Count > 0)
-                console.WriteLine(JsonSerializer.Serialize(localPackages, ShellyCliJsonContext.Default.ListLocalPackageDto));
+                console.WriteLine(JsonSerializer.Serialize(localPackages,
+                    ShellyCliJsonContext.Default.ListLocalPackageDto));
             return;
         }
 
