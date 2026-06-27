@@ -7,6 +7,7 @@ using Shelly.Gtk.Services;
 using Shelly.Gtk.Services.FlatHub;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
+using Shelly.Gtk.Helpers.CustomUiComps;
 using Shelly.Utilities;
 
 // ReSharper disable NotAccessedField.Local
@@ -63,7 +64,8 @@ public class FlatpakInstall(
     private Label _overlaySummaryLabel = null!;
     private Label _overlayDescriptionLabel = null!;
     private Image _overlayIconImage = null!;
-    private Box? _overlayScreenshotsBox;
+    private Carousel _carousel = null!;
+    private CarouselIndicatorDots _indicatorDots = null!;
     private Box? _overlayBoxRoot;
     private StringList _remotesStringList = null!;
     private string? _selectedRemote = "Any";
@@ -117,7 +119,13 @@ public class FlatpakInstall(
         _loadingSpinner = (Spinner)builder.GetObject("loading_spinner")!;
         _remoteRefOverlay = (Box)builder.GetObject("overlay_remote_ref")!;
         _addRemoteOverlay = (Box)builder.GetObject("overlay_add_remote")!;
-        _overlayScreenshotsBox = (Box)builder.GetObject("overlay_screenshots_box")!;
+        
+        var screenshotsContainer = (Box)builder.GetObject("overlay_screenshots_container")!;
+        _carousel = Carousel.New();
+        _indicatorDots = CarouselIndicatorDots.New(_carousel);
+        screenshotsContainer.Append(_carousel);
+        screenshotsContainer.Append(_indicatorDots);
+
         _overlayAuthorLabel = (Label)builder.GetObject("overlay_author_label")!;
         _overlayNameLabel = (Label)builder.GetObject("overlay_name_label")!;
         _overlayVersionLabel = (Label)builder.GetObject("overlay_version_label")!;
@@ -675,15 +683,17 @@ public class FlatpakInstall(
 
     private void PopulateScreenshots(List<string> imageUrls)
     {
-        while (_overlayScreenshotsBox!.GetFirstChild() is { } child)
-            _overlayScreenshotsBox.Remove(child);
+        _carousel.RemoveAll();
 
         foreach (var url in imageUrls)
         {
             var picture = Picture.New();
-            picture.ContentFit = ContentFit.Cover;
+            picture.ContentFit = ContentFit.Contain;
             picture.HeightRequest = 584;
-            picture.WidthRequest = 900;
+            picture.Hexpand = true;
+            picture.Vexpand = true;
+            picture.Halign = Align.Center;
+            picture.Valign = Align.Center;
             picture.AddCssClass("card");
 
             _ = Task.Run(async () =>
@@ -697,18 +707,8 @@ public class FlatpakInstall(
                         var pixbuf = GdkPixbuf.Pixbuf.NewFromStream(stream, null)!;
                         var texture = Gdk.Texture.NewForPixbuf(pixbuf);
 
-                        var isPortrait = pixbuf.Height > pixbuf.Width;
-                        picture.HeightRequest = 584;
-                        if (isPortrait)
-                        {
-                            picture.WidthRequest = (int)(584.0 * pixbuf.Width / pixbuf.Height);
-                        }
-                        else
-                        {
-                            picture.WidthRequest = 900;
-                        }
-
                         picture.SetPaintable(texture);
+                        _indicatorDots.Update();
                         return false;
                     });
                 }
@@ -718,8 +718,10 @@ public class FlatpakInstall(
                 }
             });
 
-            _overlayScreenshotsBox.Append(picture);
+            _carousel.AddWidget(picture);
         }
+        
+        _indicatorDots.Update();
     }
 
     private static void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)

@@ -36,9 +36,9 @@ public class FlatpakManage(
         var box = (Box)builder.GetObject("FlatpakRemoveWindow")!;
 
         _listView = (ListView)builder.GetObject("installed_flatpaks")!;
-        var removeButton = (Button)builder.GetObject("remove_button")!;
 
         var flatpakRepairButton = (Button)builder.GetObject("flatpak_repair_button")!;
+        var optionsMenu = (MenuButton)builder.GetObject("options_menu")!;
         _listStore = Gio.ListStore.New(StringObject.GetGType());
         _selectionModel = SingleSelection.New(_listStore);
         _listView.SetModel(_selectionModel);
@@ -49,8 +49,11 @@ public class FlatpakManage(
         _listView.SetFactory(_factory);
 
         _listView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
-        removeButton.OnClicked += (_, _) => { _ = RemoveSelectedAsync(); };
-        flatpakRepairButton.OnClicked += (_, _) => { _ = FlatpakRepairAsync(); };
+        flatpakRepairButton.OnClicked += (_, _) =>
+        {
+            optionsMenu.Popdown();
+            _ = FlatpakRepairAsync();
+        };
 
         _showRuntimesCheck = (CheckButton)builder.GetObject("runtime_check")!;
         _showRuntimesCheck.Active = false;
@@ -64,7 +67,7 @@ public class FlatpakManage(
 
     public void Reload() => _ = LoadDataAsync(_cts.Token);
 
-    private static void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
+    private void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
         
@@ -85,17 +88,26 @@ public class FlatpakManage(
 
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
-        contentGrid.Attach(nameLabel, 1, 0, 1, 1);
+        nameLabel.Hexpand = true;
+        contentGrid.Attach(nameLabel, 1, 0, 2, 1);
 
-        var idLabel = Label.New(string.Empty);
-        idLabel.Halign = Align.Start;
-        idLabel.AddCssClass("dim-label");
-        contentGrid.Attach(idLabel, 1, 1, 1, 1);
+        var infoLabel = Label.New(string.Empty);
+        infoLabel.Halign = Align.Start;
+        infoLabel.AddCssClass("dim-label");
+        contentGrid.Attach(infoLabel, 1, 1, 2, 1);
 
-        var versionLabel = Label.New(string.Empty);
-        versionLabel.Halign = Align.End;
-        versionLabel.Hexpand = true;
-        contentGrid.Attach(versionLabel, 2, 0, 1, 2);
+        var removeButton = Button.NewFromIconName("user-trash-symbolic");
+        removeButton.Valign = Align.Center;
+        removeButton.AddCssClass("flat");
+        removeButton.AddCssClass("destructive-action");
+        removeButton.OnClicked += (_, _) =>
+        {
+            if (listItem.GetItem() is StringObject stringObj)
+            {
+                _ = RemovePackageAsync(stringObj.GetString());
+            }
+        };
+        contentGrid.Attach(removeButton, 3, 0, 1, 2);
 
         listItem.SetChild(contentGrid);
     }
@@ -112,8 +124,7 @@ public class FlatpakManage(
 
         var icon = (Image)contentGrid.GetChildAt(0, 0)!;
         var nameLabel = (Label)contentGrid.GetChildAt(1, 0)!;
-        var idLabel = (Label)contentGrid.GetChildAt(1, 1)!;
-        var versionLabel = (Label)contentGrid.GetChildAt(2, 0)!;
+        var infoLabel = (Label)contentGrid.GetChildAt(1, 1)!;
 
         string path;
         if (package.InstallLevel == InstallLevel.User)
@@ -134,8 +145,8 @@ public class FlatpakManage(
             icon.SetFromIconName("application-x-executable");
 
         nameLabel.SetText(package.Name);
-        idLabel.SetText(SizeHelpers.FormatSize(package.InstalledSize));
-        versionLabel.SetText(package.Version);
+        var sizeText = SizeHelpers.FormatSize(package.InstalledSize);
+        infoLabel.SetText(string.IsNullOrEmpty(package.Version) ? sizeText : $"{package.Version} • {sizeText}");
     }
 
     private async Task FlatpakRepairAsync()
@@ -205,12 +216,8 @@ public class FlatpakManage(
         }
     }
 
-    private async Task RemoveSelectedAsync()
+    private async Task RemovePackageAsync(string packageId)
     {
-        var selectedItem = _selectionModel?.GetSelectedItem();
-        if (selectedItem is not StringObject stringObj) return;
-
-        var packageId = stringObj.GetString();
         bool removeConfig;
 
         var args = RemoveConfigDialogue.BuildRemoveDialog();
