@@ -66,6 +66,10 @@ public class PostInstallValidator
     {
         var result = new ValidationResult();
         ScanHook(info.PostInstall, "post_install", result);
+
+        foreach (var (fileName, content) in info.LocalSourceContents)
+            ScanHook(content, $"source: {fileName}", result);
+
         return result;
     }
 

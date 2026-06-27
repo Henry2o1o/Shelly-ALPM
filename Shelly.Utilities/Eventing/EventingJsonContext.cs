@@ -32,4 +32,5 @@ namespace Shelly.Utilities.Eventing;
 [JsonSerializable(typeof(List<ProviderOptionDto>))]
 [JsonSerializable(typeof(List<int>))]
 [JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(Dictionary<string, string>))]
 public partial class EventingJsonContext : JsonSerializerContext;
