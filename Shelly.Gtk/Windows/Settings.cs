@@ -765,7 +765,7 @@ public sealed class Settings(
                 try
                 {
                     lockoutService.Show(Translations.T("Installing starfish..."));
-                    await privilegedOperationService.InstallPackagesAsync(["flatpak"]);
+                    await privilegedOperationService.InstallPackagesAsync(["starfish"]);
                     Functions.IdleAdd(0, () =>
                     {
                         updateAction(true);
