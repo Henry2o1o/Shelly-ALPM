@@ -449,18 +449,9 @@
                                                             </object>
                                                         </child>
                                                         <child>
-                                                            <object class="GtkScrolledWindow" id="overlay_screenshots_scroll">
-                                                                <property name="hscrollbar-policy">automatic</property>
-                                                                <property name="vscrollbar-policy">never</property>
-
-                                                                <child>
-                                                                    <object class="GtkBox" id="overlay_screenshots_box">
-                                                                        <property name="orientation">horizontal</property>
-                                                                        <property name="spacing">12</property>
-                                                                        <property name="margin-top">8</property>
-                                                                        <property name="margin-bottom">8</property>
-                                                                    </object>
-                                                                </child>
+                                                            <object class="GtkBox" id="overlay_screenshots_container">
+                                                                <property name="orientation">vertical</property>
+                                                                <property name="spacing">8</property>
                                                             </object>
                                                         </child>
                                                         <child>
