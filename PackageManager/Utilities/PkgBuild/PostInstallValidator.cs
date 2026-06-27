@@ -60,7 +60,6 @@ public class PostInstallValidator
         "cargo install",
         "go install",
         "curl", "wget",
-        "cargo",
         "php"
     ];
 
