@@ -14,7 +14,7 @@ public class ConfigReset : GlobalSettingsCommand
         {
             var instance = new ConfigReset();
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

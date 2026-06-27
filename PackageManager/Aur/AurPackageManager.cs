@@ -16,6 +16,7 @@ using PackageManager.Aur.Models;
 using PackageManager.Utilities;
 using PackageManager.Utilities.PkgBuild;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -30,6 +31,8 @@ public class PkgbuildDiffRequestEventArgs : EventArgs
 
 
     public List<ValidationFinding> Warnings { get; init; } = [];
+
+    public Dictionary<string, string> SourceFiles { get; init; } = new();
 }
 
 /// <summary>
@@ -44,15 +47,8 @@ public sealed class AurPackageManager(string? configPath = null)
     private readonly HttpClient _httpClient = CreateAurHttpClient();
     private readonly Dictionary<string, string> _pkgbaseCache = new(StringComparer.Ordinal);
 
-    private static HttpClient CreateAurHttpClient()
-    {
-        var client = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(20),
-        };
-        client.DefaultRequestHeaders.UserAgent.Add(Http.UserAgent);
-        return client;
-    }
+    private static HttpClient CreateAurHttpClient() => OptimizedClient.CreateClient(50, 5, 5);
+
 
     private readonly HashSet<string> _currentlyInstallingAurDeps = [];
     private bool _useChroot;
@@ -972,7 +968,8 @@ public sealed class AurPackageManager(string? configPath = null)
 
     private static string BuildExecutionPath()
     {
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin";
+        var path = Environment.GetEnvironmentVariable("PATH") ??
+                   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin";
         if (!path.Contains("core_perl", StringComparison.Ordinal))
             path = $"/usr/bin/core_perl:/usr/bin/vendor_perl:/usr/bin/site_perl:{path}";
 
@@ -1195,7 +1192,8 @@ public sealed class AurPackageManager(string? configPath = null)
                     return false;
                 }
 
-                var (cc, _, cerr) = await RunProcessAsync(CreateAsInvokingUserStartInfo("git", ["clone", expectedRemote, tempPath]));
+                var (cc, _, cerr) =
+                    await RunProcessAsync(CreateAsInvokingUserStartInfo("git", ["clone", expectedRemote, tempPath]));
                 if (cc != 0)
                 {
                     InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
@@ -1263,7 +1261,8 @@ public sealed class AurPackageManager(string? configPath = null)
     /// not necessarily an installed pkgname. We resolve the real pkgbase from
     /// the clone and only import when an installed foreign package maps to it.
     /// </summary>
-    private async Task ImportFromAurHelperCache(string sourceCachePath, string shellyCachePath, HashSet<string> foreignPackages)
+    private async Task ImportFromAurHelperCache(string sourceCachePath, string shellyCachePath,
+        HashSet<string> foreignPackages)
     {
         try
         {
@@ -2032,7 +2031,7 @@ public sealed class AurPackageManager(string? configPath = null)
     private bool RequestPkgbuildApproval(string packageName, string? oldPkgbuild, string? newPkgbuild,
         string? baseDir = null)
     {
-        var warnings = ValidatePkgbuild(newPkgbuild, baseDir);
+        var (warnings, sourceFiles) = ValidatePkgbuild(newPkgbuild, baseDir);
 
         if (PkgbuildDiffRequest is null) return true;
 
@@ -2042,6 +2041,7 @@ public sealed class AurPackageManager(string? configPath = null)
             OldPkgbuild = oldPkgbuild ?? string.Empty,
             NewPkgbuild = newPkgbuild ?? string.Empty,
             Warnings = warnings,
+            SourceFiles = sourceFiles,
             ProceedWithUpdate = true
         };
 
@@ -2049,23 +2049,24 @@ public sealed class AurPackageManager(string? configPath = null)
         return args.ProceedWithUpdate;
     }
 
-    private List<ValidationFinding> ValidatePkgbuild(string? newPkgbuild, string? baseDir)
+    private (List<ValidationFinding> Warnings, Dictionary<string, string> SourceFiles) ValidatePkgbuild(
+        string? newPkgbuild, string? baseDir)
     {
         if (string.IsNullOrWhiteSpace(newPkgbuild))
-            return [];
+            return ([], new Dictionary<string, string>());
 
         try
         {
             var info = PkgbuildParser.ParseContent(newPkgbuild, baseDir);
             var findings = new PostInstallValidator().Validate(info).Findings;
             findings.AddRange(new HomographValidator().Validate(info).Findings);
-            return findings;
+            return (findings, info.LocalSourceContents);
         }
         catch (Exception ex)
         {
             InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
                 $"Failed to validate PKGBUILD scriptlets: {ex.Message}"));
-            return [];
+            return ([], new Dictionary<string, string>());
         }
     }
 
@@ -2077,7 +2078,40 @@ public sealed class AurPackageManager(string? configPath = null)
         var pkgbase = await _aurSearchManager.GetPackageBaseAsync(packageName);
         var baseDir = XdgPaths.ShellyCache(pkgbase);
 
+        await FetchLocalSourceFilesAsync(newPkgbuild, pkgbase, baseDir);
+
         return RequestPkgbuildApproval(packageName, oldPkgbuild, newPkgbuild, baseDir);
+    }
+
+    private async Task FetchLocalSourceFilesAsync(string? newPkgbuild, string pkgbase, string baseDir)
+    {
+        if (string.IsNullOrWhiteSpace(newPkgbuild))
+            return;
+
+        try
+        {
+            var info = PkgbuildParser.ParseContent(newPkgbuild, baseDir);
+            foreach (var fileName in info.LocalSourceFiles)
+            {
+                var path = Path.Combine(baseDir, fileName);
+                if (File.Exists(path))
+                    continue;
+
+                var url = $"https://aur.archlinux.org/cgit/aur.git/plain/{Uri.EscapeDataString(fileName)}?h={pkgbase}";
+                var response = await _httpClient.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                var content = await response.Content.ReadAsStringAsync();
+                Directory.CreateDirectory(baseDir);
+                await File.WriteAllTextAsync(path, content);
+            }
+        }
+        catch (Exception ex)
+        {
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                $"Failed to fetch PKGBUILD source files: {ex.Message}"));
+        }
     }
 
     private async Task<string?> TryResolveFromSrcinfoAsync(string pkgname)

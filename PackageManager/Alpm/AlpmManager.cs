@@ -6,8 +6,10 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using PackageManager.Alpm.Events;
 using PackageManager.Alpm.Events.EventArgs;
@@ -16,6 +18,7 @@ using PackageManager.Alpm.TransactionErrors;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Utilities;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
 using static PackageManager.Alpm.AlpmReference;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
@@ -33,25 +36,9 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 {
     private readonly PacmanConf _config = PacmanConfParser.Parse(configPath);
     private IntPtr _handle = IntPtr.Zero;
+    
+    private static readonly HttpClient DownloadClient = OptimizedClient.CreateClient(3, 5, 5);
 
-    private static readonly SocketsHttpHandler AlpmSocketsHttpHandler = new()
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-        MaxConnectionsPerServer = 10,
-        AutomaticDecompression = DecompressionMethods.All,
-        AllowAutoRedirect = true,
-        MaxAutomaticRedirections = 10,
-        ConnectTimeout = TimeSpan.FromSeconds(30),
-        EnableMultipleHttp2Connections = true,
-        EnableMultipleHttp3Connections = true,
-    };
-
-    private static readonly HttpClient DownloadClient = new(AlpmSocketsHttpHandler, disposeHandler: false)
-    {
-        Timeout = TimeSpan.FromMinutes(5),
-        DefaultRequestHeaders = { UserAgent = { Http.UserAgent } }
-    };
 
     private HashSet<string> _preDownloadedFiles = [];
 

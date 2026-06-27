@@ -59,13 +59,18 @@ public class PostInstallValidator
         "gem",
         "cargo install",
         "go install",
-        "curl", "wget"
+        "curl", "wget",
+        "php"
     ];
 
     public ValidationResult Validate(PkgbuildInfo info)
     {
         var result = new ValidationResult();
         ScanHook(info.PostInstall, "post_install", result);
+
+        foreach (var (fileName, content) in info.LocalSourceContents)
+            ScanHook(content, $"source: {fileName}", result);
+
         return result;
     }
 

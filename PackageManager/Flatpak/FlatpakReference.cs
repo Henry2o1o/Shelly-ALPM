@@ -326,7 +326,7 @@ internal static partial class FlatpakReference
     #region GObject Signals
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate void TransactionProgressCallback(IntPtr transaction, IntPtr progress, IntPtr userData);
+    public delegate void TransactionProgressCallback(IntPtr progress, IntPtr userData);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void TransactionNewOperationCallback(IntPtr transaction, IntPtr operation, IntPtr progress,
