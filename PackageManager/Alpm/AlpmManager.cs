@@ -36,50 +36,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 {
     private readonly PacmanConf _config = PacmanConfParser.Parse(configPath);
     private IntPtr _handle = IntPtr.Zero;
-
-    private static readonly SocketsHttpHandler AlpmSocketsHttpHandler = new()
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-        MaxConnectionsPerServer = 10,
-        AutomaticDecompression = DecompressionMethods.All,
-        AllowAutoRedirect = true,
-        MaxAutomaticRedirections = 10,
-        ConnectTimeout = TimeSpan.FromSeconds(30),
-        EnableMultipleHttp2Connections = true,
-        EnableMultipleHttp3Connections = true,
-        ConnectCallback = async (context, cancellationToken) =>
-        {
-            var entry = await Dns.GetHostEntryAsync(context.DnsEndPoint.Host, cancellationToken);
-
-            var attempts = entry.AddressList.Select(async addr =>
-            {
-                var socket = new Socket(addr.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
-                {
-                    NoDelay = true
-                };
-                try
-                {
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(3)); // fast per-address fallback
-                    await socket.ConnectAsync(addr, context.DnsEndPoint.Port, timeoutCts.Token);
-                    return socket;
-                }
-                catch
-                {
-                    socket.Dispose();
-                    throw;
-                }
-            }).ToList();
-
-            var winner = await Task.WhenAny(attempts);
-            var winningSocket = await winner;
-
-            return new NetworkStream(winningSocket, ownsSocket: true);
-        },
-    };
-
-
+    
     private static readonly HttpClient DownloadClient = OptimizedClient.CreateClient(3, 5, 5);
 
 

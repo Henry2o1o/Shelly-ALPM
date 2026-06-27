@@ -17,25 +17,6 @@
             <property name="margin-end">10</property>
             <property name="halign">baseline</property>
             <child>
-              <object class="GtkButton" id="remove_button">
-                <property name="label" translatable="yes">Remove Selected</property>
-                <property name="halign">end</property>
-                <style>
-                  <class name="destructive-action"/>
-                </style>
-              </object>
-            </child>
-            <child>
-              <object class="GtkButton" id="flatpak_repair_button">
-                <property name="label" translatable="yes">Flatpak Repair</property>
-                <property name="tooltip-text" translatable="yes">Repairs Flatpak Installation (Experimental)</property>
-                <property name="halign">end</property>
-                <style>
-                  <class name="suggested-action"/>
-                </style>
-              </object>
-            </child>
-            <child>
               <object class="GtkBox">
                 <property name="hexpand">true</property>
               </object>
@@ -80,6 +61,18 @@
           <child>
               <object class="GtkCheckButton" id="runtime_check">
                   <property name="label" translatable="yes">Show Runtimes</property>   
+              </object>
+          </child>
+          <child>
+              <object class="GtkSeparator"/>
+          </child>
+          <child>
+              <object class="GtkButton" id="flatpak_repair_button">
+                  <property name="label" translatable="yes">Flatpak Repair</property>
+                  <property name="tooltip-text" translatable="yes">Repairs Flatpak Installation (Experimental)</property>
+                  <style>
+                      <class name="flat"/>
+                  </style>
               </object>
           </child>
       </object>
