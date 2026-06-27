@@ -15,7 +15,8 @@ public static class PkgbuildReviewDialog
 {
     public static Task<bool> ShowAsync(Window? parent, string packageName,
         IReadOnlyList<PkgbuildDiffLine> diff,
-        IReadOnlyList<PkgbuildWarningDto> warnings)
+        IReadOnlyList<PkgbuildWarningDto> warnings,
+        IReadOnlyDictionary<string, string>? sourceFiles = null)
     {
         var tcs = new TaskCompletionSource<bool>();
         var hasWarnings = warnings.Count > 0;
@@ -90,6 +91,17 @@ public static class PkgbuildReviewDialog
                 outer.Append(MakeWarningRow(warning));
         }
 
+        if (sourceFiles is { Count: > 0 })
+        {
+            var sourceHeading = Label.New(T("Source files"));
+            sourceHeading.SetXalign(0);
+            sourceHeading.AddCssClass("heading");
+            outer.Append(sourceHeading);
+
+            foreach (var (name, content) in sourceFiles)
+                outer.Append(MakeSourceFileRow(name, content));
+        }
+
         var buttonBox = Box.New(Orientation.Horizontal, 8);
         buttonBox.SetHalign(Align.End);
 
@@ -161,6 +173,35 @@ public static class PkgbuildReviewDialog
 
         var frame = Frame.New(null);
         frame.SetChild(view);
+        box.Append(frame);
+
+        return box;
+    }
+
+    private static Box MakeSourceFileRow(string name, string content)
+    {
+        var box = Box.New(Orientation.Vertical, 6);
+        box.SetMarginTop(6);
+
+        var title = Label.New(name);
+        title.SetXalign(0);
+        title.AddCssClass("heading");
+        box.Append(title);
+
+        var view = TextView.New();
+        view.SetEditable(false);
+        view.SetMonospace(true);
+        view.SetWrapMode(WrapMode.WordChar);
+        view.SetCursorVisible(false);
+        view.GetBuffer().SetText(content, content.Length);
+
+        var scroll = ScrolledWindow.New();
+        scroll.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
+        scroll.SetMinContentHeight(160);
+        scroll.SetChild(view);
+
+        var frame = Frame.New(null);
+        frame.SetChild(scroll);
         box.Append(frame);
 
         return box;

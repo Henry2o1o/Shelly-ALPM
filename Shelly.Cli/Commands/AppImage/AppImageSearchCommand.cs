@@ -18,7 +18,7 @@ public partial class AppImageList : GlobalSettingsCommand
         {
             var instance = new AppImageList();
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 
@@ -39,7 +39,7 @@ public partial class AppImageList : GlobalSettingsCommand
             c => c.Version,
             c => SizeUtilities.FormatSize(displaySize, c.SizeOnDisk),
             c => string.IsNullOrEmpty(c.UpdateURl)
-                ? string.IsNullOrEmpty(c.RepoOwner) ? "" : $"{c.RepoOwner}/{c.RepoOwner}"
+                ? string.IsNullOrEmpty(c.RepoOwner) ? "" : $"{c.RepoOwner}/{c.RepoName}"
                 : c.UpdateURl));
     }
 

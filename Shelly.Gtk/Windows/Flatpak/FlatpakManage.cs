@@ -6,6 +6,7 @@ using Shelly.Gtk.Services;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 using Shelly.Gtk.Windows.Dialog;
+using Shelly.Utilities;
 
 // ReSharper disable CollectionNeverQueried.Local
 
@@ -27,7 +28,7 @@ public class FlatpakManage(
     private string _searchText = string.Empty;
     private SignalListItemFactory? _factory;
     private readonly List<StringObject> _stringObjectRefs = [];
-    private bool _userOnly;
+    private CheckButton _showRuntimesCheck = null!;
 
     public Widget CreateWindow()
     {
@@ -35,9 +36,9 @@ public class FlatpakManage(
         var box = (Box)builder.GetObject("FlatpakRemoveWindow")!;
 
         _listView = (ListView)builder.GetObject("installed_flatpaks")!;
-        var removeButton = (Button)builder.GetObject("remove_button")!;
-        
+
         var flatpakRepairButton = (Button)builder.GetObject("flatpak_repair_button")!;
+        var optionsMenu = (MenuButton)builder.GetObject("options_menu")!;
         _listStore = Gio.ListStore.New(StringObject.GetGType());
         _selectionModel = SingleSelection.New(_listStore);
         _listView.SetModel(_selectionModel);
@@ -48,8 +49,16 @@ public class FlatpakManage(
         _listView.SetFactory(_factory);
 
         _listView.OnRealize += (_, _) => { _ = LoadDataAsync(_cts.Token); };
-        removeButton.OnClicked += (_, _) => { _ = RemoveSelectedAsync(); };
-        flatpakRepairButton.OnClicked += (_, _) => { _ = FlatpakRepairAsync(); };
+        flatpakRepairButton.OnClicked += (_, _) =>
+        {
+            optionsMenu.Popdown();
+            _ = FlatpakRepairAsync();
+        };
+
+        _showRuntimesCheck = (CheckButton)builder.GetObject("runtime_check")!;
+        _showRuntimesCheck.Active = false;
+
+        _showRuntimesCheck.OnToggled += (_, _) => { Reload(); };
 
         _sub = DirtySubscription.Attach(dirtyService, this);
         return box;
@@ -58,60 +67,70 @@ public class FlatpakManage(
 
     public void Reload() => _ = LoadDataAsync(_cts.Token);
 
-    private static void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
+    private void OnSetup(SignalListItemFactory sender, SignalListItemFactory.SetupSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
-        var hbox = Box.New(Orientation.Horizontal, 10);
-        hbox.MarginStart = 10;
-        hbox.MarginEnd = 10;
-        hbox.MarginTop = 5;
-        hbox.MarginBottom = 5;
+        
+        var contentGrid = Grid.New();
+        contentGrid.MarginStart = 12;
+        contentGrid.MarginEnd = 12;
+        contentGrid.MarginTop = 6;
+        contentGrid.MarginBottom = 6;
+        contentGrid.ColumnSpacing = 12;
+        contentGrid.RowSpacing = 2;
+        contentGrid.Hexpand = true;
+        contentGrid.Valign = Align.Center;
 
         var icon = Image.New();
-        hbox.Append(icon);
+        icon.PixelSize = 48;
+        icon.Valign = Align.Center;
+        contentGrid.Attach(icon, 0, 0, 1, 2);
 
-        var vbox = Box.New(Orientation.Vertical, 2);
         var nameLabel = Label.New(string.Empty);
         nameLabel.Halign = Align.Start;
+        nameLabel.Hexpand = true;
+        contentGrid.Attach(nameLabel, 1, 0, 2, 1);
 
-        var idLabel = Label.New(string.Empty);
-        idLabel.Halign = Align.Start;
-        idLabel.AddCssClass("dim-label");
+        var infoLabel = Label.New(string.Empty);
+        infoLabel.Halign = Align.Start;
+        infoLabel.AddCssClass("dim-label");
+        contentGrid.Attach(infoLabel, 1, 1, 2, 1);
 
-        vbox.Append(nameLabel);
-        vbox.Append(idLabel);
-        hbox.Append(vbox);
+        var removeButton = Button.NewFromIconName("user-trash-symbolic");
+        removeButton.Valign = Align.Center;
+        removeButton.AddCssClass("flat");
+        removeButton.AddCssClass("destructive-action");
+        removeButton.OnClicked += (_, _) =>
+        {
+            if (listItem.GetItem() is StringObject stringObj)
+            {
+                _ = RemovePackageAsync(stringObj.GetString());
+            }
+        };
+        contentGrid.Attach(removeButton, 3, 0, 1, 2);
 
-        var versionLabel = Label.New(string.Empty);
-        versionLabel.Halign = Align.End;
-        versionLabel.Hexpand = true;
-        hbox.Append(versionLabel);
-
-        listItem.SetChild(hbox);
+        listItem.SetChild(contentGrid);
     }
 
     private void OnBind(SignalListItemFactory sender, SignalListItemFactory.BindSignalArgs args)
     {
         var listItem = (ListItem)args.Object;
         if (listItem.GetItem() is not StringObject stringObj) return;
-        if (listItem.GetChild() is not Box hbox) return;
+        if (listItem.GetChild() is not Grid contentGrid) return;
 
         var packageId = stringObj.GetString();
         var package = _allPackages.FirstOrDefault(p => p.Id == packageId);
         if (package == null) return;
 
-        var icon = (Image)hbox.GetFirstChild()!;
-        var vbox = (Box)icon.GetNextSibling()!;
-        var nameLabel = (Label)vbox.GetFirstChild()!;
-        var idLabel = (Label)nameLabel.GetNextSibling()!;
-        var versionLabel = (Label)vbox.GetNextSibling()!;
+        var icon = (Image)contentGrid.GetChildAt(0, 0)!;
+        var nameLabel = (Label)contentGrid.GetChildAt(1, 0)!;
+        var infoLabel = (Label)contentGrid.GetChildAt(1, 1)!;
 
         string path;
-        if (_userOnly)
+        if (package.InstallLevel == InstallLevel.User)
         {
-            var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path =
-                Path.Combine(userHome, ".local/share/flatpak/appstream", package.Remote,
+                Path.Combine(XdgPaths.DataHome(), "/flatpak/appstream", package.Remote,
                     "x86_64/active/icons/64x64", $"{package.Id}.png");
         }
         else
@@ -126,10 +145,10 @@ public class FlatpakManage(
             icon.SetFromIconName("application-x-executable");
 
         nameLabel.SetText(package.Name);
-        idLabel.SetText(package.Id);
-        versionLabel.SetText(package.Version);
+        var sizeText = SizeHelpers.FormatSize(package.InstalledSize);
+        infoLabel.SetText(string.IsNullOrEmpty(package.Version) ? sizeText : $"{package.Version} • {sizeText}");
     }
-    
+
     private async Task FlatpakRepairAsync()
     {
         try
@@ -153,14 +172,13 @@ public class FlatpakManage(
     {
         try
         {
-            _allPackages = await unprivilegedOperationService.ListFlatpakPackages();
-            ct.ThrowIfCancellationRequested();
+            var packages = await unprivilegedOperationService.ListFlatpakPackages();
+            _allPackages = !_showRuntimesCheck.Active ? packages.Where(p => p.Kind == 0).ToList() : packages;
 
-            var remotes = await unprivilegedOperationService.FlatpakListRemotes();
+            ct.ThrowIfCancellationRequested();
 
             GLib.Functions.IdleAdd(0, () =>
             {
-                _userOnly = remotes.Any(r => r.Scope != InstallLevel.System);
                 ApplyFilter();
                 return false;
             });
@@ -198,12 +216,8 @@ public class FlatpakManage(
         }
     }
 
-    private async Task RemoveSelectedAsync()
+    private async Task RemovePackageAsync(string packageId)
     {
-        var selectedItem = _selectionModel?.GetSelectedItem();
-        if (selectedItem is not StringObject stringObj) return;
-
-        var packageId = stringObj.GetString();
         bool removeConfig;
 
         var args = RemoveConfigDialogue.BuildRemoveDialog();

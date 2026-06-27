@@ -36,7 +36,7 @@ public class AddRemote : GlobalSettingsCommand
                 GpgVerify = parseResult.GetValue(gpgVerify)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

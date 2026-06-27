@@ -8,6 +8,7 @@ using Shelly.Cli.Interactions;
 using Shelly.Cli.Models.Standard.Downgrade;
 using Shelly.Cli.Outputs;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
 using static System.CommandLine.ArgumentArity;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
@@ -34,9 +35,11 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
     public static Command Create()
     {
-        var oldest = new Option<bool>("--oldest", "-o") { Description = "Installs the oldest matched version (default newest)" };
+        var oldest = new Option<bool>("--oldest", "-o")
+            { Description = "Installs the oldest matched version (default newest)" };
         var ignore = new Option<bool>("--ignore", "-i") { Description = "Add to IgnorePkg list" };
-        var listOptions = new Option<bool>("--list-options", "-l") { Description = "List available downgrade versions" };
+        var listOptions = new Option<bool>("--list-options", "-l")
+            { Description = "List available downgrade versions" };
         var target = new Option<string?>("--target", "-t")
             { Description = "Install a specific downgrade target by exact version or package filename" };
         var package = new Argument<string?>("package") { Description = "The package to downgrade", Arity = ZeroOrOne };
@@ -54,7 +57,7 @@ public partial class DowngradePackage : GlobalSettingsCommand
                 Package = parseResult.GetValue(package)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 
@@ -104,7 +107,8 @@ public partial class DowngradePackage : GlobalSettingsCommand
             return;
         }
 
-        if (!JsonOutput) console.WriteLine(Colorize($"Looking for downgrade options for: {Package}", ConsoleColor.Green));
+        if (!JsonOutput)
+            console.WriteLine(Colorize($"Looking for downgrade options for: {Package}", ConsoleColor.Green));
 
         var packages = await GatherDowngradeOptions(manager, installedPackages);
         if (packages.Count == 0)
@@ -164,7 +168,8 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         console.WriteLine(Colorize($"Installing: {selectedPackage.Filename}", ConsoleColor.Green));
 
-        var isSuccess = await StandardSinglePaneOutput.Output(console, manager, m => m.InstallLocalPackage(path), NoConfirm);
+        var isSuccess =
+            await StandardSinglePaneOutput.Output(console, manager, m => m.InstallLocalPackage(path), NoConfirm);
 
         if (selectedPackage.Location == Location.Remote && File.Exists(path))
             try
@@ -229,7 +234,8 @@ public partial class DowngradePackage : GlobalSettingsCommand
 
         if (ListOptions)
         {
-            var options = packages.Select(p => new DowngradeOptionDto(p.Name, p.Filename, p.Location.ToString(), p.IsInstalled)).ToList();
+            var options = packages
+                .Select(p => new DowngradeOptionDto(p.Name, p.Filename, p.Location.ToString(), p.IsInstalled)).ToList();
             UiFrames.Frame(options);
             return;
         }
@@ -344,20 +350,8 @@ public partial class DowngradePackage : GlobalSettingsCommand
             .ToList();
     }
 
-    private static HttpClient CreateHttpClient()
-    {
-        return new HttpClient(new SocketsHttpHandler
-        {
-            AllowAutoRedirect = true,
-            AutomaticDecompression = DecompressionMethods.All,
-            MaxAutomaticRedirections = 10,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(10),
-            DefaultRequestHeaders = { UserAgent = { Http.UserAgent } }
-        };
-    }
+    private static HttpClient CreateHttpClient() => OptimizedClient.CreateClient(10, 2, 1);
+
 
     private static PackageInfo MatchPackageToTargetVersion(
         List<PackageInfo> packages,

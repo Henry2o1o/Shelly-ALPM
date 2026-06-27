@@ -32,7 +32,7 @@ public partial class Export : GlobalSettingsCommand
                 Output = parseResult.GetValue(output)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

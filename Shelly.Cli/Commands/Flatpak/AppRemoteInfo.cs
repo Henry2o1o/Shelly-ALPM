@@ -30,7 +30,7 @@ public class AppRemoteInfo : GlobalSettingsCommand
                 Branch = parseResult.GetValue(branch) ?? string.Empty
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

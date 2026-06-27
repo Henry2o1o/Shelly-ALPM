@@ -19,6 +19,7 @@ using Module = Gtk.Module;
 using Settings = Shelly.Gtk.Windows.Settings;
 using GtkSettings = Gtk.Settings;
 using static Shelly.GTK.Resources.Translations;
+using Action = System.Action;
 using Application = Gtk.Application;
 using File = System.IO.File;
 using Task = System.Threading.Tasks.Task;
@@ -362,6 +363,7 @@ sealed class Program
             {
                 sidebarBox.Visible = useOldMenu;
                 topHeaderBar.Visible = !useOldMenu;
+                settingsStack.MarginStart = !useOldMenu ? 9 : 0;
 
                 if (!useOldMenu) return;
                 sidebarRecommendBtn.Visible = config.RecommendedEnabled;
@@ -686,12 +688,9 @@ sealed class Program
                     return false;
                 });
             };
-            
 
 
             window.Show();
-
-            ShowFingerprintWarningBannerIfNeeded(serviceProvider, configService, mainOverlay, window);
 
             if (!initialConfig.NewInstallInitSettings)
             {
@@ -702,14 +701,14 @@ sealed class Program
 
                 setupWindow.SetupFinished += (_, _) =>
                 {
-                    GLib.Functions.IdleAdd(0, () =>
+                    AnimationHelper.FadeOutAndLift(setupWidget, () =>
                     {
                         mainOverlay.RemoveOverlay(setupWidget);
                         setupWindow.Dispose();
-                        return false;
                     });
                 };
             }
+
 
             var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(4) ?? "0.0.0.0";
             if (assemblyVersion != configService.LoadConfig().CurrentVersion)
@@ -859,138 +858,57 @@ sealed class Program
                         genericQuestionService.RaiseQuestion(failArgs);
                         await failArgs.ResponseTask;
                     }
-                 }
-                 catch (Exception e)
-                 {
-                     Console.WriteLine(e);
-                 }
-                 finally
-                 {
-                     lockoutService.Hide();
-                     upgradeAllButton.Sensitive = true;
-                 }
-             }
-         };
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e);
+                }
+                finally
+                {
+                    lockoutService.Hide();
+                    upgradeAllButton.Sensitive = true;
+                }
+            }
+        };
 
-         return application.Run(args);
-     }
+        return application.Run(args);
+    }
 
-     private static void SetupChelflagButton(Builder mainBuilder, IGenericQuestionService genericQuestionService)
-     {
-         using var stream = ResourceHelper.GetResourceStream("Assets/chelflag.png");
-         using var ms = new MemoryStream();
-         stream.CopyTo(ms);
-         var gioStream = MemoryInputStream.NewFromBytes(GLib.Bytes.New(ms.ToArray()));
-         var pixbuf = GdkPixbuf.Pixbuf.NewFromStream(gioStream, null)!;
-         var texture = Texture.NewForPixbuf(pixbuf);
-         var image = Image.NewFromPaintable(texture);
-         image.PixelSize = 20;
-         var button = (Button)mainBuilder.GetObject("chel_button")!;
-         button.SetChild(image);
+    private static void SetupChelflagButton(Builder mainBuilder, IGenericQuestionService genericQuestionService)
+    {
+        using var stream = ResourceHelper.GetResourceStream("Assets/chelflag.png");
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        var gioStream = MemoryInputStream.NewFromBytes(GLib.Bytes.New(ms.ToArray()));
+        var pixbuf = GdkPixbuf.Pixbuf.NewFromStream(gioStream, null)!;
+        var texture = Texture.NewForPixbuf(pixbuf);
+        var image = Image.NewFromPaintable(texture);
+        image.PixelSize = 20;
+        var button = (Button)mainBuilder.GetObject("chel_button")!;
+        button.SetChild(image);
 
-         button.OnClicked += (_, _) =>
-         {
-             var dialogBox = Box.New(Orientation.Vertical, 12);
-             dialogBox.SetSizeRequest(460, -1);
+        button.OnClicked += (_, _) =>
+        {
+            var dialogBox = Box.New(Orientation.Vertical, 12);
+            dialogBox.SetSizeRequest(460, -1);
 
-             var title = Label.New(T("Happy pride month!"));
-             title.AddCssClass("title-2");
-             title.SetHalign(Align.Center);
-             dialogBox.Append(title);
+            var title = Label.New(T("Happy pride month!"));
+            title.AddCssClass("title-2");
+            title.SetHalign(Align.Center);
+            dialogBox.Append(title);
 
-             var dialogImage = Image.NewFromPaintable(texture);
-             dialogImage.PixelSize = 192;
-             dialogImage.SetHalign(Align.Center);
-             dialogBox.Append(dialogImage);
+            var dialogImage = Image.NewFromPaintable(texture);
+            dialogImage.PixelSize = 192;
+            dialogImage.SetHalign(Align.Center);
+            dialogBox.Append(dialogImage);
 
-             var description = Label.New(T("You found Chel's hidden page."));
-             description.SetWrap(true);
-             description.SetJustify(Justification.Center);
-             description.SetHalign(Align.Center);
-             dialogBox.Append(description);
+            var description = Label.New(T("You found Chel's hidden page."));
+            description.SetWrap(true);
+            description.SetJustify(Justification.Center);
+            description.SetHalign(Align.Center);
+            dialogBox.Append(description);
 
-             genericQuestionService.RaiseDialog(new GenericDialogEventArgs(dialogBox));
-         };
-     }
-
-     private static bool _fingerprintBannerShown;
-
-     private static void ShowFingerprintWarningBannerIfNeeded(IServiceProvider serviceProvider,
-         IConfigService configService, Overlay mainOverlay, Window parentWindow)
-     {
-         if (_fingerprintBannerShown) return;
-
-         Task.Run(() =>
-         {
-             try
-             {
-                 var state = serviceProvider.GetRequiredService<IFingerprintAuthState>();
-                 if (!state.ShouldWarn) return;
-
-                 GLib.Functions.IdleAdd(0, () =>
-                 {
-                     if (_fingerprintBannerShown) return false;
-                     _fingerprintBannerShown = true;
-
-                     var bannerFrame = Frame.New(null);
-                     bannerFrame.AddCssClass("background");
-                     bannerFrame.AddCssClass("toast-message");
-                     bannerFrame.SetOverflow(Overflow.Hidden);
-                     bannerFrame.SetHalign(Align.Center);
-                     bannerFrame.SetValign(Align.Start);
-                     bannerFrame.SetMarginTop(12);
-
-                     var box = Box.New(Orientation.Horizontal, 8);
-                     box.SetMarginTop(8);
-                     box.SetMarginBottom(8);
-                     box.SetMarginStart(12);
-                     box.SetMarginEnd(12);
-
-                     var label = Label.New(
-                         "Fingerprint authentication detected for sudo. This can interfere with privileged " +
-                         "operations (issue #728). Disable pam_fprintd in /etc/pam.d/sudo as a workaround.");
-                     label.SetWrap(true);
-                     label.SetXalign(0);
-                     box.Append(label);
-
-                     var showFix = Button.NewWithLabel("Show fix");
-                     showFix.OnClicked += (_, _) => FingerprintFixDialog.Show(parentWindow);
-                     box.Append(showFix);
-
-                     var dontShow = Button.NewWithLabel("Don't show again");
-                     dontShow.OnClicked += (_, _) =>
-                     {
-                         try
-                         {
-                             var cfg = configService.LoadConfig();
-                             cfg.SuppressFingerprintWarning = true;
-                             configService.SaveConfig(cfg);
-                         }
-                         catch
-                         {
-                             // ignored
-                         }
-
-                         if (bannerFrame.GetParent() != null) mainOverlay.RemoveOverlay(bannerFrame);
-                     };
-                     box.Append(dontShow);
-
-                     var dismiss = Button.NewWithLabel("Dismiss");
-                     dismiss.OnClicked += (_, _) =>
-                     {
-                         if (bannerFrame.GetParent() != null) mainOverlay.RemoveOverlay(bannerFrame);
-                     };
-                     box.Append(dismiss);
-
-                     bannerFrame.SetChild(box);
-                     mainOverlay.AddOverlay(bannerFrame);
-                     return false;
-                 });
-             }
-             catch (Exception ex)
-             {
-                 Console.WriteLine($"ShowFingerprintWarningBannerIfNeeded failed: {ex}");
-             }
-         });
-     }
- }
+            genericQuestionService.RaiseDialog(new GenericDialogEventArgs(dialogBox));
+        };
+    }
+}

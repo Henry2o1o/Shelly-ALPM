@@ -7,6 +7,7 @@ using Shelly.Cli.Commands.Flatpak;
 using Shelly.Cli.Commands.Keyring;
 using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Commands.Utility;
+using Shelly.Cli.Outputs;
 using Shelly.Cli.Shortcodes;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 using AurUpgrade = Shelly.Cli.Commands.Aur.Upgrade;
@@ -58,18 +59,26 @@ public static class Program
             Environment.Exit(130);
         };
 
+        using var log = ShellyFileLog.TryOpen();
+        ShellyFileLog.Current = log;
+        log?.WriteSessionHeader(args);
+
         var root = BuildRootCommand();
 
+        int result;
         try
         {
             var translated = ShortcodeTranslator.Translate(args);
-            return await root.Parse(translated).InvokeAsync();
+            result = await root.Parse(translated).InvokeAsync();
         }
         catch (ShortcodeException ex)
         {
             await Console.Error.WriteLineAsync(ex.Message);
-            return 1;
+            result = 1;
         }
+
+        log?.WriteSessionFooter(result);
+        return result;
     }
 
     public static RootCommand BuildRootCommand()
@@ -91,6 +100,7 @@ public static class Program
         root.Add(Export.Create());
         root.Add(FixPermissions.Create());
         root.Add(Mark.Create());
+        root.Add(Pacfile.Create());
         root.Add(PurifyPackages.Create());
         root.Add(Remove.Create());
         root.Add(Sync.Create());
@@ -170,7 +180,7 @@ public static class Program
         {
             var instance = new UpgradeAll();
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 
