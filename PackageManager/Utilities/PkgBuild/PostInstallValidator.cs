@@ -59,7 +59,8 @@ public class PostInstallValidator
         "gem",
         "cargo install",
         "go install",
-        "curl", "wget"
+        "curl", "wget",
+        "php"
     ];
 
     public ValidationResult Validate(PkgbuildInfo info)
