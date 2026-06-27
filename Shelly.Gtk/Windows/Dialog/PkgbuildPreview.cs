@@ -87,6 +87,34 @@ public static class PkgbuildPreview
         
         box.Append(scrolledWindow);
 
+        foreach (var (name, content) in e.SourceFiles)
+        {
+            var sourceLabel = Label.New(name);
+            sourceLabel.AddCssClass("heading");
+            sourceLabel.SetXalign(0);
+            sourceLabel.SetMarginStart(12);
+            box.Append(sourceLabel);
+
+            var sourceView = TextView.New();
+            sourceView.SetWrapMode(WrapMode.WordChar);
+            sourceView.Editable = false;
+            sourceView.Monospace = true;
+            sourceView.CursorVisible = false;
+            sourceView.LeftMargin = 12;
+            sourceView.RightMargin = 12;
+            sourceView.TopMargin = 12;
+            sourceView.BottomMargin = 12;
+            sourceView.GetBuffer().SetText(content, -1);
+
+            var sourceScroll = ScrolledWindow.New();
+            sourceScroll.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
+            sourceScroll.SetVexpand(true);
+            sourceScroll.SetHexpand(true);
+            sourceScroll.AddCssClass("view");
+            sourceScroll.SetChild(sourceView);
+            box.Append(sourceScroll);
+        }
+
         var shortcutController = ShortcutController.New();
         shortcutController.Scope = ShortcutScope.Global;
         

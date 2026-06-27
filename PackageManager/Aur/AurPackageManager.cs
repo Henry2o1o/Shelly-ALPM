@@ -31,6 +31,8 @@ public class PkgbuildDiffRequestEventArgs : EventArgs
 
 
     public List<ValidationFinding> Warnings { get; init; } = [];
+
+    public Dictionary<string, string> SourceFiles { get; init; } = new();
 }
 
 /// <summary>
@@ -2029,7 +2031,7 @@ public sealed class AurPackageManager(string? configPath = null)
     private bool RequestPkgbuildApproval(string packageName, string? oldPkgbuild, string? newPkgbuild,
         string? baseDir = null)
     {
-        var warnings = ValidatePkgbuild(newPkgbuild, baseDir);
+        var (warnings, sourceFiles) = ValidatePkgbuild(newPkgbuild, baseDir);
 
         if (PkgbuildDiffRequest is null) return true;
 
@@ -2039,6 +2041,7 @@ public sealed class AurPackageManager(string? configPath = null)
             OldPkgbuild = oldPkgbuild ?? string.Empty,
             NewPkgbuild = newPkgbuild ?? string.Empty,
             Warnings = warnings,
+            SourceFiles = sourceFiles,
             ProceedWithUpdate = true
         };
 
@@ -2046,23 +2049,24 @@ public sealed class AurPackageManager(string? configPath = null)
         return args.ProceedWithUpdate;
     }
 
-    private List<ValidationFinding> ValidatePkgbuild(string? newPkgbuild, string? baseDir)
+    private (List<ValidationFinding> Warnings, Dictionary<string, string> SourceFiles) ValidatePkgbuild(
+        string? newPkgbuild, string? baseDir)
     {
         if (string.IsNullOrWhiteSpace(newPkgbuild))
-            return [];
+            return ([], new Dictionary<string, string>());
 
         try
         {
             var info = PkgbuildParser.ParseContent(newPkgbuild, baseDir);
             var findings = new PostInstallValidator().Validate(info).Findings;
             findings.AddRange(new HomographValidator().Validate(info).Findings);
-            return findings;
+            return (findings, info.LocalSourceContents);
         }
         catch (Exception ex)
         {
             InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
                 $"Failed to validate PKGBUILD scriptlets: {ex.Message}"));
-            return [];
+            return ([], new Dictionary<string, string>());
         }
     }
 
@@ -2074,7 +2078,40 @@ public sealed class AurPackageManager(string? configPath = null)
         var pkgbase = await _aurSearchManager.GetPackageBaseAsync(packageName);
         var baseDir = XdgPaths.ShellyCache(pkgbase);
 
+        await FetchLocalSourceFilesAsync(newPkgbuild, pkgbase, baseDir);
+
         return RequestPkgbuildApproval(packageName, oldPkgbuild, newPkgbuild, baseDir);
+    }
+
+    private async Task FetchLocalSourceFilesAsync(string? newPkgbuild, string pkgbase, string baseDir)
+    {
+        if (string.IsNullOrWhiteSpace(newPkgbuild))
+            return;
+
+        try
+        {
+            var info = PkgbuildParser.ParseContent(newPkgbuild, baseDir);
+            foreach (var fileName in info.LocalSourceFiles)
+            {
+                var path = Path.Combine(baseDir, fileName);
+                if (File.Exists(path))
+                    continue;
+
+                var url = $"https://aur.archlinux.org/cgit/aur.git/plain/{Uri.EscapeDataString(fileName)}?h={pkgbase}";
+                var response = await _httpClient.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                var content = await response.Content.ReadAsStringAsync();
+                Directory.CreateDirectory(baseDir);
+                await File.WriteAllTextAsync(path, content);
+            }
+        }
+        catch (Exception ex)
+        {
+            InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                $"Failed to fetch PKGBUILD source files: {ex.Message}"));
+        }
     }
 
     private async Task<string?> TryResolveFromSrcinfoAsync(string pkgname)

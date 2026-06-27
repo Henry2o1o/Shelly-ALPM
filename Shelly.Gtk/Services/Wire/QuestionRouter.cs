@@ -92,13 +92,14 @@ internal static class QuestionRouter
     {
         var warnings = d.Warnings ?? [];
         var diff = PkgbuildDiff.BuildLines(d.OldPkgbuild ?? string.Empty, d.NewPkgbuild ?? string.Empty);
+        var sourceFiles = d.SourceFiles ?? new Dictionary<string, string>();
 
         var tcs = new TaskCompletionSource<bool>();
 
         GLib.Functions.IdleAdd(0, () =>
         {
             var parent = (Gio.Application.GetDefault() as Application)?.GetActiveWindow();
-            _ = PkgbuildReviewDialog.ShowAsync(parent, d.PackageName, diff, warnings)
+            _ = PkgbuildReviewDialog.ShowAsync(parent, d.PackageName, diff, warnings, sourceFiles)
                 .ContinueWith(t => tcs.TrySetResult(t is { IsCompletedSuccessfully: true, Result: true }));
             return false;
         });
