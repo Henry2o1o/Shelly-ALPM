@@ -86,7 +86,7 @@ internal static class PacmanConfParser
             case "hookdir": conf.HookDir.AddRange(value.Split(' ', StringSplitOptions.RemoveEmptyEntries)); break;
             case "holdpkg":
             {
-                conf.HoldPkg.AddRange(value.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList());
+                conf.HoldPkg = value.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
                 if (!conf.HoldPkg.Contains("shelly"))
                     conf.HoldPkg.Add("shelly");
                 break;
