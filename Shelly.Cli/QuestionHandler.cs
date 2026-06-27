@@ -22,6 +22,7 @@ public static class QuestionHandler
         if (noConfirm)
         {
             PrintWarnings(args.Warnings);
+            PrintSourceFiles(args.SourceFiles);
             args.ProceedWithUpdate = args.Warnings.Count <= 0;
             return;
         }
@@ -30,6 +31,7 @@ public static class QuestionHandler
         {
             PackageBuilderDiffGenerator.PrintUnifiedDiff(args.OldPkgbuild, args.NewPkgbuild, isUiMode: false);
             PrintWarnings(args.Warnings);
+            PrintSourceFiles(args.SourceFiles);
             args.ProceedWithUpdate = Confirm.Execute(
                 $"Proceed with update to {args.PackageName}?",
                 // A careless Enter must not auto-approve a risky scriptlet.
@@ -45,8 +47,11 @@ public static class QuestionHandler
 
         var id = Guid.NewGuid().ToString("N");
         var diffLines = PackageBuilderDiffGenerator.BuildUnifiedDiffLines(args.OldPkgbuild, args.NewPkgbuild).ToList();
+        var sourceFiles = args.SourceFiles.Count > 0
+            ? new Dictionary<string, string>(args.SourceFiles)
+            : null;
         JsonPackFrame.WriteToStdout<QuestionRequest>(new PkgbuildDiffQuestionDto(
-            id, args.PackageName, args.OldPkgbuild, args.NewPkgbuild, warnings, diffLines));
+            id, args.PackageName, args.OldPkgbuild, args.NewPkgbuild, warnings, diffLines, sourceFiles));
 
         var resp = ReadAnswer<PkgbuildDiffAnswer>(id);
         args.ProceedWithUpdate = resp.ProceedWithUpdate;
@@ -62,7 +67,7 @@ public static class QuestionHandler
 
         var supportsAnsi = AnsiUtilities.SupportsAnsi;
         var header =
-            "Install scriptlet warnings \u2014 these commands fetch/execute code outside pacman's control:";
+            "PKGBUILD security warnings \u2014 these commands fetch/execute code outside pacman's control:";
         Console.WriteLine(supportsAnsi ? header.Pastel(ConsoleColor.Red) : header);
 
         foreach (var w in warnings)
@@ -74,6 +79,19 @@ public static class QuestionHandler
                 Console.WriteLine($"    {w.Message}");
             var matched = $"    {w.MatchedLine}";
             Console.WriteLine(supportsAnsi ? matched.Pastel(ConsoleColor.Gray) : matched);
+        }
+    }
+
+    private static void PrintSourceFiles(IReadOnlyDictionary<string, string> sources)
+    {
+        if (sources.Count == 0) return;
+
+        var supportsAnsi = AnsiUtilities.SupportsAnsi;
+        foreach (var (name, content) in sources)
+        {
+            var header = $"Source file: {name}";
+            Console.WriteLine(supportsAnsi ? header.Pastel(ConsoleColor.Cyan) : header);
+            Console.WriteLine(supportsAnsi ? content.Pastel(ConsoleColor.Yellow) : content);
         }
     }
 

@@ -63,7 +63,7 @@ public class UpgradeAll : GlobalSettingsCommand
                 NoAppImage = parseResult.GetValue(NoAppImageOption)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 
@@ -368,7 +368,7 @@ public class UpgradeAll : GlobalSettingsCommand
         try
         {
             if (UiMode)
-                await child.ExecuteAsync(new SystemShellyConsole());
+                await child.ExecuteAsync(ShellyConsoleFactory.Create());
             else
                 await child.ExecuteAsync(console!);
         }

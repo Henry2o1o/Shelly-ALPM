@@ -30,7 +30,7 @@ public class Search : GlobalSettingsCommand
                 Page = parseResult.GetValue(page)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

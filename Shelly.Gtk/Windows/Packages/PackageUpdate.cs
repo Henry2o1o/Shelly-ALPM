@@ -153,10 +153,6 @@ public class PackageUpdate(
         var detailGridHbox = (Box)builder.GetObject("detail_grid_hbox")!;
         var detailHbox = (Box)builder.GetObject("detail_hbox")!;
 
-        var savedView = configService.LoadConfig().PackageManageView;
-        detailGridHbox.SetVisible(savedView == ViewType.Grid);
-        detailHbox.SetVisible(savedView == ViewType.List);
-
         var searchTrigger = "<Control>f";
 
         var action = CallbackAction.New((_, _) =>
@@ -171,6 +167,10 @@ public class PackageUpdate(
         var gridViewButton = (ToggleButton)builder.GetObject("grid_view_button")!;
         var listViewButton = (ToggleButton)builder.GetObject("list_view_button")!;
 
+        var savedView = configService.LoadConfig().PackageUpdateView;
+        detailGridHbox.SetVisible(savedView == ViewType.Grid);
+        detailHbox.SetVisible(savedView == ViewType.List);
+        
         gridViewButton.Active = savedView == ViewType.Grid;
         listViewButton.Active = savedView == ViewType.List;
 

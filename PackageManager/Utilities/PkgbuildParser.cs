@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -26,6 +27,10 @@ public static class PkgbuildParser
         var rawInstall = ResolveOrParse(pkgbuildContent, vars, "install");
         var installFile = rawInstall is null ? null : ResolveString(rawInstall, vars);
 
+        var source = ResolveVariableReferences(pkgbuildContent, vars, ParseArray(pkgbuildContent, "source"));
+        var localSourceFiles = ExtractLocalSourceFiles(source);
+        var localSourceContents = ResolveLocalSourceContents(localSourceFiles, baseDir);
+
         return new PkgbuildInfo
         {
             Variables = new Dictionary<string, string>(vars),
@@ -44,15 +49,96 @@ public static class PkgbuildParser
             Provides = ResolveVariableReferences(pkgbuildContent, vars, ParseArray(pkgbuildContent, "provides")),
             Conflicts = ParseArray(pkgbuildContent, "conflicts"),
             Replaces = ParseArray(pkgbuildContent, "replaces"),
-            Source = ResolveVariableReferences(pkgbuildContent, vars, ParseArray(pkgbuildContent, "source")),
+            Source = source,
             Sha256Sums = ParseArray(pkgbuildContent, "sha256sums"),
             Sha512Sums = ParseArray(pkgbuildContent, "sha512sums"),
             Md5Sums = ParseArray(pkgbuildContent, "md5sums"),
 
             InstallFile = installFile,
             PostInstall = ResolvePostInstall(installFile, baseDir)
-                          ?? ExtractFunctionBody(pkgbuildContent, "post_install")
+                          ?? ExtractFunctionBody(pkgbuildContent, "post_install"),
+
+            LocalSourceFiles = localSourceFiles,
+            LocalSourceContents = localSourceContents
         };
+    }
+
+    private static readonly string[] LocalSourceExtensions =
+    [
+        ".sh", ".bash", ".install", ".patch", ".diff", ".desktop",
+        ".py", ".pl", ".rb", ".service", ".conf", ".cfg", ".hook"
+    ];
+
+    private static List<string> ExtractLocalSourceFiles(List<string> source)
+    {
+        var files = new List<string>();
+        foreach (var entry in source)
+        {
+            var (fileName, location) = SplitSourceEntry(entry);
+            if (IsRemoteSource(location))
+                continue;
+
+            var name = string.IsNullOrWhiteSpace(fileName) ? location : fileName;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var ext = Path.GetExtension(name).ToLowerInvariant();
+            if (!LocalSourceExtensions.Contains(ext))
+                continue;
+
+            if (!files.Contains(name))
+                files.Add(name);
+        }
+
+        return files;
+    }
+
+    private static (string fileName, string location) SplitSourceEntry(string entry)
+    {
+        var idx = entry.IndexOf("::", StringComparison.Ordinal);
+        if (idx < 0)
+            return (string.Empty, entry.Trim());
+
+        var name = entry.Substring(0, idx).Trim();
+        var loc = entry.Substring(idx + 2).Trim();
+        return (name, loc);
+    }
+
+    private static bool IsRemoteSource(string location)
+    {
+        return Regex.IsMatch(location,
+            @"^(https?|ftp|ftps|git\+|svn\+|hg\+|bzr\+|git|svn|hg|bzr|rsync|file)(://|\+)",
+            RegexOptions.IgnoreCase)
+            || location.Contains("://");
+    }
+
+    private static Dictionary<string, string> ResolveLocalSourceContents(List<string> localSourceFiles, string? baseDir)
+    {
+        var contents = new Dictionary<string, string>();
+        foreach (var fileName in localSourceFiles)
+        {
+            var resolved = ResolveLocalFile(fileName, baseDir);
+            if (resolved is not null)
+                contents[fileName] = resolved;
+        }
+
+        return contents;
+    }
+
+    private static string? ResolveLocalFile(string fileName, string? baseDir)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+            return null;
+
+        var path = baseDir is null ? fileName : Path.Combine(baseDir, fileName);
+        if (!File.Exists(path))
+        {
+            System.Console.Error.WriteLine(
+                $"[Shelly] Warning: source file not found: {path}");
+            return null;
+        }
+
+        return File.ReadAllText(path);
     }
 
     private static string? ResolvePostInstall(string? installFile, string? baseDir)
@@ -472,6 +558,10 @@ public class PkgbuildInfo
     public string? InstallFile { get; set; }
     
     public string? PostInstall { get; set; }
+
+    public List<string> LocalSourceFiles { get; set; } = new();
+
+    public Dictionary<string, string> LocalSourceContents { get; set; } = new();
 
     public List<ParsedDependency> ParsedDepends
     {

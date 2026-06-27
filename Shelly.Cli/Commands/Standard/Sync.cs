@@ -20,7 +20,7 @@ public class Sync : GlobalSettingsCommand
                 Force = parseResult.GetValue(force)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
         return command;

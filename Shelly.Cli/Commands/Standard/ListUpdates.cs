@@ -19,7 +19,7 @@ public class ListUpdates : GlobalSettingsCommand
         {
             var instance = new ListUpdates();
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

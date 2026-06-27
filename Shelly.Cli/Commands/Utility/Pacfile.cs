@@ -29,7 +29,7 @@ public class Pacfile : GlobalSettingsCommand
                 Pacfiles = parseResult.GetValue(pacfilesArgument) ?? []
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
         return command;

@@ -27,7 +27,7 @@ public class RemoveRemote : GlobalSettingsCommand
                 SystemWide = parseResult.GetValue(system)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

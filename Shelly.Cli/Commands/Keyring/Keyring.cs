@@ -32,7 +32,7 @@ public class Keyring : GlobalSettingsCommand
                 Keyserver = parseResult.GetValue(keyserver)
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 
@@ -139,7 +139,7 @@ public class Keyring : GlobalSettingsCommand
 
     public override ValueTask ExecuteUiMode()
     {
-        var console = new SystemShellyConsole();
+        var console = ShellyConsoleFactory.Create();
 
         switch (Action)
         {

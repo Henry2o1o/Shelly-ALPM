@@ -31,7 +31,7 @@ public class Upgrade : GlobalSettingsCommand
             var instance = new Upgrade();
             GlobalOptions.Apply(instance, parseResult);
             instance.Check = parseResult.GetValue(CheckOption);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

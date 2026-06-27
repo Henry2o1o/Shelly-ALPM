@@ -17,6 +17,9 @@ namespace PackageManager.Flatpak;
 public class FlatpakManager : IDisposable
 {
     private static readonly ConcurrentDictionary<IntPtr, string> ProgressIdMap = new();
+   
+    private readonly List<Delegate> _activeDelegates = [];
+    
     public EventHandler<FlatpakEventArgs> FlatpakEvent;
 
     public EventHandler<FlatpakProgressEventArgs> FlatpakProgressEvent;
@@ -534,6 +537,7 @@ public class FlatpakManager : IDisposable
             try
             {
                 var newOpCallback = new FlatpakReference.TransactionNewOperationCallback(OnNewOperation);
+                _activeDelegates.Add(newOpCallback);
                 var newOpCallbackPtr = Marshal.GetFunctionPointerForDelegate(newOpCallback);
                 FlatpakReference.GSignalConnectData(transactionPtr, "new-operation", newOpCallbackPtr,
                     IntPtr.Zero, IntPtr.Zero, 0);
@@ -579,6 +583,8 @@ public class FlatpakManager : IDisposable
                 var runSuccess = FlatpakReference.TransactionRun(
                     transactionPtr, IntPtr.Zero, out var runError);
 
+                GC.KeepAlive(newOpCallback);
+
                 if (!runSuccess || runError != IntPtr.Zero)
                 {
                     var errorMsg = runError != IntPtr.Zero
@@ -602,6 +608,7 @@ public class FlatpakManager : IDisposable
             finally
             {
                 FlatpakReference.GObjectUnref(transactionPtr);
+                _activeDelegates.Clear();
             }
         }
         finally
@@ -705,6 +712,7 @@ public class FlatpakManager : IDisposable
             {
                 // Connect to new-operation signal to hook progress callbacks
                 var newOpCallback = new FlatpakReference.TransactionNewOperationCallback(OnNewOperation);
+                _activeDelegates.Add(newOpCallback);
                 var newOpCallbackPtr = Marshal.GetFunctionPointerForDelegate(newOpCallback);
                 FlatpakReference.GSignalConnectData(transactionPtr, "new-operation", newOpCallbackPtr,
                     IntPtr.Zero, IntPtr.Zero, 0);
@@ -725,6 +733,8 @@ public class FlatpakManager : IDisposable
                 var runSuccess = FlatpakReference.TransactionRun(
                     transactionPtr, IntPtr.Zero, out IntPtr runError);
 
+                GC.KeepAlive(newOpCallback);
+
                 if (!runSuccess || runError != IntPtr.Zero)
                 {
                     var errorMsg = FlatpakReference.GetErrorMessage(runError);
@@ -740,6 +750,7 @@ public class FlatpakManager : IDisposable
             finally
             {
                 FlatpakReference.GObjectUnref(transactionPtr);
+                _activeDelegates.Clear();
             }
         }
         finally
@@ -880,6 +891,7 @@ public class FlatpakManager : IDisposable
         try
         {
             var newOpCallback = new FlatpakReference.TransactionNewOperationCallback(OnNewOperation);
+            _activeDelegates.Add(newOpCallback);
             var newOpCallbackPtr = Marshal.GetFunctionPointerForDelegate(newOpCallback);
             FlatpakReference.GSignalConnectData(transactionPtr, "new-operation", newOpCallbackPtr,
                 IntPtr.Zero, IntPtr.Zero, 0);
@@ -896,6 +908,8 @@ public class FlatpakManager : IDisposable
 
             var runSuccess = FlatpakReference.TransactionRun(
                 transactionPtr, IntPtr.Zero, out IntPtr runError);
+
+            GC.KeepAlive(newOpCallback);
 
             if (!runSuccess || runError != IntPtr.Zero)
             {
@@ -917,6 +931,7 @@ public class FlatpakManager : IDisposable
         finally
         {
             FlatpakReference.GObjectUnref(transactionPtr);
+            _activeDelegates.Clear();
         }
     }
 
@@ -1145,6 +1160,7 @@ public class FlatpakManager : IDisposable
                 {
                     // Connect to new-operation signal to hook progress callbacks
                     var newOpCallback = new FlatpakReference.TransactionNewOperationCallback(OnNewOperation);
+                    _activeDelegates.Add(newOpCallback);
                     var newOpCallbackPtr = Marshal.GetFunctionPointerForDelegate(newOpCallback);
                     FlatpakReference.GSignalConnectData(transactionPtr, "new-operation", newOpCallbackPtr,
                         IntPtr.Zero, IntPtr.Zero, 0);
@@ -1163,6 +1179,8 @@ public class FlatpakManager : IDisposable
                     var runSuccess = FlatpakReference.TransactionRun(
                         transactionPtr, IntPtr.Zero, out IntPtr runError);
 
+                    GC.KeepAlive(newOpCallback);
+
                     if (!runSuccess || runError != IntPtr.Zero)
                     {
                         var msg = FlatpakReference.GetErrorMessage(runError);
@@ -1175,6 +1193,7 @@ public class FlatpakManager : IDisposable
                 finally
                 {
                     FlatpakReference.GObjectUnref(transactionPtr);
+                    _activeDelegates.Clear();
                 }
             }
         }
@@ -1320,12 +1339,16 @@ public class FlatpakManager : IDisposable
                 }
 
                 var newOpCallback = new FlatpakReference.TransactionNewOperationCallback(OnNewOperation);
+                _activeDelegates.Add(newOpCallback);
                 var newOpCallbackPtr = Marshal.GetFunctionPointerForDelegate(newOpCallback);
                 FlatpakReference.GSignalConnectData(transactionPtr, "new-operation", newOpCallbackPtr,
                     IntPtr.Zero, IntPtr.Zero, 0);
 
                 var runSuccess =
                     FlatpakReference.TransactionRun(transactionPtr, IntPtr.Zero, out var runError);
+
+                GC.KeepAlive(newOpCallback);
+
                 if (runSuccess && runError == IntPtr.Zero)
                 {
                     totalUpdated += refsLength;
@@ -1340,6 +1363,7 @@ public class FlatpakManager : IDisposable
             finally
             {
                 FlatpakReference.GObjectUnref(transactionPtr);
+                _activeDelegates.Clear();
             }
         }
         finally
@@ -2640,6 +2664,7 @@ public class FlatpakManager : IDisposable
 
             // Connect to the progress changed signal for this specific operation
             var progressCallback = new FlatpakReference.TransactionProgressCallback(OnOperationProgress);
+            _activeDelegates.Add(progressCallback);
             var progressCallbackPtr = Marshal.GetFunctionPointerForDelegate(progressCallback);
             FlatpakReference.GSignalConnectData(progress, "changed", progressCallbackPtr,
                 IntPtr.Zero, IntPtr.Zero, 0);
@@ -2654,7 +2679,7 @@ public class FlatpakManager : IDisposable
     /// <summary>
     /// Callback for operation progress updates.
     /// </summary>
-    private void OnOperationProgress(IntPtr progress, IntPtr userData1, IntPtr userData2)
+    private void OnOperationProgress(IntPtr progress, IntPtr userData)
     {
         if (progress == IntPtr.Zero) return;
 

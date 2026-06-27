@@ -152,6 +152,13 @@ public static class ConfigManager
                         .ToList();
                 }
             }
+            else if (targetType.IsEnum)
+            {
+                if (!Enum.TryParse(targetType, value, true, out convertedValue))
+                {
+                    return false;
+                }
+            }
             else
             {
                 if (property.Name == nameof(ShellyConfig.ProgressBarStyle))
@@ -180,15 +187,6 @@ public static class ConfigManager
                     }
 
                     convertedValue = parsed.ToString();
-                }
-                else if (property.Name == nameof(ShellyConfig.DefaultPageDropDown))
-                {
-                    if (!Enum.TryParse<ShellyTabs>(value, true, out var parsed))
-                    {
-                        return false;
-                    }
-
-                    convertedValue = parsed;
                 }
                 else
                 {

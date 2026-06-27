@@ -25,7 +25,7 @@ public partial class AppImageInstall : GlobalSettingsCommand
                 AppImageLocation = parseResult.GetValue(appImageLocation)!
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 

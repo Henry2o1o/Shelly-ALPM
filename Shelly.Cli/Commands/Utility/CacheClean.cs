@@ -41,7 +41,7 @@ public partial class CacheClean : GlobalSettingsCommand
                 TargetPackages = parseResult.GetValue(target) ?? Array.Empty<string>()
             };
             GlobalOptions.Apply(instance, parseResult);
-            await instance.ExecuteAsync(new SystemShellyConsole());
+            await instance.ExecuteAsync(ShellyConsoleFactory.Create());
             return 0;
         });
 
