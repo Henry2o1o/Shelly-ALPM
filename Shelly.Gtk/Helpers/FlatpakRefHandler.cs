@@ -1,0 +1,32 @@
+namespace Shelly.Gtk.Helpers;
+
+public static class FlatpakRefHandler
+{
+    private static string? _pendingAppId;
+    public static event Func<string, Task>? InstallRequested;
+
+
+    public static void RegisterAppId(string appId)
+    {
+        _pendingAppId = appId;
+    }
+
+    
+    public static void OnPageLoaded()
+    {
+        if (_pendingAppId is not { } appId)
+            return;
+
+        _pendingAppId = null;
+        
+        RequestInstall(appId);
+
+    }
+
+    public static void RequestInstall(string appId)
+    {
+        if (InstallRequested != null)
+            _ = InstallRequested.Invoke(appId);
+    }
+
+}

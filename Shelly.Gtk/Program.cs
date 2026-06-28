@@ -33,8 +33,6 @@ sealed class Program
     private static ApplicationWindow? _window;
     private static String? _pendingAppId;
     private static FlatpakInstall? _currentFlatpakWindow;
-    public static event Action<string>? FlatpakInstallRequested;
-
     
     private static void EnsureSessionEnvironment()
     {
@@ -129,32 +127,7 @@ sealed class Program
         var i = line.IndexOf('=');
         return i < 0 ? null : line[(i + 1)..].Trim().Trim('"', '\'');
     }
-
-    private static string ExtractAppId(string raw)
-    {
-        if (raw.StartsWith("appstream://"))
-            return raw["appstream://".Length..];
-
-        if (raw.StartsWith("flatpak+https://"))
-            return raw.Split('/')
-                .Last()
-                .Replace(".flatpakref", "");
-
-        return raw;
-    }
     
-    private static void NavigateToFlatpakRef(string appId)
-    {
-        GLib.Functions.IdleAdd(0, () =>
-        {
-            _settingsStack?.SetVisibleChildName("flatpak_page");
-            _window?.Present();
-
-            FlatpakInstallRequested?.Invoke(appId);
-
-            return false;
-        });
-    }    
     public static int Main(string[] args)
     {
         EnsureSessionEnvironment();
@@ -207,19 +180,36 @@ sealed class Program
                 return 0;
 
             var raw = cmdArgs[0];
-            var appId = ExtractAppId(raw);
+            var appId = ExtractAppIdHelper.ExtractAppId(raw);
 
-            if (_window == null)
+            var currentPage = _settingsStack?.GetVisibleChildName();
+
+
+            if (currentPage == "flatpak_page")
             {
-                _pendingAppId = appId;
+                FlatpakRefHandler.RequestInstall(appId);
             }
-            else
-            {
-                NavigateToFlatpakRef(appId);
-            }
+            
+            FlatpakRefHandler.RegisterAppId(appId);
+            _settingsStack?.SetVisibleChildName("flatpak_page");
+            _window?.Present();
 
             return 0;
-        };        
+        };   
+        
+        FlatpakRefHandler.InstallRequested += _ =>
+        {
+            try
+            {
+                _settingsStack?.SetVisibleChildName("flatpak_page");
+                _window?.Present();
+                return Task.CompletedTask;
+            }
+            catch (Exception exception)
+            {
+                return Task.FromException(exception);
+            }
+        };
         
         var quitAction = SimpleAction.New("quit", null);
         quitAction.OnActivate += (_, _) => application.Quit();
@@ -379,18 +369,6 @@ sealed class Program
             void LoadFlatpakPage()
             {
                 var w = serviceProvider.GetRequiredService<FlatpakInstall>();
-                
-                w.DataLoaded += async () =>
-                {
-                    if (_pendingAppId != null)
-                    {
-                        var id = _pendingAppId;
-                        _pendingAppId = null;
-
-                        await w.InstallFromRefId(id);
-                    }
-                };
-                
                 _flatpakPageBox.Append(w.CreateWindow());
                 _currentFlatpakWindow = w;
             }
@@ -754,7 +732,7 @@ sealed class Program
 
             if (!string.IsNullOrEmpty(_pendingAppId))
             {
-                NavigateToFlatpakRef(_pendingAppId);
+                FlatpakRefHandler.RegisterAppId(_pendingAppId);
                 _pendingAppId = null;
             }
             
