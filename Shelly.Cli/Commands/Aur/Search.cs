@@ -1,13 +1,20 @@
 using System.CommandLine;
 using System.Text.Json;
+using PackageManager.Alpm;
 using PackageManager.Aur;
+using PackageManager.Aur.Models;
+using Shelly.Cli.Commands.Standard;
 using Shelly.Cli.Interactions;
+using Shelly.Utilities;
+using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Aur;
 
 public class Search : GlobalSettingsCommand
 {
     private string[] Query { get; set; } = [];
+
+    private bool SearchStandard { get; set; } = false;
 
     public static Command Create()
     {
@@ -16,8 +23,15 @@ public class Search : GlobalSettingsCommand
             Description = "Search term to find packages in the Arch User Repository", Arity = ArgumentArity.OneOrMore
         };
 
+        var searchStandard = new Option<bool>("--standard","-s")
+        {
+            Required = false,
+            Description = "Searches standard packages in addition to the AUR"
+        };
+
         var command = new Command("search", "Search the Arch User Repository")
         {
+            searchStandard,
             query
         };
 
@@ -25,6 +39,7 @@ public class Search : GlobalSettingsCommand
         {
             var instance = new Search
             {
+                SearchStandard = parseResult.GetValue(searchStandard),
                 Query = parseResult.GetValue(query) ?? []
             };
             GlobalOptions.Apply(instance, parseResult);
@@ -52,10 +67,26 @@ public class Search : GlobalSettingsCommand
             return;
         }
 
+        List<AlpmPackageDto> alpmPackageDtos = [];
+        if (SearchStandard)
+        {
+            var alpm = new AlpmManager();
+            alpm.Initialize();
+            alpmPackageDtos = alpm.GetAvailablePackages();
+            alpmPackageDtos = alpmPackageDtos
+                .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(query, x.Name) })
+                .Where(x => x.Score >= 90)
+                .Select(x => x.Package)
+                .ToList();
+            alpm.Dispose();
+            alpmPackageDtos.Reverse();
+        }
+
         using var manager = new AurPackageManager();
         await manager.Initialize();
 
         var results = await manager.SearchPackages(query);
+        
 
         if (UiMode)
         {
@@ -66,11 +97,27 @@ public class Search : GlobalSettingsCommand
         if (JsonOutput)
         {
             console.WriteLine(JsonSerializer.Serialize(results, ShellyCliJsonContext.Default.ListAurPackageDto));
+            if (SearchStandard)
+            {
+                console.WriteLine(JsonSerializer.Serialize(alpmPackageDtos,
+                    ShellyCliJsonContext.Default.ListAlpmPackageDto));
+            }
+
             return;
         }
-
+        foreach (var alpmPackageDto in alpmPackageDtos)
+        {
+            results.Add(new AurPackageDto()
+            {
+                Name =  alpmPackageDto.Name,
+                Version = alpmPackageDto.Version,
+                Maintainer = alpmPackageDto.Repository,
+                LastModified = new DateTimeOffset(alpmPackageDto.BuildDate).ToUnixTimeSeconds(),
+                Description = alpmPackageDto.Description,
+            });
+        }
         console.WriteLine(BasicTable.Execute(
-            ["Name", "Version", "Maintainer", "Last Updated", "Description"], results.Take(25).ToList(),
+            ["Name", "Version", "Maintainer/Repository", "Last Updated/Build Date", "Description"], results.Take(25).ToList(),
             p => p.Name,
             p => p.Version,
             p => p.Maintainer ?? "Unknown Maintainer",
