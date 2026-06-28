@@ -24,7 +24,7 @@ using static PackageManager.Alpm.AlpmReference;
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
-//Hours wasted here: 5
+//Hours wasted here: 9
 //If you touch this code and spend more than 30 minutes in it please increment this counter.
 namespace PackageManager.Alpm;
 
@@ -36,7 +36,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 {
     private readonly PacmanConf _config = PacmanConfParser.Parse(configPath);
     private IntPtr _handle = IntPtr.Zero;
-    
+
     private static readonly HttpClient DownloadClient = OptimizedClient.CreateClient(3, 5, 5);
 
 
@@ -1222,7 +1222,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         if (pkgPtrs.Count == 0) return Task.FromResult(false);
 
-        // If we are doing a DbOnly install, we should also skip dependency checks, 
+        // If we are doing a DbOnly install, we should also skip dependency checks,
         // extraction, and signature/checksum validation to avoid requirement for the physical package file.
         if (flags.HasFlag(AlpmTransFlag.DbOnly))
         {
@@ -1242,7 +1242,8 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 if (!PackageListBuilder.IsAvailableInSyncDbs(_handle, name)) continue;
                 var description = parts.Length > 1 ? parts[1].Trim() : "No description found";
                 if (string.IsNullOrEmpty(description)) description = "No description found";
-                var isInstalled = PackageUtilities.IsPackageInstalled(_handle, name);
+                var isInstalled = PackageUtilities.IsPackageInstalled(_handle, name) ||
+                                  IsDependencySatisfiedByInstalled(name);
                 optDependList.Add(new ProviderOption(name, description, isInstalled));
             }
         }
@@ -1257,7 +1258,12 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             args.WaitForResponse();
             var responseOptions = args.Response.ProviderOptions ?? [];
             optDepNames = responseOptions
-                .Where(x => x is { IsSelected: true, IsInstalled: false }).Select(x => x.Name).ToList();
+                .Where(x => x is { IsSelected: true, IsInstalled: false })
+                .Select(x => x.Name)
+                .Where(n => !IsDependencySatisfiedByInstalled(n)) // defensive guard: skip already-satisfied
+                .Select(ResolveOptDepProvider)                    // virtual -> concrete (prompt if ambiguous)
+                .Distinct()
+                .ToList();
             var result = PackageListBuilder.Build(_handle, optDepNames);
             pkgPtrs.AddRange(result);
         }
@@ -1514,7 +1520,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             }
         }
 
-        // If we are doing a DbOnly install, we should also skip dependency checks, 
+        // If we are doing a DbOnly install, we should also skip dependency checks,
         // extraction, and signature/checksum validation to avoid requirement for the physical package file.
         if (flags.HasFlag(AlpmTransFlag.DbOnly))
         {
@@ -1870,6 +1876,101 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Returns every package across the sync DBs whose name or 'provides' satisfies
+    /// <paramref name="dependency"/>. Distinct by real package name.
+    /// </summary>
+    private List<string> EnumerateProvidersInSyncDbs(string dependency)
+    {
+        if (_handle == IntPtr.Zero) Initialize();
+
+        var depName = ParsedDependency.Parse(dependency).Name;
+        var providers = new List<string>();
+
+        var currentPtr = GetSyncDbs(_handle);
+        while (currentPtr != IntPtr.Zero)
+        {
+            var node = Marshal.PtrToStructure<AlpmList>(currentPtr);
+            if (node.Data != IntPtr.Zero)
+            {
+                var pkgNode = DbGetPkgCache(node.Data);
+                while (pkgNode != IntPtr.Zero)
+                {
+                    var pkgListNode = Marshal.PtrToStructure<AlpmList>(pkgNode);
+                    if (pkgListNode.Data != IntPtr.Zero)
+                    {
+                        var pkg = new AlpmPackage(pkgListNode.Data);
+
+                        // exact real-name match …
+                        var isMatch = string.Equals(pkg.Name, depName, StringComparison.Ordinal);
+
+                        // … or satisfied via provides (strip any version constraint from each provide)
+                        if (!isMatch)
+                        {
+                            isMatch = pkg.Provides.Any(p =>
+                                string.Equals(ParsedDependency.Parse(p).Name, depName, StringComparison.Ordinal));
+                        }
+
+                        if (isMatch && !providers.Contains(pkg.Name))
+                        {
+                            providers.Add(pkg.Name);
+                        }
+                    }
+
+                    pkgNode = pkgListNode.Next;
+                }
+            }
+
+            currentPtr = node.Next;
+        }
+
+        return providers;
+    }
+
+    /// <summary>
+    /// Resolves a (possibly virtual) optdep name to a single concrete package name.
+    /// - exact package / single provider  -> returns it directly
+    /// - multiple providers               -> raises SelectProvider and returns the user's choice
+    /// </summary>
+    private string ResolveOptDepProvider(string name)
+    {
+        var match = FindSatisfierInSyncDbsEx(name);
+
+        // Real package (not via provides): no ambiguity, keep the name as-is.
+        if (match is null || !match.Value.ViaProvides)
+            return name;
+
+        var providers = EnumerateProvidersInSyncDbs(name);
+
+        // Zero or one provider: nothing to choose, fall back to the satisfier.
+        if (providers.Count <= 1)
+            return match.Value.RealName;
+
+        // 2+ providers -> ask the user, reusing the existing SelectProvider question.
+        var options = providers
+            .Select(p => new ProviderOption(
+                p,
+                "No description available",
+                PackageUtilities.IsPackageInstalled(_handle, p) || IsDependencySatisfiedByInstalled(p)))
+            .ToList();
+
+        var args = new AlpmQuestionEventArgs(
+            AlpmQuestionType.SelectProvider,
+            $"Select a provider for '{name}':",
+            options,
+            name)
+        {
+            Response = new QuestionResponse(0, null) // default to first if no handler responds
+        };
+
+        Question?.Invoke(this, args);
+        args.WaitForResponse();
+
+        var index = args.Response.Response;
+        if (index < 0 || index >= providers.Count) index = 0;
+        return providers[index];
     }
 
     public Task<bool> InstallDependenciesOnly(string packageName,

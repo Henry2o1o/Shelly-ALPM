@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
-"POT-Creation-Date: 2026-06-23 22:35+0000\n"
-"PO-Revision-Date: 2026-06-26 16:16+0000\n"
+"POT-Creation-Date: 2026-06-27 07:15+0000\n"
+"PO-Revision-Date: 2026-06-27 07:27+0000\n"
 "Last-Translator: juliazero <juliazero2@gmail.com>\n"
 "Language-Team: Polish\n"
 "Language: pl\n"
@@ -318,8 +318,8 @@ msgstr "np. https://flathub.org/repo/flathub.flatpakrepo"
 msgid "Scope"
 msgstr "Zakres"
 
-msgid "Remove Selected"
-msgstr "Usuń wybrane"
+msgid "Show Runtimes"
+msgstr "Pokaż środowiska uruchomieniowe"
 
 msgid "Flatpak Repair"
 msgstr "Naprawa Flatpak"
@@ -441,6 +441,9 @@ msgstr "Obniż wybrane"
 msgid "Downgrade selected packages one by one"
 msgstr "Obniżaj wybrane pakiety jeden po drugim"
 
+msgid "Remove Selected"
+msgstr "Usuń wybrane"
+
 msgid "Package Name"
 msgstr "Nazwa pakietu"
 
@@ -554,11 +557,32 @@ msgstr "Wygląd i styl"
 msgid "Icons Enabled"
 msgstr "Ikony pakietów"
 
+msgid ""
+"If enabled, Shelly will use appstream icons in the package list and details "
+"pages."
+msgstr ""
+"Jeśli ta opcja jest włączona, Shelly będzie wyświetlać ikony AppStream na "
+"liście pakietów oraz na stronach szczegółów."
+
 msgid "Use Sidebar Navigation"
 msgstr "Użyj bocznej nawigacji"
 
+msgid ""
+"If enabled, Shelly will use a sidebar vertical navigation instead of the top "
+"bar one."
+msgstr ""
+"Jeśli ta opcja jest włączona, Shelly będzie korzystać z pionowego paska "
+"nawigacyjnego w pasku bocznym zamiast paska nawigacyjnego u góry strony."
+
 msgid "Use Symbolic Tray Icon"
 msgstr "Użyj symbolicznej ikony w zasobniku systemowym"
+
+msgid ""
+"If enabled, Shelly will use a symbolic svg icon instead of the default image "
+"one."
+msgstr ""
+"Jeśli ta opcja jest włączona, Shelly będzie używać symbolicznej ikony SVG "
+"zamiast domyślnej ikony graficznej."
 
 msgid "Tray Icon"
 msgstr "Ikona w zasobniku"
@@ -605,11 +629,21 @@ msgstr "Pobieranie równoległe"
 msgid "Force Database Update"
 msgstr "Wymuś aktualizację bazy danych"
 
+msgid "Force a synchronization of the package database."
+msgstr "Wymuś synchronizację bazy danych pakietów."
+
 msgid "Remove db.lck"
 msgstr "Usuń db.lck"
 
+msgid ""
+"Removes the db.lck file if it was left behind by an interrupted alpm process."
+msgstr "Usuwa plik db.lck, jeśli pozostał on po przerwanym procesie alpm."
+
 msgid "View Pacfiles"
 msgstr "Wyświetl pliki pac"
+
+msgid "View the contents of stored pacfiles."
+msgstr "Wyświetl zawartość zapisanych plików pac."
 
 msgid "Fix Permissions"
 msgstr "Napraw uprawnienia"
@@ -624,6 +658,9 @@ msgstr ""
 
 msgid "Purify Packages"
 msgstr "Oczyść pakiety"
+
+msgid "Remove corrupted/orphaned packages."
+msgstr "Usuń uszkodzone lub osierocone pakiety."
 
 msgid "View Changelog"
 msgstr "Zobacz dziennik zmian"
@@ -1034,26 +1071,8 @@ msgstr "Dodaj do listy IgnorePkg"
 msgid "Downgrade"
 msgstr "Obniż wersję"
 
-msgid "Fingerprint Disable Instructions"
-msgstr "Instrukcje wyłączania odcisku palca"
-
-msgid "Disable fingerprint authentication for sudo"
-msgstr "Wyłącz uwierzytelnianie odciskiem palca dla sudo"
-
-msgid "1. Inspect"
-msgstr "1. Przegląd"
-
-msgid "2. Disable for sudo"
-msgstr "2. Wyłącz dla sudo"
-
-msgid "3. Re-enable later"
-msgstr "3. Włącz ponownie później"
-
 msgid "Close"
 msgstr "Zamknij"
-
-msgid "Copy"
-msgstr "Kopiuj"
 
 msgid "Operation Complete"
 msgstr "Operacja ukończona"
@@ -1084,6 +1103,9 @@ msgid ""
 msgstr ""
 "Te polecenia pobierają i wykonują kod poza kontrolą Shelly i Libalpm. "
 "Zapoznaj się z nimi przed kontynuowaniem."
+
+msgid "Source files"
+msgstr "Pliki źródłowe"
 
 msgid "Install Anyway"
 msgstr "Zainstaluj mimo wszystko"
@@ -1287,6 +1309,9 @@ msgstr "Instalowanie pakietu lokalnego..."
 
 msgid "Installed local package"
 msgstr "Zainstalowano pakiet lokalny"
+
+msgid "Failed to install local package."
+msgstr "Nie udało się zainstalować lokalnego pakietu."
 
 msgid "Install As"
 msgstr "Zainstaluj jako"

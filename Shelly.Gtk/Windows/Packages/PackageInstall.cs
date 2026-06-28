@@ -10,6 +10,7 @@ using Shelly.Gtk.Services.PackageTraversal;
 using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
+using Shelly.Gtk.Windows.Dialog;
 using Shelly.Utilities.Enums;
 using static Shelly.GTK.Resources.Translations;
 using ListStore = Gio.ListStore;
@@ -641,11 +642,12 @@ public sealed class PackageInstall(
         if (pkg.Groups.Count > 0)
             AddDetail(T("Groups"), string.Join(", ", pkg.Groups));
 
-        if (configService.LoadConfig().WebViewEnabled && pkg.Depends.Count > 0)
+        if (configService.LoadConfig().StarFishEnabled && pkg.Depends.Count > 0)
         {
-            var dictionary = new Dictionary<string, List<string>> { { pkg.Name, pkg.Depends } };
+            var cleanDeps = pkg.Depends.Select(StripVersionSpecifier).ToList();
+            var dictionary = new Dictionary<string, List<string>> { { pkg.Name, cleanDeps } };
 
-            foreach (var dep in pkg.Depends)
+            foreach (var depName in cleanDeps)
             {
                 for (uint i = 0; i < _listStore.GetNItems(); i++)
                 {
@@ -653,13 +655,14 @@ public sealed class PackageInstall(
                     if (obj is not AlpmPackageGObject depObj) continue;
                     if (depObj.Index < 0 || depObj.Index >= _packageData.Count) continue;
                     var depPkg = _packageData[depObj.Index];
-                    if (depPkg.Name.Contains(dep))
+                    if (depPkg.Name == depName)
                         dictionary.TryAdd(depPkg.Name, depPkg.Depends);
                 }
             }
 
-            var window = new WebWindow(pkg.Name, dictionary);
-            _detailBox.Append(window.CreateWindow());
+            var button = Button.NewWithLabel(T("View Dependency Graph"));
+            button.OnClicked += (_, _) => DependencyGraphPreview.Show(null, pkg.Name, dictionary);
+            _detailBox.Append(button);
         }
 
         _detailRevealer.SetRevealChild(true);
@@ -1271,6 +1274,13 @@ public sealed class PackageInstall(
         }
 
         return false;
+    }
+
+    private static string StripVersionSpecifier(string dep)
+    {
+        var span = dep.AsSpan();
+        var end = span.IndexOfAny(['>', '<', '=', ' ']);
+        return (end >= 0 ? span[..end] : span).ToString();
     }
 
     public void Dispose()

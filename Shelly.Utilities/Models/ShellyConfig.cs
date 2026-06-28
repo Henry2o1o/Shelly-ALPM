@@ -28,7 +28,6 @@ public class ShellyConfig
     public bool UseWeeklySchedule { get; set; }
     public List<DayOfWeek> DaysOfWeek { get; set; } = [];
     public TimeOnly? Time { get; set; }
-    public bool WebViewEnabled { get; set; }
     public bool ShellyIconsEnabled { get; set; } = true;
     public bool AppImageEnabled { get; set; }
     public bool NewInstallInitSettings { get; set; }
@@ -68,6 +67,7 @@ public class ShellyConfig
     public bool AurUpdateRunChecks { get; set; }
     public bool AurUpdateShowHidden { get; set; }
     public string? AppImageInstallPath { get; set; }
+    public bool StarFishEnabled { get; set; } = false;
     
     public ViewType PackageInstallView { get; set; } = ViewType.List;
     public ViewType PackageUpdateView { get; set; } = ViewType.List;
