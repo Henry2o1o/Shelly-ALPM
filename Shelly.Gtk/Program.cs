@@ -188,6 +188,7 @@ sealed class Program
             if (currentPage == "flatpak_page")
             {
                 FlatpakRefHandler.RequestInstall(appId);
+                return 0;
             }
             
             FlatpakRefHandler.RegisterAppId(appId);
@@ -197,7 +198,7 @@ sealed class Program
             return 0;
         };   
         
-        FlatpakRefHandler.InstallRequested += _ =>
+        FlatpakRefHandler.InstallRequested += (_, _) =>
         {
             try
             {

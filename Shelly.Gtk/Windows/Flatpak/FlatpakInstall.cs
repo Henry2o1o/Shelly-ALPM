@@ -111,7 +111,8 @@ public class FlatpakInstall(
     {
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakInstallWindow.ui"), -1);
         var box = (Box)builder.GetObject("FlatpakInstallWindow")!;
-        FlatpakRefHandler.InstallRequested += InstallFromRefId;
+        FlatpakRefHandler.InstallRequested += (appId, _) =>
+            InstallFromIdAsync(appId, remote: "flathub", isRuntime:false);
         
         _gridView = (GridView)builder.GetObject("list_flatpaks")!;
         _scroller = _gridView.GetParent() as ScrolledWindow;
@@ -1217,8 +1218,29 @@ public class FlatpakInstall(
         }
     }
 
-    private async Task InstallFromIdAsync(string id)
+    private async Task InstallFromIdAsync(string id, string? remote = null, bool isRuntime = true)
     {
+        
+        if (remote != null)
+        {
+            var pkg = _allPackages.FirstOrDefault(x => x.Id == id);
+
+            if (pkg == null)
+                return;
+
+            var installedPackages = await unprivilegedOperationService.ListFlatpakPackages();
+
+            if (installedPackages.Any(p => p.Id == pkg.Id))
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(
+                        Translations.T("Package is already installed")));
+                return;
+            }
+        }
+        
+        var selectedRemote = remote ?? _selectedRemote;
+        
         if (!configService.LoadConfig().NoConfirm)
         {
             var args = new GenericQuestionEventArgs(
@@ -1237,26 +1259,27 @@ public class FlatpakInstall(
             UnprivilegedOperationResult result;
             lockoutService.Show(Translations.T("Installing {0}...", id));
             
-            if (_selectedRemote.Contains("user"))
+            if (selectedRemote.Contains("user"))
             {
                 result = await unprivilegedOperationService.InstallFlatpakPackage(id,
-                    true, _selectedRemote.Split(":")[0].Trim(),
-                    _selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", true);
+                    true, selectedRemote.Split(":")[0].Trim(),
+                    selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", isRuntime);
             }
             else
             {
                 result = await unprivilegedOperationService.InstallFlatpakPackage(id,
-                    false, _selectedRemote.Split(":")[0].Trim(),
-                    _selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", true);
+                    false, selectedRemote.Split(":")[0].Trim(),
+                    selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", isRuntime);
             }
 
 
             if (result.Success)
             {
-                var args = new ToastMessageEventArgs(
-                    Translations.T("Installed Flatpak addon")
-                );
-                genericQuestionService.RaiseToastMessage(args);
+                var message = remote != null
+                    ? Translations.T("Installed Flatpak")
+                    : Translations.T("Installed Flatpak addon");
+
+                genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(message));
             }
             else
             {
@@ -1628,72 +1651,6 @@ public class FlatpakInstall(
             return false;
         });
         return Task.CompletedTask;
-    }
-
-    public async Task InstallFromRefId(string appId)
-    {
-        if (string.IsNullOrWhiteSpace(appId))
-            return;
-
-        if (_allPackages.Count == 0)
-            return;    
-
-        var pkg = _allPackages.FirstOrDefault(x => x.Id == appId);
-
-        if (pkg == null)
-            return;
-
-        var installedPackages = await unprivilegedOperationService.ListFlatpakPackages();
-        
-        if (installedPackages.Any(p => p.Id == pkg.Id))
-        {
-            genericQuestionService.RaiseToastMessage(
-                new ToastMessageEventArgs(
-                    Translations.T("Package is already installed")));
-
-            return;
-        }
-        
-        if (!configService.LoadConfig().NoConfirm)
-        {
-            var question = new GenericQuestionEventArgs(
-                Translations.T("Install Package?"),
-                $"{pkg.Name}"
-            );
-
-            genericQuestionService.RaiseQuestion(question);
-
-            if (!await question.ResponseTask)
-                return;
-        }
-        
-        try
-        {
-            lockoutService.Show(Translations.T("Installing {0}...", appId));
-
-            var result = await unprivilegedOperationService.InstallFlatpakPackageFromFlathub(
-                pkg.Id,
-                InstallLevel.User);
-
-            if (result.Success)
-            {
-                genericQuestionService.RaiseToastMessage(
-                    new ToastMessageEventArgs(
-                        Translations.T("Installed Flatpak")));
-            }
-            else
-            {
-                genericQuestionService.RaiseToastMessage(
-                    new ToastMessageEventArgs(
-                        Translations.T("Installing Flatpak failed")));
-
-                Console.WriteLine($"Failed to install {appId}: {result.Error}");
-            }
-        }
-        finally
-        {
-            lockoutService.Hide();
-        }
     }
     
     public void Dispose()
