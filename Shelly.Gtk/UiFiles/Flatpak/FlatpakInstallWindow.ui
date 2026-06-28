@@ -470,15 +470,46 @@
                                                             </object>
                                                         </child>
                                                         <child>
-                                                            <object class="GtkLabel" id="overlay_description_label">
-                                                                <property name="label" translatable="yes">No description available.</property>
-                                                                <property name="halign">start</property>
-                                                                <property name="xalign">0</property>
-                                                                <property name="wrap">true</property>
-                                                                <property name="wrap-mode">word-char</property>
-                                                                <style>
-                                                                    <class name="body"/>
-                                                                </style>
+                                                            <object class="GtkBox">
+                                                                <property name="orientation">vertical</property>
+                                                                <property name="spacing">4</property>
+                                                                <child>
+                                                                    <object class="GtkLabel" id="overlay_description_label">
+                                                                        <property name="halign">start</property>
+                                                                        <property name="xalign">0</property>
+                                                                        <property name="wrap">true</property>
+                                                                        <property name="wrap-mode">word-char</property>
+                                                                        <style>
+                                                                            <class name="body"/>
+                                                                        </style>
+                                                                    </object>
+                                                                </child>
+                                                                <child>
+                                                                    <object class="GtkRevealer" id="description_revealer">
+                                                                        <property name="reveal-child">false</property>
+                                                                        <property name="transition-type">slide-down</property>
+                                                                        <child>
+                                                                            <object class="GtkLabel" id="overlay_description_label_full">
+                                                                                <property name="halign">start</property>
+                                                                                <property name="xalign">0</property>
+                                                                                <property name="wrap">true</property>
+                                                                                <property name="wrap-mode">word-char</property>
+                                                                                <style>
+                                                                                    <class name="body"/>
+                                                                                </style>
+                                                                            </object>
+                                                                        </child>
+                                                                    </object>
+                                                                </child>
+                                                                <child>
+                                                                    <object class="GtkButton" id="description_reveal_button">
+                                                                        <property name="halign">center</property>
+                                                                        <property name="label" translatable="yes">Show more</property>
+                                                                        <style>
+                                                                            <class name="flat"/>
+                                                                        </style>
+                                                                    </object>
+                                                                </child>
                                                             </object>
                                                         </child>
                                                         <child>
@@ -487,55 +518,32 @@
                                                             </object>
                                                         </child>
                                                         <child>
-                                                            <object class="GtkGrid">
-                                                                <property name="column-spacing">12</property>
-                                                                <property name="row-spacing">12</property>
-                                                                <child>
-                                                                    <object class="GtkLabel" id="overlay_urls_label">
-                                                                        <property name="halign">start</property>
-                                                                        <property name="xalign">0</property>
-                                                                        <property name="use-markup">true</property>
-                                                                        <property name="wrap">true</property>
-                                                                        <property name="selectable">true</property>
-                                                                        <layout>
-                                                                            <property name="column">0</property>
-                                                                            <property name="row">0</property>
-                                                                        </layout>
-                                                                    </object>
-                                                                </child>
-                                                                <child>
-                                                                    <object class="GtkBox">
-                                                                        <property name="hexpand">true</property>
-                                                                        <layout>
-                                                                            <property name="column">1</property>
-                                                                            <property name="row">0</property>
-                                                                        </layout>
-                                                                    </object>
-                                                                </child>
+                                                            <object class="GtkBox">
+                                                                <property name="spacing">8</property>
+                                                                <property name="orientation">horizontal</property>
+                                                                <property name="hexpand">true</property>
                                                                 <child>
                                                                     <object class="GtkButton" id="overlay_permissions_button">
-                                                                        <property name="halign">end</property>
-                                                                        <property name="valign">start</property>
+                                                                        <property name="hexpand">true</property>
                                                                         <property name="label" translatable="yes">App Permissions</property>
-                                                                        <layout>
-                                                                            <property name="column">2</property>
-                                                                            <property name="row">0</property>
-                                                                        </layout>
                                                                     </object>
                                                                 </child>
                                                                 <child>
                                                                     <object class="GtkButton" id="version_history_button">
-                                                                        <property name="halign">end</property>
-                                                                        <property name="valign">start</property>
+                                                                        <property name="hexpand">true</property>
                                                                         <property name="label" translatable="yes">Version History</property>
-                                                                        <layout>
-                                                                            <property name="column">3</property>
-                                                                            <property name="row">0</property>
-                                                                        </layout>
                                                                     </object>
                                                                 </child>
                                                             </object>
                                                         </child>
+                                                    <child>
+                                                        <object class="GtkListBox" id="overlay_links_box">
+                                                            <property name="selection-mode">0</property>
+                                                            <style>
+                                                                <class name="boxed-list"/>
+                                                            </style>
+                                                        </object>
+                                                    </child>
                                                     </object>
                                                 </child>
                                             </object>
