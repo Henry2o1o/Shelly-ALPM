@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Shelly-ALPM / Shelly: UI\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
-"POT-Creation-Date: 2026-06-23 22:35+0000\n"
+"POT-Creation-Date: 2026-06-27 07:15+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -309,7 +309,7 @@ msgstr ""
 msgid "Scope"
 msgstr ""
 
-msgid "Remove Selected"
+msgid "Show Runtimes"
 msgstr ""
 
 msgid "Flatpak Repair"
@@ -432,6 +432,9 @@ msgstr ""
 msgid "Downgrade selected packages one by one"
 msgstr ""
 
+msgid "Remove Selected"
+msgstr ""
+
 msgid "Package Name"
 msgstr ""
 
@@ -541,10 +544,25 @@ msgstr ""
 msgid "Icons Enabled"
 msgstr ""
 
+msgid ""
+"If enabled, Shelly will use appstream icons in the package list and details "
+"pages."
+msgstr ""
+
 msgid "Use Sidebar Navigation"
 msgstr ""
 
+msgid ""
+"If enabled, Shelly will use a sidebar vertical navigation instead of the top "
+"bar one."
+msgstr ""
+
 msgid "Use Symbolic Tray Icon"
+msgstr ""
+
+msgid ""
+"If enabled, Shelly will use a symbolic svg icon instead of the default image "
+"one."
 msgstr ""
 
 msgid "Tray Icon"
@@ -592,10 +610,20 @@ msgstr ""
 msgid "Force Database Update"
 msgstr ""
 
+msgid "Force a synchronization of the package database."
+msgstr ""
+
 msgid "Remove db.lck"
 msgstr ""
 
+msgid ""
+"Removes the db.lck file if it was left behind by an interrupted alpm process."
+msgstr ""
+
 msgid "View Pacfiles"
+msgstr ""
+
+msgid "View the contents of stored pacfiles."
 msgstr ""
 
 msgid "Fix Permissions"
@@ -607,6 +635,9 @@ msgid ""
 msgstr ""
 
 msgid "Purify Packages"
+msgstr ""
+
+msgid "Remove corrupted/orphaned packages."
 msgstr ""
 
 msgid "View Changelog"
@@ -1007,25 +1038,7 @@ msgstr ""
 msgid "Downgrade"
 msgstr ""
 
-msgid "Fingerprint Disable Instructions"
-msgstr ""
-
-msgid "Disable fingerprint authentication for sudo"
-msgstr ""
-
-msgid "1. Inspect"
-msgstr ""
-
-msgid "2. Disable for sudo"
-msgstr ""
-
-msgid "3. Re-enable later"
-msgstr ""
-
 msgid "Close"
-msgstr ""
-
-msgid "Copy"
 msgstr ""
 
 msgid "Operation Complete"
@@ -1054,6 +1067,9 @@ msgstr ""
 msgid ""
 "These commands fetch and execute code outside of shelly and libalpm's "
 "control. Review them before continuing."
+msgstr ""
+
+msgid "Source files"
 msgstr ""
 
 msgid "Install Anyway"
@@ -1257,6 +1273,9 @@ msgid "Installing local package..."
 msgstr ""
 
 msgid "Installed local package"
+msgstr ""
+
+msgid "Failed to install local package."
 msgstr ""
 
 msgid "Install As"
