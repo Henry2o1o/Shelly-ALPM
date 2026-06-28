@@ -91,10 +91,10 @@ public sealed class Settings(
         SetupTraySwitch("tray_switch", _config.TrayEnabled, (v) => _config.TrayEnabled = v, builder);
         SetupWeeklyScheduleSwitch("daily_schedule", _config.UseWeeklySchedule, (v) => _config.UseWeeklySchedule = v,
             builder);
+        SetupStarfishSwitch("webview_switch", _config.StarFishEnabled, (v) => _config.StarFishEnabled = v, builder);
         SetupSwitch("no_confirm_switch", _config.NoConfirm, (v) => _config.NoConfirm = v, builder);
         SetupSwitch("remove_cache_switch", _config.RemoveCache, (v) => _config.RemoveCache = v, builder);
-        SetupSwitch("webview_switch", _config.WebViewEnabled, (v) => _config.WebViewEnabled = v, builder);
-        SetupSwitch("shelly_icons_switch", _config.ShellyIconsEnabled, (v) => _config.ShellyIconsEnabled = v, builder);
+        SetupSwitch("webview_switch", _config.StarFishEnabled, (v) => _config.StarFishEnabled = v, builder);
         SetupSwitch("recommended_switch", _config.RecommendedEnabled, (v) => _config.RecommendedEnabled = v, builder);
         SetupSwitch("appimage_switch", _config.AppImageEnabled, (v) => _config.AppImageEnabled = v, builder);
         SetupSwitch("symbolic_tray_switch", _config.UseSymbolicTray, (v) => _config.UseSymbolicTray = v, builder);
@@ -626,6 +626,24 @@ public sealed class Settings(
             return true;
         };
     }
+    
+    private void SetupStarfishSwitch(string id, bool initialValue, Action<bool> updateAction, Builder builder)
+    {
+        var sw = (Switch)builder.GetObject(id)!;
+        sw.Active = initialValue;
+        sw.OnStateSet += (s, e) =>
+        {
+            if (!e.State)
+            {
+                updateAction(false);
+                SaveConfig();
+                return false;
+            }
+
+            _ = HandleStarfishMissing(sw, updateAction);
+            return true;
+        };
+    }
 
 
     private async Task HandleAurConfirmationAsync(Switch sw, Action<bool> updateAction)
@@ -703,6 +721,73 @@ public sealed class Settings(
                     lockoutService.Hide();
                     genericQuestionService.RaiseToastMessage(
                         new ToastMessageEventArgs(Translations.T("Reboot required to complete installation.")));
+                }
+            }
+            else
+            {
+                Functions.IdleAdd(0, () =>
+                {
+                    sw.Active = false;
+                    sw.State = false;
+                    return false;
+                });
+            }
+        }
+        else
+        {
+            Functions.IdleAdd(0, () =>
+            {
+                updateAction(true);
+                SaveConfig();
+                sw.Active = true;
+                sw.State = true;
+                return false;
+            });
+        }
+    }
+    
+     private async Task HandleStarfishMissing(Switch sw, Action<bool> updateAction)
+    {
+        var result = await unprivilegedOperationService.IsPackageInstalledOnMachine("lib-starfish");
+
+        if (!result)
+        {
+            var args = new GenericQuestionEventArgs(
+                Translations.T("Missing Starfish"),
+                Translations.T("Would you like to install this this now?")
+            );
+
+            genericQuestionService.RaiseQuestion(args);
+            var confirmed = await args.ResponseTask;
+
+            if (confirmed)
+            {
+                try
+                {
+                    lockoutService.Show(Translations.T("Installing starfish..."));
+                    await privilegedOperationService.InstallPackagesAsync(["starfish"]);
+                    Functions.IdleAdd(0, () =>
+                    {
+                        updateAction(true);
+                        SaveConfig();
+                        sw.Active = true;
+                        sw.State = true;
+                        return false;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error installing starfish: {ex.Message}");
+                    Functions.IdleAdd(0, () =>
+                    {
+                        sw.Active = false;
+                        sw.State = false;
+                        return false;
+                    });
+                }
+                finally
+                {
+                    lockoutService.Hide();
                 }
             }
             else

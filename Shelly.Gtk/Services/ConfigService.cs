@@ -52,7 +52,7 @@ public class ConfigService : IConfigService
         CallCliConfigSet(nameof(config.UseWeeklySchedule), config.UseWeeklySchedule.ToString());
         CallCliConfigSet(nameof(config.DaysOfWeek), string.Join(",", config.DaysOfWeek));
         CallCliConfigSet(nameof(config.Time), config.Time?.ToString() ?? "");
-        CallCliConfigSet(nameof(config.WebViewEnabled), config.WebViewEnabled.ToString());
+        CallCliConfigSet(nameof(config.StarFishEnabled), config.StarFishEnabled.ToString());
         CallCliConfigSet(nameof(config.ShellyIconsEnabled), config.ShellyIconsEnabled.ToString());
         CallCliConfigSet(nameof(config.NewInstallInitSettings), config.NewInstallInitSettings.ToString());
         CallCliConfigSet(nameof(config.RecommendedEnabled), config.RecommendedEnabled.ToString());

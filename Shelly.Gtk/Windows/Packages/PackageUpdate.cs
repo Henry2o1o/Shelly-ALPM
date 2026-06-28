@@ -412,28 +412,6 @@ public class PackageUpdate(
         if (pkg.Groups.Count > 0)
             AddDetail(T("Groups"), string.Join(", ", pkg.Groups));
 
-        if (configService.LoadConfig().WebViewEnabled)
-        {
-            if (pkg.Depends.Count > 0)
-            {
-                var dictionary = new Dictionary<string, List<string>> { { pkg.Name, pkg.Depends } };
-
-                foreach (var dep in pkg.Depends)
-                {
-                    for (uint i = 0; i < _listStore.GetNItems(); i++)
-                    {
-                        var obj = _listStore.GetObject(i);
-                        if (obj is not AlpmUpdateGObject depObj || depObj.Package == null) continue;
-                        if (depObj.Package.Name.Contains(dep))
-                            dictionary.TryAdd(depObj.Package.Name, depObj.Package.Depends);
-                    }
-                }
-
-                var window = new WebWindow(pkg.Name, dictionary);
-                _detailBox.Append(window.CreateWindow());
-            }
-        }
-
         _detailRevealer.SetRevealChild(true);
         return;
 
