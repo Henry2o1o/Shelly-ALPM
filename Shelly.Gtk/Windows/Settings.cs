@@ -748,7 +748,7 @@ public sealed class Settings(
     
      private async Task HandleStarfishMissing(Switch sw, Action<bool> updateAction)
     {
-        var result = await unprivilegedOperationService.IsPackageInstalledOnMachine("lib-starfish");
+        var result = await unprivilegedOperationService.IsPackageInstalledOnMachine("libstarfish");
 
         if (!result)
         {
@@ -765,7 +765,7 @@ public sealed class Settings(
                 try
                 {
                     lockoutService.Show(Translations.T("Installing starfish..."));
-                    await privilegedOperationService.InstallPackagesAsync(["starfish"]);
+                    await privilegedOperationService.InstallPackagesAsync(["libstarfish"]);
                     Functions.IdleAdd(0, () =>
                     {
                         updateAction(true);
