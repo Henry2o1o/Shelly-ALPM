@@ -1,0 +1,21 @@
+<Project>
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <PublishAot>true</PublishAot>
+        <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+
+        <!-- size/trim knobs shared by every project -->
+        <StripSymbols>true</StripSymbols>
+        <DebugType>none</DebugType>
+        <DebugSymbols>false</DebugSymbols>
+        <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
+        <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+
+        <!-- runtime feature switches (resolved at the AOT entry project,
+             but harmless/consistent to define centrally) -->
+        <StackTraceSupport>false</StackTraceSupport>
+        <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+        <DebuggerSupport>false</DebuggerSupport>
+    </PropertyGroup>
+</Project>

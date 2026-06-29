@@ -6,10 +6,16 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <PublishAot>true</PublishAot>
+        <!--<OptimizationPreference>Size</OptimizationPreference>-->
+        <!--<OptimizationPreference>Speed</OptimizationPreference>-->
         <InvariantGlobalization>true</InvariantGlobalization>
         <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     </PropertyGroup>
 
+    
+    <PropertyGroup>
+        <!--<IlcDisableReflection>true</IlcDisableReflection>-->
+    </PropertyGroup>
     <PropertyGroup>
         <Version>2.4.1.0</Version>
         <AssemblyName>shelly</AssemblyName>
