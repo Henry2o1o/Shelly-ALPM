@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace PackageManager.Alpm.Reference;
+namespace PackageManager.Alpm.Native;
 
 internal static partial class AlpmReference
 {

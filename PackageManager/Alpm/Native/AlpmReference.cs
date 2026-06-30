@@ -1,11 +1,10 @@
 using System;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 [assembly: InternalsVisibleTo("PackageManager.Tests")]
 
-namespace PackageManager.Alpm.Reference;
+namespace PackageManager.Alpm.Native;
 
 internal static partial class AlpmReference
 {

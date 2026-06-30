@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using PackageManager.Alpm.Package;
-using PackageManager.Alpm.Reference;
+using AlpmReference = PackageManager.Alpm.Native.AlpmReference;
 
 namespace PackageManager.Alpm;
 
