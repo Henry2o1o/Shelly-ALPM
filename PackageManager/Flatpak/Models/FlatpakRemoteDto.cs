@@ -1,7 +1,9 @@
 
-namespace PackageManager.Flatpak;
+using PackageManager.Flatpak.Enums;
 
-public partial class FlatpakRemoteDto()
+namespace PackageManager.Flatpak.Models;
+
+public record FlatpakRemoteDto()
 {
     public string Name { get; set; } = string.Empty;
  

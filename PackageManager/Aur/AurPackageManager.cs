@@ -14,6 +14,7 @@ using PackageManager.Alpm.Events.EventArgs;
 using PackageManager.Alpm.Questions;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Aur.Models;
+using PackageManager.Aur.Vcs;
 using PackageManager.Utilities;
 using PackageManager.Utilities.PkgBuild;
 using Shelly.Utilities;
@@ -131,7 +132,13 @@ public sealed class AurPackageManager(string? configPath = null)
     {
         var foreignPackages = _alpm.GetForeignPackages();
         var response = await _aurSearchManager.GetInfoAsync(foreignPackages.Select(x => x.Name).ToList());
-        return response.Results;
+        var aurPackages = response.Results;
+        foreach (var pkg in aurPackages)
+        {
+            pkg.Explicit = foreignPackages.First(x => x.Name == pkg.Name).InstallReason == "Explicit";
+        }
+
+        return aurPackages;
     }
 
     public async Task<List<AurPackageDto>> SearchPackages(string query)
@@ -520,11 +527,11 @@ public sealed class AurPackageManager(string? configPath = null)
                 continue;
             }
 
-            var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-            if (pkgFile is null)
+            var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+            if (pkgFiles.Count == 0)
             {
                 RaisePkgProgress(AlpmEventType.AurPackageFailed, packageName, i + 1, totalCount,
-                    $"No package file matching '{packageName}' produced by makepkg");
+                    $"No package files matching '{packageName}' produced by makepkg");
                 continue;
             }
 
@@ -533,7 +540,7 @@ public sealed class AurPackageManager(string? configPath = null)
 
             try
             {
-                _ = await _alpm.InstallLocalPackage(pkgFile);
+                _ = await _alpm.InstallLocalPackages(pkgFiles);
                 _alpm.Refresh();
 
                 // Update VCS info store with current commit SHAs after successful install
@@ -780,11 +787,11 @@ public sealed class AurPackageManager(string? configPath = null)
         _alpm.Dispose();
     }
 
-    private static string? SelectBuiltPackageFile(string tempPath, string packageName)
+    private static List<string> SelectBuiltPackageFiles(string tempPath, string packageName)
     {
         if (!Directory.Exists(tempPath))
         {
-            return null;
+            return [];
         }
 
         var allPkgFiles = Directory.GetFiles(tempPath, "*.pkg.tar.*")
@@ -793,7 +800,7 @@ public sealed class AurPackageManager(string? configPath = null)
 
         if (allPkgFiles.Count == 0)
         {
-            return null;
+            return [];
         }
 
         var prefix = packageName + "-";
@@ -802,10 +809,10 @@ public sealed class AurPackageManager(string? configPath = null)
 
         if (match is not null)
         {
-            return match;
+            return allPkgFiles;
         }
 
-        return allPkgFiles.Count == 1 ? allPkgFiles[0] : null;
+        return allPkgFiles.Count == 1 ? allPkgFiles : [];
     }
 
     public async Task InstallPackageVersion(string packageName, string commit)
@@ -892,17 +899,17 @@ public sealed class AurPackageManager(string? configPath = null)
             throw new Exception($"Failed to build package {packageName}");
         }
 
-        var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-        if (pkgFile is null)
+        var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+        if (pkgFiles.Count == 0)
         {
             RaisePkgProgress(AlpmEventType.AurPackageFailed, packageName, 1, 1,
-                $"No package file matching '{packageName}' produced by makepkg");
-            throw new Exception($"No package file matching '{packageName}' produced by makepkg");
+                $"No package files matching '{packageName}' produced by makepkg");
+            throw new Exception($"No package files matching '{packageName}' produced by makepkg");
         }
 
         RaisePkgProgress(AlpmEventType.AurInstallStart, packageName, 1, 1);
 
-        _ = await _alpm.InstallLocalPackage(pkgFile);
+        _ = await _alpm.InstallLocalPackages(pkgFiles);
         _alpm.Refresh();
 
         // Remove build-only dependencies (makedepends/checkdepends) that were installed for this build
@@ -1591,15 +1598,15 @@ public sealed class AurPackageManager(string? configPath = null)
                 return;
             }
 
-            var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-            if (pkgFile is null)
+            var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+            if (pkgFiles.Count == 0)
             {
                 InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
-                    $"No package file found for {packageName} in {tempPath} produced by makepkg"));
+                    $"No package files found for {packageName} in {tempPath} produced by makepkg"));
                 return;
             }
 
-            await _alpm.InstallLocalPackage(pkgFile, AlpmTransFlag.AllDeps);
+            await _alpm.InstallLocalPackages(pkgFiles, AlpmTransFlag.AllDeps);
             _alpm.Refresh();
         }
         finally
@@ -1720,15 +1727,15 @@ public sealed class AurPackageManager(string? configPath = null)
                 return;
             }
 
-            var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-            if (pkgFile is null)
+            var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+            if (pkgFiles.Count == 0)
             {
                 InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
-                    $"No package file found for {packageName} in {tempPath} produced by makepkg"));
+                    $"No package files found for {packageName} in {tempPath} produced by makepkg"));
                 return;
             }
 
-            await _alpm.InstallLocalPackage(pkgFile, AlpmTransFlag.AllDeps);
+            await _alpm.InstallLocalPackages(pkgFiles, AlpmTransFlag.AllDeps);
             _alpm.Refresh();
         }
         finally
