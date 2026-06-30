@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Enums;
 
 namespace PackageManager.Utilities;
 

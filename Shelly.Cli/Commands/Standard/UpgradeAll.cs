@@ -1,5 +1,6 @@
 using System.CommandLine;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Package;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using PackageManager.Aur;

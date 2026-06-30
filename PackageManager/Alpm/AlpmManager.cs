@@ -8,15 +8,18 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using PackageManager.Alpm.Enums;
 using PackageManager.Alpm.Events;
 using PackageManager.Alpm.Events.EventArgs;
+using PackageManager.Alpm.Interop;
+using PackageManager.Alpm.Package;
 using PackageManager.Alpm.Questions;
-using PackageManager.Alpm.Reference;
 using PackageManager.Alpm.TransactionErrors;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Utilities;
 using Shelly.Utilities.Networking;
-using static PackageManager.Alpm.Reference.AlpmReference;
+using static PackageManager.Alpm.Native.AlpmReference;
+using AlpmReference = PackageManager.Alpm.Native.AlpmReference;
 
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
