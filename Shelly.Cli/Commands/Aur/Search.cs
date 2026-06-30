@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Text.Json;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Package;
 using PackageManager.Aur;
 using PackageManager.Aur.Models;
 using Shelly.Cli.Commands.Standard;

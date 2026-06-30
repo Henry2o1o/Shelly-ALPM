@@ -4,6 +4,7 @@ using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Package;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Models.Standard.Downgrade;
 using Shelly.Cli.Outputs;

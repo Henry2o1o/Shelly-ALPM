@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using PackageManager.Alpm;
 using PackageManager.Alpm.Pacfile;
+using PackageManager.Alpm.Package;
 using PackageManager.Alpm.Questions;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;

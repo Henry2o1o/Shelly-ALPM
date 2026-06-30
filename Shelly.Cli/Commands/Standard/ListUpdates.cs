@@ -1,5 +1,6 @@
 using System.CommandLine;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Package;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
 using Shelly.Utilities.Enums;

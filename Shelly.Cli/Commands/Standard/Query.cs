@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Text;
 using System.Text.Json;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Package;
 using PackageManager.Local;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;

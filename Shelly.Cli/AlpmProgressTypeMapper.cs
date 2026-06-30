@@ -1,4 +1,5 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Enums;
 using Shelly.Utilities.Eventing;
 
 namespace Shelly.Cli;

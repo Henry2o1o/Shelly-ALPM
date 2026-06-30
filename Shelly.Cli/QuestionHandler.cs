@@ -1,4 +1,6 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Enums;
+using PackageManager.Alpm.Events.EventArgs;
 using PackageManager.Alpm.Questions;
 using PackageManager.Aur;
 using PackageManager.Utilities.PkgBuild;
