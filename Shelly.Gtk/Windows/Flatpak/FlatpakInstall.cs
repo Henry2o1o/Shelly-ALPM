@@ -1223,14 +1223,9 @@ public class FlatpakInstall(
         
         if (remote != null)
         {
-            var pkg = _allPackages.FirstOrDefault(x => x.Id == id);
-
-            if (pkg == null)
-                return;
-
             var installedPackages = await unprivilegedOperationService.ListFlatpakPackages();
 
-            if (installedPackages.Any(p => p.Id == pkg.Id))
+            if (installedPackages.Any(p => p.Id == id))
             {
                 genericQuestionService.RaiseToastMessage(
                     new ToastMessageEventArgs(
