@@ -132,7 +132,13 @@ public sealed class AurPackageManager(string? configPath = null)
     {
         var foreignPackages = _alpm.GetForeignPackages();
         var response = await _aurSearchManager.GetInfoAsync(foreignPackages.Select(x => x.Name).ToList());
-        return response.Results;
+        var aurPackages = response.Results;
+        foreach (var pkg in aurPackages)
+        {
+            pkg.Explicit = foreignPackages.First(x => x.Name == pkg.Name).InstallReason == "Explicit";
+        }
+
+        return aurPackages;
     }
 
     public async Task<List<AurPackageDto>> SearchPackages(string query)

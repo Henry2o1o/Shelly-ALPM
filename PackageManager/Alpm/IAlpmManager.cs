@@ -184,4 +184,5 @@ public interface IAlpmManager
     /// Gets the list of allowed architectures.
     /// </summary>
     List<string> GetAllowedArchitectures();
+
 }

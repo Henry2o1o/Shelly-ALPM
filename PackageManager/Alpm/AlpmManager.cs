@@ -2829,6 +2829,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         return architectures;
     }
+    
 
     private void HandleErrorMessage(IntPtr dataPtr, AlpmErrno error)
     {
