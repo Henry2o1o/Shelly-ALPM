@@ -46,7 +46,7 @@ public class PkgBuildService : IPkgBuildService
             {
                 var args = new PackageBuildEventArgs($"PKGBUILD: {packageName}", content, sourceFiles);
             
-                PkgbuildPreview.ShowPackageBuildPreview(parentOverlay, args, questionService);
+                PkgbuildPreview.ShowPackageBuildPreview(args, questionService);
             
                 return false; 
             });

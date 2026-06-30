@@ -8,54 +8,48 @@ namespace Shelly.Gtk.Windows.Dialog;
 
 public static class PkgbuildPreview
 {
-    public static void ShowPackageBuildPreview(Overlay parentOverlay, PackageBuildEventArgs e, IGenericQuestionService questionService)
+    public static void ShowPackageBuildPreview(PackageBuildEventArgs e, IGenericQuestionService questionService)
     {
-        var background = Box.New(Orientation.Horizontal, 0);
-        background.AddCssClass("lockout-overlay");
-        background.SetHalign(Align.Fill);
-        background.SetValign(Align.Fill);
-        background.SetHexpand(true);
-        background.SetVexpand(true);
+        var tcs = new TaskCompletionSource<bool>(); // Opcional: se quiser usar como Task<bool> no futuro
 
-        var baseFrame = Frame.New(null);
-        baseFrame.SetHalign(Align.Center);
-        baseFrame.SetValign(Align.Center);
-        baseFrame.SetSizeRequest(900, 600); 
-        baseFrame.SetMarginTop(20);
-        baseFrame.SetMarginBottom(20);
-        baseFrame.SetMarginStart(20);
-        baseFrame.SetMarginEnd(20);
-        baseFrame.AddCssClass("background");
-        baseFrame.AddCssClass("dialog-overlay");
-        baseFrame.SetOverflow(Overflow.Hidden);
-        background.Append(baseFrame);
+        var dialog = Window.New();
+        
+        dialog.SetTitle(e.Title);                      
+        dialog.SetTransientFor(null);                  
+        dialog.SetModal(true);                         
+        dialog.SetDefaultSize(900, 650);               
 
-        var box = Box.New(Orientation.Vertical, 12);
-        baseFrame.SetChild(box);
-
+        var outer = Box.New(Orientation.Vertical, 12);
+        
         var headerBox = Box.New(Orientation.Horizontal, 0);
         headerBox.SetMarginTop(4);
-        headerBox.SetMarginStart(4);
 
         var closeButton = Button.New();
         closeButton.SetIconName("window-close-symbolic");
         closeButton.TooltipText = "Close Preview";
-        closeButton.OnClicked += (_, _) => Close();
         
-        var copyButton = Button.New();
-        copyButton.SetIconName("edit-copy-symbolic"); 
-        copyButton.TooltipText = "Copy PKGBUILD to clipboard";
-        copyButton.OnClicked += (_, _) =>
+        closeButton.OnClicked += (_, _) =>
         {
-            var clipboard = copyButton.GetClipboard();
-            clipboard.SetText(e.PkgBuild);
-            questionService.RaiseToastMessage(new ToastMessageEventArgs("PKGBUILD copied to clipboard"));
+            tcs.TrySetResult(false);
+            dialog.Close();
         };
+
+        var copyButton = Button.New();
+        if (!string.IsNullOrEmpty(e.PkgBuild))
+        {
+            copyButton.SetIconName("edit-copy-symbolic"); 
+            copyButton.TooltipText = "Copy PKGBUILD to clipboard";
+            copyButton.OnClicked += (_, _) =>
+            {
+                var clipboard = copyButton.GetClipboard();
+                clipboard.SetText(e.PkgBuild);
+                questionService.RaiseToastMessage(new ToastMessageEventArgs("PKGBUILD copied to clipboard"));
+            };
+        }
 
         var titleLabel = Label.New(e.Title);
         titleLabel.AddCssClass("title-4");
         titleLabel.SetHexpand(true);
-        titleLabel.SetHalign(Align.Center);
         titleLabel.SetXalign(0.5f);
         titleLabel.SetMarginEnd(40);
 
@@ -63,37 +57,40 @@ public static class PkgbuildPreview
         headerBox.Append(titleLabel);
         headerBox.Append(closeButton);
 
-        box.Append(headerBox);
-        
+        outer.Append(headerBox);
 
         var textView = TextView.New();
-        textView.SetWrapMode(WrapMode.WordChar);
-        textView.Editable = false;          
-        textView.Monospace = true;        
-        textView.CursorVisible = false;
-        textView.LeftMargin = 12;
-        textView.RightMargin = 12;
-        textView.TopMargin = 12;
-        textView.BottomMargin = 12;
-        
-        textView.GetBuffer().SetText(e.PkgBuild, -1);
+        if (!string.IsNullOrEmpty(e.PkgBuild))
+        {
+            textView.WrapMode = WrapMode.WordChar;
+            textView.Editable = false;          
+            textView.Monospace = true;        
+            textView.CursorVisible = false;
+            textView.LeftMargin = 12;
+            textView.RightMargin = 12;
+            textView.TopMargin = 12;
+            textView.BottomMargin = 12;
+            textView.GetBuffer().SetText(e.PkgBuild, -1);
 
-        var scrolledWindow = ScrolledWindow.New();
-        scrolledWindow.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
-        scrolledWindow.SetVexpand(true);
-        scrolledWindow.SetHexpand(true);
-        scrolledWindow.AddCssClass("view"); 
-        scrolledWindow.SetChild(textView);
-        
-        box.Append(scrolledWindow);
+            var scrolledWindow = ScrolledWindow.New();
+            scrolledWindow.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
+            scrolledWindow.SetVexpand(true);
+            scrolledWindow.SetHexpand(true);
+            scrolledWindow.AddCssClass("view"); 
+            scrolledWindow.SetChild(textView);
 
+            outer.Append(scrolledWindow);
+        }
+        
         foreach (var (name, content) in e.SourceFiles)
         {
+            if (string.IsNullOrEmpty(content)) continue;
+
             var sourceLabel = Label.New(name);
             sourceLabel.AddCssClass("heading");
             sourceLabel.SetXalign(0);
             sourceLabel.SetMarginStart(12);
-            box.Append(sourceLabel);
+            outer.Append(sourceLabel);
 
             var sourceView = TextView.New();
             sourceView.SetWrapMode(WrapMode.WordChar);
@@ -112,26 +109,19 @@ public static class PkgbuildPreview
             sourceScroll.SetHexpand(true);
             sourceScroll.AddCssClass("view");
             sourceScroll.SetChild(sourceView);
-            box.Append(sourceScroll);
+            outer.Append(sourceScroll);
         }
 
-        var shortcutController = ShortcutController.New();
-        shortcutController.Scope = ShortcutScope.Global;
-        
-        var escAction = CallbackAction.New((_, _) => {
-            Close();
-            return true;
-        });
-        shortcutController.AddShortcut(Shortcut.New(ShortcutTrigger.ParseString("Escape"), escAction));
-        background.AddController(shortcutController);
+        dialog.SetChild(outer);
 
-        parentOverlay.AddOverlay(background);
-        return;
-
-        void Close()
+        dialog.OnCloseRequest += (_, _) =>
         {
-            e.SetResponse(false);
-            parentOverlay.RemoveOverlay(background);
-        }
+            tcs.TrySetResult(false);
+            return false;
+        };
+
+        dialog.Present();
+
+        closeButton.GrabFocus();
     }
 }
