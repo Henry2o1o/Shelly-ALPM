@@ -43,7 +43,6 @@ public static class PkgbuildPreview
             {
                 var clipboard = copyButton.GetClipboard();
                 clipboard.SetText(e.PkgBuild);
-                questionService.RaiseToastMessage(new ToastMessageEventArgs("PKGBUILD copied to clipboard"));
             };
         }
 
