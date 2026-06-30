@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using PackageManager.Alpm.Enums;
 using PackageManager.Alpm.Events.EventArgs;
+using PackageManager.Alpm.Package;
+using AlpmReference = PackageManager.Alpm.Native.AlpmReference;
 
 namespace PackageManager.Alpm;
 

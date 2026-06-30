@@ -4,22 +4,23 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
+using PackageManager.Alpm.Enums;
 using PackageManager.Alpm.Events;
 using PackageManager.Alpm.Events.EventArgs;
+using PackageManager.Alpm.Interop;
+using PackageManager.Alpm.Package;
 using PackageManager.Alpm.Questions;
 using PackageManager.Alpm.TransactionErrors;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Utilities;
-using Shelly.Utilities;
 using Shelly.Utilities.Networking;
-using static PackageManager.Alpm.AlpmReference;
+using static PackageManager.Alpm.Native.AlpmReference;
+using AlpmReference = PackageManager.Alpm.Native.AlpmReference;
+
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
