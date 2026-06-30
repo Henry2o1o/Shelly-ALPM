@@ -137,24 +137,6 @@ public class UnprivilegedOperationService(
         return result;
     }
     
-    public async Task<UnprivilegedOperationResult> InstallFlatpakPackageFromFlathub(
-        string appId,
-        InstallLevel level)
-    {
-        var args = new List<string>
-        {
-            "flatpak",
-            "install",
-            appId
-        };
-        
-        var result = await RunShellyCommandAsync(args.ToArray());
-
-        if (result.Success)
-            dirtyService.MarkDirty(DirtyScopes.Flatpak);
-
-        return result;
-    }
 
     public async Task<UnprivilegedOperationResult> FlatpakUpgrade()
     {
