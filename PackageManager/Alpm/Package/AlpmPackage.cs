@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using PackageManager.Alpm.Package;
+using PackageManager.Alpm.Interop;
 using AlpmReference = PackageManager.Alpm.Native.AlpmReference;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Package;
 
 public class AlpmPackage(IntPtr pkgPtr)
 {

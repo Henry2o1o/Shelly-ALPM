@@ -1,7 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
+using PackageManager.Alpm.Enums;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Events;
 
 // Base event - just the type field
 [StructLayout(LayoutKind.Sequential)]

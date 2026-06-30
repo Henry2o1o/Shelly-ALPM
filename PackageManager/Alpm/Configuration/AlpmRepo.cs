@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using PackageManager.Alpm.Enums;
+
 #pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Configuration;
 
 internal class AlpmRepo
 {

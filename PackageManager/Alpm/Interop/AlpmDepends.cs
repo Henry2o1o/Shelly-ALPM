@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Interop;
 
 [StructLayout(LayoutKind.Sequential)]
 public struct AlpmDepends

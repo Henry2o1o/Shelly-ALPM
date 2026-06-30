@@ -1,6 +1,6 @@
-using System;
+using PackageManager.Alpm.Enums;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Events.EventArgs;
 
 public class AlpmProgressEventArgs(
     AlpmProgressType progressType,
@@ -9,7 +9,7 @@ public class AlpmProgressEventArgs(
     ulong? howMany,
     ulong? current,
     string? message = null)
-    : EventArgs
+    : System.EventArgs
 {
     public AlpmProgressType ProgressType { get; } = progressType;
     public string? PackageName { get; } = packageName;

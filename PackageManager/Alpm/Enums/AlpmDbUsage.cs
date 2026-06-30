@@ -1,6 +1,6 @@
 using System;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Enums;
 
 [Flags]
 internal enum AlpmDbUsage : int

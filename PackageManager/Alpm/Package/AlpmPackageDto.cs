@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using PackageManager.Alpm.Package;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Package;
 
 public partial record AlpmPackageDto
 {

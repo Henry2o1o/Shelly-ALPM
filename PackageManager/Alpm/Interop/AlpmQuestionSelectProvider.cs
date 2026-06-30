@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Interop;
 
 /// <summary>
 /// Structure for the SelectProvider question type in libalpm.

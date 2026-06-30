@@ -1,4 +1,4 @@
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Enums;
 
 /// <summary>
 /// ALPM event types - values must match alpm_event_type_t from alpm.h

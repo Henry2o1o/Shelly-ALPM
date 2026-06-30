@@ -1,11 +1,11 @@
-using System;
 using System.Collections.Generic;
 using System.Threading;
+using PackageManager.Alpm.Enums;
 using PackageManager.Alpm.Questions;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Events.EventArgs;
 
-public class AlpmQuestionEventArgs : EventArgs
+public class AlpmQuestionEventArgs : System.EventArgs
 {
     public AlpmQuestionEventArgs(
         AlpmQuestionType questionType,

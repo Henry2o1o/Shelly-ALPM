@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Package;
 
 public partial record AlpmPackageUpdateDto
 {

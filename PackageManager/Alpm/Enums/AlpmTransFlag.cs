@@ -1,6 +1,6 @@
 using System;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Enums;
 
 [Flags]
 public enum AlpmTransFlag : int

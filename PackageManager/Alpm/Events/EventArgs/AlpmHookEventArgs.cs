@@ -1,8 +1,6 @@
-using System;
+namespace PackageManager.Alpm.Events.EventArgs;
 
-namespace PackageManager.Alpm;
-
-public class AlpmHookEventArgs(string description, ulong position, ulong total) : EventArgs
+public class AlpmHookEventArgs(string description, ulong position, ulong total) : System.EventArgs
 {
     public string Description { get; } = description;
     public ulong Position { get; } = position;

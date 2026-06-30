@@ -1,6 +1,4 @@
-using System;
-
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Package;
 
 public class AlpmPackageUpdate(AlpmPackage installedPackage, AlpmPackage newPackage)
 {

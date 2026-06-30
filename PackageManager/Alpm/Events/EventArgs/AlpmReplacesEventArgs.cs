@@ -1,9 +1,8 @@
-using System;
 using System.Collections.Generic;
 
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Events.EventArgs;
 
-public class AlpmReplacesEventArgs : EventArgs
+public class AlpmReplacesEventArgs : System.EventArgs
 {
     public string PackageName { get; }
     public string Repository { get; }

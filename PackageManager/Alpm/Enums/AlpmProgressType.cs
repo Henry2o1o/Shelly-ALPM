@@ -1,4 +1,4 @@
-namespace PackageManager.Alpm;
+namespace PackageManager.Alpm.Enums;
 
 public enum AlpmProgressType
 {

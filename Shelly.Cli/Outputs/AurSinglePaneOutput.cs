@@ -1,4 +1,5 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Enums;
 using PackageManager.Alpm.Pacfile;
 using PackageManager.Aur;
 using Pastel;
