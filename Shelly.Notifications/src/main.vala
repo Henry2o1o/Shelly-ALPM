@@ -118,7 +118,7 @@ public class ShellyApp : Object {
 
         cancel_id = cancel.connect (() => {
             Source.remove (source_id);
-            resume ();
+            Idle.add (resume);
         });
 
         yield;
