@@ -64,8 +64,13 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
             console.WriteLine(message);
         }
 
-        message = isAnsiSupported ? "Checking for updates...".Pastel(ConsoleColor.Green) : "Checking for updates...";
-        console.WriteLine(message);
+        if (!JsonOutput)
+        {
+            message = isAnsiSupported
+                ? "Checking for updates...".Pastel(ConsoleColor.Green)
+                : "Checking for updates...";
+            console.WriteLine(message);
+        }
 
         var standard = GetSyncStandards(dbPath, sizeDisplay);
         List<SyncAur> aurSync = [];
@@ -163,7 +168,8 @@ public partial class CheckPackageUpdateNonRoot : GlobalSettingsCommand
         JsonPackFrame.WriteToStdout(sync);
     }
 
-    private void CountOutput(IShellyConsole console, bool isAnsiSupported, int standardCount, int aurCount, int flatpakCount)
+    private void CountOutput(IShellyConsole console, bool isAnsiSupported, int standardCount, int aurCount,
+        int flatpakCount)
     {
         var message = isAnsiSupported
             ? $"Updates found: {standardCount + aurCount + flatpakCount} ".Pastel(ConsoleColor.Green)
