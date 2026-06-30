@@ -46,7 +46,8 @@ public class PkgBuildService : IPkgBuildService
             {
                 var args = new PackageBuildEventArgs($"PKGBUILD: {packageName}", content, sourceFiles);
             
-                PkgbuildPreview.ShowPackageBuildPreview(args, questionService);
+                var parent = (Gio.Application.GetDefault() as Application)?.GetActiveWindow();
+                PkgbuildPreview.ShowPackageBuildPreview(parent, args);
             
                 return false; 
             });
