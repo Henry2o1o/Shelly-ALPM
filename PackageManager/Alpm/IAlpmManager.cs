@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using PackageManager.Alpm.Events.EventArgs;
+using PackageManager.Alpm.Reference;
 
 namespace PackageManager.Alpm;
 

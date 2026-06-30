@@ -7,7 +7,7 @@ public class LibraryIdentificationTests
     [Test]
     public void SuccessfullyResolvesAlpmLibrary()
     {
-        var isAvailable = NativeResolver.IsLibraryAvailable(Alpm.AlpmReference.LibName);
+        var isAvailable = NativeResolver.IsLibraryAvailable(Alpm.Reference.AlpmReference.LibName);
         Assert.That(isAvailable, Is.True);
     }
     
