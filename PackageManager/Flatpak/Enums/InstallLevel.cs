@@ -1,4 +1,4 @@
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Enums;
 
 public enum InstallLevel
 {

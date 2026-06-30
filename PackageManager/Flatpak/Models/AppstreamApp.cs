@@ -1,12 +1,11 @@
 using System.Collections.Generic;
-using System.Text.Json.Serialization;
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Models;
 
 /// <summary>
 /// Represents an application from Flatpak appstream metadata
 /// </summary>
-public partial class AppstreamApp
+public record class AppstreamApp
 {
     public string Id { get; set; } = string.Empty;
 
@@ -48,7 +47,7 @@ public partial class AppstreamApp
 /// <summary>
 /// Represents an icon for an appstream application
 /// </summary>
-public partial class AppstreamIcon
+public record AppstreamIcon
 {
     public string Type { get; set; } = string.Empty;
 
@@ -64,7 +63,7 @@ public partial class AppstreamIcon
 /// <summary>
 /// Represents a screenshot for an appstream application
 /// </summary>
-public partial class AppstreamScreenshot
+public record AppstreamScreenshot
 {
     public string Caption { get; set; } = string.Empty;
 
@@ -76,7 +75,7 @@ public partial class AppstreamScreenshot
 /// <summary>
 /// Represents an image in a screenshot
 /// </summary>
-public partial class AppstreamImage
+public record AppstreamImage
 {
     public string Type { get; set; } = string.Empty;
     
@@ -90,7 +89,7 @@ public partial class AppstreamImage
 /// <summary>
 /// Represents a release/version entry for an appstream application
 /// </summary>
-public partial class AppstreamRelease
+public record AppstreamRelease
 {
     public string Version { get; set; } = string.Empty;
     

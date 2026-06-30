@@ -4,7 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Models;
 
 //TODO: Cleanup and make properties with an actual name and map to property
 

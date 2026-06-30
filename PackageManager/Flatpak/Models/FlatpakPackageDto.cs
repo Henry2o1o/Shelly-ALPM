@@ -1,9 +1,9 @@
 using System.Collections.Generic;
-using System.Text.Json.Serialization;
+using PackageManager.Flatpak.Enums;
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Models;
 
-public partial class FlatpakPackageDto
+public class FlatpakPackageDto
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
