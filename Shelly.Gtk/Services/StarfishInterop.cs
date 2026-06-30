@@ -9,7 +9,7 @@ namespace Shelly.Gtk.Services;
 /// </summary>
 public static partial class StarfishInterop
 {
-    private const string LibName = "lib-starfish";
+    private const string LibName = "libstarfish";
 
     [LibraryImport(LibName, EntryPoint = "starfish_graph_widget_init")]
     private static partial int NativeInit();
