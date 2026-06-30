@@ -13,5 +13,15 @@
             <arg name="expire_timeout" type="i"      direction="in"/>
             <arg name="id"             type="u"      direction="out"/>
         </method>
+
+        <signal name="ActionInvoked">
+            <arg name="id" type="u"/>
+            <arg name="action_key" type="s"/>
+        </signal>
+
+        <signal name="NotificationClosed">
+            <arg name="id" type="u"/>
+            <arg name="reason" type="u"/>
+        </signal>
     </interface>
 </node>
