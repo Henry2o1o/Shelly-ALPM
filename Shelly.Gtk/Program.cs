@@ -369,6 +369,7 @@ sealed class Program
 
             void LoadFlatpakPage()
             {
+                _currentFlatpakWindow?.Unsubscribe();
                 var w = serviceProvider.GetRequiredService<FlatpakInstall>();
                 _flatpakPageBox.Append(w.CreateWindow());
                 _currentFlatpakWindow = w;
@@ -616,6 +617,7 @@ sealed class Program
                     case "flatpak_page":
                         if (_currentFlatpakWindow != null)
                         {
+                            _currentFlatpakWindow.Unsubscribe();
                             UnloadPage(_flatpakPageBox, [_currentFlatpakWindow]);
                             _currentFlatpakWindow = null;
                         }

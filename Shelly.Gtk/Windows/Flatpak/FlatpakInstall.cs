@@ -111,9 +111,8 @@ public class FlatpakInstall(
     {
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakInstallWindow.ui"), -1);
         var box = (Box)builder.GetObject("FlatpakInstallWindow")!;
-        FlatpakRefHandler.InstallRequested += (appId, _) =>
-            InstallFromIdAsync(appId, remote: "flathub", isRuntime:false);
-        
+        FlatpakRefHandler.InstallRequested += OnInstallRequested;
+
         _gridView = (GridView)builder.GetObject("list_flatpaks")!;
         _scroller = _gridView.GetParent() as ScrolledWindow;
         _gridView.SetMaxColumns(4);
@@ -652,6 +651,17 @@ public class FlatpakInstall(
         _sub = DirtySubscription.Attach(dirtyService, this);
         return box;
     }
+
+    private Task OnInstallRequested(string appId, string remote)
+    {
+        return InstallFromIdAsync(appId, remote: "flathub", isRuntime: false);
+    }
+    
+    public void Unsubscribe()
+    {
+        FlatpakRefHandler.InstallRequested -= OnInstallRequested;
+    }
+
 
     public void Reload() => _ = LoadDataAsync(_cts.Token);
 
