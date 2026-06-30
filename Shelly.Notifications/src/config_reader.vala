@@ -40,7 +40,7 @@ public class ConfigReader : Object {
 
             var root = parser.get_root ();
             if (root == null || root.get_node_type () != Json.NodeType.OBJECT) {
-                printerr ("[shelly-config] Unexpected JSON — using defaults\n");
+                printerr ("[shelly-notifications] Unexpected JSON — using defaults\n");
                 return _cached = new ShellyConfig ();
             }
 
@@ -88,7 +88,7 @@ public class ConfigReader : Object {
             stdout.printf ("[shelly-config] Loaded from %s\n", path);
             return _cached = cfg;
         } catch (Error e) {
-            printerr ("[shelly-config] Load error: %s — using defaults\n", e.message);
+            printerr ("[shelly-notifications] Load error: %s — using defaults\n", e.message);
             return _cached = new ShellyConfig ();
         }
     }

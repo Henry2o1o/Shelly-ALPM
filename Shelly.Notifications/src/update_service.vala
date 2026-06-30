@@ -144,7 +144,7 @@ public class UpdateService : Object {
                            (int) model.packages.length, (int) model.aur.length,
                            (int) model.flatpaks.length, model.total ());
         } catch (Error e) {
-            printerr ("[shelly-updates] JSON parse error: %s\n", e.message);
+            printerr ("[shelly-notifications] JSON parse error: %s\n", e.message);
         }
 
         return model;

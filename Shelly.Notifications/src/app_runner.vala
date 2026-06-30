@@ -22,7 +22,7 @@ public class AppRunner {
         }
 
         if (app_path == null) {
-            printerr ("[shell-runner] shelly-ui not found at known paths\n");
+            printerr ("[shelly-notifications] shelly-ui not found at known paths\n");
             return;
         }
 
@@ -30,14 +30,14 @@ public class AppRunner {
             new Subprocess.newv ({ app_path }, SubprocessFlags.NONE);
             stdout.printf ("[app] Launched %s\n", app_path);
         } catch (Error e) {
-            printerr ("[shelly-runner] Could not launch shelly-ui: %s\n", e.message);
+            printerr ("[shelly-notifications] Could not launch shelly-ui: %s\n", e.message);
         }
     }
 
     public static async void spawn_terminal_with_command (string command) throws Error {
         var terminal = find_terminal ();
         if (terminal == null) {
-            printerr ("[shelly-runner] No terminal emulator found\n");
+            printerr ("[shelly-notifications] No terminal emulator found\n");
             return;
         }
 

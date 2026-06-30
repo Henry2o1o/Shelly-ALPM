@@ -37,12 +37,12 @@ public class ShellyApp : Object {
                     break;
                 case 2:
                     do_update_packages.begin ((obj, res) => {
-                    try { do_update_packages.end (res); } catch (Error e) { printerr ("[shell-notif]%s\n", e.message); }
+                    try { do_update_packages.end (res); } catch (Error e) { printerr ("[shelly-notifications] %s\n", e.message); }
                 });
                     break;
                 case 3:
                     run_update_check.begin ((obj, res) => {
-                    try { run_update_check.end (res); } catch (Error e) { printerr ("[shell-notif]%s\n", e.message); }
+                    try { run_update_check.end (res); } catch (Error e) { printerr ("[shelly-notifications] %s\n", e.message); }
                 });
                     break;
                 case 99:
@@ -67,24 +67,24 @@ public class ShellyApp : Object {
     private void on_name_acquired (DBusConnection conn, string name) {
         stdout.printf ("[shelly] Service name acquired: %s\n", name);
 
-        try { conn.register_object<StatusNotifierItem> ("/StatusNotifierItem", tray_item); } catch (IOError e) { printerr ("[shell-notif] %s\n", e.message); loop.quit (); return; }
+        try { conn.register_object<StatusNotifierItem> ("/StatusNotifierItem", tray_item); } catch (IOError e) { printerr ("[shelly-notifications] %s\n", e.message); loop.quit (); return; }
 
-        try { conn.register_object<DBusMenuHandler> ("/MenuBar", menu_handler); } catch (IOError e) { printerr ("[shell-notif] %s\n", e.message); loop.quit (); return; }
+        try { conn.register_object<DBusMenuHandler> ("/MenuBar", menu_handler); } catch (IOError e) { printerr ("[shelly-notifications] %s\n", e.message); loop.quit (); return; }
 
-        try { conn.register_object<ShellyUiReceiver> ("/org/shelly/Notifications", ui_receiver); } catch (IOError e) { printerr ("[shell-notif] %s\n", e.message); loop.quit (); return; }
+        try { conn.register_object<ShellyUiReceiver> ("/org/shelly/Notifications", ui_receiver); } catch (IOError e) { printerr ("[shelly-notifications] %s\n", e.message); loop.quit (); return; }
 
         var sni_name = "org.freedesktop.StatusNotifierItem-%d-1"
              .printf ((int) Posix.getpid ());
         Bus.own_name_on_connection (
                                     conn, sni_name, BusNameOwnerFlags.NONE,
                                     (c, n) => on_sni_name_acquired (n),
-                                    (c, n) => printerr ("[shelly] Lost SNI bus name: %s\n", n)
+                                    (c, n) => printerr ("[shelly-notifications] Lost SNI bus name: %s\n", n)
         );
 
         tray_item.apply_config (config_reader.load ());
 
         run_update_check.begin ((obj, res) => {
-            try { run_update_check.end (res); } catch (Error e) { printerr ("[shelly-notif] Initial check error: %s\n", e.message); }
+            try { run_update_check.end (res); } catch (Error e) { printerr ("[shelly-notifications] Initial check error: %s\n", e.message); }
         });
 
         start_background_loop.begin ((obj, res) => {
@@ -102,7 +102,7 @@ public class ShellyApp : Object {
             _sleep_cancel = new Cancellable ();
             yield sleep_cancellable (delay_secs, _sleep_cancel);
 
-            try { yield run_update_check (); } catch (Error e) { printerr ("[shelly-notif] Check error: %s\n", e.message); }
+            try { yield run_update_check (); } catch (Error e) { printerr ("[shelly-notifications] Check error: %s\n", e.message); }
         }
     }
 
@@ -151,7 +151,7 @@ public class ShellyApp : Object {
 
     private void on_sni_name_acquired (string sni_name) {
         register_with_watcher.begin (sni_name, (obj, res) => {
-            try { register_with_watcher.end (res); } catch (Error e) { printerr ("[shelly-notif] Watcher error: %s\n", e.message); }
+            try { register_with_watcher.end (res); } catch (Error e) { printerr ("[shelly-notifications] Watcher error: %s\n", e.message); }
         });
     }
 
@@ -176,14 +176,14 @@ public class ShellyApp : Object {
         } catch (Error e) {
             stdout.printf ("[shelly-notif] org.freedesktop.StatusNotifierWatcher unavailable: %s\n", e.message);
         }
-        printerr ("[shelly-notif] WARNING: No StatusNotifierWatcher found.\n");
+        printerr ("[shelly-notifications] WARNING: No StatusNotifierWatcher found.\n");
     }
 
     private void on_name_lost (DBusConnection? conn, string name) {
         if (conn == null)
-            printerr ("[shelly-notif] Could not connect to the session bus.\n");
+            printerr ("[shelly-notifications] Could not connect to the session bus.\n");
         else
-            printerr ("[shelly-notif] Could not acquire '%s' — another instance may be running.\n", name);
+            printerr ("[shelly-notifications] Could not acquire '%s' — another instance may be running.\n", name);
         loop.quit ();
     }
 }

@@ -20,7 +20,7 @@ public class NotificationHandler : Object {
                 hints,
                 5000);
         } catch (Error e) {
-            printerr ("[shelly-notif] Could not send notification: %s\n", e.message);
+            printerr ("[shelly-notifications] Could not send notification: %s\n", e.message);
         }
     }
 }
