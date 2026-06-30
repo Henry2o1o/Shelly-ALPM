@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using PackageManager.Alpm.Package;
+using PackageManager.Alpm.Reference;
 
 namespace PackageManager.Alpm;
 

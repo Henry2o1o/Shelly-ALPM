@@ -1,5 +1,5 @@
 using System;
-using static PackageManager.Alpm.AlpmReference;
+using static PackageManager.Alpm.Reference.AlpmReference;
 
 namespace PackageManager.Alpm.Utilities;
 

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using static PackageManager.Alpm.AlpmReference;
+using static PackageManager.Alpm.Reference.AlpmReference;
 
 namespace PackageManager.Alpm.Utilities;
 
