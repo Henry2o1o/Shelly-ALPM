@@ -661,7 +661,17 @@ public sealed class PackageInstall(
             }
 
             var button = Button.NewWithLabel(T("View Dependency Graph"));
-            button.OnClicked += (_, _) => DependencyGraphPreview.Show(null, pkg.Name, dictionary);
+            button.OnClicked += (_, _) =>
+            {
+                try
+                {
+                    DependencyGraphPreview.Show(null, pkg.Name, dictionary);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e);
+                }
+            };
             _detailBox.Append(button);
         }
 
