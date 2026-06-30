@@ -1,10 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using PackageManager.Alpm;
-using PackageManager.Utilities;
+using PackageManager.Flatpak.Enums;
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Models;
 
 public class FlatpackPackage(IntPtr pkgPtr)
 {

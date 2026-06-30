@@ -1,6 +1,6 @@
 using System;
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Enums;
 
 [Flags]
 public enum FlatpakQueryFlags : uint

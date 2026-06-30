@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Models;
 
-public partial record FlatpakRemoteRefInfo
+public record FlatpakRemoteRefInfo
 {
     public ulong DownloadSize { get; set; }
     public ulong InstalledSize { get; set; }

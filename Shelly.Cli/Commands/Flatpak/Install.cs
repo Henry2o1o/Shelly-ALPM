@@ -1,5 +1,6 @@
 using System.CommandLine;
 using PackageManager.Flatpak;
+using PackageManager.Flatpak.Enums;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;
 using static Shelly.Cli.Interactions.AnsiUtilities;

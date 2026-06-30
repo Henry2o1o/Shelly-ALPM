@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using PackageManager.Flatpak.Enums;
 
 [assembly: InternalsVisibleTo("PackageManager.Tests")]
 

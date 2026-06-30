@@ -292,7 +292,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             HandleSelectProviderQuestion(questionPtr);
             return;
         }
-
+       
         string? packageName = null;
         string? questionText;
         List<ProviderOption>? conflictOptions = null;

@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using PackageManager.Aur.Models;
 
-namespace PackageManager.Aur;
+namespace PackageManager.Aur.Vcs;
 
 public static class VcsSourceParser
 {

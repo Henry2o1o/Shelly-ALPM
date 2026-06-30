@@ -14,6 +14,7 @@ using PackageManager.Alpm.Events.EventArgs;
 using PackageManager.Alpm.Questions;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Aur.Models;
+using PackageManager.Aur.Vcs;
 using PackageManager.Utilities;
 using PackageManager.Utilities.PkgBuild;
 using Shelly.Utilities;
