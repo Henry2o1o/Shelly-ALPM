@@ -49,6 +49,9 @@ public sealed class AurPackageManager(string? configPath = null)
     private readonly HttpClient _httpClient = CreateAurHttpClient();
     private readonly Dictionary<string, string> _pkgbaseCache = new(StringComparer.Ordinal);
 
+ 
+    private readonly Dictionary<string, string?> _binVariantCache = new(StringComparer.Ordinal);
+
     private static HttpClient CreateAurHttpClient() => OptimizedClient.CreateClient(50, 5, 5);
 
 
@@ -1446,6 +1449,10 @@ public sealed class AurPackageManager(string? configPath = null)
         foreach (var originalAurDep in aurPackages)
         {
             var aurDep = originalAurDep;
+
+      
+            aurDep = await PreferBinVariantAsync(aurDep);
+
             if (!visited.Add(aurDep.Name))
             {
                 continue;
@@ -1454,10 +1461,8 @@ public sealed class AurPackageManager(string? configPath = null)
             var success = DownloadPackage(aurDep.Name).Result;
             if (!success)
             {
-                // The literal dep name doesn't exist as an AUR package; try to
-                // resolve it through `provides=` to honor virtual/renamed deps
-                // (e.g. `python-trayer` → `python-trayer-git`). See issue #880.
-                var providers = _aurSearchManager.FindProvidersAsync(aurDep.Name).GetAwaiter().GetResult();
+                
+                var providers = await _aurSearchManager.FindProvidersAsync(aurDep.Name);
                 string? chosenProvider = null;
                 if (providers.Count == 1)
                 {
@@ -1996,6 +2001,73 @@ public sealed class AurPackageManager(string? configPath = null)
     private static bool IsVcsPackage(string packageName)
     {
         return VcsSuffixes.Any(suffix => packageName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+    }
+
+ 
+    private static readonly string[] NoBinRemapSuffixes =
+        ["-bin", "-git", "-svn", "-hg", "-bzr", "-darcs", "-cvs"];
+
+    
+
+    private async Task<ParsedDependency> PreferBinVariantAsync(ParsedDependency dep)
+    {
+        var name = dep.Name;
+
+        // Skip if it's already a -bin package or a VCS flavor the packager chose on purpose.
+        if (NoBinRemapSuffixes.Any(s => name.EndsWith(s, StringComparison.OrdinalIgnoreCase)))
+        {
+            return dep;
+        }
+
+        var binName = name + "-bin";
+
+        if (!_binVariantCache.TryGetValue(name, out var resolved))
+        {
+            resolved = null;
+            try
+            {
+                var info = await _aurSearchManager.GetInfoAsync([binName]);
+                var candidate = info.Results?.FirstOrDefault();
+                if (candidate is not null &&
+                    string.Equals(candidate.Name, binName, StringComparison.Ordinal))
+                {
+                    // Don't prefer an orphaned -bin package. The AUR reports an
+                    // orphan (no maintainer) with a null/empty Maintainer field;
+                    // such packages are unmaintained and often stale, so building
+                    // the maintained source package is the safer choice.
+                    if (string.IsNullOrWhiteSpace(candidate.Maintainer))
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                            $"Skipping prebuilt '{binName}' because it is orphaned; building '{name}' from source"));
+                    }
+                    // Honor a pinned version constraint: only remap when the -bin
+                    // package actually satisfies it, otherwise we'd break the build.
+                    else if (dep.Operator is null ||
+                             string.IsNullOrEmpty(candidate.Version) ||
+                             dep.IsSatisifiedBy(candidate.Version))
+                    {
+                        resolved = candidate.Name;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"Failed to check for prebuilt '{binName}': {ex.Message}"));
+            }
+
+            _binVariantCache[name] = resolved;
+        }
+
+        if (resolved is null)
+        {
+            return dep;
+        }
+
+        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+            $"Preferring prebuilt '{resolved}' over building '{name}' from source"));
+
+        return dep with { Name = resolved };
     }
 
     private async Task<string?> ReadCachedPkgbuildAsync(string packageName)
