@@ -21,7 +21,8 @@ public static class PkgbuildReviewDialog
     {
         var tcs = new TaskCompletionSource<bool>();
         var hasWarnings = warnings.Count > 0;
-
+        var changesReviewed = !hasWarnings;
+        
         var dialog = Window.New();
         dialog.SetTitle(T("Review PKGBUILD changes"));
         if (parent is not null)
@@ -42,15 +43,12 @@ public static class PkgbuildReviewDialog
         heading.SetWrap(true);
         heading.AddCssClass("title-3");
         outer.Append(heading);
-
-        outer.Append(MakeScanStatusBanner(hasWarnings, warnings.Count));
         
         var notebook = Notebook.New();
         notebook.SetVexpand(true);
         notebook.SetHexpand(true);
         notebook.SetScrollable(true);
-
-
+        
         // Diff section — the part that the regression dropped.
         var diffBox = Box.New(Orientation.Vertical, 0);
         diffBox.SetHalign(Align.Fill);
@@ -83,52 +81,45 @@ public static class PkgbuildReviewDialog
 
         var diffFrame = Frame.New(null);
         diffFrame.SetChild(diffScroll);
-        notebook.AppendPage(diffFrame, Label.New(T("Changes")));
-
+        
         // Warnings section — only when PostInstallValidator produced findings.
         if (hasWarnings)
         {
+            var warningsBox = Box.New(Orientation.Vertical, 6);
+            warningsBox.SetMarginTop(8);
+            warningsBox.SetMarginBottom(8);
+            warningsBox.SetMarginStart(8);
+            warningsBox.SetMarginEnd(8);
+
             var subtitle = Label.New(T(
                 "These commands fetch and execute code outside of shelly and libalpm's control. Review them before continuing."));
             subtitle.SetXalign(0);
             subtitle.SetWrap(true);
             subtitle.AddCssClass("error");
-            outer.Append(subtitle);
+            warningsBox.Append(subtitle);
 
             foreach (var warning in warnings)
-                outer.Append(MakeWarningRow(warning));
-        }
+                warningsBox.Append(MakeWarningRow(warning));
 
-        if (sourceFiles is { Count: > 0 })
-        {
-            foreach (var (name, content) in sourceFiles)
-            {
-                if (string.IsNullOrEmpty(content)) continue;
- 
-                var view = TextView.New();
-                view.SetEditable(false);
-                view.SetMonospace(true);
-                view.SetWrapMode(WrapMode.WordChar);
-                view.SetCursorVisible(false);
-                view.LeftMargin = 12;
-                view.RightMargin = 12;
-                view.TopMargin = 12;
-                view.BottomMargin = 12;
-                view.GetBuffer().SetText(content, content.Length);
- 
-                var scroll = ScrolledWindow.New();
-                scroll.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
-                scroll.SetVexpand(true);
-                scroll.SetHexpand(true);
-                scroll.AddCssClass("view");
-                scroll.SetChild(view);
- 
-                notebook.AppendPage(scroll, Label.New(name));
-            }
+            var warningsScroll = ScrolledWindow.New();
+            warningsScroll.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
+            warningsScroll.SetVexpand(true);
+            warningsScroll.SetHexpand(true);
+            warningsScroll.SetChild(warningsBox);
+
+            var warningsTabLabel = Box.New(Orientation.Horizontal, 4);
+            var warningsIcon = Image.NewFromIconName("dialog-warning-symbolic");
+            warningsIcon.SetPixelSize(14);
+            warningsTabLabel.Append(warningsIcon);
+            warningsTabLabel.Append(Label.New(string.Format(T("Warnings ({0})"), warnings.Count)));
+
+            notebook.AppendPage(warningsScroll, warningsTabLabel);
         }
         
+        var changesPage = notebook.AppendPage(diffFrame, Label.New(T("Changes")));
         outer.Append(notebook);
-
+        outer.Append(MakeScanStatusBanner(hasWarnings, warnings.Count));
+        
         var buttonBox = Box.New(Orientation.Horizontal, 8);
         buttonBox.SetHalign(Align.End);
 
@@ -142,13 +133,41 @@ public static class PkgbuildReviewDialog
 
         // When warnings exist, use the cautious "Install Anyway" affordance and
         // focus Cancel; otherwise Confirm is the suggested default.
-        var proceed = Button.NewWithLabel(hasWarnings ? T("Install Anyway") : T("Confirm"));
-        proceed.AddCssClass(hasWarnings ? "destructive-action" : "suggested-action");
+        var proceed = Button.NewWithLabel(
+            hasWarnings ? T("Review Changes") : T("Confirm"));        
+        proceed.AddCssClass("suggested-action");
+        
+        void MarkChangesReviewed()
+        {
+            if (changesReviewed)
+                return;
+
+            changesReviewed = true;
+
+            proceed.RemoveCssClass("suggested-action");
+            proceed.AddCssClass("destructive-action");
+            proceed.SetLabel(T("Install Anyway"));
+        }
+        
+        notebook.OnSwitchPage += (_, e) =>
+        {
+            if (e.PageNum == changesPage)
+                MarkChangesReviewed();
+        };
+        
         proceed.OnClicked += (_, _) =>
         {
+            if (!changesReviewed)
+            {
+                notebook.SetCurrentPage(changesPage);
+                MarkChangesReviewed();
+                return;
+            }
+
             tcs.TrySetResult(true);
             dialog.Close();
-        };
+        };     
+        
         buttonBox.Append(proceed);
 
         outer.Append(buttonBox);
@@ -191,20 +210,19 @@ public static class PkgbuildReviewDialog
             box.Append(message);
         }
 
-        var view = TextView.New();
-        view.SetEditable(false);
-        view.SetMonospace(true);
-        view.SetWrapMode(WrapMode.WordChar);
-        view.SetCursorVisible(false);
-        view.GetBuffer().SetText(warning.MatchedLine, warning.MatchedLine.Length);
+        var matchedLine = Label.New(null);
+        matchedLine.SetMarkup($"<tt>{Markup.EscapeText(warning.MatchedLine)}</tt>");
+        matchedLine.SetSelectable(true);
+        matchedLine.SetWrap(true);
+        matchedLine.SetXalign(0);
 
         var frame = Frame.New(null);
-        frame.SetChild(view);
+        frame.SetChild(matchedLine);
         box.Append(frame);
 
         return box;
     }
-
+    
     private static Box MakeSourceFileRow(string name, string content)
     {
         var box = Box.New(Orientation.Vertical, 6);
@@ -233,7 +251,7 @@ public static class PkgbuildReviewDialog
 
         return box;
     }
-
+    
     private static Box MakeScanStatusBanner(bool hasWarnings, int warningCount)
     {
         var banner = Box.New(Orientation.Horizontal, 8);
