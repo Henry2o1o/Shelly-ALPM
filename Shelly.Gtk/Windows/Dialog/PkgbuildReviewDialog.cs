@@ -136,19 +136,7 @@ public static class PkgbuildReviewDialog
         var proceed = Button.NewWithLabel(
             hasWarnings ? T("Review Changes") : T("Confirm"));        
         proceed.AddCssClass("suggested-action");
-        
-        void MarkChangesReviewed()
-        {
-            if (changesReviewed)
-                return;
 
-            changesReviewed = true;
-
-            proceed.RemoveCssClass("suggested-action");
-            proceed.AddCssClass("destructive-action");
-            proceed.SetLabel(T("Install Anyway"));
-        }
-        
         notebook.OnSwitchPage += (_, e) =>
         {
             if (e.PageNum == changesPage)
@@ -188,6 +176,18 @@ public static class PkgbuildReviewDialog
             proceed.GrabFocus();
 
         return tcs.Task;
+
+        void MarkChangesReviewed()
+        {
+            if (changesReviewed)
+                return;
+
+            changesReviewed = true;
+
+            proceed.RemoveCssClass("suggested-action");
+            proceed.AddCssClass("destructive-action");
+            proceed.SetLabel(T("Install Anyway"));
+        }
     }
 
     private static Box MakeWarningRow(PkgbuildWarningDto warning)
