@@ -1116,6 +1116,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             pkgPtrs.Add(pkgPtr);
         }
 
+        List<string> optDepNames = [];
         foreach (var packageName in chosenPkgs)
         {
             // Find the package in sync databases
@@ -1232,6 +1233,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
 
         List<ProviderOption> optDependList = [];
+
         foreach (var pkgPtr in pkgPtrs)
         {
             var pkg = new AlpmPackage(pkgPtr);
@@ -1249,7 +1251,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             }
 
 
-            List<string> optDepNames = [];
+
             if (optDependList.Count > 0)
             {
                 var args = new AlpmQuestionEventArgs(AlpmQuestionType.SelectOptionalDeps,
@@ -1258,13 +1260,13 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 Question?.Invoke(this, args);
                 args.WaitForResponse();
                 var responseOptions = args.Response.ProviderOptions ?? [];
-                optDepNames = responseOptions
-                    .Where(x => x is { IsSelected: true, IsInstalled: false })
-                    .Select(x => x.Name)
-                    .Where(n => !IsDependencySatisfiedByInstalled(n)) // defensive guard: skip already-satisfied
-                    .Select(ResolveOptDepProvider) // virtual -> concrete (prompt if ambiguous)
-                    .Distinct()
-                    .ToList();
+                optDepNames.AddRange(responseOptions
+                .Where(x => x is { IsSelected: true, IsInstalled: false })
+                .Select(x => x.Name)
+                .Where(n => !IsDependencySatisfiedByInstalled(n)) // defensive guard: skip already-satisfied
+                .Select(ResolveOptDepProvider) // virtual -> concrete (prompt if ambiguous)
+                .Distinct()
+                .ToList());
                 var result = PackageListBuilder.Build(_handle, optDepNames);
                 pkgPtrs.AddRange(result);
             }
