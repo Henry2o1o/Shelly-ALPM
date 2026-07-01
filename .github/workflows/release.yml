@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang zlib1g-dev libalpm-dev libgtk-4-dev zip gettext
+          sudo apt-get install -y clang zlib1g-dev libalpm-dev libgtk-4-dev zip gettext valac meson ninja-build libjson-glib-dev
 
       - name: Publish Shelly.Cli
         run: |
@@ -58,7 +58,7 @@ jobs:
       - name: Compile and bundle tray service translations
         run: |
           mkdir -p publish/shelly-ui/locale
-          for po_file in Shelly-Notifications/po/*.po; do
+          for po_file in Shelly.Notifications/po/*.po; do
             if [ -f "$po_file" ]; then
               lang=$(basename "$po_file" .po)
               mkdir -p "publish/shelly-ui/locale/$lang/LC_MESSAGES"
@@ -66,11 +66,12 @@ jobs:
             fi
           done
 
-      - name: Publish Shelly-Notifications
+      - name: Publish Shelly.Notifications
         run: |
-          dotnet publish Shelly-Notifications/Shelly-Notifications.csproj -c Release -o publish/shelly-notifications -p:InstructionSet=x86-64
+          meson setup build-notify Shelly.Notifications
+          meson compile -C build-notify
           # Bundle Notifications into the UI directory
-          cp publish/shelly-notifications/Shelly-Notifications publish/shelly-ui/
+          cp build-notify/shelly-notifications publish/shelly-ui/
 
       - name: Publish Shelly.Keys
         run: |

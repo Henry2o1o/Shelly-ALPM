@@ -7,6 +7,7 @@ using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using PackageManager.Aur.Models;
 using PackageManager.Flatpak;
+using PackageManager.Flatpak.Models;
 using PackageManager.Local;
 using Shelly.Cli.Models.Aur;
 using Shelly.Cli.Models.Standard;
