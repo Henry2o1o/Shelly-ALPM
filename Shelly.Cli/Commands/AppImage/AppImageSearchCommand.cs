@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text.Json;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using Shelly.Cli.Interactions;
@@ -30,6 +31,13 @@ public partial class AppImageList : GlobalSettingsCommand
         if (UiMode)
         {
             await ExecuteUiMode();
+            return;
+        }
+
+        if (JsonOutput)
+        {
+            var appImages = await GetAppImagesFromLocalDb();
+            console.WriteLine(JsonSerializer.Serialize(appImages,ShellyCliJsonContext.Default.ListAppImageDtoV2));
             return;
         }
 
