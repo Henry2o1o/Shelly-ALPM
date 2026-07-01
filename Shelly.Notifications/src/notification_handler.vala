@@ -2,9 +2,11 @@ public class NotificationHandler : Object {
 
     private uint _last_id = 0;
 
+    private FreedesktopNotifications proxy;
+
     public async void send (string body) {
         try {
-            var proxy = yield Bus.get_proxy<FreedesktopNotifications> (BusType.SESSION,
+            proxy = yield Bus.get_proxy<FreedesktopNotifications> (BusType.SESSION,
                 "org.freedesktop.Notifications",
                 "/org/freedesktop/Notifications",
                 DBusProxyFlags.NONE, null);
@@ -19,6 +21,7 @@ public class NotificationHandler : Object {
                 {},
                 hints,
                 5000);
+
         } catch (Error e) {
             printerr ("[shelly-notifications] Could not send notification: %s\n", e.message);
         }

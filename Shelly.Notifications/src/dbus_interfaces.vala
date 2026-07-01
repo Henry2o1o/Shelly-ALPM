@@ -4,6 +4,7 @@ public interface KdeStatusNotifierWatcher : Object {
 
     [DBus (name = "IsStatusNotifierHostRegistered")]
     public abstract bool is_status_notifier_host_registered { owned get; }
+
 }
 
 [DBus (name = "org.freedesktop.StatusNotifierWatcher")]
@@ -24,4 +25,7 @@ public interface FreedesktopNotifications : Object {
         string[]                             actions,
         GLib.HashTable<string, GLib.Variant> hints,
         int expire_timeout) throws DBusError, IOError;
+
+    public signal void action_invoked (uint32 id, string action_key);
+    public signal void notification_closed (uint32 id, uint32 reason);
 }
