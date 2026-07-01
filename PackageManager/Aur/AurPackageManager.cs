@@ -447,7 +447,7 @@ public sealed class AurPackageManager(string? configPath = null)
                 .Distinct()
                 .ToList();
 
-            var (allRepoPackages, orderedAurPackages) = CollectAllDependencies(pkgbuildInfo);
+            var (allRepoPackages, orderedAurPackages) = await CollectAllDependencies(pkgbuildInfo);
             InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
                 $"Collected {allRepoPackages.Count + orderedAurPackages.Count} dependencies for {packageName}"));
             await InstallCollectedDependencies(allRepoPackages, orderedAurPackages, AlpmTransFlag.AllDeps);
@@ -845,7 +845,7 @@ public sealed class AurPackageManager(string? configPath = null)
             .Distinct()
             .ToList();
 
-        var (allRepoPackages, orderedAurPackages) = CollectAllDependencies(pkgbuildInfo);
+        var (allRepoPackages, orderedAurPackages) = await CollectAllDependencies(pkgbuildInfo);
         await InstallCollectedDependencies(allRepoPackages, orderedAurPackages);
 
 
@@ -1418,20 +1418,19 @@ public sealed class AurPackageManager(string? configPath = null)
         return (alpmPackages, aurPackages);
     }
 
-    private (List<string> allRepoPackages, List<ParsedDependency> orderedAurPackages)
-        CollectAllDependencies(PkgbuildInfo pkgbuildInfo)
+    private async Task<(List<string> allRepoPackages, List<ParsedDependency> orderedAurPackages)> CollectAllDependencies(PkgbuildInfo pkgbuildInfo)
     {
         var allRepoPackages = new List<string>();
         var orderedAurPackages = new List<ParsedDependency>();
         var visited = new HashSet<string>();
 
-        CollectDepsRecursive(pkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
+        await CollectDepsRecursive(pkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
 
         allRepoPackages = allRepoPackages.Distinct().ToList();
         return (allRepoPackages, orderedAurPackages);
     }
 
-    private void CollectDepsRecursive(
+    private async Task CollectDepsRecursive(
         PkgbuildInfo pkgbuildInfo,
         List<string> allRepoPackages,
         List<ParsedDependency> orderedAurPackages,
@@ -1514,8 +1513,19 @@ public sealed class AurPackageManager(string? configPath = null)
                 aurDep = new ParsedDependency(chosenProvider, aurDep.Operator, aurDep.Version);
             }
 
-            var tempPath = XdgPaths.ShellyCache(aurDep.Name);
-            var depPkgbuildInfo = PkgbuildParser.Parse(Path.Combine(tempPath, "PKGBUILD"));
+
+            var depPkgbase = await ResolvePkgbaseAsync(aurDep.Name);
+            var tempPath = XdgPaths.ShellyCache(depPkgbase);
+            var depPkgbuildPath = Path.Combine(tempPath, "PKGBUILD");
+            if (!File.Exists(depPkgbuildPath))
+            {
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.AurPackageFailed,
+                    $"Could not locate PKGBUILD for AUR dependency '{aurDep.Name}' at {depPkgbuildPath}",
+                    aurDep.Name));
+                continue;
+            }
+
+            var depPkgbuildInfo = PkgbuildParser.Parse(depPkgbuildPath);
 
             if (aurDep.Operator != null)
             {
@@ -1528,7 +1538,7 @@ public sealed class AurPackageManager(string? configPath = null)
                 }
             }
 
-            CollectDepsRecursive(depPkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
+            await CollectDepsRecursive(depPkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
 
             orderedAurPackages.Add(aurDep);
         }
@@ -1674,7 +1684,7 @@ public sealed class AurPackageManager(string? configPath = null)
             // Refresh sync DBs before resolving recursive AUR dep tree, otherwise
             // a stale local sync DB can cause real repo deps to be misrouted to AUR.
             _alpm.Refresh();
-            var (allRepoPackages, orderedAurPackages) = CollectAllDependencies(pkgbuildInfo);
+            var (allRepoPackages, orderedAurPackages) = await CollectAllDependencies(pkgbuildInfo);
             await InstallCollectedDependencies(allRepoPackages, orderedAurPackages, AlpmTransFlag.AllDeps);
 
             if (_useChroot)
