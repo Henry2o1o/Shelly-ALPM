@@ -14,6 +14,7 @@ using PackageManager.Alpm.Events.EventArgs;
 using PackageManager.Alpm.Questions;
 using PackageManager.Alpm.Utilities;
 using PackageManager.Aur.Models;
+using PackageManager.Aur.Vcs;
 using PackageManager.Utilities;
 using PackageManager.Utilities.PkgBuild;
 using Shelly.Utilities;
@@ -47,6 +48,9 @@ public sealed class AurPackageManager(string? configPath = null)
     private AurSearchManager _aurSearchManager;
     private readonly HttpClient _httpClient = CreateAurHttpClient();
     private readonly Dictionary<string, string> _pkgbaseCache = new(StringComparer.Ordinal);
+
+ 
+    private readonly Dictionary<string, string?> _binVariantCache = new(StringComparer.Ordinal);
 
     private static HttpClient CreateAurHttpClient() => OptimizedClient.CreateClient(50, 5, 5);
 
@@ -131,7 +135,13 @@ public sealed class AurPackageManager(string? configPath = null)
     {
         var foreignPackages = _alpm.GetForeignPackages();
         var response = await _aurSearchManager.GetInfoAsync(foreignPackages.Select(x => x.Name).ToList());
-        return response.Results;
+        var aurPackages = response.Results;
+        foreach (var pkg in aurPackages)
+        {
+            pkg.Explicit = foreignPackages.First(x => x.Name == pkg.Name).InstallReason == "Explicit";
+        }
+
+        return aurPackages;
     }
 
     public async Task<List<AurPackageDto>> SearchPackages(string query)
@@ -440,7 +450,7 @@ public sealed class AurPackageManager(string? configPath = null)
                 .Distinct()
                 .ToList();
 
-            var (allRepoPackages, orderedAurPackages) = CollectAllDependencies(pkgbuildInfo);
+            var (allRepoPackages, orderedAurPackages) = await CollectAllDependencies(pkgbuildInfo);
             InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
                 $"Collected {allRepoPackages.Count + orderedAurPackages.Count} dependencies for {packageName}"));
             await InstallCollectedDependencies(allRepoPackages, orderedAurPackages, AlpmTransFlag.AllDeps);
@@ -520,11 +530,11 @@ public sealed class AurPackageManager(string? configPath = null)
                 continue;
             }
 
-            var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-            if (pkgFile is null)
+            var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+            if (pkgFiles.Count == 0)
             {
                 RaisePkgProgress(AlpmEventType.AurPackageFailed, packageName, i + 1, totalCount,
-                    $"No package file matching '{packageName}' produced by makepkg");
+                    $"No package files matching '{packageName}' produced by makepkg");
                 continue;
             }
 
@@ -533,7 +543,7 @@ public sealed class AurPackageManager(string? configPath = null)
 
             try
             {
-                _ = await _alpm.InstallLocalPackage(pkgFile);
+                _ = await _alpm.InstallLocalPackages(pkgFiles);
                 _alpm.Refresh();
 
                 // Update VCS info store with current commit SHAs after successful install
@@ -780,11 +790,11 @@ public sealed class AurPackageManager(string? configPath = null)
         _alpm.Dispose();
     }
 
-    private static string? SelectBuiltPackageFile(string tempPath, string packageName)
+    private static List<string> SelectBuiltPackageFiles(string tempPath, string packageName)
     {
         if (!Directory.Exists(tempPath))
         {
-            return null;
+            return [];
         }
 
         var allPkgFiles = Directory.GetFiles(tempPath, "*.pkg.tar.*")
@@ -793,7 +803,7 @@ public sealed class AurPackageManager(string? configPath = null)
 
         if (allPkgFiles.Count == 0)
         {
-            return null;
+            return [];
         }
 
         var prefix = packageName + "-";
@@ -802,10 +812,10 @@ public sealed class AurPackageManager(string? configPath = null)
 
         if (match is not null)
         {
-            return match;
+            return allPkgFiles;
         }
 
-        return allPkgFiles.Count == 1 ? allPkgFiles[0] : null;
+        return allPkgFiles.Count == 1 ? allPkgFiles : [];
     }
 
     public async Task InstallPackageVersion(string packageName, string commit)
@@ -838,7 +848,7 @@ public sealed class AurPackageManager(string? configPath = null)
             .Distinct()
             .ToList();
 
-        var (allRepoPackages, orderedAurPackages) = CollectAllDependencies(pkgbuildInfo);
+        var (allRepoPackages, orderedAurPackages) = await CollectAllDependencies(pkgbuildInfo);
         await InstallCollectedDependencies(allRepoPackages, orderedAurPackages);
 
 
@@ -892,17 +902,17 @@ public sealed class AurPackageManager(string? configPath = null)
             throw new Exception($"Failed to build package {packageName}");
         }
 
-        var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-        if (pkgFile is null)
+        var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+        if (pkgFiles.Count == 0)
         {
             RaisePkgProgress(AlpmEventType.AurPackageFailed, packageName, 1, 1,
-                $"No package file matching '{packageName}' produced by makepkg");
-            throw new Exception($"No package file matching '{packageName}' produced by makepkg");
+                $"No package files matching '{packageName}' produced by makepkg");
+            throw new Exception($"No package files matching '{packageName}' produced by makepkg");
         }
 
         RaisePkgProgress(AlpmEventType.AurInstallStart, packageName, 1, 1);
 
-        _ = await _alpm.InstallLocalPackage(pkgFile);
+        _ = await _alpm.InstallLocalPackages(pkgFiles);
         _alpm.Refresh();
 
         // Remove build-only dependencies (makedepends/checkdepends) that were installed for this build
@@ -1411,20 +1421,19 @@ public sealed class AurPackageManager(string? configPath = null)
         return (alpmPackages, aurPackages);
     }
 
-    private (List<string> allRepoPackages, List<ParsedDependency> orderedAurPackages)
-        CollectAllDependencies(PkgbuildInfo pkgbuildInfo)
+    private async Task<(List<string> allRepoPackages, List<ParsedDependency> orderedAurPackages)> CollectAllDependencies(PkgbuildInfo pkgbuildInfo)
     {
         var allRepoPackages = new List<string>();
         var orderedAurPackages = new List<ParsedDependency>();
         var visited = new HashSet<string>();
 
-        CollectDepsRecursive(pkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
+        await CollectDepsRecursive(pkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
 
         allRepoPackages = allRepoPackages.Distinct().ToList();
         return (allRepoPackages, orderedAurPackages);
     }
 
-    private void CollectDepsRecursive(
+    private async Task CollectDepsRecursive(
         PkgbuildInfo pkgbuildInfo,
         List<string> allRepoPackages,
         List<ParsedDependency> orderedAurPackages,
@@ -1440,6 +1449,10 @@ public sealed class AurPackageManager(string? configPath = null)
         foreach (var originalAurDep in aurPackages)
         {
             var aurDep = originalAurDep;
+
+      
+            aurDep = await PreferBinVariantAsync(aurDep);
+
             if (!visited.Add(aurDep.Name))
             {
                 continue;
@@ -1448,10 +1461,8 @@ public sealed class AurPackageManager(string? configPath = null)
             var success = DownloadPackage(aurDep.Name).Result;
             if (!success)
             {
-                // The literal dep name doesn't exist as an AUR package; try to
-                // resolve it through `provides=` to honor virtual/renamed deps
-                // (e.g. `python-trayer` → `python-trayer-git`). See issue #880.
-                var providers = _aurSearchManager.FindProvidersAsync(aurDep.Name).GetAwaiter().GetResult();
+                
+                var providers = await _aurSearchManager.FindProvidersAsync(aurDep.Name);
                 string? chosenProvider = null;
                 if (providers.Count == 1)
                 {
@@ -1507,8 +1518,19 @@ public sealed class AurPackageManager(string? configPath = null)
                 aurDep = new ParsedDependency(chosenProvider, aurDep.Operator, aurDep.Version);
             }
 
-            var tempPath = XdgPaths.ShellyCache(aurDep.Name);
-            var depPkgbuildInfo = PkgbuildParser.Parse(Path.Combine(tempPath, "PKGBUILD"));
+
+            var depPkgbase = await ResolvePkgbaseAsync(aurDep.Name);
+            var tempPath = XdgPaths.ShellyCache(depPkgbase);
+            var depPkgbuildPath = Path.Combine(tempPath, "PKGBUILD");
+            if (!File.Exists(depPkgbuildPath))
+            {
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.AurPackageFailed,
+                    $"Could not locate PKGBUILD for AUR dependency '{aurDep.Name}' at {depPkgbuildPath}",
+                    aurDep.Name));
+                continue;
+            }
+
+            var depPkgbuildInfo = PkgbuildParser.Parse(depPkgbuildPath);
 
             if (aurDep.Operator != null)
             {
@@ -1521,7 +1543,7 @@ public sealed class AurPackageManager(string? configPath = null)
                 }
             }
 
-            CollectDepsRecursive(depPkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
+            await CollectDepsRecursive(depPkgbuildInfo, allRepoPackages, orderedAurPackages, visited);
 
             orderedAurPackages.Add(aurDep);
         }
@@ -1591,15 +1613,15 @@ public sealed class AurPackageManager(string? configPath = null)
                 return;
             }
 
-            var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-            if (pkgFile is null)
+            var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+            if (pkgFiles.Count == 0)
             {
                 InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
-                    $"No package file found for {packageName} in {tempPath} produced by makepkg"));
+                    $"No package files found for {packageName} in {tempPath} produced by makepkg"));
                 return;
             }
 
-            await _alpm.InstallLocalPackage(pkgFile, AlpmTransFlag.AllDeps);
+            await _alpm.InstallLocalPackages(pkgFiles, AlpmTransFlag.AllDeps);
             _alpm.Refresh();
         }
         finally
@@ -1667,7 +1689,7 @@ public sealed class AurPackageManager(string? configPath = null)
             // Refresh sync DBs before resolving recursive AUR dep tree, otherwise
             // a stale local sync DB can cause real repo deps to be misrouted to AUR.
             _alpm.Refresh();
-            var (allRepoPackages, orderedAurPackages) = CollectAllDependencies(pkgbuildInfo);
+            var (allRepoPackages, orderedAurPackages) = await CollectAllDependencies(pkgbuildInfo);
             await InstallCollectedDependencies(allRepoPackages, orderedAurPackages, AlpmTransFlag.AllDeps);
 
             if (_useChroot)
@@ -1720,15 +1742,15 @@ public sealed class AurPackageManager(string? configPath = null)
                 return;
             }
 
-            var pkgFile = SelectBuiltPackageFile(tempPath, packageName);
-            if (pkgFile is null)
+            var pkgFiles = SelectBuiltPackageFiles(tempPath, packageName);
+            if (pkgFiles.Count == 0)
             {
                 InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
-                    $"No package file found for {packageName} in {tempPath} produced by makepkg"));
+                    $"No package files found for {packageName} in {tempPath} produced by makepkg"));
                 return;
             }
 
-            await _alpm.InstallLocalPackage(pkgFile, AlpmTransFlag.AllDeps);
+            await _alpm.InstallLocalPackages(pkgFiles, AlpmTransFlag.AllDeps);
             _alpm.Refresh();
         }
         finally
@@ -1979,6 +2001,73 @@ public sealed class AurPackageManager(string? configPath = null)
     private static bool IsVcsPackage(string packageName)
     {
         return VcsSuffixes.Any(suffix => packageName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+    }
+
+ 
+    private static readonly string[] NoBinRemapSuffixes =
+        ["-bin", "-git", "-svn", "-hg", "-bzr", "-darcs", "-cvs"];
+
+    
+
+    private async Task<ParsedDependency> PreferBinVariantAsync(ParsedDependency dep)
+    {
+        var name = dep.Name;
+
+        // Skip if it's already a -bin package or a VCS flavor the packager chose on purpose.
+        if (NoBinRemapSuffixes.Any(s => name.EndsWith(s, StringComparison.OrdinalIgnoreCase)))
+        {
+            return dep;
+        }
+
+        var binName = name + "-bin";
+
+        if (!_binVariantCache.TryGetValue(name, out var resolved))
+        {
+            resolved = null;
+            try
+            {
+                var info = await _aurSearchManager.GetInfoAsync([binName]);
+                var candidate = info.Results?.FirstOrDefault();
+                if (candidate is not null &&
+                    string.Equals(candidate.Name, binName, StringComparison.Ordinal))
+                {
+                    // Don't prefer an orphaned -bin package. The AUR reports an
+                    // orphan (no maintainer) with a null/empty Maintainer field;
+                    // such packages are unmaintained and often stale, so building
+                    // the maintained source package is the safer choice.
+                    if (string.IsNullOrWhiteSpace(candidate.Maintainer))
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+                            $"Skipping prebuilt '{binName}' because it is orphaned; building '{name}' from source"));
+                    }
+                    // Honor a pinned version constraint: only remap when the -bin
+                    // package actually satisfies it, otherwise we'd break the build.
+                    else if (dep.Operator is null ||
+                             string.IsNullOrEmpty(candidate.Version) ||
+                             dep.IsSatisifiedBy(candidate.Version))
+                    {
+                        resolved = candidate.Name;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
+                    $"Failed to check for prebuilt '{binName}': {ex.Message}"));
+            }
+
+            _binVariantCache[name] = resolved;
+        }
+
+        if (resolved is null)
+        {
+            return dep;
+        }
+
+        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InformationalOutput,
+            $"Preferring prebuilt '{resolved}' over building '{name}' from source"));
+
+        return dep with { Name = resolved };
     }
 
     private async Task<string?> ReadCachedPkgbuildAsync(string packageName)

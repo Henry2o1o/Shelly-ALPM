@@ -1262,7 +1262,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                 .Where(x => x is { IsSelected: true, IsInstalled: false })
                 .Select(x => x.Name)
                 .Where(n => !IsDependencySatisfiedByInstalled(n)) // defensive guard: skip already-satisfied
-                .Select(ResolveOptDepProvider)                    // virtual -> concrete (prompt if ambiguous)
+                .Select(ResolveOptDepProvider) // virtual -> concrete (prompt if ambiguous)
                 .Distinct()
                 .ToList();
             var result = PackageListBuilder.Build(_handle, optDepNames);
@@ -1742,22 +1742,52 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
     public Task<bool> InstallLocalPackage(string path, AlpmTransFlag flags = AlpmTransFlag.None)
     {
+        return InstallLocalPackages([path], flags);
+    }
+
+    public Task<bool> InstallLocalPackages(List<string> paths, AlpmTransFlag flags = AlpmTransFlag.None)
+    {
         if (_handle == IntPtr.Zero) Initialize();
 
-        // 1. Load package from file
-        var result = PkgLoad(_handle, path, true, AlpmSigLevel.PackageOptional | AlpmSigLevel.DatabaseOptional,
-            out IntPtr pkgPtr);
-        if (result != 0 || pkgPtr == IntPtr.Zero)
+        var packagePaths = paths
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (packagePaths.Count == 0)
         {
-            ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(
-                $"Failed to load package from '{path}': {GetErrorMessage(ErrorNumber(_handle))}"));
             return Task.FromResult(false);
+        }
+
+        // 1. Load package from file
+        List<IntPtr> pkgPtrs = [];
+        foreach (var path in packagePaths)
+        {
+            var result = PkgLoad(_handle, path, true, AlpmSigLevel.PackageOptional | AlpmSigLevel.DatabaseOptional,
+                out IntPtr pkgPtr);
+            if (result != 0 || pkgPtr == IntPtr.Zero)
+            {
+                foreach (var loadedPkgPtr in pkgPtrs)
+                {
+                    _ = PkgFree(loadedPkgPtr);
+                }
+
+                ErrorEvent?.Invoke(this, new AlpmErrorEventArgs(
+                    $"Failed to load package from '{path}': {GetErrorMessage(ErrorNumber(_handle))}"));
+                return Task.FromResult(false);
+            }
+
+            pkgPtrs.Add(pkgPtr);
         }
 
         // 2. Initialize transaction
         if (TransInit(_handle, flags) != 0)
         {
-            _ = PkgFree(pkgPtr);
+            foreach (var pkgPtr in pkgPtrs)
+            {
+                _ = PkgFree(pkgPtr);
+            }
+
             var err = ErrorNumber(_handle);
             ErrorEvent?.Invoke(this,
                 new AlpmErrorEventArgs($"Failed to initialize transaction: {GetErrorMessage(err)}"));
@@ -1767,13 +1797,23 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         try
         {
             // 3. Add package to transaction
-            if (AddPkg(_handle, pkgPtr) != 0)
+            foreach (var pkgPtr in pkgPtrs)
             {
-                _ = PkgFree(pkgPtr);
-                var err = ErrorNumber(_handle);
-                ErrorEvent?.Invoke(this,
-                    new AlpmErrorEventArgs($"Failed to add package to transaction: {GetErrorMessage(err)}"));
-                return Task.FromResult(false);
+                if (AddPkg(_handle, pkgPtr) != 0)
+                {
+                    var err = ErrorNumber(_handle);
+                    if (err == AlpmErrno.TransDupTarget)
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                            "Skipping duplicate package in transaction"));
+                        continue;
+                    }
+
+                    _ = PkgFree(pkgPtr);
+                    ErrorEvent?.Invoke(this,
+                        new AlpmErrorEventArgs($"Failed to add package to transaction: {GetErrorMessage(err)}"));
+                    return Task.FromResult(false);
+                }
             }
 
             // 4. Prepare transaction
@@ -1792,7 +1832,11 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
         catch (Exception ex)
         {
-            _ = PkgFree(pkgPtr);
+            foreach (var pkgPtr in pkgPtrs)
+            {
+                _ = PkgFree(pkgPtr);
+            }
+
             ErrorEvent?.Invoke(this,
                 new AlpmErrorEventArgs($"Encountered an error during local package installation: {ex.Message}"));
             return Task.FromResult(false);
@@ -2785,6 +2829,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         return architectures;
     }
+    
 
     private void HandleErrorMessage(IntPtr dataPtr, AlpmErrno error)
     {

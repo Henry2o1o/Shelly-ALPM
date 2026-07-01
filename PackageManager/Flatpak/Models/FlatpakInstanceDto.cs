@@ -1,7 +1,7 @@
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Models;
 
-public partial class FlatpakInstanceDto
+public record FlatpakInstanceDto
 {
     public string Name { get; set; } = string.Empty;
     public string AppId { get; set; } = string.Empty;

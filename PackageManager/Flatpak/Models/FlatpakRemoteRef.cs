@@ -1,7 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
+using PackageManager.Flatpak.Enums;
 
-namespace PackageManager.Flatpak;
+namespace PackageManager.Flatpak.Models;
 
 /// <summary>
 /// A specialized class for handling remote references returned by flatpak_installation_list_remote_refs_sync_full.
