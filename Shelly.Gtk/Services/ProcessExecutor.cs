@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using Shelly.Gtk.Helpers;
 using Shelly.Gtk.Services.Wire;
-using Tmds.DBus.Protocol;
 
 namespace Shelly.Gtk.Services;
 
@@ -102,13 +101,9 @@ public sealed class ProcessExecutor(
         }
     }
 
-    private static async Task<bool> IsPolkitAvailableAsync()
+    private static Task<bool> IsPolkitAvailableAsync()
     {
-        using DBusConnection systemConnection = new(DBusAddress.System!);
-        await systemConnection.ConnectAsync();
-
-        var services = await systemConnection.ListServicesAsync();
-        return services.Contains("org.freedesktop.PolicyKit1");
+        return Task.FromResult(true);
     }
 
     private async Task<OperationResult> RunSudoAsync(string description, string[] args)
