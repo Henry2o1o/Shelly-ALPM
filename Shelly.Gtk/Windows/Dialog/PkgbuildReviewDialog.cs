@@ -3,6 +3,7 @@ using Gtk;
 using Shelly.Utilities.Eventing;
 using Shelly.Utilities.Models;
 using static Shelly.GTK.Resources.Translations;
+using WrapMode = Gtk.WrapMode;
 
 namespace Shelly.Gtk.Windows.Dialog;
 
@@ -27,7 +28,8 @@ public static class PkgbuildReviewDialog
             dialog.SetTransientFor(parent);
         dialog.SetModal(true);
         dialog.SetDefaultSize(720, 560);
-
+        dialog.SetResizable(true);
+        
         var outer = Box.New(Orientation.Vertical, 12);
         outer.SetMarginTop(16);
         outer.SetMarginBottom(16);
@@ -42,6 +44,12 @@ public static class PkgbuildReviewDialog
         outer.Append(heading);
 
         outer.Append(MakeScanStatusBanner(hasWarnings, warnings.Count));
+        
+        var notebook = Notebook.New();
+        notebook.SetVexpand(true);
+        notebook.SetHexpand(true);
+        notebook.SetScrollable(true);
+
 
         // Diff section — the part that the regression dropped.
         var diffBox = Box.New(Orientation.Vertical, 0);
@@ -75,7 +83,7 @@ public static class PkgbuildReviewDialog
 
         var diffFrame = Frame.New(null);
         diffFrame.SetChild(diffScroll);
-        outer.Append(diffFrame);
+        notebook.AppendPage(diffFrame, Label.New(T("Changes")));
 
         // Warnings section — only when PostInstallValidator produced findings.
         if (hasWarnings)
@@ -93,14 +101,33 @@ public static class PkgbuildReviewDialog
 
         if (sourceFiles is { Count: > 0 })
         {
-            var sourceHeading = Label.New(T("Source files"));
-            sourceHeading.SetXalign(0);
-            sourceHeading.AddCssClass("heading");
-            outer.Append(sourceHeading);
-
             foreach (var (name, content) in sourceFiles)
-                outer.Append(MakeSourceFileRow(name, content));
+            {
+                if (string.IsNullOrEmpty(content)) continue;
+ 
+                var view = TextView.New();
+                view.SetEditable(false);
+                view.SetMonospace(true);
+                view.SetWrapMode(WrapMode.WordChar);
+                view.SetCursorVisible(false);
+                view.LeftMargin = 12;
+                view.RightMargin = 12;
+                view.TopMargin = 12;
+                view.BottomMargin = 12;
+                view.GetBuffer().SetText(content, content.Length);
+ 
+                var scroll = ScrolledWindow.New();
+                scroll.SetPolicy(PolicyType.Automatic, PolicyType.Automatic);
+                scroll.SetVexpand(true);
+                scroll.SetHexpand(true);
+                scroll.AddCssClass("view");
+                scroll.SetChild(view);
+ 
+                notebook.AppendPage(scroll, Label.New(name));
+            }
         }
+        
+        outer.Append(notebook);
 
         var buttonBox = Box.New(Orientation.Horizontal, 8);
         buttonBox.SetHalign(Align.End);
