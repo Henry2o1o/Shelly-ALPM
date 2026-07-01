@@ -34,4 +34,10 @@ public static class StringMatcher
 
         return bestScore;
     }
+ 
+    public static bool TokenContains(string token, string text)
+    {
+        var split = token.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return split.All(tok => text.Contains(tok, StringComparison.OrdinalIgnoreCase));
+    }
 }
