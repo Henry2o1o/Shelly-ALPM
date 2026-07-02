@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -20,8 +21,7 @@ public class AppImageManagerV2(string installDirectory = "")
     private readonly string _installDirectory =
         string.IsNullOrEmpty(installDirectory) ? XdgPaths.BinHome() : installDirectory;
 
-    private static readonly string LocalDbPath =
-        XdgPaths.ShellyCache("appimage-local-meta-store", "appimage-metadata-v2.db");
+    private static readonly string LocalDbPath = GetLocalDbPath();
 
     public EventHandler<AppImageStatusEventArgs>? StatusEvent;
     public EventHandler<AppImageProgressEventArgs>? ProgressEvent;
@@ -648,7 +648,7 @@ public class AppImageManagerV2(string installDirectory = "")
                         }
                         else if (line.StartsWith("TryExec="))
                         {
-                            //do nothing 
+                            //do nothing
                         }
                         else if (line.StartsWith("Icon="))
                         {
@@ -1110,32 +1110,40 @@ public class AppImageManagerV2(string installDirectory = "")
             response.EnsureSuccessStatusCode();
 
             var totalBytes = response.Content.Headers.ContentLength;
-            await using var fs = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            await using var contentStream = await response.Content.ReadAsStreamAsync();
 
-            var buffer = new byte[81920];
-            long totalDownloadedBytes = 0;
-            int bytesRead;
-            var lastReportedProgress = -1;
-
-            while ((bytesRead = await contentStream.ReadAsync(buffer)) != 0)
+            await using (var fs = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            await using (var contentStream = await response.Content.ReadAsStreamAsync())
             {
-                await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
-                totalDownloadedBytes += bytesRead;
+                var buffer = ArrayPool<byte>.Shared.Rent(81920);
+                try
+                {
+                    long totalDownloadedBytes = 0;
+                    int bytesRead;
+                    var lastReportedProgress = -1;
 
-                if (totalBytes.HasValue)
-                {
-                    var currentProgress = (int)((double)totalDownloadedBytes / totalBytes.Value * 100);
-                    if (currentProgress <= lastReportedProgress) continue;
-                    LogProgress(update.Name, totalBytes, totalDownloadedBytes);
-                    lastReportedProgress = currentProgress;
+                    while ((bytesRead = await contentStream.ReadAsync(buffer.AsMemory(0, 81920))) != 0)
+                    {
+                        await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
+                        totalDownloadedBytes += bytesRead;
+
+                        if (totalBytes.HasValue)
+                        {
+                            var currentProgress = (int)((double)totalDownloadedBytes / totalBytes.Value * 100);
+                            if (currentProgress <= lastReportedProgress) continue;
+                            LogProgress(update.Name, totalBytes, totalDownloadedBytes);
+                            lastReportedProgress = currentProgress;
+                        }
+                        else
+                        {
+                            LogProgress(update.Name, totalBytes, totalDownloadedBytes);
+                        }
+                    }
                 }
-                else
+                finally
                 {
-                    LogProgress(update.Name, totalBytes, totalDownloadedBytes);
+                    ArrayPool<byte>.Shared.Return(buffer);
                 }
             }
-
 
             SetFilePermissions(downloadPath, "a+x");
 
@@ -1728,4 +1736,20 @@ public class AppImageManagerV2(string installDirectory = "")
     }
 
     #endregion
+
+    private static string GetLocalDbPath()
+    {
+        var oldFilePath = Path.Combine(XdgPaths.ShellyCache("appimage-local-meta-store"), "appimage-metadata-v2.db");
+
+        if (!Path.Exists(oldFilePath))
+            return XdgPaths.ShellyConfig("appimage-metadata-v2.db");
+        
+        File.Move(oldFilePath, XdgPaths.ShellyConfig("appimage-metadata-v2.db"));
+        
+        var oldDir = XdgPaths.ShellyCache("appimage-local-meta-store");
+        if (!Directory.EnumerateFileSystemEntries(oldDir).Any())
+            Directory.Delete(oldDir);
+        
+        return XdgPaths.ShellyConfig("appimage-metadata-v2.db");
+    }
 }

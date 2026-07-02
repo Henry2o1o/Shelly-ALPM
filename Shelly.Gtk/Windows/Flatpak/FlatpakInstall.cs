@@ -11,6 +11,7 @@ using Shelly.Gtk.Helpers.CustomUiComps;
 using Shelly.Utilities;
 using Shelly.Utilities.Networking;
 using Functions = Gtk.Functions;
+using PackageSearch = Shelly.Gtk.Helpers.PackageSearch;
 
 // ReSharper disable NotAccessedField.Local
 

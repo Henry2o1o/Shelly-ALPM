@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text.Json;
 using PackageManager.Alpm;
 using PackageManager.Alpm.Package;
 using Shelly.Cli.Interactions;
@@ -39,7 +40,7 @@ public class ListUpdates : GlobalSettingsCommand
 
         if (JsonOutput)
         {
-            JsonPackFrame.WriteToStdout(updates);
+            console.WriteLine(JsonSerializer.Serialize(updates,ShellyCliJsonContext.Default.ListAlpmPackageUpdateDto));
             return;
         }
 

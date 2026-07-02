@@ -11,11 +11,10 @@ public static class DependencyGraphPreview
         Dictionary<string, List<string>> dependencyMap)
     {
         var dialog = Window.New();
-        dialog.SetTitle($"Dependency Graph: {packageName}");
-        if (parent is not null)
-            dialog.SetTransientFor(parent);
-        dialog.SetModal(true);
-        dialog.SetDefaultSize(900, 600);
+        dialog.SetTransientFor(parent);                  
+        dialog.SetModal(true);                         
+        dialog.SetDefaultSize(900, 650);    
+        dialog.SetResizable(true);
 
         var box = Box.New(Orientation.Vertical, 12);
         box.SetMarginTop(16);
@@ -52,6 +51,15 @@ public static class DependencyGraphPreview
         box.Append(buttonBox);
 
         dialog.SetChild(box);
+       
+        //Dont let the GC win...
+        //Long story short with invoking this and the GC collecting something before it can and causes a crash.
+        dialog.OnCloseRequest += (_, _) =>
+        {
+            graphWidget.Dispose();
+            return false;
+        };
+        
         dialog.Present();
     }
 }

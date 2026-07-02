@@ -79,7 +79,7 @@ internal static class QuestionRouter
 
         var args = new QuestionEventArgs(
             QuestionType.SelectOptionalDeps,
-            q.DependencyName,
+            q.QuestionText,
             options,
             q.DependencyName);
 
