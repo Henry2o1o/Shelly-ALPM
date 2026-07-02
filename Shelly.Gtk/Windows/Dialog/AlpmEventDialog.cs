@@ -30,6 +30,7 @@ public class AlpmEventDialog
         box.Append(titleLabel);
 
         var questionLabel = Label.New(e.QuestionText);
+        questionLabel.SetText(e.QuestionText);
         questionLabel.SetWrap(true);
         questionLabel.SetHalign(Align.Start);
         questionLabel.SetXalign(0);
