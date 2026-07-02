@@ -13,13 +13,15 @@ public static class BasicSelection
         }
         defaultIndex = Math.Clamp(defaultIndex, 0, options.Count - 1);
         var supportAnsi = AnsiUtilities.SupportsAnsi;
-        
+
         Console.WriteLine(supportAnsi ? $"{title.Pastel(ConsoleColor.DarkYellow)}" : $"{title} ({options[defaultIndex]})");
 
         for (var i = 0; i < options.Count; i++)
         {
             var option = options[i];
-            var label = supportAnsi ? $"{i}. {option}".Pastel(ConsoleColor.Green) : $"{i}. {option}";
+            var label = supportAnsi
+                ? $"{i + 1}. {option}".Pastel(ConsoleColor.Green)
+                : $"{i + 1}. {option}";
             Console.WriteLine(label);
         }
         var prompt = supportAnsi ? "Enter selection: ".Pastel(ConsoleColor.Yellow) : "Enter selection: ";
