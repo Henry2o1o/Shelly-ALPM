@@ -9,6 +9,9 @@ using Shelly.Gtk.UiModels;
 using Shelly.Gtk.UiModels.PackageManagerObjects.GObjects;
 using Shelly.Gtk.Helpers.CustomUiComps;
 using Shelly.Utilities;
+using Shelly.Utilities.Networking;
+using Functions = Gtk.Functions;
+using PackageSearch = Shelly.Gtk.Helpers.PackageSearch;
 
 // ReSharper disable NotAccessedField.Local
 
@@ -61,8 +64,12 @@ public class FlatpakInstall(
     private Label _overlaySizeLabel = null!;
     private Label _overlayLicenseLabel = null!;
     private Label _overlayUrlLabel = null!;
+    private ListBox _overlayListBox = null!;
     private Label _overlaySummaryLabel = null!;
     private Label _overlayDescriptionLabel = null!;
+    private Label _overlayDescriptionLabelFull = null!;
+    private Revealer _descriptionRevealer = null!;
+    private Button _descriptionRevealButton = null!;
     private Image _overlayIconImage = null!;
     private Carousel _carousel = null!;
     private CarouselIndicatorDots _indicatorDots = null!;
@@ -95,7 +102,7 @@ public class FlatpakInstall(
 
     private CancellationTokenSource _searchDebounce = new();
 
-    private readonly HttpClient _httpClient = new();
+    private readonly HttpClient _httpClient = OptimizedClient.CreateClient();
 
     private Stack? _mainContentStack;
     private Box? _installSidebarControls;
@@ -119,7 +126,7 @@ public class FlatpakInstall(
         _loadingSpinner = (Spinner)builder.GetObject("loading_spinner")!;
         _remoteRefOverlay = (Box)builder.GetObject("overlay_remote_ref")!;
         _addRemoteOverlay = (Box)builder.GetObject("overlay_add_remote")!;
-        
+
         var screenshotsContainer = (Box)builder.GetObject("overlay_screenshots_container")!;
         _carousel = Carousel.New();
         _indicatorDots = CarouselIndicatorDots.New(_carousel);
@@ -132,8 +139,20 @@ public class FlatpakInstall(
         _overlaySizeLabel = (Label)builder.GetObject("overlay_size_label")!;
         _overlayLicenseLabel = (Label)builder.GetObject("overlay_license_label")!;
         _overlayUrlLabel = (Label)builder.GetObject("overlay_urls_label")!;
+        _overlayListBox = (ListBox)builder.GetObject("overlay_links_box")!;
         _overlaySummaryLabel = (Label)builder.GetObject("overlay_summary_label")!;
         _overlayDescriptionLabel = (Label)builder.GetObject("overlay_description_label")!;
+        _descriptionRevealer = (Revealer)builder.GetObject("description_revealer")!;
+        _descriptionRevealButton = (Button)builder.GetObject("description_reveal_button")!;
+        _overlayDescriptionLabelFull = (Label)builder.GetObject("overlay_description_label_full")!;
+
+        _descriptionRevealButton.OnClicked += (_, _) =>
+        {
+            var isRevealed = _descriptionRevealer.GetRevealChild();
+            _descriptionRevealer.SetRevealChild(!isRevealed);
+            _descriptionRevealButton.Label = !isRevealed ? Translations.T("Show less") : Translations.T("Show more");
+        };
+        
         _remoteDropDown = (DropDown)builder.GetObject("overlay_remote_selection")!;
         _remoteDropDown.OnNotify += (_, args) =>
         {
@@ -514,7 +533,24 @@ public class FlatpakInstall(
 
             _overlayLicenseLabel.SetText(Translations.T("License: {0}", obj.ProjectLicense));
             _overlaySummaryLabel.SetText(obj.Summary);
-            _overlayDescriptionLabel.SetText(obj.Description);
+
+            var description = obj.Description;
+            var lines = description.Split('\n');
+            if (lines.Length > 3)
+            {
+                _overlayDescriptionLabel.SetText(string.Join("\n", lines.Take(3)));
+                _overlayDescriptionLabelFull.SetText(string.Join("\n", lines.Skip(3)));
+                _descriptionRevealButton.SetVisible(true);
+            }
+            else
+            {
+                _overlayDescriptionLabel.SetText(description);
+                _overlayDescriptionLabelFull.SetText(string.Empty);
+                _descriptionRevealButton.SetVisible(false);
+            }
+
+            _descriptionRevealer.SetRevealChild(false);
+            _descriptionRevealButton.Label = Translations.T("Show more");
 
             var result = unprivilegedOperationService
                 .GetFlatpakAppDataAsync(obj.Remotes.FirstOrDefault()?.Name ?? String.Empty, obj.Id, "stable").Result;
@@ -664,19 +700,59 @@ public class FlatpakInstall(
 
     private void SetUrlLinks(Dictionary<string, string>? urls)
     {
+        _overlayListBox.RemoveAll();
         if (urls == null || urls.Count == 0)
         {
-            _overlayUrlLabel.SetText(Translations.T("No links available"));
+            _overlayUrlLabel?.SetText(Translations.T("No links available"));
             return;
         }
 
-        var markup = string.Join("  ·  ", urls.Select(kvp =>
-            $"<a href=\"{kvp.Value}\">{CapitalizeFirst(kvp.Key)}</a>"
-        ));
+        _overlayUrlLabel?.SetText(string.Empty);
+        foreach (var link in urls)
+        {
+            var box = Box.New(Orientation.Horizontal, 6);
+            var labelBox = Box.New(Orientation.Vertical, 6);
 
-        _overlayUrlLabel.SetMarkup(markup);
-        _overlayUrlLabel.UseMarkup = true;
+            var image = Image.NewFromIconName(GetIconForUrlType(link.Key));
+            image.SetMarginEnd(6);
+            image.SetMarginStart(6);
+            box.Append(image);
+            
+            var nameLabel = Label.New(CapitalizeFirst(link.Key));
+            nameLabel.Halign = Align.Start;
+            labelBox.Append(nameLabel);
+            
+            var linkLabel = Label.New(link.Value);
+            linkLabel.Selectable = true;
+            labelBox.Append(linkLabel);
+            labelBox.Halign = Align.Start;
+            box.Append(labelBox);
+
+            var spacer = Box.New(Orientation.Horizontal, 0);
+            spacer.Hexpand = true;
+            box.Append(spacer);
+            
+            var linkButton = Button.NewFromIconName("web-browser");
+            linkButton.Halign = Align.End;
+            linkButton.OnClicked += async (_, _) => {  Functions.ShowUri(null, link.Value, 0); };
+            box.Append(linkButton);
+            _overlayListBox.Append(box);
+        }
     }
+    
+    private static string GetIconForUrlType(string urlType) =>
+        urlType.ToLowerInvariant() switch
+        {
+            "homepage" => "go-home",
+            "bugtracker" => "dialog-warning",
+            "donation" => "emblem-favorite",
+            "faq" => "help-faq",
+            "help" => "help-browser",
+            "vcs-browser" => "folder-saved-search",
+            "contact" => "mail-send-receive",
+            "translate" => "accessories-dictionary",
+            _ => "web-browser"
+        };
 
     private static string CapitalizeFirst(string s) =>
         string.IsNullOrEmpty(s) ? s : char.ToUpper(s[0]) + s[1..];
@@ -720,7 +796,7 @@ public class FlatpakInstall(
 
             _carousel.AddWidget(picture);
         }
-        
+
         _indicatorDots.Update();
     }
 

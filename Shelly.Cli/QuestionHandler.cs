@@ -1,4 +1,6 @@
 using PackageManager.Alpm;
+using PackageManager.Alpm.Enums;
+using PackageManager.Alpm.Events.EventArgs;
 using PackageManager.Alpm.Questions;
 using PackageManager.Aur;
 using PackageManager.Utilities.PkgBuild;
@@ -169,7 +171,7 @@ public static class QuestionHandler
                 .Select((o, i) => new ProviderOptionDto(i, o.Name, o.Description, o.IsInstalled, o.IsSelected))
                 .ToList();
             JsonPackFrame.WriteToStdout<QuestionRequest>(new SelectOptDepsQuestionDto(
-                id, question.DependencyName ?? string.Empty, options));
+                id, question.DependencyName ?? string.Empty, question.QuestionText ?? string.Empty, options));
             var answer = ReadAnswer<SelectOptDepsAnswer>(id);
             var selectedIndices = new HashSet<int>(answer.SelectedIndices);
             var uiSelected = question.ProviderOptions

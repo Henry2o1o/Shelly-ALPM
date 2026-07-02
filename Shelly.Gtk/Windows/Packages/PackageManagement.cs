@@ -469,27 +469,6 @@ public sealed class PackageManagement(
             _detailBox.Append(fileExpander);
         }
 
-        if (configService.LoadConfig().WebViewEnabled && pkg.Depends.Count > 0)
-        {
-            var dictionary = new Dictionary<string, List<string>> { { pkg.Name, pkg.Depends } };
-
-            foreach (var dep in pkg.Depends)
-            {
-                for (uint i = 0; i < _listStore.GetNItems(); i++)
-                {
-                    var obj = _listStore.GetObject(i);
-                    if (obj is not AlpmPackageGObject depObj) continue;
-                    if (depObj.Index < 0 || depObj.Index >= _packageData.Count) continue;
-                    var depPkg = _packageData[depObj.Index];
-                    if (depPkg.Name.Contains(dep))
-                        dictionary.TryAdd(depPkg.Name, depPkg.Depends);
-                }
-            }
-
-            var window = new WebWindow(pkg.Name, dictionary);
-            _detailBox.Append(window.CreateWindow());
-        }
-
         _detailRevealer.SetRevealChild(true);
         return;
 

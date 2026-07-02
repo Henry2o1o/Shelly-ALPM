@@ -6,7 +6,9 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using PackageManager.Flatpak.Enums;
 using PackageManager.Flatpak.Events;
+using PackageManager.Flatpak.Models;
 using Shelly.Utilities;
 
 namespace PackageManager.Flatpak;
