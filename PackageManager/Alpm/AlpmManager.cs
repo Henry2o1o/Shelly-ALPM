@@ -1116,6 +1116,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             pkgPtrs.Add(pkgPtr);
         }
 
+        List<string> optDepNames = [];
         foreach (var packageName in chosenPkgs)
         {
             // Find the package in sync databases
@@ -1232,6 +1233,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         }
 
         List<ProviderOption> optDependList = [];
+
         foreach (var pkgPtr in pkgPtrs)
         {
             var pkg = new AlpmPackage(pkgPtr);
@@ -1247,26 +1249,27 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
                                   IsDependencySatisfiedByInstalled(name);
                 optDependList.Add(new ProviderOption(name, description, isInstalled));
             }
-        }
 
-        List<string> optDepNames = [];
-        if (optDependList.Count > 0)
-        {
-            var args = new AlpmQuestionEventArgs(AlpmQuestionType.SelectOptionalDeps,
-                "Select optional dependencies",
-                optDependList);
-            Question?.Invoke(this, args);
-            args.WaitForResponse();
-            var responseOptions = args.Response.ProviderOptions ?? [];
-            optDepNames = responseOptions
+
+
+            if (optDependList.Count > 0)
+            {
+                var args = new AlpmQuestionEventArgs(AlpmQuestionType.SelectOptionalDeps,
+                    $"Select optional dependencies for {pkg.Name}",
+                    optDependList);
+                Question?.Invoke(this, args);
+                args.WaitForResponse();
+                var responseOptions = args.Response.ProviderOptions ?? [];
+                optDepNames.AddRange(responseOptions
                 .Where(x => x is { IsSelected: true, IsInstalled: false })
                 .Select(x => x.Name)
                 .Where(n => !IsDependencySatisfiedByInstalled(n)) // defensive guard: skip already-satisfied
                 .Select(ResolveOptDepProvider) // virtual -> concrete (prompt if ambiguous)
                 .Distinct()
-                .ToList();
-            var result = PackageListBuilder.Build(_handle, optDepNames);
-            pkgPtrs.AddRange(result);
+                .ToList());
+                var result = PackageListBuilder.Build(_handle, optDepNames);
+                pkgPtrs.AddRange(result);
+            }
         }
 
         InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
@@ -1474,13 +1477,13 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
         if (removeOptionalDeps)
         {
             foreach (var name in from pkgPtr in pkgPtrs
-                     select new AlpmPackage(pkgPtr)
+                                 select new AlpmPackage(pkgPtr)
                      into pkg
-                     from raw in pkg.OptDepends
-                     select raw.Split(':', 2)[0].Trim()
+                                 from raw in pkg.OptDepends
+                                 select raw.Split(':', 2)[0].Trim()
                      into name
-                     where !string.IsNullOrEmpty(name)
-                     select name)
+                                 where !string.IsNullOrEmpty(name)
+                                 select name)
             {
                 InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DebugOutput,
                     $"Removing optional dependency: {name}"));
@@ -2345,289 +2348,289 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
             switch (type)
             {
                 case AlpmEventType.CheckDepsStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.CheckDepsStart,
-                        "Checking dependencies..."));
-                    break;
-                }
-                case AlpmEventType.CheckDepsDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.CheckDepsDone,
-                        "Dependency check finished."));
-                    break;
-                }
-                case AlpmEventType.FileConflictsStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.FileConflictsStart,
-                        "Checking for file conflicts..."));
-                    break;
-                }
-                case AlpmEventType.FileConflictsDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.FileConflictsDone,
-                        "File conflict check finished."));
-                    break;
-                }
-                case AlpmEventType.ResolveDepsStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.ResolveDepsStart,
-                        "Resolving dependencies..."));
-                    break;
-                }
-                case AlpmEventType.ResolveDepsDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.ResolveDepsDone,
-                        "Dependency resolution finished."));
-                    break;
-                }
-                case AlpmEventType.InterConflictsStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InterConflictsStart,
-                        "Checking for package conflicts..."));
-                    break;
-                }
-                case AlpmEventType.InterConflictsDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InterConflictsDone,
-                        "Package conflict check finished."));
-                    break;
-                }
-                case AlpmEventType.TransactionStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TransactionStart,
-                        "Starting transaction..."));
-                    break;
-                }
-                case AlpmEventType.TransactionDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TransactionDone,
-                        "Transaction completed."));
-                    break;
-                }
-                case AlpmEventType.IntegrityStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.IntegrityStart,
-                        "Checking package integrity..."));
-                    break;
-                }
-                case AlpmEventType.IntegrityDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.IntegrityDone,
-                        "Package integrity check finished."));
-                    break;
-                }
-                case AlpmEventType.LoadStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.LoadStart,
-                        "Loading packages..."));
-                    break;
-                }
-                case AlpmEventType.LoadDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.LoadDone,
-                        "Packages loaded."));
-                    break;
-                }
-                case AlpmEventType.DiskspaceStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DiskspaceStart,
-                        "Checking disk space..."));
-                    break;
-                }
-                case AlpmEventType.DiskspaceDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DiskspaceDone,
-                        "Disk space check finished."));
-                    break;
-                }
-                case AlpmEventType.PackageOperationStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PackageOperationStart,
-                        "Starting package operation..."));
-                    break;
-                }
-                case AlpmEventType.PackageOperationDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PackageOperationDone,
-                        "Package operation completed."));
-                    break;
-                }
-                case AlpmEventType.ScriptletInfo:
-                {
-                    var scriptletEvent = Marshal.PtrToStructure<AlpmEventScriptletInfo>(eventPtr);
-                    string? line = scriptletEvent.Line != IntPtr.Zero
-                        ? Marshal.PtrToStringUTF8(scriptletEvent.Line)
-                        : null;
-                    if (!string.IsNullOrEmpty(line))
                     {
-                        ScriptletInfo?.Invoke(this, new AlpmScriptletEventArgs(line));
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.CheckDepsStart,
+                            "Checking dependencies..."));
+                        break;
                     }
+                case AlpmEventType.CheckDepsDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.CheckDepsDone,
+                            "Dependency check finished."));
+                        break;
+                    }
+                case AlpmEventType.FileConflictsStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.FileConflictsStart,
+                            "Checking for file conflicts..."));
+                        break;
+                    }
+                case AlpmEventType.FileConflictsDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.FileConflictsDone,
+                            "File conflict check finished."));
+                        break;
+                    }
+                case AlpmEventType.ResolveDepsStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.ResolveDepsStart,
+                            "Resolving dependencies..."));
+                        break;
+                    }
+                case AlpmEventType.ResolveDepsDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.ResolveDepsDone,
+                            "Dependency resolution finished."));
+                        break;
+                    }
+                case AlpmEventType.InterConflictsStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InterConflictsStart,
+                            "Checking for package conflicts..."));
+                        break;
+                    }
+                case AlpmEventType.InterConflictsDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.InterConflictsDone,
+                            "Package conflict check finished."));
+                        break;
+                    }
+                case AlpmEventType.TransactionStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TransactionStart,
+                            "Starting transaction..."));
+                        break;
+                    }
+                case AlpmEventType.TransactionDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TransactionDone,
+                            "Transaction completed."));
+                        break;
+                    }
+                case AlpmEventType.IntegrityStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.IntegrityStart,
+                            "Checking package integrity..."));
+                        break;
+                    }
+                case AlpmEventType.IntegrityDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.IntegrityDone,
+                            "Package integrity check finished."));
+                        break;
+                    }
+                case AlpmEventType.LoadStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.LoadStart,
+                            "Loading packages..."));
+                        break;
+                    }
+                case AlpmEventType.LoadDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.LoadDone,
+                            "Packages loaded."));
+                        break;
+                    }
+                case AlpmEventType.DiskspaceStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DiskspaceStart,
+                            "Checking disk space..."));
+                        break;
+                    }
+                case AlpmEventType.DiskspaceDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DiskspaceDone,
+                            "Disk space check finished."));
+                        break;
+                    }
+                case AlpmEventType.PackageOperationStart:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PackageOperationStart,
+                            "Starting package operation..."));
+                        break;
+                    }
+                case AlpmEventType.PackageOperationDone:
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PackageOperationDone,
+                            "Package operation completed."));
+                        break;
+                    }
+                case AlpmEventType.ScriptletInfo:
+                    {
+                        var scriptletEvent = Marshal.PtrToStructure<AlpmEventScriptletInfo>(eventPtr);
+                        string? line = scriptletEvent.Line != IntPtr.Zero
+                            ? Marshal.PtrToStringUTF8(scriptletEvent.Line)
+                            : null;
+                        if (!string.IsNullOrEmpty(line))
+                        {
+                            ScriptletInfo?.Invoke(this, new AlpmScriptletEventArgs(line));
+                        }
 
-                    break;
-                }
+                        break;
+                    }
                 case AlpmEventType.HookStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookStart,
-                        "Running hooks..."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookStart,
+                            "Running hooks..."));
+                        break;
+                    }
                 case AlpmEventType.HookDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookDone,
-                        "Finished running hooks."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookDone,
+                            "Finished running hooks."));
+                        break;
+                    }
                 case AlpmEventType.HookRunStart:
-                {
-                    var hookEvent = Marshal.PtrToStructure<AlpmEventHookRun>(eventPtr);
-                    string? name = hookEvent.Name != IntPtr.Zero
-                        ? Marshal.PtrToStringUTF8(hookEvent.Name)
-                        : null;
-                    string? desc = hookEvent.Desc != IntPtr.Zero
-                        ? Marshal.PtrToStringUTF8(hookEvent.Desc)
-                        : null;
-                    var position = (ulong)hookEvent.Position;
-                    var total = (ulong)hookEvent.Total;
+                    {
+                        var hookEvent = Marshal.PtrToStructure<AlpmEventHookRun>(eventPtr);
+                        string? name = hookEvent.Name != IntPtr.Zero
+                            ? Marshal.PtrToStringUTF8(hookEvent.Name)
+                            : null;
+                        string? desc = hookEvent.Desc != IntPtr.Zero
+                            ? Marshal.PtrToStringUTF8(hookEvent.Desc)
+                            : null;
+                        var position = (ulong)hookEvent.Position;
+                        var total = (ulong)hookEvent.Total;
 
-                    var hookLine = !string.IsNullOrEmpty(desc)
-                        ? $"({position}/{total}) {desc}"
-                        : $"({position}/{total}) {name ?? "Running hook..."}";
+                        var hookLine = !string.IsNullOrEmpty(desc)
+                            ? $"({position}/{total}) {desc}"
+                            : $"({position}/{total}) {name ?? "Running hook..."}";
 
-                    HookRun?.Invoke(this, new AlpmHookEventArgs(hookLine, position, total));
-                    break;
-                }
+                        HookRun?.Invoke(this, new AlpmHookEventArgs(hookLine, position, total));
+                        break;
+                    }
                 case AlpmEventType.HookRunDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookRunDone,
-                        "Finished running hook."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.HookRunDone,
+                            "Finished running hook."));
+                        break;
+                    }
                 case AlpmEventType.DbRetrieveStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveStart,
-                        "Retrieving database..."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveStart,
+                            "Retrieving database..."));
+                        break;
+                    }
                 case AlpmEventType.DbRetrieveDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveDone,
-                        "Database retrieved."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveDone,
+                            "Database retrieved."));
+                        break;
+                    }
                 case AlpmEventType.DbRetrieveFailed:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveFailed,
-                        "Failed to retrieve database."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DbRetrieveFailed,
+                            "Failed to retrieve database."));
+                        break;
+                    }
                 case AlpmEventType.PkgRetrieveStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveStart,
-                        "Retrieving package..."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveStart,
+                            "Retrieving package..."));
+                        break;
+                    }
                 case AlpmEventType.PkgRetrieveDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveDone,
-                        "Package retrieved."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveDone,
+                            "Package retrieved."));
+                        break;
+                    }
                 case AlpmEventType.PkgRetrieveFailed:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveFailed,
-                        "Package retrieval failed."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.PkgRetrieveFailed,
+                            "Package retrieval failed."));
+                        break;
+                    }
                 case AlpmEventType.DatabaseMissing:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DatabaseMissing,
-                        "Database missing. Please run `shelly keyring init` to initialize the keyring."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.DatabaseMissing,
+                            "Database missing. Please run `shelly keyring init` to initialize the keyring."));
+                        break;
+                    }
                 case AlpmEventType.OptdepRemoval:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.OptdepRemoval,
-                        "Removing optional dependencies..."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.OptdepRemoval,
+                            "Removing optional dependencies..."));
+                        break;
+                    }
 
                 case AlpmEventType.KeyringStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyringStart,
-                        "Checking keyring..."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyringStart,
+                            "Checking keyring..."));
+                        break;
+                    }
                 case AlpmEventType.KeyringDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyringDone,
-                        "Keyring check finished."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyringDone,
+                            "Keyring check finished."));
+                        break;
+                    }
                 case AlpmEventType.KeyDownloadStart:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyDownloadStart,
-                        "Downloading key..."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyDownloadStart,
+                            "Downloading key..."));
+                        break;
+                    }
                 case AlpmEventType.KeyDownloadDone:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyDownloadDone,
-                        "Key download finished."));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.KeyDownloadDone,
+                            "Key download finished."));
+                        break;
+                    }
                 case AlpmEventType.PacnewCreated:
-                {
-                    var pacnewEvent = Marshal.PtrToStructure<AlpmPacnewCreatedEvent>(eventPtr);
-
-                    string? file = pacnewEvent.File != IntPtr.Zero
-                        ? Marshal.PtrToStringUTF8(pacnewEvent.File)
-                        : null;
-
-                    string? oldPkgName = null;
-                    if (pacnewEvent.OldPkg != IntPtr.Zero)
                     {
-                        IntPtr namePtr = GetPkgName(pacnewEvent.OldPkg);
-                        oldPkgName = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
-                    }
+                        var pacnewEvent = Marshal.PtrToStructure<AlpmPacnewCreatedEvent>(eventPtr);
 
-                    string? newPkgName = null;
-                    if (pacnewEvent.NewPkg != IntPtr.Zero)
-                    {
-                        IntPtr namePtr = GetPkgName(pacnewEvent.NewPkg);
-                        newPkgName = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
-                    }
+                        string? file = pacnewEvent.File != IntPtr.Zero
+                            ? Marshal.PtrToStringUTF8(pacnewEvent.File)
+                            : null;
 
-                    bool fromNoupgrade = pacnewEvent.FromNoUpgrade != 0;
-                    PacnewInfo?.Invoke(this, new AlpmPacnewEventArgs(file!));
-                    break;
-                }
+                        string? oldPkgName = null;
+                        if (pacnewEvent.OldPkg != IntPtr.Zero)
+                        {
+                            IntPtr namePtr = GetPkgName(pacnewEvent.OldPkg);
+                            oldPkgName = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
+                        }
+
+                        string? newPkgName = null;
+                        if (pacnewEvent.NewPkg != IntPtr.Zero)
+                        {
+                            IntPtr namePtr = GetPkgName(pacnewEvent.NewPkg);
+                            newPkgName = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
+                        }
+
+                        bool fromNoupgrade = pacnewEvent.FromNoUpgrade != 0;
+                        PacnewInfo?.Invoke(this, new AlpmPacnewEventArgs(file!));
+                        break;
+                    }
                 case AlpmEventType.PacsaveCreated:
-                {
-                    var pacsaveEvent = Marshal.PtrToStructure<AlpmPacsaveCreatedEvent>(eventPtr);
-
-                    var fileLocation = pacsaveEvent.File != IntPtr.Zero
-                        ? Marshal.PtrToStringUTF8(pacsaveEvent.File)
-                        : null;
-
-                    string? pkgNameOld = null;
-                    if (pacsaveEvent.OldPkg != IntPtr.Zero)
                     {
-                        IntPtr namePtr = GetPkgName(pacsaveEvent.OldPkg);
-                        pkgNameOld = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
-                    }
+                        var pacsaveEvent = Marshal.PtrToStructure<AlpmPacsaveCreatedEvent>(eventPtr);
 
-                    PacsaveInfo?.Invoke(this,
-                        new AlpmPacsaveEventArgs(pkgNameOld ?? "No package name", fileLocation ?? "No file location"));
-                    break;
-                }
+                        var fileLocation = pacsaveEvent.File != IntPtr.Zero
+                            ? Marshal.PtrToStringUTF8(pacsaveEvent.File)
+                            : null;
+
+                        string? pkgNameOld = null;
+                        if (pacsaveEvent.OldPkg != IntPtr.Zero)
+                        {
+                            IntPtr namePtr = GetPkgName(pacsaveEvent.OldPkg);
+                            pkgNameOld = namePtr != IntPtr.Zero ? Marshal.PtrToStringUTF8(namePtr) : null;
+                        }
+
+                        PacsaveInfo?.Invoke(this,
+                            new AlpmPacsaveEventArgs(pkgNameOld ?? "No package name", fileLocation ?? "No file location"));
+                        break;
+                    }
 
                 // ReSharper disable once UnreachableSwitchCaseDueToIntegerAnalysis
                 default:
-                {
-                    InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
-                        $"Unhandled event type: {type}"));
-                    break;
-                }
+                    {
+                        InformationalEvent?.Invoke(this, new InformationalEventArgs(AlpmEventType.TraceOutput,
+                            $"Unhandled event type: {type}"));
+                        break;
+                    }
             }
         }
         catch (Exception ex)
@@ -2829,7 +2832,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
         return architectures;
     }
-    
+
 
     private void HandleErrorMessage(IntPtr dataPtr, AlpmErrno error)
     {

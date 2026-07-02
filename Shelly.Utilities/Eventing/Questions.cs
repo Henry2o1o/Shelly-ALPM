@@ -46,6 +46,7 @@ public sealed record SelectProviderQuestionDto(
 public sealed record SelectOptDepsQuestionDto(
     string QuestionId,
     string DependencyName,
+    string QuestionText,
     List<ProviderOptionDto> Options) : QuestionRequest(QuestionId);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$kind")]
