@@ -52,7 +52,8 @@ public class QuestionDtoSerializationTests
         var original = new SelectOptDepsQuestionDto(
             "id-3",
             "some-pkg",
-            [
+            "Select optional dependencies for some-pkg",
+        [
                 new ProviderOptionDto(0, "opt-a", "desc a", false, true),
                 new ProviderOptionDto(1, "opt-b", "desc b", true, false),
             ]);
@@ -65,6 +66,7 @@ public class QuestionDtoSerializationTests
         Assert.That(dto!.DependencyName, Is.EqualTo("some-pkg"));
         Assert.That(dto.Options, Has.Count.EqualTo(2));
         Assert.That(dto.Options[0].IsSelected, Is.True);
+        Assert.That(dto.QuestionText, Is.EqualTo("Select optional dependencies for some-pkg"));
     }
 
     [Test]

@@ -41,7 +41,7 @@ public class ShellyApp : Object {
                 });
                     break;
                 case 3:
-                    run_update_check.begin ((obj, res) => {
+                    run_update_check.begin (true, (obj, res) => {
                     try { run_update_check.end (res); } catch (Error e) { printerr ("[shelly-notifications] %s\n", e.message); }
                 });
                     break;
@@ -83,7 +83,7 @@ public class ShellyApp : Object {
 
         tray_item.apply_config (config_reader.load ());
 
-        run_update_check.begin ((obj, res) => {
+        run_update_check.begin (true, (obj, res) => {
             try { run_update_check.end (res); } catch (Error e) { printerr ("[shelly-notifications] Initial check error: %s\n", e.message); }
         });
 
@@ -128,26 +128,31 @@ public class ShellyApp : Object {
 
     private async void do_update_packages () throws Error {
         yield AppRunner.spawn_terminal_with_command ("shelly");
-        yield run_update_check ();
+        yield run_update_check (false);
     }
 
-    private async void run_update_check () throws Error {
+    private async void run_update_check (bool notify = true) throws Error {
         var model = yield update_service.check_for_updates ();
 
         tray_item.set_updates_pending (model.total () > 0);
         menu_handler.notify_updates (model);
         menu_handler.set_last_check_label (
-                                           new DateTime.now_local ().format ("Last check: %H:%M %m/%d")
+            new DateTime.now_local ().format ("Last check: %H:%M %m/%d")
         );
 
-        if (model.total () > 0) {
-            yield notification_handler.send ("%d package update%s available".printf (
-                                                                                     model.total (), model.total () == 1 ? "" : "s"
-            ));
+        if (notify) {
+            if (model.total () > 0) {
+                yield notification_handler.send ("%d package update%s available".printf (
+                    model.total (), model.total () == 1 ? "" : "s"
+                ));
+            } else {
+                yield notification_handler.send ("No updates available");
+            }
         }
 
-        stdout.printf ("[shelly] Check complete — %d update(s)\n", model.total ());
+        stdout.printf ("[shelly-notifications] Check complete — %d update(s)\n", model.total ());
     }
+
 
     private void on_sni_name_acquired (string sni_name) {
         register_with_watcher.begin (sni_name, (obj, res) => {
