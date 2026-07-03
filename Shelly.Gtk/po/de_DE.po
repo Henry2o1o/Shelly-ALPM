@@ -3,7 +3,7 @@ msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
 "POT-Creation-Date: 2026-06-27 07:15+0000\n"
-"PO-Revision-Date: 2026-07-01 18:21+0200\n"
+"PO-Revision-Date: 2026-07-03 23:04+0200\n"
 "Last-Translator: helge1o1o1@gmail.com\n"
 "Language-Team: Deutschland (Deutsch) helge1o1o1@gmail.com\n"
 "Language: de\n"
@@ -1080,7 +1080,7 @@ msgid "Operation Complete"
 msgstr "Vorgang abgeschlossen"
 
 msgid "Authentication Required"
-msgstr "Authentication Required"
+msgstr "Authentifizierung erforderlich"
 
 #, csharp-format
 msgid "Password needed to execute: {0}."
