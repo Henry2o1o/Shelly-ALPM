@@ -344,11 +344,13 @@ public class PackageUpdate(
         headerBox.Append(iconImage);
 
         var nameLabel = Label.New(pkg.Name);
+        nameLabel.Selectable = true;
         nameLabel.AddCssClass("title-2");
         nameLabel.Halign = Align.Center;
         headerBox.Append(nameLabel);
 
         var descLabel = Label.New(pkg.Description);
+        descLabel.Selectable = true;
         descLabel.AddCssClass("dim-label");
         descLabel.Halign = Align.Center;
         descLabel.Wrap = true;
