@@ -104,6 +104,7 @@ public sealed class Settings(
             (v) => _config.PackageDowngradeEnabled = v,
             builder);
         SetupSwitch("use_old_menu_switch", !_config.UseOldMenu, (v) => _config.UseOldMenu = !v, builder);
+        SetupSwitch("shelly_icons_switch", _config.ShellyIconsEnabled, (v) => _config.ShellyIconsEnabled = v, builder);
         SetupTrayAutoStart("tray_auto_switch", _config.TrayAutoStart, (v) => _config.TrayAutoStart = v, builder);
 
         var parallelDownloadsSpin = (SpinButton)builder.GetObject("parallel_downloads_spin")!;
