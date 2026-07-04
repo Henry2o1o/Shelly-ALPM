@@ -607,11 +607,13 @@ public class AurInstall(
         headerBox.Append(iconImage);
 
         var nameLabel = Label.New(pkgObj.Name);
+        nameLabel.Selectable = true;
         nameLabel.AddCssClass("title-2");
         nameLabel.Halign = Align.Center;
         headerBox.Append(nameLabel);
 
         var descLabel = Label.New(pkgObj.Description);
+        descLabel.Selectable = true;
         descLabel.AddCssClass("dim-label");
         descLabel.Halign = Align.Center;
         descLabel.Wrap = true;
@@ -684,29 +686,6 @@ public class AurInstall(
             AddChipList(T("Groups"), pkgObj.Groups);
         if (pkgObj.Replaces?.Count > 0)
             AddChipList(T("Replaces"), pkgObj.Replaces);
-
-        if (configService.LoadConfig().WebViewEnabled)
-        {
-            if (pkgObj.Depends?.Count > 0)
-            {
-                var dictionary = new Dictionary<string, List<string>> { { pkgObj.Name, pkgObj.Depends } };
-
-                foreach (var dep in pkgObj.Depends)
-                {
-                    for (uint i = 0; i < _listStore.GetNItems(); i++)
-                    {
-                        var obj = _listStore.GetObject(i);
-                        if (obj is not AurPackageGObject depObj) continue;
-                        if (_aurPackages[depObj.Index].Name.Contains(dep))
-                            dictionary.TryAdd(_aurPackages[depObj.Index].Name,
-                                _aurPackages[depObj.Index].Depends ?? []);
-                    }
-                }
-
-                var window = new WebWindow(pkgObj.Name, dictionary);
-                _detailBox.Append(window.CreateWindow());
-            }
-        }
 
         _detailRevealer.SetRevealChild(true);
         return;

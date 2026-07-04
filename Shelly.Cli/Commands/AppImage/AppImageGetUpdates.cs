@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text.Json;
 using Microsoft.VisualBasic;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
@@ -34,6 +35,13 @@ public partial class AppImageGetUpdates : GlobalSettingsCommand
         }
 
         var result = await GetAppImageUpdates();
+
+        if (JsonOutput)
+        {
+            console.WriteLine(JsonSerializer.Serialize(result, ShellyCliJsonContext.Default.ListAppImageUpdateDto));
+            return;
+        }
+
         foreach (var update in result)
         {
             console.WriteLine(AnsiUtilities.Colorize($"{update.Name} {update.Version} is available",

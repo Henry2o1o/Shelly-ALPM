@@ -9,21 +9,35 @@ public class ListInstalled : GlobalSettingsCommand
 {
     private bool ShowHidden { get; set; }
 
+    private bool ExplicitOnly { get; set; }
+
+    private bool DependencyOnly { get; set; }
+
     public static Command Create()
     {
         var showHidden = new Option<bool>("--show-hidden")
             { Description = "Include hidden packages in the listing" };
+        
+        var explicitOnly = new Option<bool>("--explicitOnly", "-e")
+            { Description = "Only show explicitly installed packages" };
+        
+        var dependencyOnly = new Option<bool>("--dependencyOnly", "-d")
+            { Description = "Only show packages that are dependencies of other packages" };
 
         var command = new Command("list", "List installed AUR packages")
         {
-            showHidden
+            showHidden,
+            explicitOnly,
+            dependencyOnly,
         };
 
         command.SetAction(async (parseResult, _) =>
         {
             var instance = new ListInstalled
             {
-                ShowHidden = parseResult.GetValue(showHidden)
+                ShowHidden = parseResult.GetValue(showHidden),
+                ExplicitOnly = parseResult.GetValue(explicitOnly),
+                DependencyOnly = parseResult.GetValue(dependencyOnly),
             };
             GlobalOptions.Apply(instance, parseResult);
             await instance.ExecuteAsync(ShellyConsoleFactory.Create());
@@ -53,13 +67,23 @@ public class ListInstalled : GlobalSettingsCommand
             return;
         }
 
+        if (ExplicitOnly && !DependencyOnly)
+        {
+            sorted = sorted.Where(x => x.Explicit).ToList();
+        }
+        
+        if(DependencyOnly && !ExplicitOnly)
+        {
+            sorted = sorted.Where(x => !x.Explicit).ToList();
+        }
+
         console.WriteLine(BasicTable.Execute(
             ["Name", "Version", "Description"], sorted,
             p => p.Name,
             p => p.Version,
             p => Truncate(p.Description ?? "", 60)));
         console.WriteLine(AnsiUtilities.Colorize(
-            $"Total: {packages.Count} AUR packages installed", ConsoleColor.Blue));
+            $"Total: {sorted.Count} AUR packages installed", ConsoleColor.Blue));
     }
 
     public override ValueTask ExecuteUiMode() => ValueTask.CompletedTask;

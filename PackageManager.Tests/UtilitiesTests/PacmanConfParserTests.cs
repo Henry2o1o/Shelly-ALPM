@@ -3,6 +3,7 @@ using PackageManager.Utilities;
 using System.IO;
 using System.Linq;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Enums;
 
 namespace PackageManager.Tests.UtilitiesTests;
 

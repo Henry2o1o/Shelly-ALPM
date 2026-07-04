@@ -105,7 +105,7 @@ internal static class ShortcodeMaps
             [('A', 'U')] = new HashSet<char>(),
             [('A', 'L')] = new HashSet<char>(),
             [('A', 'P')] = new HashSet<char>(),
-            [('A', 'S')] = new HashSet<char>(),
+            [('A', 'S')] = new HashSet<char>(){'s'},
             [('A', 'B')] = new HashSet<char>(),
 
             [('F', 'I')] = new HashSet<char> { 'r', 'b' },
