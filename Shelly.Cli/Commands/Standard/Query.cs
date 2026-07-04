@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Text;
 using System.Text.Json;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Package;
 using PackageManager.Local;
 using Shelly.Cli.Interactions;
 using Shelly.Utilities;
@@ -151,14 +152,20 @@ public class Query : GlobalSettingsCommand
         if (!string.IsNullOrWhiteSpace(Package) && !Group)
         {
             packages = packages
-                .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
-                .Where(x => x.Score >= 90)
+                .Select(x => new { Package = x, Score = PackageSearch.Score(x.Name, x.Description, Package) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Package.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(x => x.Package)
                 .ToList();
 
             localPackages = localPackages
-                .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
-                .Where(x => x.Score >= 90).Select(x => x.Package).ToList();
+                .Select(x => new { Package = x, Score = PackageSearch.Score(x.Name, null, Package) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Package.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.Package)
+                .ToList();
         }
 
         if (!string.IsNullOrWhiteSpace(Package) && Group)
@@ -173,6 +180,9 @@ public class Query : GlobalSettingsCommand
             console.WriteLine(table);
             return;
         }
+
+        packages = packages.Skip((Page - 1) * Take).Take(Take).ToList();
+        localPackages = localPackages.Skip((Page - 1) * Take).Take(Take).ToList();
 
         if (JsonOutput)
         {
@@ -279,37 +289,33 @@ public class Query : GlobalSettingsCommand
         if (Installed)
         {
             var packages = manager.GetInstalledPackages();
+            var total = packages.Count;
 
-            if (!string.IsNullOrWhiteSpace(Package))
-                packages = packages
-                    .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
-                    .Where(x => x.Score >= 90)
-                    .Select(x => x.Package)
-                    .ToList();
+            var sortedList = packages
+                .Select(x => new { Package = x, Score = PackageSearch.Score(x.Name, x.Description, Package) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Package.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.Package)
+                .ToList();
 
-            var sortedList = packages.OrderBy(p => p.Name).ToList();
             UiFrames.Frame(sortedList);
-            UiFrames.Info($"Showing {sortedList.Count} of {packages.Count} installed packages");
+            UiFrames.Info($"Showing {sortedList.Count} of {total} installed packages");
         }
 
         if (Available)
         {
             var packages = manager.GetAvailablePackages();
-
-            if (!string.IsNullOrWhiteSpace(Package))
-                packages = packages
-                    .Select(x => new
-                    {
-                        Package = x,
-                        Score = (int)(StringMatcher.PartialRatio(Package, x.Name) * 0.7
-                                      + StringMatcher.PartialRatio(Package, x.Description) * 0.3)
-                    })
-                    .Where(x => x.Score >= 75)
-                    .Select(x => x.Package)
-                    .ToList();
-
             var total = packages.Count;
-            var sortedList = packages.OrderBy(p => p.Name).ToList();
+
+            var sortedList = packages
+                .Select(x => new { Package = x, Score = PackageSearch.Score(x.Name, x.Description, Package) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Package.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.Package)
+                .ToList();
+
             UiFrames.Frame(sortedList);
             UiFrames.Info($"Showing {sortedList.Count} of {total} available packages");
         }
@@ -317,17 +323,18 @@ public class Query : GlobalSettingsCommand
         if (Local)
         {
             var packages = LocalManager.GetInstalledBinaryPackages();
+            var total = packages.Count;
 
-            if (!string.IsNullOrWhiteSpace(Package))
-                packages = packages
-                    .Select(x => new { Package = x, Score = StringMatcher.PartialRatio(Package, x.Name) })
-                    .Where(x => x.Score >= 90)
-                    .Select(x => x.Package)
-                    .ToList();
+            var sortedList = packages
+                .Select(x => new { Package = x, Score = PackageSearch.Score(x.Name, null, Package) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Package.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.Package)
+                .ToList();
 
-            var sortedList = packages.OrderBy(p => p.Name).ToList();
             UiFrames.Frame(sortedList);
-            UiFrames.Info($"Showing {sortedList.Count} of {packages.Count} local packages");
+            UiFrames.Info($"Showing {sortedList.Count} of {total} local packages");
         }
     }
 }

@@ -1,10 +1,12 @@
 using System.CommandLine;
 using PackageManager.Alpm;
+using PackageManager.Alpm.Package;
 using PackageManager.AppImage;
 using PackageManager.AppImage.AppImageV2;
 using PackageManager.Aur;
 using PackageManager.Aur.Models;
 using PackageManager.Flatpak;
+using PackageManager.Flatpak.Models;
 using PackageManager.User;
 using Shelly.Cli.Interactions;
 using Shelly.Cli.Outputs;

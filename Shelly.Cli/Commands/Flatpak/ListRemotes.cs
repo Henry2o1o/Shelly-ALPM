@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Text.Json;
 using PackageManager.Flatpak;
+using PackageManager.Flatpak.Enums;
 using static Shelly.Cli.Interactions.AnsiUtilities;
 
 namespace Shelly.Cli.Commands.Flatpak;
