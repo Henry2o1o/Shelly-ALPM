@@ -1005,12 +1005,17 @@ public sealed class PackageInstall(
 
             ct.ThrowIfCancellationRequested();
 
-            var packages = await unprivilegedOperationService.GetAvailablePackagesAsync(_showHiddenCheck.Active);
+            var packagesTask = unprivilegedOperationService.GetAvailablePackagesAsync(_showHiddenCheck.Active);
+            var installedPackagesTask = unprivilegedOperationService.GetInstalledPackagesAsync();
+            await Task.WhenAll(packagesTask, installedPackagesTask);
+
+            ct.ThrowIfCancellationRequested();
+
+            var packages = await packagesTask;
             _groups = packages.SelectMany(x => x.Groups).Distinct().ToList();
             _groups.Insert(0, T("Any"));
 
-            ct.ThrowIfCancellationRequested();
-            var installedPackages = await unprivilegedOperationService.GetInstalledPackagesAsync();
+            var installedPackages = await installedPackagesTask;
             _installedPackageNames = new HashSet<string>(installedPackages.Select(x => x.Name));
             installedPackages.Clear();
             installedPackages.TrimExcess();
