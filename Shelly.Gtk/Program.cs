@@ -28,6 +28,12 @@ namespace Shelly.Gtk;
 
 sealed class Program
 {
+
+    private static Stack? _settingsStack;
+    private static ApplicationWindow? _window;
+    private static String? _pendingAppId;
+    private static FlatpakInstall? _currentFlatpakWindow;
+    
     private static void EnsureSessionEnvironment()
     {
         // DBUS_SESSION_BUS_ADDRESS — dconf needs this to read GSettings
@@ -121,7 +127,7 @@ sealed class Program
         var i = line.IndexOf('=');
         return i < 0 ? null : line[(i + 1)..].Trim().Trim('"', '\'');
     }
-
+    
     public static int Main(string[] args)
     {
         EnsureSessionEnvironment();
@@ -166,12 +172,46 @@ sealed class Program
         var application = Application.New(ShellyConstants.Service,
             ApplicationFlags.DefaultFlags | ApplicationFlags.HandlesCommandLine);
 
-        application.OnCommandLine += (_, _) =>
+        application.OnCommandLine += (_, e) =>
         {
-            application.Register(null);
-            return 0;
-        };
+            var cmdArgs = e.CommandLine.GetArguments(out int argc);
 
+            if (argc == 0)
+                return 0;
+
+            var raw = cmdArgs[0];
+            var appId = ExtractAppIdHelper.ExtractAppId(raw);
+
+            var currentPage = _settingsStack?.GetVisibleChildName();
+
+
+            if (currentPage == "flatpak_page")
+            {
+                FlatpakRefHandler.RequestInstall(appId);
+                return 0;
+            }
+            
+            FlatpakRefHandler.RegisterAppId(appId);
+            _settingsStack?.SetVisibleChildName("flatpak_page");
+            _window?.Present();
+
+            return 0;
+        };   
+        
+        FlatpakRefHandler.InstallRequested += (_, _) =>
+        {
+            try
+            {
+                _settingsStack?.SetVisibleChildName("flatpak_page");
+                _window?.Present();
+                return Task.CompletedTask;
+            }
+            catch (Exception exception)
+            {
+                return Task.FromException(exception);
+            }
+        };
+        
         var quitAction = SimpleAction.New("quit", null);
         quitAction.OnActivate += (_, _) => application.Quit();
         application.AddAction(quitAction);
@@ -199,10 +239,10 @@ sealed class Program
             var mainBuilder = Builder.New();
             mainBuilder.TranslationDomain = Domain;
             mainBuilder.AddFromString(ResourceHelper.LoadUiFile("UiFiles/MainWindow.ui"), -1);
-            var window = (ApplicationWindow)mainBuilder.GetObject("MainWindow")!;
+            _window = (ApplicationWindow)mainBuilder.GetObject("MainWindow")!;
 
-            window.SetIconName("shelly");
-            window.Application = application;
+            _window.SetIconName("shelly");
+            _window.Application = application;
 
             SetupStatButton(mainBuilder, serviceProvider);
 
@@ -214,11 +254,11 @@ sealed class Program
 
             Task.Run(async () => { await serviceProvider.GetRequiredService<IIConDownloadService>().DownloadAndUnpackIcons(); });
 
-            var settingsStack = (Stack)mainBuilder.GetObject("settings_stack")!;
+            _settingsStack = (Stack)mainBuilder.GetObject("settings_stack")!;
             var recommendPageBox = (Box)mainBuilder.GetObject("recommend_page_box")!;
             var packagesPageBox = (Box)mainBuilder.GetObject("packages_page_box")!;
             var aurPageBox = (Box)mainBuilder.GetObject("aur_page_box")!;
-            var flatpakPageBox = (Box)mainBuilder.GetObject("flatpak_page_box")!;
+            var _flatpakPageBox = (Box)mainBuilder.GetObject("flatpak_page_box")!;
             var appImagePageBox = (Box)mainBuilder.GetObject("appimage_page_box")!;
             var shellySearchPageBox = (Box)mainBuilder.GetObject("shelly_search_page_box")!;
             var settingsPageBox = (Box)mainBuilder.GetObject("settings_page_box")!;
@@ -243,7 +283,7 @@ sealed class Program
             var sidebarSearchLabel = (Label)mainBuilder.GetObject("SidebarSearchLabel")!;
 
             var preferencesAction = SimpleAction.New("preferences", null);
-            preferencesAction.OnActivate += (_, _) => settingsStack.SetVisibleChildName("settings_page");
+            preferencesAction.OnActivate += (_, _) => _settingsStack.SetVisibleChildName("settings_page");
             application.AddAction(preferencesAction);
 
             var archNews = SimpleAction.New("news", null);
@@ -270,7 +310,6 @@ sealed class Program
             List<IShellyWindow> currentPackagesWindows = [];
             List<IShellyWindow> currentAurWindows = [];
             IShellyWindow? currentRecommendWindow = null;
-            IShellyWindow? currentFlatpakWindow = null;
             IShellyWindow? currentAppImageWindow = null;
             IShellyWindow? currentShellySearchWindow = null;
 
@@ -327,9 +366,10 @@ sealed class Program
 
             void LoadFlatpakPage()
             {
+                _currentFlatpakWindow?.Unsubscribe();
                 var w = serviceProvider.GetRequiredService<FlatpakInstall>();
-                flatpakPageBox.Append(w.CreateWindow());
-                currentFlatpakWindow = w;
+                _flatpakPageBox.Append(w.CreateWindow());
+                _currentFlatpakWindow = w;
             }
 
             void LoadAppImagePage()
@@ -349,18 +389,18 @@ sealed class Program
             var settingsWindow = serviceProvider.GetRequiredService<Settings>();
             settingsPageBox.Append(settingsWindow.CreateWindow());
 
-            settingsStack.GetPage(recommendPageBox).Visible = initialConfig.RecommendedEnabled;
-            settingsStack.GetPage(aurPageBox).Visible = initialConfig.AurEnabled;
-            settingsStack.GetPage(flatpakPageBox).Visible = initialConfig.FlatPackEnabled;
-            settingsStack.GetPage(appImagePageBox).Visible = initialConfig.AppImageEnabled;
-            settingsStack.GetPage(shellySearchPageBox).Visible = initialConfig.ShellySearchEnabled;
+            _settingsStack.GetPage(recommendPageBox).Visible = initialConfig.RecommendedEnabled;
+            _settingsStack.GetPage(aurPageBox).Visible = initialConfig.AurEnabled;
+            _settingsStack.GetPage(_flatpakPageBox).Visible = initialConfig.FlatPackEnabled;
+            _settingsStack.GetPage(appImagePageBox).Visible = initialConfig.AppImageEnabled;
+            _settingsStack.GetPage(shellySearchPageBox).Visible = initialConfig.ShellySearchEnabled;
 
             // Sidebar setup - controlled by UseOldMenu config
             void ApplyNavigationStyle(bool useOldMenu, ShellyConfig config)
             {
                 sidebarBox.Visible = useOldMenu;
                 topHeaderBar.Visible = !useOldMenu;
-                settingsStack.MarginStart = !useOldMenu ? 9 : 0;
+                _settingsStack.MarginStart = !useOldMenu ? 9 : 0;
 
                 if (!useOldMenu) return;
                 sidebarRecommendBtn.Visible = config.RecommendedEnabled;
@@ -440,7 +480,7 @@ sealed class Program
                     if (suppressSidebarToggle) return;
                     if (btn.Active)
                     {
-                        settingsStack.SetVisibleChildName(capturedPage);
+                        _settingsStack.SetVisibleChildName(capturedPage);
                         SetActiveSidebarButton(capturedPage);
                     }
                     else
@@ -494,7 +534,7 @@ sealed class Program
                     break;
             }
 
-            settingsStack.SetVisibleChildName(initialPageName);
+            _settingsStack.SetVisibleChildName(initialPageName);
 
             if (initialConfig.UseOldMenu)
             {
@@ -503,22 +543,22 @@ sealed class Program
 
             settingsWindow.ConfigChanged += (config) =>
             {
-                settingsStack.GetPage(recommendPageBox).Visible = config.RecommendedEnabled;
-                settingsStack.GetPage(aurPageBox).Visible = config.AurEnabled;
-                settingsStack.GetPage(flatpakPageBox).Visible = config.FlatPackEnabled;
-                settingsStack.GetPage(appImagePageBox).Visible = config.AppImageEnabled;
-                settingsStack.GetPage(shellySearchPageBox).Visible = config.ShellySearchEnabled;
+                _settingsStack.GetPage(recommendPageBox).Visible = config.RecommendedEnabled;
+                _settingsStack.GetPage(aurPageBox).Visible = config.AurEnabled;
+                _settingsStack.GetPage(_flatpakPageBox).Visible = config.FlatPackEnabled;
+                _settingsStack.GetPage(appImagePageBox).Visible = config.AppImageEnabled;
+                _settingsStack.GetPage(shellySearchPageBox).Visible = config.ShellySearchEnabled;
                 ApplyNavigationStyle(!config.UseOldMenu, config);
                 if (config.UseOldMenu)
                 {
-                    SetActiveSidebarButton(settingsStack.GetVisibleChildName()!);
+                    SetActiveSidebarButton(_settingsStack.GetVisibleChildName()!);
                 }
             };
             settingsWindow.NavigationToPackages += () =>
             {
                 GLib.Functions.IdleAdd(0, () =>
                 {
-                    settingsStack.SetVisibleChildName("packages_page");
+                    _settingsStack.SetVisibleChildName("packages_page");
                     return false;
                 });
             };
@@ -530,14 +570,14 @@ sealed class Program
                 GLib.Functions.IdleAdd(0, () =>
                 {
                     var c = configService.LoadConfig();
-                    settingsStack.GetPage(aurPageBox).Visible = c.AurEnabled;
-                    settingsStack.GetPage(flatpakPageBox).Visible = c.FlatPackEnabled;
-                    settingsStack.GetPage(appImagePageBox).Visible = c.AppImageEnabled;
-                    settingsStack.GetPage(shellySearchPageBox).Visible = c.ShellySearchEnabled;
+                    _settingsStack.GetPage(aurPageBox).Visible = c.AurEnabled;
+                    _settingsStack.GetPage(_flatpakPageBox).Visible = c.FlatPackEnabled;
+                    _settingsStack.GetPage(appImagePageBox).Visible = c.AppImageEnabled;
+                    _settingsStack.GetPage(shellySearchPageBox).Visible = c.ShellySearchEnabled;
                     ApplyNavigationStyle(!c.UseOldMenu, c);
                     if (c.UseOldMenu)
                     {
-                        SetActiveSidebarButton(settingsStack.GetVisibleChildName()!);
+                        SetActiveSidebarButton(_settingsStack.GetVisibleChildName()!);
                     }
 
                     dirtyService.Clear(DirtyScopes.Config);
@@ -547,10 +587,10 @@ sealed class Program
 
             var previousPage = initialPageName;
 
-            settingsStack.OnNotify += (_, notifySignalArgs) =>
+            _settingsStack.OnNotify += (_, notifySignalArgs) =>
             {
                 if (notifySignalArgs.Pspec.GetName() != "visible-child-name") return;
-                var currentPage = settingsStack.GetVisibleChildName();
+                var currentPage = _settingsStack.GetVisibleChildName();
                 if (currentPage == previousPage) return;
 
                 switch (previousPage)
@@ -572,10 +612,11 @@ sealed class Program
 
                         break;
                     case "flatpak_page":
-                        if (currentFlatpakWindow != null)
+                        if (_currentFlatpakWindow != null)
                         {
-                            UnloadPage(flatpakPageBox, [currentFlatpakWindow]);
-                            currentFlatpakWindow = null;
+                            _currentFlatpakWindow.Unsubscribe();
+                            UnloadPage(_flatpakPageBox, [_currentFlatpakWindow]);
+                            _currentFlatpakWindow = null;
                         }
 
                         break;
@@ -612,11 +653,11 @@ sealed class Program
 
 
             //Setting window height
-            window.DefaultHeight = double.ConvertToInteger<int>(initialConfig.WindowHeight);
-            window.DefaultWidth = double.ConvertToInteger<int>(initialConfig.WindowWidth);
+            _window.DefaultHeight = double.ConvertToInteger<int>(initialConfig.WindowHeight);
+            _window.DefaultWidth = double.ConvertToInteger<int>(initialConfig.WindowWidth);
             uint resizeTimerId = 0;
 
-            window.OnNotify += (_, args) =>
+            _window.OnNotify += (_, args) =>
             {
                 if (args.Pspec.GetName() is not ("default-width" or "default-height")) return;
                 if (resizeTimerId != 0)
@@ -625,8 +666,8 @@ sealed class Program
                 resizeTimerId = GLib.Functions.TimeoutAdd(0, 500, () =>
                 {
                     var config = configService.LoadConfig();
-                    config.WindowWidth = window.DefaultWidth;
-                    config.WindowHeight = window.DefaultHeight;
+                    config.WindowWidth = _window.DefaultWidth;
+                    config.WindowHeight = _window.DefaultHeight;
                     configService.SaveConfig(config);
                     resizeTimerId = 0;
                     return false;
@@ -687,8 +728,14 @@ sealed class Program
             };
 
 
-            window.Show();
+            _window.Show();
 
+            if (!string.IsNullOrEmpty(_pendingAppId))
+            {
+                FlatpakRefHandler.RegisterAppId(_pendingAppId);
+                _pendingAppId = null;
+            }
+            
             if (!initialConfig.NewInstallInitSettings)
             {
                 var setupWindow = serviceProvider.GetRequiredService<SetupWindow>();

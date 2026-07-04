@@ -136,6 +136,7 @@ public class UnprivilegedOperationService(
         if (result.Success) dirtyService.MarkDirty(DirtyScopes.Flatpak);
         return result;
     }
+    
 
     public async Task<UnprivilegedOperationResult> FlatpakUpgrade()
     {

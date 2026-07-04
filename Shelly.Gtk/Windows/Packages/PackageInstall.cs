@@ -569,11 +569,13 @@ public sealed class PackageInstall(
         headerBox.Append(iconImage);
 
         var nameLabel = Label.New(pkg.Name);
+        nameLabel.Selectable = true;
         nameLabel.AddCssClass("title-2");
         nameLabel.Halign = Align.Center;
         headerBox.Append(nameLabel);
 
         var descLabel = Label.New(pkg.Description);
+        descLabel.Selectable = true;
         descLabel.AddCssClass("dim-label");
         descLabel.Halign = Align.Center;
         descLabel.Wrap = true;
@@ -1003,12 +1005,17 @@ public sealed class PackageInstall(
 
             ct.ThrowIfCancellationRequested();
 
-            var packages = await unprivilegedOperationService.GetAvailablePackagesAsync(_showHiddenCheck.Active);
+            var packagesTask = unprivilegedOperationService.GetAvailablePackagesAsync(_showHiddenCheck.Active);
+            var installedPackagesTask = unprivilegedOperationService.GetInstalledPackagesAsync();
+            await Task.WhenAll(packagesTask, installedPackagesTask);
+
+            ct.ThrowIfCancellationRequested();
+
+            var packages = await packagesTask;
             _groups = packages.SelectMany(x => x.Groups).Distinct().ToList();
             _groups.Insert(0, T("Any"));
 
-            ct.ThrowIfCancellationRequested();
-            var installedPackages = await unprivilegedOperationService.GetInstalledPackagesAsync();
+            var installedPackages = await installedPackagesTask;
             _installedPackageNames = new HashSet<string>(installedPackages.Select(x => x.Name));
             installedPackages.Clear();
             installedPackages.TrimExcess();
