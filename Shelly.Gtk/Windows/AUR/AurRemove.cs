@@ -481,11 +481,13 @@ public class AurRemove(
         headerBox.Append(iconImage);
 
         var nameLabel = Label.New(pkgObj.Name);
+        nameLabel.Selectable = true;
         nameLabel.AddCssClass("title-2");
         nameLabel.Halign = Align.Center;
         headerBox.Append(nameLabel);
 
         var descLabel = Label.New(pkgObj.Description);
+        descLabel.Selectable = true;
         descLabel.AddCssClass("dim-label");
         descLabel.Halign = Align.Center;
         descLabel.Wrap = true;
