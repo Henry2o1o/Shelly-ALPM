@@ -7,8 +7,6 @@ const builtin = @import("builtin");
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
 
-threadlocal var active_manager: ?*Manager = null;
-
 pub const ConfigError = error{
     InitFailed,
     RegisterDbFailed,
@@ -36,33 +34,49 @@ pub const Manager = struct {
     allocator: std.mem.Allocator,
     config: configuration.Configuration.Config,
     dispatcher: events.Dispatcher,
+    threaded: std.Io.Threaded,
     local_db: ?bindings.libalpm.Database = null,
     sync_dbs: std.ArrayList(bindings.libalpm.Database) = .empty,
 
+    /// If null is passed for config it will use the default /etc/pacman.conf
     pub fn init(allocator: std.mem.Allocator, root: bool, configPath: ?[]const u8) InitError!Manager {
         const database_path = configPath orelse "/etc/pacman.conf";
-        const io = std.Io;
-        const config = configuration.Configuration.parse(allocator, io, database_path);
+        var self = Manager{
+            .handle = null,
+            .is_initialized = true,
+            .allocator = allocator,
+            .dispatcher = events.Dispatcher.init(allocator),
+            .threaded = .init(allocator, .{}),
+            .config = undefined,
+        };
+        self.config = configuration.Configuration.parse(allocator, self.io(), database_path);
+
         var err: rawLibalpm.alpm_errno_t = 0;
         const handle = rawLibalpm.alpm_initialize(root, database_path, &err) orelse {
             std.log.err("alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))});
             return error.InitFailed;
         };
-        var self = Manager{
-            .handle = handle,
-            .is_initialized = true,
-            .allocator = allocator,
-            .dispatcher = events.Dispatcher.init(allocator),
-            .config = config,
-        };
-        self.applyConfig(config, root);
+        self.handle = handle;
+        self.is_initialized = true;
+
+        self.applyConfig(self.config, root);
+        self.setupCallbacks();
         return self;
+    }
+
+    pub fn io(self: *Manager) std.Io {
+        return self.threaded.io();
     }
 
     pub fn deinit(self: *Manager) void {
         if (self.handle) |h| _ = libalpm.alpm.alpm_release(h);
         self.handle = null;
         self.is_initialized = false;
+    }
+
+    fn setupCallbacks(self: *Manager) void {
+        const h = self.handle;
+        _ = rawLibalpm.alpm_option_set_progresscb(h, progressCallback, self);
     }
 
     fn applyConfig(self: *Manager, config: configuration.Configuration.Config, root: bool) void {
@@ -230,6 +244,29 @@ pub const Manager = struct {
         const step2 = std.mem.replaceOwned(u8, self.allocator, step1, "$arch", resolved_arch) catch return null;
         defer self.allocator.free(step2);
         return self.allocator.dupeSentinel(u8, step2, 0) catch null;
+    }
+
+    fn progressCallback(
+        ctx: ?*anyopaque,
+        progress: rawLibalpm.alpm_progress_t,
+        pkg: [*c]const u8,
+        percent: c_int,
+        howmany: usize,
+        current: usize,
+    ) callconv(.c) void {
+        const self: *Manager = @ptrCast(@alignCast(ctx));
+        self.dispatcher.raiseProgress(.{
+            .progress_type = @intCast(progress),
+            .pkg_name = spanC(pkg),
+            .percent = percent,
+            .howmany = howmany,
+            .current = current,
+        });
+    }
+
+    fn spanC(ptr: [*c]const u8) ?[]const u8 {
+        if (ptr == null) return null;
+        return std.mem.span(ptr);
     }
 };
 
