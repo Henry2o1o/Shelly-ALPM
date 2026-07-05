@@ -73,7 +73,7 @@ pub const Manager = struct {
             try list.append(self.allocator, flatpak.Flatpak.new(raw, flatpak.Scope.SYSTEM));
         }
 
-        installation = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
+        installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
         installed_refs_ptr = rawflatpak.flatpak_installation_list_installed_refs(installation, cancellable, &g_error);
         j = 0;
         while (j < installed_refs_ptr.*.len) : (j += 1) {
@@ -348,6 +348,239 @@ pub const Manager = struct {
         return list.toOwnedSlice(self.allocator);
     }
 
+    pub fn get_remote_ref_info_flatpak(self: Manager, remote_name: [:0]const u8, flatpak_name: [:0]const u8, branch: [:0]const u8, scope: flatpak.Scope) !flatpak.RemoteRef {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        var g_error: ?*rawflatpak.GError = null;
+        defer rawflatpak.g_object_unref(cancellable);
+        defer if (g_error) |e| rawflatpak.g_error_free(e);
+
+        var installation: ?*rawflatpak.FlatpakInstallation = null;
+
+        if (scope == flatpak.Scope.SYSTEM) {
+            installation = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
+        } else {
+            installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        }
+
+        const remote_ref_ptr = rawflatpak.flatpak_installation_fetch_remote_ref_sync(installation, cStr(remote_name), 0, cStr(flatpak_name), rawflatpak.flatpak_get_default_arch(), cStr(branch), cancellable, &g_error);
+        if (remote_ref_ptr == null) {
+            if (g_error) |e| std.debug.print("failed to fetch remote ref: {s}\n", .{e.*.message});
+            return error.FetchRemoteRefFailed;
+        }
+
+        const permissions = try get_permissions_from_remote_ref(self, remote_ref_ptr);
+        return flatpak.RemoteRef.new(remote_ref_ptr, scope, permissions);
+    }
+
+    pub fn get_updates_flatpak(self: Manager) ![]flatpak.InstalledFlatpak {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        var g_error: ?*rawflatpak.GError = null;
+        defer rawflatpak.g_object_unref(cancellable);
+        defer if (g_error) |e| rawflatpak.g_error_free(e);
+
+        const installation_system = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
+        const installation_user = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+
+        var list: std.ArrayList(flatpak.InstalledFlatpak) = .empty;
+        errdefer list.deinit(self.allocator);
+
+        if (installation_system != null) {
+            const sys_result = try get_updates_ptr(self, installation_system, flatpak.Scope.SYSTEM);
+            defer self.allocator.free(sys_result);
+            try list.appendSlice(self.allocator, sys_result);
+        }
+
+        if (installation_user != null) {
+            const user_result = try get_updates_ptr(self, installation_user, flatpak.Scope.USER);
+            defer self.allocator.free(user_result);
+            try list.appendSlice(self.allocator, user_result);
+        }
+
+        return list.toOwnedSlice(self.allocator);
+    }
+
+    fn get_updates_ptr(self: Manager, installation: [*c]rawflatpak.FlatpakInstallation, scope: flatpak.Scope) ![]flatpak.InstalledFlatpak {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        var g_error: ?*rawflatpak.GError = null;
+        defer rawflatpak.g_object_unref(cancellable);
+        defer if (g_error) |e| rawflatpak.g_error_free(e);
+
+        var list: std.ArrayList(flatpak.InstalledFlatpak) = .empty;
+        errdefer list.deinit(self.allocator);
+
+        const update_refs_ptr = rawflatpak.flatpak_installation_list_installed_refs_for_update(installation, cancellable, &g_error);
+        if (update_refs_ptr == null) {
+            if (g_error) |e| std.debug.print("failed to list updates: {s}\n", .{e.*.message});
+            return list.toOwnedSlice(self.allocator);
+        }
+        defer rawflatpak.g_ptr_array_unref(update_refs_ptr);
+
+        const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
+        if (trans_ptr == null) {
+            if (g_error) |e| std.debug.print("failed to create transaction: {s}\n", .{e.*.message});
+            return list.toOwnedSlice(self.allocator);
+        }
+        defer rawflatpak.g_object_unref(trans_ptr);
+
+        var j: usize = 0;
+        while (j < update_refs_ptr.*.len) : (j += 1) {
+            const raw: *rawflatpak.FlatpakRef = @ptrCast(@alignCast(update_refs_ptr.*.pdata[j]));
+            _ = rawflatpak.g_object_ref(raw); // keep this ref alive after the array is freed //TODO: Re-visit this but works for now.
+            const flatpak_ref = flatpak.InstalledFlatpak.new(raw, scope);
+            try list.append(self.allocator, flatpak_ref);
+
+            const ref_string = try flatpak.refToString(self.allocator, raw);
+            defer self.allocator.free(ref_string);
+            _ = rawflatpak.flatpak_transaction_add_update(trans_ptr, ref_string, null, null, null);
+        }
+
+        var ctx = DiffContext{ .manager = self, .list = &list };
+        _ = rawflatpak.g_signal_connect_data(trans_ptr, "ready", @ptrCast(&onReadyDiffPermissions), &ctx, null, 0);
+        _ = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, null);
+
+        return list.toOwnedSlice(self.allocator);
+    }
+
+    fn onReadyDiffPermissions(trans: ?*rawflatpak.FlatpakTransaction, user_data: ?*anyopaque) callconv(.c) c_int {
+        const ctx: *DiffContext = @ptrCast(@alignCast(user_data.?));
+
+        var operations: ?*rawflatpak.GList = rawflatpak.flatpak_transaction_get_operations(trans);
+        while (operations) |operation| {
+            const operation_ptr: *rawflatpak.FlatpakTransactionOperation = @ptrCast(@alignCast(operation.data));
+            const ref_c = rawflatpak.flatpak_transaction_operation_get_ref(operation_ptr);
+
+            if (ref_c != null) {
+                const ref_str = std.mem.span(ref_c);
+
+                for (ctx.list.items) |*item| {
+                    const id = item.id();
+                    if (std.mem.indexOf(u8, ref_str, id) != null) {
+                        const new_kf = rawflatpak.flatpak_transaction_operation_get_metadata(operation_ptr);
+                        const old_kf = rawflatpak.flatpak_transaction_operation_get_old_metadata(operation_ptr);
+
+                        item.permissions = diffPermissions(ctx.manager, new_kf, old_kf) catch &.{};
+                        break;
+                    }
+                }
+            }
+            operations = operation.next;
+        }
+        return 0; // FALSE — stop before applying anything
+    }
+
+    fn diffPermissions(self: Manager, new_kf: ?*rawflatpak.GKeyFile, old_kf: ?*rawflatpak.GKeyFile) ![]const [:0]u8 {
+        var new_raw: std.ArrayList([:0]u8) = .empty;
+        const new_perms = try get_permissions_from_key_file(self, new_kf, &new_raw);
+        defer {
+            for (new_perms) |p| self.allocator.free(p);
+            self.allocator.free(new_perms);
+        }
+
+        var old_raw: std.ArrayList([:0]u8) = .empty;
+        const old_perms = try get_permissions_from_key_file(self, old_kf, &old_raw);
+        defer {
+            for (old_perms) |p| self.allocator.free(p);
+            self.allocator.free(old_perms);
+        }
+
+        var diff: std.ArrayList([:0]u8) = .empty;
+        errdefer {
+            for (diff.items) |p| self.allocator.free(p);
+            diff.deinit(self.allocator);
+        }
+
+        for (new_perms) |p| {
+            if (!containsStr(old_perms, p)) {
+                try diff.append(self.allocator, try std.fmt.allocPrintSentinel(self.allocator, "+ {s}", .{p}, 0));
+            }
+        }
+        for (old_perms) |p| {
+            if (!containsStr(new_perms, p)) {
+                try diff.append(self.allocator, try std.fmt.allocPrintSentinel(self.allocator, "- {s}", .{p}, 0));
+            }
+        }
+
+        return diff.toOwnedSlice(self.allocator);
+    }
+
+    fn get_permissions_from_remote_ref(self: Manager, remote_ref_ptr: *rawflatpak.FlatpakRemoteRef) ![]const [:0]u8 {
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |e| rawflatpak.g_error_free(e);
+
+        var permissions: std.ArrayList([:0]u8) = .empty;
+        errdefer {
+            for (permissions.items) |p| self.allocator.free(p);
+            permissions.deinit(self.allocator);
+        }
+
+        const bytes_ptr = rawflatpak.flatpak_remote_ref_get_metadata(remote_ref_ptr);
+        if (bytes_ptr == null) return permissions.toOwnedSlice(self.allocator);
+
+        var size: usize = 0;
+        const data_ptr = rawflatpak.g_bytes_get_data(bytes_ptr, &size);
+        if (data_ptr == null) return permissions.toOwnedSlice(self.allocator);
+
+        const key_file_ptr = rawflatpak.g_key_file_new();
+        defer rawflatpak.g_key_file_free(key_file_ptr);
+
+        const loaded = rawflatpak.g_key_file_load_from_data(key_file_ptr, @ptrCast(data_ptr), size, 0, &g_error);
+        if (loaded == 0) {
+            if (g_error) |e| std.debug.print("failed to load keyfile: {s}\n", .{e.*.message});
+            return permissions.toOwnedSlice(self.allocator);
+        }
+
+        return get_permissions_from_key_file(self, key_file_ptr, &permissions);
+    }
+
+    fn get_permissions_from_key_file(self: Manager, key_file_ptr: ?*rawflatpak.GKeyFile, permissions: *std.ArrayList([:0]u8)) ![]const [:0]u8 {
+        const groups = [_][:0]const u8{ "Context", "ExtensionBus", "Shared", "Sockets", "Filesystems", "SessionBus", "SystemBus" };
+
+        for (groups) |group| {
+            var num_keys: usize = 0;
+            const keys_ptr = rawflatpak.g_key_file_get_keys(key_file_ptr, group.ptr, &num_keys, null);
+            if (keys_ptr == null) continue;
+            defer rawflatpak.g_strfreev(keys_ptr);
+
+            var i: usize = 0;
+            while (keys_ptr[i] != null) : (i += 1) {
+                const key = keys_ptr[i];
+                if (key == null or std.mem.len(key) == 0) continue;
+
+                var list_len: usize = 0;
+                const list_ptr = rawflatpak.g_key_file_get_string_list(key_file_ptr, group.ptr, key, &list_len, null);
+                if (list_ptr != null) {
+                    defer rawflatpak.g_strfreev(list_ptr);
+                    var j: usize = 0;
+                    while (list_ptr[j] != null) : (j += 1) {
+                        const val = list_ptr[j];
+                        if (val == null or std.mem.len(val) == 0) continue;
+                        const entry = try std.fmt.allocPrintSentinel(
+                            self.allocator,
+                            "{s}={s}:{s}",
+                            .{ group, std.mem.span(key), std.mem.span(val) },
+                            0,
+                        );
+                        try permissions.append(self.allocator, entry);
+                    }
+                } else {
+                    const val_ptr = rawflatpak.g_key_file_get_string(key_file_ptr, group.ptr, key, null);
+                    if (val_ptr == null) continue;
+                    defer rawflatpak.g_free(val_ptr);
+                    if (std.mem.len(val_ptr) == 0) continue;
+                    const entry = try std.fmt.allocPrintSentinel(
+                        self.allocator,
+                        "{s}={s}:{s}",
+                        .{ group, std.mem.span(key), std.mem.span(val_ptr) },
+                        0,
+                    );
+                    try permissions.append(self.allocator, entry);
+                }
+            }
+        }
+
+        return permissions.toOwnedSlice(self.allocator);
+    }
+
     fn get_all_flatpaks_by_remote(self: Manager, remote: [:0]const u8, scope: flatpak.Scope, installation: [*c]rawflatpak.FlatpakInstallation) ![]flatpak.Flatpak {
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
@@ -545,9 +778,21 @@ pub const Manager = struct {
         return false;
     }
 
+    fn containsStr(haystack: []const [:0]u8, needle: [:0]u8) bool {
+        for (haystack) |h| {
+            if (std.mem.eql(u8, h, needle)) return true;
+        }
+        return false;
+    }
+
     pub fn cStr(s: ?[:0]const u8) [*c]const u8 {
         return if (s) |str| str.ptr else null;
     }
+
+    const DiffContext = struct {
+        manager: Manager,
+        list: *std.ArrayList(flatpak.InstalledFlatpak),
+    };
 };
 
 //disabled until uninstall is added.
@@ -618,6 +863,39 @@ test "test getAllFlatpaksFromRemotes" {
     const result = try manager.get_flatpaks_from_remote("flathub");
     defer std.testing.allocator.free(result);
     try std.testing.expect(result.len > 500);
+}
+
+test "test getRemoteRefInfo" {
+    const manager = Manager{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const result = try manager.get_remote_ref_info_flatpak("flathub", "it.mijorus.gearlever", "stable", flatpak.Scope.SYSTEM);
+    defer result.deinitPermissions(std.testing.allocator);
+    try std.testing.expect(result.permissions.len > 1);
+}
+
+test "test updateswithperms" {
+    const manager = Manager{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const result = try manager.get_updates_flatpak();
+    defer {
+        for (result) |item| {
+            if (item.permissions.len > 0) {
+                for (item.permissions) |p| std.testing.allocator.free(p);
+                std.testing.allocator.free(item.permissions);
+            }
+            rawflatpak.g_object_unref(item.ptr); // release the ref we took
+        }
+        std.testing.allocator.free(result);
+    }
+
+    var found: ?flatpak.InstalledFlatpak = null;
+    for (result) |item| {
+        if (std.mem.eql(u8, item.id(), "it.mijorus.gearlever")) {
+            found = item;
+            break;
+        }
+    }
+
+    const gearlever = found orelse return error.GearleverNotInUpdateList;
+    try std.testing.expect(gearlever.permissions.len > 0);
 }
 
 // test "test installfromref" {
