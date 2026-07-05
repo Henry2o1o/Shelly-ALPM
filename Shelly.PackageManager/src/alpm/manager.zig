@@ -55,73 +55,70 @@ pub const Manager = struct {
             .dispatcher = events.Dispatcher.init(allocator),
             .config = config,
         };
-        self.applyConfig(config);
+        self.applyConfig(config, root);
         return self;
     }
 
     pub fn deinit(self: *Manager) void {
-        // NOTE: `self.dispatcher.deinit()` is intentionally not called yet:
-        // events.zig still uses the pre-0.16 managed ArrayList API (append/deinit
-        // without an allocator) and won't compile until updated.
         if (self.handle) |h| _ = libalpm.alpm.alpm_release(h);
         self.handle = null;
         self.is_initialized = false;
     }
 
-    /// Apply the optional settings from `config` to the live handle. Option
-    /// setter failures are logged but non-fatal; the resulting `alpm_errno` is
-    /// reported for context.
-    fn applyConfig(self: *Manager, config: configuration.Configuration.Config) void {
+    fn applyConfig(self: *Manager, config: configuration.Configuration.Config, root: bool) void {
         const h = self.handle;
 
-        for (config.hook_directory.items) |hooks| {
-            self.check("hook_directory", rawLibalpm.alpm_option_add_hookdir(h, hooks.ptr));
+        for (config.ignore_package.items) |pkg_name| {
+            self.check("ignore_package", rawLibalpm.alpm_option_add_ignorepkg(h, pkg_name.ptr));
         }
 
-        if (config.cache_directory) |v| self.check("cachedir", rawLibalpm.alpm_option_add_cachedir(h, v.ptr));
-        if (config.log_file) |v| self.check("logfile", rawLibalpm.alpm_option_set_logfile(h, v.ptr));
-        if (config.gpg_dir) |v| self.check("gpgdir", rawLibalpm.alpm_option_set_gpgdir(h, v.ptr));
-
-        for (config.ignore_package.items) |pkgName| {
-            self.check("ignore_package", rawLibalpm.alpm_option_add_ignorepkg(h, pkgName.ptr));
+        for (config.ignore_group.items) |group_name| {
+            self.check("ignore_group", rawLibalpm.alpm_option_add_ignoregroup(h, group_name.ptr));
         }
 
-        for (config.ignore_group.items) |groupName| {
-            self.check("ignore_group", rawLibalpm.alpm_option_add_ignoregroup(h, groupName.ptr));
+        for (config.hook_directory.items) |hook_dir| {
+            self.check("hook_directory", rawLibalpm.alpm_option_add_hookdir(h, hook_dir.ptr));
         }
 
-        if (config.signature_level) |level| {
-            self.check("default_sig_level", rawLibalpm.alpm_option_set_default_siglevel(h, level));
+        if (root and config.gpg_directory.len != 0) {
+            self.check("gpgdir", rawLibalpm.alpm_option_set_gpgdir(h, config.gpg_directory.ptr));
         }
 
-        if (config.local_file_signature_level) |level| {
-            self.check("local_file_sig_level", rawLibalpm.alpm_option_set_local_file_siglevel(h, level));
+        if (config.signature_level != 0) {
+            self.check("default_sig_level", rawLibalpm.alpm_option_set_default_siglevel(h, @intCast(config.signature_level)));
+            self.check("local_file_sig_level", rawLibalpm.alpm_option_set_local_file_siglevel(h, @intCast(config.local_file_signature_level)));
+        }
+        self.check("remote_file_sig_level", rawLibalpm.alpm_option_set_remote_file_siglevel(h, @intCast(config.remote_file_signature_level)));
+
+        if (config.cache_directory.len != 0) {
+            self.check("cachedir", rawLibalpm.alpm_option_add_cachedir(h, config.cache_directory.ptr));
         }
 
-        if (config.remote_file_signature_level) |level| {
-            self.check("remote_file_sig_level", rawLibalpm.alpm_option_set_remote_file_siglevel(h, level));
+        if (config.log_file.len != 0) {
+            self.check("logfile", rawLibalpm.alpm_option_set_logfile(h, config.log_file.ptr));
         }
 
-        self.check("check_space", rawLibalpm.alpm_option_set_check_space(h, @intFromBool(config.CheckSpace)));
-    }
+        self.check("check_space", rawLibalpm.alpm_option_set_checkspace(h, @as(c_int, if (config.check_space) 1 else 0)));
 
-    fn addArchitecture(self: *Manager, arch: [:0]const u8) void {
-        var resolved_arch: [:0]const u8 = blk: {
-            var it = std.mem.splitScalar([:0]u8, arch, ' ');
-            break :blk it.first();
+        const resolved_arch = resolveArchitecture(config.architecture);
+        const resolved_arch_z = self.allocator.dupeZ(u8, resolved_arch) catch {
+            std.log.err("out of memory resolving architecture; skipping repository registration", .{});
+            return;
         };
+        defer self.allocator.free(resolved_arch_z);
 
-        if (resolved_arch.len == 0) resolved_arch = "auto";
+        self.check("add_arch", rawLibalpm.alpm_option_add_architecture(h, resolved_arch_z.ptr));
+        self.check("add_arch_any", rawLibalpm.alpm_option_add_architecture(h, "any"));
 
-        if (std.ascii.eqlIgnoreCase(resolved_arch, "auto")) {
-            resolved_arch = switch (builtin.cpu.arch) {
-                .x86_64 => "x86_64",
-                .aarch64 => "aarch64",
-                else => "x86_64",
-            };
+        var registered_arches: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (registered_arches.items) |a| self.allocator.free(a);
+            registered_arches.deinit(self.allocator);
         }
 
-        self.check("add_arch", rawLibalpm.alpm_option_add_arch(self.handle, resolved_arch.ptr));
+        for (config.repositories.items) |repo| {
+            self.registerRepository(repo, resolved_arch_z, &registered_arches);
+        }
     }
 
     fn check(self: *Manager, what: [:0]const u8, ret: c_int) void {
@@ -133,23 +130,106 @@ pub const Manager = struct {
         }
     }
 
-    /// Register a sync database (e.g. "core", "extra") and attach its servers.
-    pub fn registerSyncDb(
+    fn resolveArchitecture(architecture: []const u8) []const u8 {
+        var it = std.mem.tokenizeScalar(u8, architecture, ' ');
+        const first = it.next() orelse "auto";
+        if (std.ascii.eqlIgnoreCase(first, "auto")) {
+            return switch (builtin.cpu.arch) {
+                .x86_64 => "x86_64",
+                .aarch64 => "aarch64",
+                else => "x86_64",
+            };
+        }
+        return first;
+    }
+
+    fn registerRepository(
         self: *Manager,
-        name: [:0]const u8,
-        servers: []const [:0]const u8,
-    ) ConfigError!libalpm.Database {
-        const db = rawLibalpm.alpm_register_syncdb(self.handle, name.ptr, rawLibalpm.ALPM_SIG_USE_DEFAULT) orelse {
+        repo: configuration.Configuration.Repository,
+        resolved_arch: []const u8,
+        registered_arches: *std.ArrayList([]const u8),
+    ) void {
+        const use_default: u32 = @intFromEnum(libalpm.SigLevel.use_default);
+        const effective_sig: c_int = if (repo.sig_level == 0 or repo.sig_level == use_default)
+            @intCast(self.config.signature_level)
+        else
+            @intCast(repo.sig_level);
+
+        // alpm copies the treename, so a temporary null-terminated name is fine.
+        const name_z = self.allocator.dupeZ(u8, repo.name) catch return;
+        defer self.allocator.free(name_z);
+
+        const db = rawLibalpm.alpm_register_syncdb(self.handle, name_z.ptr, effective_sig) orelse {
             std.log.err("alpm_register_syncdb('{s}') failed: {s}", .{
-                name,
+                repo.name,
                 std.mem.span(rawLibalpm.alpm_strerror(rawLibalpm.alpm_errno(self.handle))),
             });
-            return error.RegisterDbFailed;
+            return;
         };
-        for (servers) |url| {
-            self.check("db_add_server", rawLibalpm.alpm_db_add_server(db, url.ptr));
+
+        if (repo.usage != 0) {
+            self.check("db_set_usage", rawLibalpm.alpm_db_set_usage(db, @intCast(repo.usage)));
         }
-        return db;
+
+        for (repo.servers.items) |server| {
+            self.registerMicroArchitectures(server, resolved_arch, registered_arches);
+
+            const resolved = self.resolveServer(server, repo.name, resolved_arch) orelse continue;
+            defer self.allocator.free(resolved);
+            self.check("db_add_server", rawLibalpm.alpm_db_add_server(db, resolved.ptr));
+        }
+
+        self.sync_dbs.append(self.allocator, .{ .ptr = db }) catch {};
+    }
+
+    fn registerMicroArchitectures(
+        self: *Manager,
+        server: []const u8,
+        resolved_arch: []const u8,
+        registered_arches: *std.ArrayList([]const u8),
+    ) void {
+        const marker = "$arch";
+        const marker_idx = std.mem.indexOf(u8, server, marker) orelse return;
+        const after = server[marker_idx + marker.len ..];
+        const suffix_end = std.mem.indexOfScalar(u8, after, '/') orelse after.len;
+        const suffix = after[0..suffix_end];
+
+        const v_idx = std.mem.indexOfScalar(u8, suffix, 'v') orelse return;
+        const level = std.fmt.parseInt(u8, suffix[v_idx + 1 ..], 10) catch return;
+
+        var i: u8 = level;
+        while (i >= 2) : (i -= 1) {
+            const arch_name = std.fmt.allocPrint(self.allocator, "{s}_v{d}", .{ resolved_arch, i }) catch return;
+
+            var already = false;
+            for (registered_arches.items) |a| {
+                if (std.mem.eql(u8, a, arch_name)) {
+                    already = true;
+                    break;
+                }
+            }
+            if (already) {
+                self.allocator.free(arch_name);
+                continue;
+            }
+
+            const arch_z = self.allocator.dupeZ(u8, arch_name) catch {
+                self.allocator.free(arch_name);
+                return;
+            };
+            defer self.allocator.free(arch_z);
+
+            self.check("add_arch", rawLibalpm.alpm_option_add_architecture(self.handle, arch_z.ptr));
+            registered_arches.append(self.allocator, arch_name) catch self.allocator.free(arch_name);
+        }
+    }
+
+    fn resolveServer(self: *Manager, template: []const u8, repo_name: []const u8, resolved_arch: []const u8) ?[:0]const u8 {
+        const step1 = std.mem.replaceOwned(u8, self.allocator, template, "$repo", repo_name) catch return null;
+        defer self.allocator.free(step1);
+        const step2 = std.mem.replaceOwned(u8, self.allocator, step1, "$arch", resolved_arch) catch return null;
+        defer self.allocator.free(step2);
+        return self.allocator.dupeZ(u8, step2) catch null;
     }
 };
 

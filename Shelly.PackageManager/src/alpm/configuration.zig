@@ -344,10 +344,10 @@ pub const Configuration = struct {
         }
 
         fn dupe(self: *Parser, s: []const u8) Allocator.Error![:0]const u8 {
-            return self.arena_allocater.dupe([:0]u8, s);
+            return self.arena_allocater.dupeZ(u8, s);
         }
 
-        fn add_split(self: *Parser, list: *std.ArrayList([]const u8), value: []const u8) Allocator.Error!void {
+        fn add_split(self: *Parser, list: *std.ArrayList([:0]const u8), value: []const u8) Allocator.Error!void {
             var it = std.mem.tokenizeScalar(u8, value, ' ');
             while (it.next()) |tok| {
                 try list.append(self.arena_allocater, try self.dupe(tok));
