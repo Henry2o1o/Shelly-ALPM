@@ -2,6 +2,7 @@ const std = @import("std");
 const bindings = @import("bindings.zig");
 const events = @import("events.zig");
 const configuration = @import("configuration.zig");
+const builtin = @import("builtin");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
@@ -74,7 +75,7 @@ pub const Manager = struct {
         const h = self.handle;
 
         for (config.hook_directory.items) |hooks| {
-            self.check("hookdirectory", rawLibalpm.alpm_option_add_hookdir(h, hooks.ptr));
+            self.check("hook_directory", rawLibalpm.alpm_option_add_hookdir(h, hooks.ptr));
         }
 
         if (config.cache_directory) |v| self.check("cachedir", rawLibalpm.alpm_option_add_cachedir(h, v.ptr));
@@ -82,26 +83,45 @@ pub const Manager = struct {
         if (config.gpg_dir) |v| self.check("gpgdir", rawLibalpm.alpm_option_set_gpgdir(h, v.ptr));
 
         for (config.ignore_package.items) |pkgName| {
-            self.check("ignorepkg", rawLibalpm.alpm_option_add_ignorepkg(h, pkgName.ptr));
+            self.check("ignore_package", rawLibalpm.alpm_option_add_ignorepkg(h, pkgName.ptr));
         }
 
         for (config.ignore_group.items) |groupName| {
-            self.check("ignoregroup", rawLibalpm.alpm_option_add_ignoregroup(h, groupName.ptr));
+            self.check("ignore_group", rawLibalpm.alpm_option_add_ignoregroup(h, groupName.ptr));
         }
 
         if (config.signature_level) |level| {
-            self.check("default_siglevel", rawLibalpm.alpm_option_set_default_siglevel(h, level));
+            self.check("default_sig_level", rawLibalpm.alpm_option_set_default_siglevel(h, level));
         }
 
         if (config.local_file_signature_level) |level| {
-            self.check("local_file_siglevel", rawLibalpm.alpm_option_set_local_file_siglevel(h, level));
+            self.check("local_file_sig_level", rawLibalpm.alpm_option_set_local_file_siglevel(h, level));
         }
 
         if (config.remote_file_signature_level) |level| {
-            self.check("remote_file_siglevel", rawLibalpm.alpm_option_set_remote_file_siglevel(h, level));
+            self.check("remote_file_sig_level", rawLibalpm.alpm_option_set_remote_file_siglevel(h, level));
         }
 
         self.check("check_space", rawLibalpm.alpm_option_set_check_space(h, @intFromBool(config.CheckSpace)));
+    }
+
+    fn addArchitecture(self: *Manager, arch: [:0]const u8) void {
+        var resolved_arch: [:0]const u8 = blk: {
+            var it = std.mem.splitScalar([:0]u8, arch, ' ');
+            break :blk it.first();
+        };
+
+        if (resolved_arch.len == 0) resolved_arch = "auto";
+
+        if (std.ascii.eqlIgnoreCase(resolved_arch, "auto")) {
+            resolved_arch = switch (builtin.cpu.arch) {
+                .x86_64 => "x86_64",
+                .aarch64 => "aarch64",
+                else => "x86_64",
+            };
+        }
+
+        self.check("add_arch", rawLibalpm.alpm_option_add_arch(self.handle, resolved_arch.ptr));
     }
 
     fn check(self: *Manager, what: [:0]const u8, ret: c_int) void {
