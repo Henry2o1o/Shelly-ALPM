@@ -359,7 +359,7 @@ sealed class Program
                 var w2 = serviceProvider.GetRequiredService<AurUpdate>();
                 nb.AppendPage(w2.CreateWindow(), Label.New(T("Updates")));
                 var w3 = serviceProvider.GetRequiredService<AurRemove>();
-                nb.AppendPage(w3.CreateWindow(), Label.New(T("Remove")));
+                nb.AppendPage(w3.CreateWindow(), Label.New(T("Manage")));
                 aurPageBox.Append(nb);
                 currentAurWindows = [w1, w2, w3];
             }
