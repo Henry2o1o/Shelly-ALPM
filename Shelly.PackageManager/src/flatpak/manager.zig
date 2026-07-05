@@ -31,7 +31,7 @@ pub const Manager = struct {
         );
         defer self.allocator.free(ref_str);
 
-        const ref_string = try self.allocator.dupeZ(u8, ref_str);
+        const ref_string = try self.allocator.dupeSentinel(u8, ref_str, 0);
         defer self.allocator.free(ref_string);
 
         const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
@@ -154,7 +154,7 @@ pub const Manager = struct {
         defer self.allocator.free(ref_string);
 
         const commit_c_safe: ?[:0]u8 = if (commit) |c|
-            try self.allocator.dupeZ(u8, c)
+            try self.allocator.dupeSentinel(u8, c, 0)
         else
             null;
         defer if (commit_c_safe) |c| self.allocator.free(c);

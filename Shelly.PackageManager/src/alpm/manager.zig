@@ -101,7 +101,7 @@ pub const Manager = struct {
         self.check("check_space", rawLibalpm.alpm_option_set_checkspace(h, @as(c_int, if (config.check_space) 1 else 0)));
 
         const resolved_arch = resolveArchitecture(config.architecture);
-        const resolved_arch_z = self.allocator.dupeZ(u8, resolved_arch) catch {
+        const resolved_arch_z = self.allocator.dupeSentinel(u8, resolved_arch, 0) catch {
             std.log.err("out of memory resolving architecture; skipping repository registration", .{});
             return;
         };
@@ -156,7 +156,7 @@ pub const Manager = struct {
             @intCast(repo.sig_level);
 
         // alpm copies the treename, so a temporary null-terminated name is fine.
-        const name_z = self.allocator.dupeZ(u8, repo.name) catch return;
+        const name_z = self.allocator.dupeSentinel(u8, repo.name, 0) catch return;
         defer self.allocator.free(name_z);
 
         const db = rawLibalpm.alpm_register_syncdb(self.handle, name_z.ptr, effective_sig) orelse {
@@ -213,7 +213,7 @@ pub const Manager = struct {
                 continue;
             }
 
-            const arch_z = self.allocator.dupeZ(u8, arch_name) catch {
+            const arch_z = self.allocator.dupeSentinel(u8, arch_name, 0) catch {
                 self.allocator.free(arch_name);
                 return;
             };
@@ -229,7 +229,7 @@ pub const Manager = struct {
         defer self.allocator.free(step1);
         const step2 = std.mem.replaceOwned(u8, self.allocator, step1, "$arch", resolved_arch) catch return null;
         defer self.allocator.free(step2);
-        return self.allocator.dupeZ(u8, step2) catch null;
+        return self.allocator.dupeSentinel(u8, step2, 0) catch null;
     }
 };
 

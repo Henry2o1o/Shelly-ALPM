@@ -226,6 +226,6 @@ pub const libflatpak = struct {
         );
         defer allocator.free(ref_str);
 
-        return allocator.dupeZ(u8, ref_str);
+        return allocator.dupeSentinel(u8, ref_str, 0);
     }
 };
