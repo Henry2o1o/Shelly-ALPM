@@ -295,6 +295,26 @@ public static class PkgbuildParser
         });
 
 
+        result = Regex.Replace(result, @"\$\{(\w+)/(/|#|%)?([^/}]*)(?:/([^}]*))?\}", match =>
+        {
+            var varName = match.Groups[1].Value;
+            if (!vars.TryGetValue(varName, out var val))
+                return match.Value;
+            return ApplyReplacement(val, match.Groups[2].Value, match.Groups[3].Value, match.Groups[4].Value);
+        });
+
+
+        result = Regex.Replace(result, @"\$\{(\w+):(?:\s*(\d+)|\s+(-\d+))(?::\s*(-?\d+))?\}", match =>
+        {
+            var varName = match.Groups[1].Value;
+            if (!vars.TryGetValue(varName, out var val))
+                return match.Value;
+            var offset = int.Parse(match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value);
+            int? length = match.Groups[4].Success ? int.Parse(match.Groups[4].Value) : null;
+            return ApplySubstring(val, offset, length);
+        });
+
+
         result = Regex.Replace(result, @"\$\{(\w+)\}|\$(\w+)", match =>
         {
             var varName = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
@@ -340,6 +360,44 @@ public static class PkgbuildParser
             default:
                 return value;
         }
+    }
+
+    private static string ApplyReplacement(string value, string mode, string findGlob, string repl)
+    {
+        if (string.IsNullOrEmpty(findGlob))
+            return value;
+
+        var pattern = GlobToRegex(findGlob);
+        if (mode == "#") pattern = "^" + pattern;
+        else if (mode == "%") pattern = pattern + "$";
+
+        try
+        {
+            var regex = new Regex(pattern);
+            var count = mode == "/" ? int.MaxValue : 1;
+            return regex.Replace(value, _ => repl, count);
+        }
+        catch
+        {
+            return value;
+        }
+    }
+
+    private static string ApplySubstring(string value, int offset, int? length)
+    {
+        var start = offset < 0 ? value.Length + offset : offset;
+        start = System.Math.Clamp(start, 0, value.Length);
+
+        int end;
+        if (length is null)
+            end = value.Length;
+        else if (length < 0)
+            end = value.Length + length.Value;
+        else
+            end = start + length.Value;
+
+        end = System.Math.Clamp(end, start, value.Length);
+        return value[start..end];
     }
 
     private static string GlobToRegex(string glob)
