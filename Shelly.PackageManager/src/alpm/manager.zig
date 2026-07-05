@@ -1,6 +1,7 @@
 const std = @import("std");
 const bindings = @import("bindings.zig");
 const events = @import("events.zig");
+const configuration = @import("configuration.zig");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
@@ -12,26 +13,37 @@ pub const ConfigError = error{
     RegisterDbFailed,
 };
 
+pub const InitError = error{
+    InitFailed,
+    RegisterDbFailed,
+    ConfigParseFailed,
+};
+pub const TransactionError = error{
+    TransInitFailed,
+    PrepareFailed,
+    CommitFailed,
+    UnsatisfiedDeps,
+    ConflictingDeps,
+    FileConflicts,
+};
+pub const QueryError = error{ DbNotFound, PkgNotFound };
+
 pub const Manager = struct {
     handle: libalpm.Handle = null,
     is_initialized: bool = false,
     is_cachyos: bool = false,
     allocator: std.mem.Allocator,
-
-    // Holds subscribers
+    config: configuration.Configuration.Config,
     dispatcher: events.Dispatcher,
-    /// Initialize libalpm and apply `config`.
-    ///
-    /// `root_dir` and `db_dir` are the only values required by
-    /// `alpm_initialize`; both fall back to the standard system locations when
-    /// left null. Everything else in `config` is applied afterwards through the
-    /// `alpm_option_*` setters.
-    pub fn init(allocator: std.mem.Allocator, config: libalpm.Config) ConfigError!Manager {
-        const root = if (config.root_dir) |r| r.ptr else "/";
-        const dbpath = if (config.db_dir) |d| d.ptr else "/var/lib/pacman/";
+    local_db: ?bindings.libalpm.Database = null,
+    sync_dbs: std.ArrayList(bindings.libalpm.Database) = .empty,
 
+    pub fn init(allocator: std.mem.Allocator, root: bool, configPath: ?[]const u8) InitError!Manager {
+        const database_path = configPath orelse "/etc/pacman.conf";
+        const io = std.Io;
+        const config = configuration.Configuration.parse(allocator, io, database_path);
         var err: rawLibalpm.alpm_errno_t = 0;
-        const handle = rawLibalpm.alpm_initialize(root, dbpath, &err) orelse {
+        const handle = rawLibalpm.alpm_initialize(root, database_path, &err) orelse {
             std.log.err("alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))});
             return error.InitFailed;
         };
@@ -40,6 +52,7 @@ pub const Manager = struct {
             .is_initialized = true,
             .allocator = allocator,
             .dispatcher = events.Dispatcher.init(allocator),
+            .config = config,
         };
         self.applyConfig(config);
         return self;
@@ -57,26 +70,41 @@ pub const Manager = struct {
     /// Apply the optional settings from `config` to the live handle. Option
     /// setter failures are logged but non-fatal; the resulting `alpm_errno` is
     /// reported for context.
-    fn applyConfig(self: *Manager, config: libalpm.Config) void {
+    fn applyConfig(self: *Manager, config: configuration.Configuration.Config) void {
         const h = self.handle;
 
-        // cachedir is a *list* in libalpm — use add, not set.
-        if (config.cache_dir) |v| self.check("cachedir", rawLibalpm.alpm_option_add_cachedir(h, v.ptr));
+        for (config.hook_directory.items) |hooks| {
+            self.check("hookdirectory", rawLibalpm.alpm_option_add_hookdir(h, hooks.ptr));
+        }
+
+        if (config.cache_directory) |v| self.check("cachedir", rawLibalpm.alpm_option_add_cachedir(h, v.ptr));
         if (config.log_file) |v| self.check("logfile", rawLibalpm.alpm_option_set_logfile(h, v.ptr));
         if (config.gpg_dir) |v| self.check("gpgdir", rawLibalpm.alpm_option_set_gpgdir(h, v.ptr));
-        if (config.Architecture) |v| self.check("architecture", rawLibalpm.alpm_option_add_architecture(h, v.ptr));
+
+        for (config.ignore_package.items) |pkgName| {
+            self.check("ignorepkg", rawLibalpm.alpm_option_add_ignorepkg(h, pkgName.ptr));
+        }
+
+        for (config.ignore_group.items) |groupName| {
+            self.check("ignoregroup", rawLibalpm.alpm_option_add_ignoregroup(h, groupName.ptr));
+        }
+
+        if (config.signature_level) |level| {
+            self.check("default_siglevel", rawLibalpm.alpm_option_set_default_siglevel(h, level));
+        }
+
+        if (config.local_file_signature_level) |level| {
+            self.check("local_file_siglevel", rawLibalpm.alpm_option_set_local_file_siglevel(h, level));
+        }
+
+        if (config.remote_file_signature_level) |level| {
+            self.check("remote_file_siglevel", rawLibalpm.alpm_option_set_remote_file_siglevel(h, level));
+        }
 
         self.check("check_space", rawLibalpm.alpm_option_set_check_space(h, @intFromBool(config.CheckSpace)));
-
-        if (config.IgnorePkg) |v| self.check("ignorepkg", rawLibalpm.alpm_option_add_ignorepkg(h, v.ptr));
-        if (config.IgnoreGroup) |v| self.check("ignoregroup", rawLibalpm.alpm_option_add_ignoregroup(h, v.ptr));
-
-        // SigLevel is a bitmask (alpm_siglevel_t), not a string. Start from the
-        // library default; parsing config.SigLevel into flags is a follow-up.
-        self.check("default_siglevel", rawLibalpm.alpm_option_set_default_siglevel(h, rawLibalpm.ALPM_SIG_USE_DEFAULT));
     }
 
-    fn check(self: *Manager, what: []const u8, ret: c_int) void {
+    fn check(self: *Manager, what: [:0]const u8, ret: c_int) void {
         if (ret != 0) {
             std.log.warn("alpm option '{s}' failed: {s}", .{
                 what,
