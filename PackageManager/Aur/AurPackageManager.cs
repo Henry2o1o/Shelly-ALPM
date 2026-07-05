@@ -138,7 +138,11 @@ public sealed class AurPackageManager(string? configPath = null)
         var aurPackages = response.Results;
         foreach (var pkg in aurPackages)
         {
+            var localMatch = foreignPackages.First(x => x.Name == pkg.Name);
+            
             pkg.Explicit = foreignPackages.First(x => x.Name == pkg.Name).InstallReason == "Explicit";
+            
+            pkg.Version = localMatch.Version;
         }
 
         return aurPackages;
