@@ -57,23 +57,23 @@ pub const Manager = struct {
     /// Apply the optional settings from `config` to the live handle. Option
     /// setter failures are logged but non-fatal; the resulting `alpm_errno` is
     /// reported for context.
-    fn applyConfig(self: *Manager, config: c.Config) void {
+    fn applyConfig(self: *Manager, config: libalpm.Config) void {
         const h = self.handle;
 
         // cachedir is a *list* in libalpm — use add, not set.
-        if (config.cache_dir) |v| self.check("cachedir", raw.alpm_option_add_cachedir(h, v.ptr));
-        if (config.log_file) |v| self.check("logfile", raw.alpm_option_set_logfile(h, v.ptr));
-        if (config.gpg_dir) |v| self.check("gpgdir", raw.alpm_option_set_gpgdir(h, v.ptr));
-        if (config.Architecture) |v| self.check("architecture", raw.alpm_option_add_architecture(h, v.ptr));
+        if (config.cache_dir) |v| self.check("cachedir", rawLibalpm.alpm_option_add_cachedir(h, v.ptr));
+        if (config.log_file) |v| self.check("logfile", rawLibalpm.alpm_option_set_logfile(h, v.ptr));
+        if (config.gpg_dir) |v| self.check("gpgdir", rawLibalpm.alpm_option_set_gpgdir(h, v.ptr));
+        if (config.Architecture) |v| self.check("architecture", rawLibalpm.alpm_option_add_architecture(h, v.ptr));
 
         self.check("check_space", rawLibalpm.alpm_option_set_check_space(h, @intFromBool(config.CheckSpace)));
 
-        if (config.IgnorePkg) |v| self.check("ignorepkg", raw.alpm_option_add_ignorepkg(h, v.ptr));
-        if (config.IgnoreGroup) |v| self.check("ignoregroup", raw.alpm_option_add_ignoregroup(h, v.ptr));
+        if (config.IgnorePkg) |v| self.check("ignorepkg", rawLibalpm.alpm_option_add_ignorepkg(h, v.ptr));
+        if (config.IgnoreGroup) |v| self.check("ignoregroup", rawLibalpm.alpm_option_add_ignoregroup(h, v.ptr));
 
         // SigLevel is a bitmask (alpm_siglevel_t), not a string. Start from the
         // library default; parsing config.SigLevel into flags is a follow-up.
-        self.check("default_siglevel", raw.alpm_option_set_default_siglevel(h, raw.ALPM_SIG_USE_DEFAULT));
+        self.check("default_siglevel", rawLibalpm.alpm_option_set_default_siglevel(h, rawLibalpm.ALPM_SIG_USE_DEFAULT));
     }
 
     fn check(self: *Manager, what: []const u8, ret: c_int) void {
@@ -104,3 +104,7 @@ pub const Manager = struct {
         return db;
     }
 };
+
+test "hi" {
+    try std.testing.expectEqualStrings("test", "test");
+}

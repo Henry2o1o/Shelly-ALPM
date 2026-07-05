@@ -1,7 +1,7 @@
 //! By convention, root.zig is the root source file when making a package.
 const std = @import("std");
 const alpm = @import("alpm/manager.zig");
-const flatpak = @import("flatpak/manager.zig");
+const flatpak = @import("flatpak/remote_manager.zig");
 const Io = std.Io;
 
 /// This is a documentation comment to explain the `printAnotherMessage` function below.
@@ -17,4 +17,14 @@ pub fn add(a: i32, b: i32) i32 {
 
 test "basic add functionality" {
     try std.testing.expect(add(3, 7) == 10);
+}
+
+test {
+    _ = @import("alpm/bindings.zig");
+    _ = @import("alpm/manager.zig");
+    _ = @import("alpm/events.zig");
+    _ = @import("flatpak/bindings.zig");
+    _ = @import("flatpak/remote_manager.zig");
+    _ = @import("flatpak/manager.zig");
+    _ = @import("flatpak/appstream_manager.zig");
 }

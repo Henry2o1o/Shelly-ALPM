@@ -113,6 +113,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const zig_time_dep = b.dependency("zig-time", .{});
+    exe.root_module.addImport("zig-time", zig_time_dep.module("zig-time"));
+
+    const goose_dep = b.dependency("goose", .{});
+    exe.root_module.addImport("goose", goose_dep.module("goose"));
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
