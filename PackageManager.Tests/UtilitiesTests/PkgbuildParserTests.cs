@@ -172,6 +172,21 @@ public class PkgbuildParserTests
     }
 
     [Test]
+    public void ParseContent_ResolvesSuffixRemovalExpansion_InProvides()
+    {
+        var pkgbuild = """
+                       pkgname=kwin-effect-rounded-corners-git
+                       pkgver=0.9.0.r8.g0926a7e
+                       provides=("kwin-effect-rounded-corners=${pkgver%%.g*}")
+                       """;
+
+        var result = PkgbuildParser.ParseContent(pkgbuild);
+
+        Assert.That(result.Provides, Has.Count.EqualTo(1));
+        Assert.That(result.Provides[0], Is.EqualTo("kwin-effect-rounded-corners=0.9.0.r8"));
+    }
+
+    [Test]
     public void ParseContent_FfmpegObsStyle_ResolvesVersionedDeps()
     {
         var pkgbuild = """

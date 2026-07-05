@@ -18,7 +18,7 @@ public static class PkgbuildParser
         var pkgbuildContent = File.ReadAllText(pkgbuildPath);
         return ParseContent(pkgbuildContent, Path.GetDirectoryName(pkgbuildPath));
     }
-    
+
     public static PkgbuildInfo ParseContent(string pkgbuildContent, string? baseDir = null)
     {
         var vars = BuildVariableDictionary(pkgbuildContent);
@@ -286,6 +286,15 @@ public static class PkgbuildParser
         });
 
 
+        result = Regex.Replace(result, @"\$\{(\w+)(##|#|%%|%)([^}]*)\}", match =>
+        {
+            var varName = match.Groups[1].Value;
+            if (!vars.TryGetValue(varName, out var val))
+                return match.Value;
+            return ApplyParameterExpansion(val, match.Groups[2].Value, match.Groups[3].Value);
+        });
+
+
         result = Regex.Replace(result, @"\$\{(\w+)\}|\$(\w+)", match =>
         {
             var varName = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
@@ -293,6 +302,63 @@ public static class PkgbuildParser
         });
 
         return result;
+    }
+
+    private static string ApplyParameterExpansion(string value, string op, string glob)
+    {
+        if (string.IsNullOrEmpty(glob))
+            return value;
+
+        var pattern = GlobToRegex(glob);
+
+        switch (op)
+        {
+            case "#":
+                for (var j = 0; j <= value.Length; j++)
+                    if (Regex.IsMatch(value[..j], "^" + pattern + "$"))
+                        return value[j..];
+                return value;
+
+            case "##":
+                for (var j = value.Length; j >= 0; j--)
+                    if (Regex.IsMatch(value[..j], "^" + pattern + "$"))
+                        return value[j..];
+                return value;
+
+            case "%":
+                for (var i = value.Length; i >= 0; i--)
+                    if (Regex.IsMatch(value[i..], "^" + pattern + "$"))
+                        return value[..i];
+                return value;
+
+            case "%%":
+                for (var i = 0; i <= value.Length; i++)
+                    if (Regex.IsMatch(value[i..], "^" + pattern + "$"))
+                        return value[..i];
+                return value;
+
+            default:
+                return value;
+        }
+    }
+
+    private static string GlobToRegex(string glob)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in glob)
+        {
+            switch (c)
+            {
+                case '*': sb.Append(".*"); break;
+                case '?': sb.Append('.'); break;
+                default:
+                    if (@"\^$.|+()[]{}".Contains(c))
+                        sb.Append('\\');
+                    sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
     }
 
 
@@ -409,7 +475,7 @@ public static class PkgbuildParser
     }
 
 
-    
+
     private static List<string> ParseArray(string content, string variableName)
     {
         var result = new List<string>();
@@ -554,9 +620,9 @@ public class PkgbuildInfo
     public List<string> Sha512Sums { get; set; } = new();
     public List<string> Md5Sums { get; set; } = new();
     public Dictionary<string, string> Variables { get; set; } = new();
-    
+
     public string? InstallFile { get; set; }
-    
+
     public string? PostInstall { get; set; }
 
     public List<string> LocalSourceFiles { get; set; } = new();
