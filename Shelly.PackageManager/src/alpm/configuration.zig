@@ -10,7 +10,6 @@ const max_include_depth = 16;
 const SigLevel = Bindings.libalpm.SigLevel;
 const DatabaseUsage = Bindings.libalpm.DatabaseUsage;
 
-
 inline fn sig(level: SigLevel) u32 {
     return @intFromEnum(level);
 }
@@ -75,7 +74,7 @@ pub const Configuration = struct {
                 .repositories = .empty,
 
                 .signature_level = sig(.package) | sig(.database_optional),
-                .local_file_signature_level = sig(.package_optional) | sig(.database_option),
+                .local_file_signature_level = sig(.package_optional) | sig(.database_optional),
                 .remote_file_signature_level = sig(.package) | sig(.database),
             };
             try conf.hook_directory.append(alloc, "/usr/share/libalpm/hooks");
@@ -144,7 +143,7 @@ pub const Configuration = struct {
             } else if (equalIgnoreCase(level, "databaserequired")) {
                 result |= sig(.database);
             } else if (equalIgnoreCase(level, "databaseoptional")) {
-                result |= sig(.database_option);
+                result |= sig(.database_optional);
             } else if (equalIgnoreCase(level, "databasemarginalok")) {
                 result |= sig(.database_marginal_ok);
             } else if (equalIgnoreCase(level, "databaseunknownok")) {
@@ -180,11 +179,9 @@ pub const Configuration = struct {
         return result;
     }
 
-
     fn read_whole_file(io: Io, alloc: Allocator, path: []const u8) ![]u8 {
         return Io.Dir.cwd().readFileAlloc(io, path, alloc, .unlimited);
     }
-
 
     const Parser = struct {
         io: Io,
@@ -369,7 +366,7 @@ test "empty input yields defaults" {
     try testing.expectEqualStrings("/var/lib/pacman", conf.database_path);
     try testing.expectEqual(@as(usize, 0), conf.repositories.items.len);
     try testing.expectEqual(@as(usize, 3), conf.hold_packages.items.len);
-    try testing.expectEqual(sig(.package) | sig(.database_option), conf.signature_level);
+    try testing.expectEqual(sig(.package) | sig(.database_optional), conf.signature_level);
 }
 
 test "parses options section" {
@@ -393,7 +390,7 @@ test "parses options section" {
     try testing.expectEqualStrings("linux", conf.ignore_package.items[0]);
     try testing.expectEqualStrings("nvidia", conf.ignore_package.items[1]);
     try testing.expect(conf.check_space);
-    try testing.expectEqual(sig(.package) | sig(.database_option), conf.signature_level);
+    try testing.expectEqual(sig(.package) | sig(.database_optional), conf.signature_level);
 }
 
 test "parses repositories, servers, siglevel and usage" {
@@ -415,7 +412,7 @@ test "parses repositories, servers, siglevel and usage" {
     const core = conf.repositories.items[0];
     try testing.expectEqualStrings("core", core.name);
     try testing.expectEqual(@as(usize, 1), core.servers.items.len);
-    try testing.expectEqual(sig(.package) | sig(.database_option), core.sig_level);
+    try testing.expectEqual(sig(.package) | sig(.database_optional), core.sig_level);
     try testing.expectEqual(usageBit(.sync) | usageBit(.search), core.usage);
 
     const extra = conf.repositories.items[1];
