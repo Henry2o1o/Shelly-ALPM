@@ -1,37 +1,5 @@
 const std = @import("std");
-
-pub const UpdateType = enum {
-    none,
-    static_url,
-    github,
-    gitlab,
-    codeberg,
-    forgejo,
-};
-
-pub const AppImage = struct {
-    name: []const u8,
-    version: []const u8 = "Unknown",
-    raw_update_info: []const u8 = "",
-    icon_name: []const u8 = "",
-    description: []const u8 = "",
-    desktop_name: []const u8 = "",
-    size_on_disk: u64 = 0,
-    command_line_args: []const u8 = "",
-    path: []const u8 = "",
-    update_url: []const u8 = "",
-    update_type: UpdateType = .none,
-    repo_owner: ?[]const u8 = null,
-    repo_name: ?[]const u8 = null,
-    allow_prerelease: bool = false,
-};
-
-pub const AppImageUpdate = struct {
-    name: []const u8,
-    version: []const u8,
-    download_url: []const u8,
-    is_update_available: bool,
-};
+const appimage = @import("bindings.zig").appimage;
 
 pub const AppImageManager = struct {
     allocator: std.mem.Allocator,
@@ -91,7 +59,7 @@ pub const AppImageManager = struct {
         _ = try proc.wait(self.io);
     }
 
-    fn extractMetadata(self: AppImageManager, path: []const u8) !?AppImage {
+    fn extractMetadata(self: AppImageManager, path: []const u8) !?appimage.AppImage {
         const app_name = std.fs.path.stem(path);
         const clean_name = try self.cleanInvalidNames(app_name);
         defer self.allocator.free(clean_name);
@@ -177,7 +145,7 @@ pub const AppImageManager = struct {
             break :blk try self.allocator.dupe(u8, app_name);
         };
 
-        return AppImage{
+        return appimage.AppImage{
             .name = try self.allocator.dupe(u8, app_name),
             .version = owned_version,
             .raw_update_info = update_info,
@@ -373,7 +341,7 @@ pub const AppImageManager = struct {
         return try self.allocator.dupe(u8, std.mem.trim(u8, output, " \t\r\n"));
     }
 
-    pub fn getAppImagesFromLocalDb(self: AppImageManager) ![]AppImage {
+    pub fn getAppImagesFromLocalDb(self: AppImageManager) ![]appimage.AppImage {
         var file = std.Io.Dir.cwd().openFile(self.io, self.local_db_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return &.{},
             else => return err,
@@ -385,13 +353,13 @@ pub const AppImageManager = struct {
         const contents = try reader.interface.allocRemaining(self.allocator, .unlimited);
         defer self.allocator.free(contents);
 
-        const parsed = std.json.parseFromSlice([]AppImage, self.allocator, contents, .{}) catch |err| {
+        const parsed = std.json.parseFromSlice([]appimage.AppImage, self.allocator, contents, .{}) catch |err| {
             std.log.err("Error reading AppImage local DB: {s}", .{@errorName(err)});
             return &.{};
         };
         defer parsed.deinit();
 
-        const result = try self.allocator.alloc(AppImage, parsed.value.len);
+        const result = try self.allocator.alloc(appimage.AppImage, parsed.value.len);
         for (parsed.value, result) |src, *dst| {
             dst.* = .{
                 .name = try self.allocator.dupe(u8, src.name),
@@ -413,18 +381,18 @@ pub const AppImageManager = struct {
         return result;
     }
 
-    fn addAppImageToLocalDb(self: AppImageManager, dto: AppImage) !void {
+    fn addAppImageToLocalDb(self: AppImageManager, appimage_struct: appimage.AppImage) !void {
         const existing = try self.getAppImagesFromLocalDb();
         defer self.freeAppImages(existing);
 
-        var list: std.ArrayList(AppImage) = .empty;
+        var list: std.ArrayList(appimage.AppImage) = .empty;
         defer list.deinit(self.allocator);
 
         for (existing) |item| {
-            if (dto.desktop_name.len > 0 and std.ascii.eqlIgnoreCase(item.desktop_name, dto.desktop_name)) continue;
+            if (appimage_struct.desktop_name.len > 0 and std.ascii.eqlIgnoreCase(item.desktop_name, appimage_struct.desktop_name)) continue;
             try list.append(self.allocator, item);
         }
-        try list.append(self.allocator, dto);
+        try list.append(self.allocator, appimage_struct);
 
         const json_bytes = try std.json.Stringify.valueAlloc(self.allocator, list.items, .{ .whitespace = .indent_2 });
         defer self.allocator.free(json_bytes);
@@ -445,7 +413,7 @@ pub const AppImageManager = struct {
         const app_name = std.fs.path.stem(appimage_path);
 
         const existing = try self.getAppImagesFromLocalDb();
-        var list: std.ArrayList(AppImage) = .empty;
+        var list: std.ArrayList(appimage.AppImage) = .empty;
         defer list.deinit(self.allocator);
         defer self.freeAppImages(existing);
 
@@ -497,23 +465,23 @@ pub const AppImageManager = struct {
         return std.fs.path.join(self.allocator, &.{ home, ".local", "share" });
     }
 
-    fn freeAppImage(self: AppImageManager, dto: AppImage) void {
-        self.allocator.free(dto.name);
-        self.allocator.free(dto.version);
-        self.allocator.free(dto.raw_update_info);
-        self.allocator.free(dto.icon_name);
-        self.allocator.free(dto.description);
-        self.allocator.free(dto.desktop_name);
-        self.allocator.free(dto.command_line_args);
-        self.allocator.free(dto.path);
-        self.allocator.free(dto.update_url);
-        if (dto.repo_owner) |v| self.allocator.free(v);
-        if (dto.repo_name) |v| self.allocator.free(v);
+    fn freeAppImage(self: AppImageManager, appimage_struct: appimage.AppImage) void {
+        self.allocator.free(appimage_struct.name);
+        self.allocator.free(appimage_struct.version);
+        self.allocator.free(appimage_struct.raw_update_info);
+        self.allocator.free(appimage_struct.icon_name);
+        self.allocator.free(appimage_struct.description);
+        self.allocator.free(appimage_struct.desktop_name);
+        self.allocator.free(appimage_struct.command_line_args);
+        self.allocator.free(appimage_struct.path);
+        self.allocator.free(appimage_struct.update_url);
+        if (appimage_struct.repo_owner) |v| self.allocator.free(v);
+        if (appimage_struct.repo_name) |v| self.allocator.free(v);
     }
 
-    pub fn freeAppImages(self: AppImageManager, dtos: []AppImage) void {
-        for (dtos) |dto| self.freeAppImage(dto);
-        self.allocator.free(dtos);
+    pub fn freeAppImages(self: AppImageManager, appimage_structs: []appimage.AppImage) void {
+        for (appimage_structs) |appimage_struct| self.freeAppImage(appimage_struct);
+        self.allocator.free(appimage_structs);
     }
 };
 
@@ -647,14 +615,14 @@ test "addAppImageToLocalDb then getAppImagesFromLocalDb round-trips a single ent
         .local_db_path = db_path,
     };
 
-    const dto = AppImage{
+    const appimage_struct = appimage.AppImage{
         .name = "TestApp",
         .version = "1.2.3",
         .desktop_name = "TestApp",
         .path = "/fake/path/TestApp.AppImage",
     };
 
-    try manager.addAppImageToLocalDb(dto);
+    try manager.addAppImageToLocalDb(appimage_struct);
 
     const result = try manager.getAppImagesFromLocalDb();
     defer manager.freeAppImages(result);
