@@ -56,7 +56,7 @@ pub const AppImageManager = struct {
             std.Io.Dir.cwd().deleteFile(self.io, dest_path) catch {};
             return false;
         };
-        defer self.freeAppImageDto(metadata);
+        defer self.freeAppImage(metadata);
 
         try self.addAppImageToLocalDb(metadata);
         return true;
@@ -415,7 +415,7 @@ pub const AppImageManager = struct {
 
     fn addAppImageToLocalDb(self: AppImageManager, dto: AppImage) !void {
         const existing = try self.getAppImagesFromLocalDb();
-        defer self.freeAppImageDtos(existing);
+        defer self.freeAppImages(existing);
 
         var list: std.ArrayList(AppImage) = .empty;
         defer list.deinit(self.allocator);
@@ -447,7 +447,7 @@ pub const AppImageManager = struct {
         const existing = try self.getAppImagesFromLocalDb();
         var list: std.ArrayList(AppImage) = .empty;
         defer list.deinit(self.allocator);
-        defer self.freeAppImageDtos(existing);
+        defer self.freeAppImages(existing);
 
         for (existing) |item| {
             if (!std.ascii.eqlIgnoreCase(item.name, app_name)) try list.append(self.allocator, item);
@@ -512,7 +512,7 @@ pub const AppImageManager = struct {
     }
 
     pub fn freeAppImages(self: AppImageManager, dtos: []AppImage) void {
-        for (dtos) |dto| self.freeAppImageDto(dto);
+        for (dtos) |dto| self.freeAppImage(dto);
         self.allocator.free(dtos);
     }
 };
@@ -623,7 +623,7 @@ test "getAppImagesFromLocalDb returns empty when db file does not exist" {
     };
 
     const result = try manager.getAppImagesFromLocalDb();
-    defer manager.freeAppImageDtos(result);
+    defer manager.freeAppImages(result);
     try std.testing.expectEqual(0, result.len);
 }
 
@@ -657,7 +657,7 @@ test "addAppImageToLocalDb then getAppImagesFromLocalDb round-trips a single ent
     try manager.addAppImageToLocalDb(dto);
 
     const result = try manager.getAppImagesFromLocalDb();
-    defer manager.freeAppImageDtos(result);
+    defer manager.freeAppImages(result);
 
     try std.testing.expectEqual(1, result.len);
     try std.testing.expectEqualStrings("TestApp", result[0].name);
@@ -699,7 +699,7 @@ test "addAppImageToLocalDb overwrites entry with matching desktop_name" {
     });
 
     const result = try manager.getAppImagesFromLocalDb();
-    defer manager.freeAppImageDtos(result);
+    defer manager.freeAppImages(result);
 
     try std.testing.expectEqual(1, result.len);
     try std.testing.expectEqualStrings("2.0.0", result[0].version);
@@ -729,7 +729,7 @@ test "addAppImageToLocalDb keeps distinct desktop_name entries separate" {
     try manager.addAppImageToLocalDb(.{ .name = "AppTwo", .desktop_name = "AppTwo", .path = "/fake/two" });
 
     const result = try manager.getAppImagesFromLocalDb();
-    defer manager.freeAppImageDtos(result);
+    defer manager.freeAppImages(result);
 
     try std.testing.expectEqual(2, result.len);
 }
@@ -769,7 +769,7 @@ test "removeAppImage removes matching entry from db by name" {
     try std.testing.expect(removed);
 
     const result = try manager.getAppImagesFromLocalDb();
-    defer manager.freeAppImageDtos(result);
+    defer manager.freeAppImages(result);
 
     try std.testing.expectEqual(1, result.len);
     try std.testing.expectEqualStrings("KeepMe", result[0].name);
@@ -818,31 +818,31 @@ test "copyFile duplicates file contents" {
     try std.testing.expectEqualStrings("hello from the test file", contents);
 }
 
-test "manual: installAppImage with a real AppImage file" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
+// test "manual: installAppImage with a real AppImage file" {
+//     var tmp = std.testing.tmpDir(.{});
+//     defer tmp.cleanup();
 
-    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+//     var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+//     const len = try tmp.dir.realPath(std.testing.io, &path_buf);
 
-    const dir_path = try std.testing.allocator.dupe(u8, path_buf[0..len]);
-    defer std.testing.allocator.free(dir_path);
+//     const dir_path = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+//     defer std.testing.allocator.free(dir_path);
 
-    const db_path = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "appimages.db" });
-    defer std.testing.allocator.free(db_path);
+//     const db_path = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "appimages.db" });
+//     defer std.testing.allocator.free(db_path);
 
-    const manager = AppImageManager{
-        .allocator = std.testing.allocator,
-        .io = std.testing.io,
-        .environ = std.testing.environ,
-        .install_directory = dir_path,
-        .local_db_path = db_path,
-    };
+//     const manager = AppImageManager{
+//         .allocator = std.testing.allocator,
+//         .io = std.testing.io,
+//         .environ = std.testing.environ,
+//         .install_directory = dir_path,
+//         .local_db_path = db_path,
+//     };
 
-    const result = try manager.installAppImage("/home/caro/Downloads/osu.AppImage");
-    try std.testing.expect(result);
+//     const result = try manager.installAppImage("/home/caro/Downloads/osu.AppImage");
+//     try std.testing.expect(result);
 
-    const db = try manager.getAppImagesFromLocalDb();
-    defer manager.freeAppImageDtos(db);
-    try std.testing.expect(db.len == 1);
-}
+//     const db = try manager.getAppImagesFromLocalDb();
+//     defer manager.freeAppImages(db);
+//     try std.testing.expect(db.len == 1);
+// }
