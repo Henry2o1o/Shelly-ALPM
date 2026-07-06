@@ -484,6 +484,260 @@ test "multiple event types" {
     if (!error_called) return error.TestFailed;
 }
 
+test "add returns sequential indices" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var called = false;
+    const handler = Handler(ProgressArgs).T{
+        .function = setBoolCallback(ProgressArgs),
+        .data = @ptrCast(&called),
+    };
+
+    const idx0 = disp.addProgressHandler(handler) catch unreachable;
+    const idx1 = disp.addProgressHandler(handler) catch unreachable;
+    const idx2 = disp.addProgressHandler(handler) catch unreachable;
+
+    if (idx0 != 0) return error.TestFailed;
+    if (idx1 != 1) return error.TestFailed;
+    if (idx2 != 2) return error.TestFailed;
+}
+
+test "multiple handlers on one event all fire" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var call_count: usize = 0;
+    const handler = Handler(ProgressArgs).T{
+        .function = incrementCallback(ProgressArgs),
+        .data = @ptrCast(&call_count),
+    };
+    _ = disp.addProgressHandler(handler) catch unreachable;
+    _ = disp.addProgressHandler(handler) catch unreachable;
+    _ = disp.addProgressHandler(handler) catch unreachable;
+
+    disp.raiseProgress(.{ .progress_type = 0, .pkg_name = null, .percent = 0, .howmany = 0, .current = 0 });
+
+    if (call_count != 3) return error.TestFailed;
+}
+
+test "remove non-last handler keeps the others" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var called_a = false;
+    var called_b = false;
+    var called_c = false;
+
+    _ = disp.addProgressHandler(.{ .function = setBoolCallback(ProgressArgs), .data = @ptrCast(&called_a) }) catch unreachable;
+    const idx_b = disp.addProgressHandler(.{ .function = setBoolCallback(ProgressArgs), .data = @ptrCast(&called_b) }) catch unreachable;
+    _ = disp.addProgressHandler(.{ .function = setBoolCallback(ProgressArgs), .data = @ptrCast(&called_c) }) catch unreachable;
+
+    // Removing the middle handler exercises the `swapRemove` branch (index !=
+    // last), which moves the final handler into the freed slot.
+    disp.removeProgressHandler(idx_b);
+
+    disp.raiseProgress(.{ .progress_type = 0, .pkg_name = null, .percent = 0, .howmany = 0, .current = 0 });
+
+    if (!called_a) return error.TestFailed;
+    if (called_b) return error.TestFailed;
+    if (!called_c) return error.TestFailed;
+}
+
+test "remove out-of-bounds index is a no-op" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var called = false;
+    _ = disp.addProgressHandler(.{ .function = setBoolCallback(ProgressArgs), .data = @ptrCast(&called) }) catch unreachable;
+
+    // Out-of-range removals should be ignored rather than panic or drop the
+    // existing handler.
+    disp.removeProgressHandler(99);
+    disp.removeProgressHandler(1);
+
+    disp.raiseProgress(.{ .progress_type = 0, .pkg_name = null, .percent = 0, .howmany = 0, .current = 0 });
+
+    if (!called) return error.TestFailed;
+}
+
+test "handler receives the raised args" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var captured = ProgressCapture{};
+    _ = disp.addProgressHandler(.{ .function = captureProgressCallback, .data = @ptrCast(&captured) }) catch unreachable;
+
+    disp.raiseProgress(.{ .progress_type = 2, .pkg_name = "pkg", .percent = 42, .howmany = 7, .current = 3 });
+
+    const args = captured.args orelse return error.TestFailed;
+    if (args.progress_type != 2) return error.TestFailed;
+    if (args.percent != 42) return error.TestFailed;
+    if (args.howmany != 7) return error.TestFailed;
+    if (args.current != 3) return error.TestFailed;
+    const name = args.pkg_name orelse return error.TestFailed;
+    if (!std.mem.eql(u8, name, "pkg")) return error.TestFailed;
+}
+
+test "question propagates full response" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var ctx = QuestionContext{ .disp = &disp, .io = io };
+    _ = disp.addQuestionHandler(.{ .function = questionFullCallback, .data = @ptrCast(&ctx) }) catch unreachable;
+
+    const response = disp.raiseQuestion(io, .{
+        .question = "pick?",
+        .question_type = 1,
+        .options = &[_][]const u8{ "a", "b" },
+    });
+
+    if (response.answer != 1) return error.TestFailed;
+    if (response.choice != 3) return error.TestFailed;
+    const pkg = response.pkg orelse return error.TestFailed;
+    if (!std.mem.eql(u8, pkg, "pkgname")) return error.TestFailed;
+}
+
+test "question blocks until answered from another task" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    // Unlike the synchronous cases, this handler does NOT respond. It spawns a
+    // concurrent task that answers from a different thread, so the wait loop in
+    // `raiseQuestion` genuinely blocks and is woken via the condition variable.
+    var ctx = AsyncQuestionContext{ .disp = &disp, .io = io };
+    _ = disp.addQuestionHandler(.{ .function = asyncQuestionCallback, .data = @ptrCast(&ctx) }) catch unreachable;
+
+    const response = disp.raiseQuestion(io, .{
+        .question = "async?",
+        .question_type = 0,
+        .options = &[_][]const u8{ "yes", "no" },
+    });
+
+    // Reap the responder task before its captured pointers go out of scope.
+    if (ctx.future) |*f| f.await(io);
+
+    if (!ctx.handler_called) return error.TestFailed;
+    if (response.answer != 7) return error.TestFailed;
+}
+
+test "informational, scriptlet and hook handlers dispatch" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var info_called = false;
+    var scriptlet_called = false;
+    var hook_called = false;
+
+    _ = disp.addInformationalHandler(.{ .function = setBoolCallback(InformationalArgs), .data = @ptrCast(&info_called) }) catch unreachable;
+    _ = disp.addScriptletHandler(.{ .function = setBoolCallback(ScriptletArgs), .data = @ptrCast(&scriptlet_called) }) catch unreachable;
+    _ = disp.addHookHandler(.{ .function = setBoolCallback(HookArgs), .data = @ptrCast(&hook_called) }) catch unreachable;
+
+    disp.raiseInformational(.{ .event_type = 0, .message = "info" });
+    disp.raiseScriptlet(.{ .line = "line" });
+    disp.raiseHook(.{ .description = "hook", .position = 1, .total = 2 });
+
+    if (!info_called) return error.TestFailed;
+    if (!scriptlet_called) return error.TestFailed;
+    if (!hook_called) return error.TestFailed;
+}
+
+test "pacnew, pacsave and replaces handlers dispatch" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var pacnew_called = false;
+    var pacsave_called = false;
+    var replaces_called = false;
+
+    _ = disp.addPacnewHandler(.{ .function = setBoolCallback(PacnewArgs), .data = @ptrCast(&pacnew_called) }) catch unreachable;
+    _ = disp.addPacsaveHandler(.{ .function = setBoolCallback(PacsaveArgs), .data = @ptrCast(&pacsave_called) }) catch unreachable;
+    _ = disp.addReplacesHandler(.{ .function = setBoolCallback(ReplacesArgs), .data = @ptrCast(&replaces_called) }) catch unreachable;
+
+    disp.raisePacnew(.{ .file = "a.pacnew" });
+    disp.raisePacsave(.{ .pkg_name = "pkg", .file = "a.pacsave" });
+    disp.raiseReplaces(.{ .pkg_name = "old", .repository = "core", .replaces = &[_][]const u8{"new"} });
+
+    if (!pacnew_called) return error.TestFailed;
+    if (!pacsave_called) return error.TestFailed;
+    if (!replaces_called) return error.TestFailed;
+}
+
+test "handlers isolated per event type" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var error_called = false;
+    _ = disp.addErrorHandler(.{ .function = setBoolCallback(ErrorArgs), .data = @ptrCast(&error_called) }) catch unreachable;
+
+    // Raising an unrelated event must not invoke the error handler.
+    disp.raiseProgress(.{ .progress_type = 0, .pkg_name = null, .percent = 0, .howmany = 0, .current = 0 });
+
+    if (error_called) return error.TestFailed;
+}
+
+test "Handler.call forwards data and args" {
+    var captured = ProgressCapture{};
+    const handler = Handler(ProgressArgs).T{
+        .function = captureProgressCallback,
+        .data = @ptrCast(&captured),
+    };
+
+    handler.call(.{ .progress_type = 5, .pkg_name = null, .percent = 10, .howmany = 0, .current = 0 });
+
+    const args = captured.args orelse return error.TestFailed;
+    if (args.progress_type != 5) return error.TestFailed;
+    if (args.percent != 10) return error.TestFailed;
+}
+
 fn setBoolCallback(comptime Args: type) *const fn (?*anyopaque, Args) void {
     return struct {
         fn cb(data: ?*anyopaque, args: Args) void {
@@ -519,4 +773,44 @@ fn questionCallback(data: ?*anyopaque, args: QuestionArgs) void {
     _ = args;
     const ctx: *QuestionContext = @ptrCast(@alignCast(data));
     ctx.disp.respond(ctx.io, .{ .answer = 0, .pkg = null, .choice = null });
+}
+
+fn questionFullCallback(data: ?*anyopaque, args: QuestionArgs) void {
+    _ = args;
+    const ctx: *QuestionContext = @ptrCast(@alignCast(data));
+    ctx.disp.respond(ctx.io, .{ .answer = 1, .pkg = "pkgname", .choice = 3 });
+}
+
+const AsyncQuestionContext = struct {
+    disp: *Dispatcher,
+    io: std.Io,
+    future: ?std.Io.Future(void) = null,
+    handler_called: bool = false,
+};
+
+fn asyncResponder(disp: *Dispatcher, io: std.Io) void {
+    disp.respond(io, .{ .answer = 7, .pkg = null, .choice = null });
+}
+
+fn asyncQuestionCallback(data: ?*anyopaque, args: QuestionArgs) void {
+    _ = args;
+    const ctx: *AsyncQuestionContext = @ptrCast(@alignCast(data));
+    ctx.handler_called = true;
+    // The response reset in `raiseQuestion` happens before this handler runs, so
+    // the concurrent answer can never be clobbered regardless of scheduling.
+    ctx.future = ctx.io.concurrent(asyncResponder, .{ ctx.disp, ctx.io }) catch {
+        // Concurrency unavailable: fall back to answering inline so the wait
+        // still completes.
+        asyncResponder(ctx.disp, ctx.io);
+        return;
+    };
+}
+
+const ProgressCapture = struct {
+    args: ?ProgressArgs = null,
+};
+
+fn captureProgressCallback(data: ?*anyopaque, args: ProgressArgs) void {
+    const cap: *ProgressCapture = @ptrCast(@alignCast(data));
+    cap.args = args;
 }
