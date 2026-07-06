@@ -77,6 +77,8 @@ pub const Manager = struct {
     fn setupCallbacks(self: *Manager) void {
         const h = self.handle;
         _ = rawLibalpm.alpm_option_set_progresscb(h, progressCallback, self);
+        _ = rawLibalpm.alpm_option_set_eventcb(h, eventCallback, self);
+        _ = rawLibalpm.alpm_option_set_questioncb(h, questionCallback, self);
     }
 
     fn applyConfig(self: *Manager, config: configuration.Configuration.Config, root: bool) void {
@@ -259,9 +261,141 @@ pub const Manager = struct {
             .progress_type = @intCast(progress),
             .pkg_name = spanC(pkg),
             .percent = percent,
-            .howmany = howmany,
-            .current = current,
+            .howmany = @intCast(howmany),
+            .current = @intCast(current),
         });
+    }
+
+    fn eventCallback(
+        ctx: ?*anyopaque,
+        event: [*c]rawLibalpm.alpm_event_t,
+    ) callconv(.c) void {
+        const self: *Manager = @ptrCast(@alignCast(ctx));
+        self.dispatcher.raiseInformational(.{
+            .event_type = @intCast(event.*.type),
+            .message = "Temp Message",
+        });
+    }
+
+    fn questionCallback(ctx: ?*anyopaque, question: [*c]rawLibalpm.alpm_question_t) callconv(.c) void {
+        const self: *Manager = @ptrCast(@alignCast(ctx));
+        const manager_io = self.io();
+
+        const data: *anyopaque = @ptrCast(question);
+        const qtype: c_int = @intCast(question.*.type);
+
+        var buf: [512]u8 = undefined;
+
+        switch (libalpm.QuestionType.fromQuestionType(question.*.type)) {
+            .install_ignore => {
+                const q = libalpm.InstallIgnoredQuestion.from(data).?;
+                const text = std.fmt.bufPrint(&buf, "Install ignored package: {s}?", .{
+                    q.package().name() orelse "unknown",
+                }) catch "Install ignored package?";
+                q.confirm_install(self.askYesNo(manager_io, qtype, text));
+            },
+            .replace_package => {
+                const q = libalpm.ReplacePackageQuestion.from(data).?;
+                const old_pkg = q.old_package();
+                const new_pkg = q.new_package();
+                const text = std.fmt.bufPrint(&buf, "Replace {s}-{s} with {s}-{s}?", .{
+                    old_pkg.name() orelse "unknown",
+                    old_pkg.version() orelse "?",
+                    new_pkg.name() orelse "unknown",
+                    new_pkg.version() orelse "?",
+                }) catch "Replace package?";
+                q.confirm_replace(self.askYesNo(manager_io, qtype, text));
+            },
+            .conflict_package => {
+                const q = libalpm.ConflictQuestion.from(data).?;
+                const conflict = q.conflict();
+                const text = std.fmt.bufPrint(&buf, "{s} conflicts with {s}. Remove?", .{
+                    conflict.packageOne().name() orelse "unknown",
+                    conflict.packageTwo().name() orelse "unknown",
+                }) catch "Remove the conflicting package?";
+                q.confirm_removal(self.askYesNo(manager_io, qtype, text));
+            },
+            .corrupted_package => {
+                const q = libalpm.RemoveCorruptedPackagesQuestion.from(data).?;
+                const text = std.fmt.bufPrint(&buf, "Corrupted package {s}. Delete?", .{
+                    q.filepath(),
+                }) catch "Delete the corrupted package file?";
+                q.confirm_remove(self.askYesNo(manager_io, qtype, text));
+            },
+            .remove_packages => {
+                const q = libalpm.RemovePackagesQuestion.from(data).?;
+                q.skipRemoval(self.askYesNo(
+                    manager_io,
+                    qtype,
+                    "Some packages must be removed to proceed. Skip them instead?",
+                ));
+            },
+            .import_key => {
+                const q = libalpm.ImportKeyQuestion.from(data).?;
+                const text = std.fmt.bufPrint(&buf, "Import PGP key {s}?", .{
+                    q.uid() orelse "unknown",
+                }) catch "Import the PGP key?";
+                q.import(self.askYesNo(manager_io, qtype, text));
+            },
+            .select_provider => {
+                self.handleSelectProvider(manager_io, libalpm.SelectProviderQuestion.from(data).?, qtype);
+            },
+            else => {
+                // Leave alpm's default answer (0) untouched.
+            },
+        }
+    }
+
+    fn askYesNo(self: *Manager, manager_io: std.Io, qtype: c_int, text: []const u8) bool {
+        const yes_no = [_][]const u8{ "yes", "no" };
+        const resp = self.dispatcher.raiseQuestion(manager_io, .{
+            .question = text,
+            .question_type = qtype,
+            .options = &yes_no,
+        });
+        return (resp.answer orelse 0) != 0;
+    }
+
+    fn handleSelectProvider(
+        self: *Manager,
+        manager_io: std.Io,
+        q: libalpm.SelectProviderQuestion,
+        qtype: c_int,
+    ) void {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(self.allocator);
+        var providers: std.ArrayList(events.ProviderOption) = .empty;
+        defer providers.deinit(self.allocator);
+
+        var node = q.ptr.providers;
+        while (node != null) : (node = node.*.next) {
+            const item = node.*.data orelse continue;
+            const pkg = libalpm.Package{ .ptr = @ptrCast(@alignCast(item)) };
+            const pkg_name = pkg.name() orelse continue;
+            names.append(self.allocator, pkg_name) catch break;
+            providers.append(self.allocator, .{
+                .name = pkg_name,
+                .description = pkg.description() orelse "",
+                .is_installed = false,
+            }) catch break;
+        }
+
+        var dep_string: [*c]u8 = null;
+        defer if (dep_string != null) std.c.free(dep_string);
+        const dependency_name: ?[]const u8 = if (q.ptr.depend == null) null else blk: {
+            dep_string = rawLibalpm.alpm_dep_compute_string(q.ptr.depend);
+            break :blk spanC(dep_string);
+        };
+
+        const resp = self.dispatcher.raiseQuestion(manager_io, .{
+            .question = "Select a provider",
+            .question_type = qtype,
+            .options = names.items,
+            .provider_options = providers.items,
+            .dependency_name = dependency_name,
+        });
+
+        q.selected_choice(@intCast(resp.choice orelse 0));
     }
 
     fn spanC(ptr: [*c]const u8) ?[]const u8 {
