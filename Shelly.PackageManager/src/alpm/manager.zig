@@ -515,6 +515,380 @@ pub const Manager = struct {
     }
 };
 
-test "hi" {
-    try std.testing.expectEqualStrings("test", "test");
+const testing = std.testing;
+
+// ---------------------------------------------------------------------------
+// spanC
+// ---------------------------------------------------------------------------
+
+test "spanC returns null for a null pointer" {
+    try testing.expect(Manager.spanC(null) == null);
+}
+
+test "spanC spans a null-terminated C string" {
+    const c: [*c]const u8 = "package";
+    const span = Manager.spanC(c) orelse return error.TestUnexpectedNull;
+    try testing.expectEqualStrings("package", span);
+    try testing.expectEqual(@as(usize, 7), span.len);
+}
+
+test "spanC spans an empty C string" {
+    const c: [*c]const u8 = "";
+    const span = Manager.spanC(c) orelse return error.TestUnexpectedNull;
+    try testing.expectEqualStrings("", span);
+    try testing.expectEqual(@as(usize, 0), span.len);
+}
+
+// ---------------------------------------------------------------------------
+// resolveArchitecture
+// ---------------------------------------------------------------------------
+
+fn expectedAutoArch() []const u8 {
+    return switch (builtin.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        else => "x86_64",
+    };
+}
+
+test "resolveArchitecture returns an explicit architecture verbatim" {
+    try testing.expectEqualStrings("x86_64", Manager.resolveArchitecture("x86_64"));
+    try testing.expectEqualStrings("aarch64", Manager.resolveArchitecture("aarch64"));
+}
+
+test "resolveArchitecture resolves 'auto' to the host architecture" {
+    try testing.expectEqualStrings(expectedAutoArch(), Manager.resolveArchitecture("auto"));
+}
+
+test "resolveArchitecture treats 'auto' case-insensitively" {
+    try testing.expectEqualStrings(expectedAutoArch(), Manager.resolveArchitecture("AUTO"));
+    try testing.expectEqualStrings(expectedAutoArch(), Manager.resolveArchitecture("Auto"));
+}
+
+test "resolveArchitecture falls back to 'auto' for empty input" {
+    try testing.expectEqualStrings(expectedAutoArch(), Manager.resolveArchitecture(""));
+    // Whitespace-only input tokenizes to nothing and also falls back.
+    try testing.expectEqualStrings(expectedAutoArch(), Manager.resolveArchitecture("   "));
+}
+
+test "resolveArchitecture uses only the first token" {
+    try testing.expectEqualStrings("x86_64", Manager.resolveArchitecture("x86_64 aarch64"));
+    // A leading space is skipped by the tokenizer.
+    try testing.expectEqualStrings("i686", Manager.resolveArchitecture(" i686 x86_64"));
+}
+
+test "resolveArchitecture passes unknown architectures through" {
+    try testing.expectEqualStrings("riscv64", Manager.resolveArchitecture("riscv64"));
+}
+
+// ---------------------------------------------------------------------------
+// resolveServer
+// ---------------------------------------------------------------------------
+
+test "resolveServer substitutes $repo and $arch" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+
+    const resolved = mgr.resolveServer("https://mirror/$repo/os/$arch", "core", "x86_64") orelse
+        return error.TestUnexpectedNull;
+    defer mgr.allocator.free(resolved);
+
+    try testing.expectEqualStrings("https://mirror/core/os/x86_64", resolved);
+    // The result must be null-terminated for the C API.
+    try testing.expectEqual(@as(u8, 0), resolved[resolved.len]);
+}
+
+test "resolveServer substitutes only $repo when $arch is absent" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+
+    const resolved = mgr.resolveServer("https://mirror/$repo/os", "extra", "x86_64") orelse
+        return error.TestUnexpectedNull;
+    defer mgr.allocator.free(resolved);
+
+    try testing.expectEqualStrings("https://mirror/extra/os", resolved);
+}
+
+test "resolveServer substitutes only $arch when $repo is absent" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+
+    const resolved = mgr.resolveServer("https://mirror/os/$arch", "core", "aarch64") orelse
+        return error.TestUnexpectedNull;
+    defer mgr.allocator.free(resolved);
+
+    try testing.expectEqualStrings("https://mirror/os/aarch64", resolved);
+}
+
+test "resolveServer leaves a template without markers unchanged" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+
+    const resolved = mgr.resolveServer("https://mirror/static/os", "core", "x86_64") orelse
+        return error.TestUnexpectedNull;
+    defer mgr.allocator.free(resolved);
+
+    try testing.expectEqualStrings("https://mirror/static/os", resolved);
+}
+
+test "resolveServer replaces every occurrence of each marker" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+
+    const resolved = mgr.resolveServer("$repo/$arch/$repo/$arch", "core", "x86_64") orelse
+        return error.TestUnexpectedNull;
+    defer mgr.allocator.free(resolved);
+
+    try testing.expectEqualStrings("core/x86_64/core/x86_64", resolved);
+}
+
+// ---------------------------------------------------------------------------
+// check
+// ---------------------------------------------------------------------------
+
+test "check is a no-op for a success return code" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    // ret == 0 means success: check must return without touching the handle.
+    mgr.check("noop", 0);
+}
+
+// ---------------------------------------------------------------------------
+// progressCallback
+// ---------------------------------------------------------------------------
+
+test "progressCallback dispatches a progress event with the forwarded args" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = ProgressCapture{};
+    _ = mgr.dispatcher.addProgressHandler(.{
+        .function = captureProgress,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    Manager.progressCallback(@ptrCast(&mgr), 2, "pkg", 42, 7, 3);
+
+    const args = cap.args orelse return error.TestFailed;
+    try testing.expectEqual(@as(c_int, 2), args.progress_type);
+    try testing.expectEqual(@as(c_int, 42), args.percent);
+    try testing.expectEqual(@as(c_ulong, 7), args.howmany);
+    try testing.expectEqual(@as(c_ulong, 3), args.current);
+    try testing.expectEqualStrings("pkg", args.pkg_name orelse return error.TestFailed);
+}
+
+test "progressCallback forwards a null package name as null" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = ProgressCapture{};
+    _ = mgr.dispatcher.addProgressHandler(.{
+        .function = captureProgress,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    Manager.progressCallback(@ptrCast(&mgr), 0, null, 0, 0, 0);
+
+    const args = cap.args orelse return error.TestFailed;
+    try testing.expect(args.pkg_name == null);
+}
+
+// ---------------------------------------------------------------------------
+// eventCallback
+// ---------------------------------------------------------------------------
+
+test "eventCallback dispatches an informational event carrying the event type" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = InfoCapture{};
+    _ = mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    var ev: rawLibalpm.alpm_event_t = .{ .type = @intCast(rawLibalpm.ALPM_EVENT_TRANSACTION_START) };
+    Manager.eventCallback(@ptrCast(&mgr), &ev);
+
+    const args = cap.args orelse return error.TestFailed;
+    try testing.expectEqual(@as(c_int, rawLibalpm.ALPM_EVENT_TRANSACTION_START), args.event_type);
+    try testing.expectEqualStrings("Temp Message", args.message);
+}
+
+// ---------------------------------------------------------------------------
+// askYesNo
+// ---------------------------------------------------------------------------
+
+test "askYesNo returns true for a non-zero answer" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const tio = threaded.io();
+
+    var ctx = AskResponder{ .disp = &mgr.dispatcher, .io = tio, .answer = 1 };
+    _ = mgr.dispatcher.addQuestionHandler(.{
+        .function = askResponder,
+        .data = @ptrCast(&ctx),
+    }) catch unreachable;
+
+    try testing.expect(mgr.askYesNo(tio, 0, "proceed?"));
+}
+
+test "askYesNo returns false for a zero answer" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const tio = threaded.io();
+
+    var ctx = AskResponder{ .disp = &mgr.dispatcher, .io = tio, .answer = 0 };
+    _ = mgr.dispatcher.addQuestionHandler(.{
+        .function = askResponder,
+        .data = @ptrCast(&ctx),
+    }) catch unreachable;
+
+    try testing.expect(!mgr.askYesNo(tio, 0, "proceed?"));
+}
+
+// ---------------------------------------------------------------------------
+// handleErrorMessage
+// ---------------------------------------------------------------------------
+
+fn newErrorManager() Manager {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    return mgr;
+}
+
+test "handleErrorMessage emits a known error description" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.Memory), null);
+
+    try testing.expect(std.mem.indexOf(u8, cap.text(), "Memory allocation failed.") != null);
+}
+
+test "handleErrorMessage handles the Ok error without details" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.Ok), null);
+
+    // Ok produces no extra detail line, but the strerror header is still emitted.
+    try testing.expect(cap.len != 0);
+}
+
+test "handleErrorMessage reports an out-of-range error number as unknown" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    try mgr.handleErrorMessage(9999, null);
+
+    try testing.expect(std.mem.indexOf(u8, cap.text(), "Unknown error: 9999") != null);
+}
+
+test "handleErrorMessage tolerates a null list for list-based errors" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    // These branches walk `data_ptr`; a null list means the loop body never
+    // runs, so only the strerror header is emitted and nothing crashes.
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.UnsatisfiedDeps), null);
+    try testing.expect(cap.len != 0);
+
+    cap.len = 0;
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.ConflictingDeps), null);
+    try testing.expect(cap.len != 0);
+
+    cap.len = 0;
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.FileConflicts), null);
+    try testing.expect(cap.len != 0);
+
+    cap.len = 0;
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.PkgInvalidName), null);
+    try testing.expect(cap.len != 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+const ProgressCapture = struct {
+    args: ?events.ProgressArgs = null,
+};
+
+fn captureProgress(data: ?*anyopaque, args: events.ProgressArgs) void {
+    const cap: *ProgressCapture = @ptrCast(@alignCast(data));
+    cap.args = args;
+}
+
+const InfoCapture = struct {
+    args: ?events.InformationalArgs = null,
+};
+
+fn captureInfo(data: ?*anyopaque, args: events.InformationalArgs) void {
+    const cap: *InfoCapture = @ptrCast(@alignCast(data));
+    cap.args = args;
+}
+
+const ErrorCapture = struct {
+    buf: [2048]u8 = undefined,
+    len: usize = 0,
+
+    fn text(self: *const ErrorCapture) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+fn captureError(data: ?*anyopaque, args: events.ErrorArgs) void {
+    const cap: *ErrorCapture = @ptrCast(@alignCast(data));
+    const n = @min(args.message.len, cap.buf.len);
+    @memcpy(cap.buf[0..n], args.message[0..n]);
+    cap.len = n;
+}
+
+const AskResponder = struct {
+    disp: *events.Dispatcher,
+    io: std.Io,
+    answer: c_int,
+};
+
+fn askResponder(data: ?*anyopaque, args: events.QuestionArgs) void {
+    _ = args;
+    const ctx: *AskResponder = @ptrCast(@alignCast(data));
+    ctx.disp.respond(ctx.io, .{ .answer = ctx.answer, .pkg = null, .choice = null });
 }
