@@ -361,7 +361,7 @@ pub const Manager = struct {
         manager_io: std.Io,
         q: libalpm.SelectProviderQuestion,
         qtype: c_int,
-    ) void {
+    ) callconv(.c) void {
         var names: std.ArrayList([]const u8) = .empty;
         defer names.deinit(self.allocator);
         var providers: std.ArrayList(events.ProviderOption) = .empty;
@@ -396,6 +396,117 @@ pub const Manager = struct {
         });
 
         q.selected_choice(@intCast(resp.choice orelse 0));
+    }
+
+    fn handleErrorMessage(self: *Manager, error_number: c_int, data_ptr: bindings.libalpm.List) !void {
+        const error_msg = std.mem.span(rawLibalpm.alpm_strerror(@intCast(error_number)));
+        var details: std.ArrayList(u8) = .empty;
+        defer details.deinit(self.allocator);
+
+        const max_err = @intFromEnum(libalpm.Error.SandboxFailed);
+        if (error_number < 0 or error_number > max_err) {
+            try details.print(self.allocator, "Unknown error: {d}\n", .{error_number});
+        } else switch (@as(libalpm.Error, @enumFromInt(error_number))) {
+            .Ok => {},
+            .Memory => try details.appendSlice(self.allocator, "Memory allocation failed.\n"),
+            .System => try details.appendSlice(self.allocator, "System error.\n"),
+            .BadPerms => try details.appendSlice(self.allocator, "Bad permissions.\n"),
+            .NotAFile => try details.appendSlice(self.allocator, "Expected a file, did not receive a file. How did you mess this up?\n"),
+            .NotADir => try details.appendSlice(self.allocator, "Expected a directory, did not receive a directory. I'm sorry what?\n"),
+            .WrongArgs => try details.appendSlice(self.allocator, "Wrong or NULL arguments\n"),
+            .DiskSpace => try details.appendSlice(self.allocator, "Not enough disk space\n Why is your disk so small?\n"),
+            .HandleNull => try details.appendSlice(self.allocator, "Lost the handle. Kinda like a plot but more important.\n"),
+            .HandleNotNull => try details.appendSlice(self.allocator, "Handle is not null. Normally you would want this but at this point I'm unsure.\n"),
+            .HandleLock => try details.appendSlice(self.allocator, "You have a db.lck. It's at /var/lib/pacman/db.lck. You should probably delete that.\n"),
+            .DbOpen => try details.appendSlice(self.allocator, "Failed to open the database.\n"),
+            .DbCreate => try details.appendSlice(self.allocator, "Failed to create the database.\n"),
+            .DbNull => try details.appendSlice(self.allocator, "Database is null.\n"),
+            .DbNotNull => try details.appendSlice(self.allocator, "Database is not null.\n"),
+            .DbNotFound => try details.appendSlice(self.allocator, "Database not found.\n"),
+            .DbInvalid => try details.appendSlice(self.allocator, "Database is invalid.\n"),
+            .DbInvalidSig => try details.appendSlice(self.allocator, "Database signature is invalid.\n"),
+            .DbVersion => try details.appendSlice(self.allocator, "Database version is invalid.\n"),
+            .DbWrite => try details.appendSlice(self.allocator, "Failed to write to the database.\n"),
+            .DbRemove => try details.appendSlice(self.allocator, "Failed to remove the database.\n"),
+            .ServerBadUrl => try details.appendSlice(self.allocator, "Server URL is invalid.\n"),
+            .ServerNone => try details.appendSlice(self.allocator, "No server found.\n"),
+            .TransNotNull => try details.appendSlice(self.allocator, "Transaction is not null.\n"),
+            .TransNull => try details.appendSlice(self.allocator, "Transaction is null.\n"),
+            .TransDupTarget => try details.appendSlice(self.allocator, "Transaction target is duplicated.\n"),
+            .TransDupFilename => try details.appendSlice(self.allocator, "Transaction filename is duplicated.\n"),
+            .TransNotInitialized => try details.appendSlice(self.allocator, "Transaction is not initialized.\n"),
+            .TransNotPrepared => try details.appendSlice(self.allocator, "Transaction is not prepared.\n"),
+            .TransAbort => try details.appendSlice(self.allocator, "Transaction aborted.\n"),
+            .TransType => try details.appendSlice(self.allocator, "Transaction type is invalid.\n"),
+            .TransNotLocked => try details.appendSlice(self.allocator, "Transaction is not locked.\n"),
+            .TransHookFailed => try details.appendSlice(self.allocator, "Transaction hook failed.\n"),
+            .PkgNotFound => try details.appendSlice(self.allocator, "Package not found.\n"),
+            .PkgIgnored => try details.appendSlice(self.allocator, "Package ignored.\n"),
+            .PkgInvalid => try details.appendSlice(self.allocator, "Package is invalid.\n"),
+            .PkgInvalidChecksum => try details.appendSlice(self.allocator, "Package checksum is invalid.\n"),
+            .PkgInvalidSig => try details.appendSlice(self.allocator, "Package signature is invalid.\n"),
+            .PkgMissingSig => try details.appendSlice(self.allocator, "Package signature is missing.\n"),
+            .PkgOpen => try details.appendSlice(self.allocator, "Failed to open package.\n"),
+            .PkgCantRemove => try details.appendSlice(self.allocator, "Failed to remove package.\n"),
+            .PkgInvalidName => {
+                var node = data_ptr;
+                while (node != null) : (node = node.?.next) {
+                    if (node.?.data) |d| {
+                        const s = std.mem.span(@as([*c]const u8, @ptrCast(d)));
+                        try details.appendSlice(self.allocator, s);
+                        try details.appendSlice(self.allocator, "\n");
+                    }
+                }
+            },
+            .PkgInvalidArch => try details.appendSlice(self.allocator, "Package architecture is invalid.\n"),
+            .SigMissing => try details.appendSlice(self.allocator, "Signature is missing.\n"),
+            .SigInvalid => try details.appendSlice(self.allocator, "Signature is invalid.\n"),
+            .UnsatisfiedDeps => {
+                var node = data_ptr;
+                while (node != null) : (node = node.?.next) {
+                    const data = node.?.data orelse continue;
+                    const miss: *rawLibalpm.alpm_depmissing_t = @ptrCast(@alignCast(data));
+                    const target = spanC(miss.target) orelse "unknown";
+                    const dep_str = rawLibalpm.alpm_dep_compute_string(miss.depend);
+                    defer if (dep_str != null) std.c.free(dep_str);
+                    try details.print(self.allocator, "{s} => {s}\n", .{ target, std.mem.span(dep_str) });
+                }
+            },
+            .ConflictingDeps => {
+                var node = data_ptr;
+                while (node != null) : (node = node.?.next) {
+                    const data = node.?.data orelse continue;
+                    const conflict = bindings.libalpm.PackageConflict.from(data) orelse continue;
+                    const pkg1_name = conflict.packageOne().name() orelse "unknown";
+                    const pkg2_name = conflict.packageTwo().name() orelse "unknown";
+                    if (conflict.ptr.reason) |rp| {
+                        const computed = rawLibalpm.alpm_dep_compute_string(rp);
+                        defer if (computed != null) std.c.free(computed);
+                        try details.print(self.allocator, "{s} conflicts with {s} because of {s}\n", .{ pkg1_name, pkg2_name, std.mem.span(computed) });
+                    } else {
+                        try details.print(self.allocator, "{s} conflicts with {s}\n", .{ pkg1_name, pkg2_name });
+                    }
+                }
+            },
+            .FileConflicts => {
+                var node = data_ptr;
+                while (node != null) : (node = node.?.next) {
+                    const data = node.?.data orelse continue;
+                    const fc: *rawLibalpm.alpm_fileconflict_t = @ptrCast(@alignCast(data));
+                    const target = spanC(fc.target) orelse "unknown";
+                    const file = spanC(fc.file) orelse "";
+                    try details.print(self.allocator, "{s} in file {s}\n", .{ target, file });
+                }
+            },
+            .DownloadFailed => try details.appendSlice(self.allocator, "Download failed.\n"),
+            .Gpgme => try details.appendSlice(self.allocator, "Gpgme error.\n"),
+            .ExternalDownload => try details.appendSlice(self.allocator, "External download failed.\n"),
+            .SandboxFailed => try details.appendSlice(self.allocator, "Sandbox failed.\n"),
+        }
+
+        const full_error = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ error_msg, details.items });
+        defer self.allocator.free(full_error);
+        self.dispatcher.raiseError(.{ .message = full_error });
     }
 
     fn spanC(ptr: [*c]const u8) ?[]const u8 {
