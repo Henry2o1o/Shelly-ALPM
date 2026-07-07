@@ -71,6 +71,7 @@ pub fn build(b: *std.Build) void {
     mod.linkSystemLibrary("alpm", .{});
     mod.addImport("flatpak", flatpak_mod);
     mod.linkSystemLibrary("flatpak", .{});
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -122,6 +123,10 @@ pub fn build(b: *std.Build) void {
     const xml_dep = b.dependency("zig-xml", .{});
     exe.root_module.addImport("zig-xml", xml_dep.module("xml"));
     mod.addImport("zig-xml", xml_dep.module("xml"));
+
+    const httpx_dep = b.dependency("httpx", .{});
+    exe.root_module.addImport("httpx", httpx_dep.module("httpx"));
+    mod.addImport("httpx", httpx_dep.module("httpx"));
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default

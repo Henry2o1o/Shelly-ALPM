@@ -1,5 +1,5 @@
 const std = @import("std");
-const http = std.http;
+const httpx = @import("httpx");
 
 pub const DownloadEventType = enum {
     Start,
@@ -39,7 +39,6 @@ pub const DownloadConfiguration = struct {
     retry_delay_secs: u32 = 1,
     verify_ssl: bool = true,
     parallel_downloads: u8 = 10,
-
     pub fn default(allocator: std.mem.Allocator) DownloadConfiguration {
         return DownloadConfiguration{
             .allocator = allocator,
