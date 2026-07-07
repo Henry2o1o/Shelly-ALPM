@@ -21,7 +21,24 @@ pub const HttpClient = struct {
         self.client.deinit();
     }
 
-    pub fn get(self: *HttpClient, url: []const u8, progress_callback: ?ProgressCallback) !DownloadResponse {}
+    pub fn get(self: *HttpClient, url: []const u8, progress_callback: ?ProgressCallback) DownloadResponse {
+        const user_agent = self.user_agent;
+        var headers = [_]std.http.Header{
+            .{ .name = "Accept", .value = "application/json" },
+            .{ .name = "User-Agent", .value = user_agent },
+        };
+        const options = .{ .arena = self.allocator, .uri = std.Uri.parse(url), .method = http.Method.GET, .headers = &headers };
+        const request = self.client.fetch(options);
+        defer request.deinit();
+
+        var response_buffer: []u8 = undefined;
+        const response = try request.start();
+        defer response.deinit();
+
+        //const status = response.status;
+        _ = progress_callback;
+        _ = try response.readAll(&response_buffer, self.allocator);
+    }
 };
 
 pub const ProgressCallback = *const fn (bytes_downloaded: u64, bytes_total: ?u64) void;

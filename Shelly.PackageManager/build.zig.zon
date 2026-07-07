@@ -44,6 +44,10 @@
             .url = "git+https://github.com/ianprime0509/zig-xml#6a446191d2509788959766b60a13b8626d9ad078",
             .hash = "xml-0.2.0-ZTbP3x07AgAwDNgFEj9liF24YjojTKyznD3-Njf9w5HT",
         },
+        .httpx = .{
+            .url = "git+https://github.com/muhammad-fiaz/httpx.zig.git#dcc41d5c814847225e65b45a8d4a5849b09f040b",
+            .hash = "httpx-0.1.1-8qj2epP0DQAtgR6x-AQR0TNYAIF4LN_70iW10qY_rnWl",
+        },
     },
     .paths = .{
         "build.zig",
