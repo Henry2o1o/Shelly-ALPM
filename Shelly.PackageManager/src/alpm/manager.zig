@@ -37,6 +37,7 @@ pub const Manager = struct {
     threaded: std.Io.Threaded,
     local_db: ?bindings.libalpm.Database = null,
     sync_dbs: std.ArrayList(bindings.libalpm.Database) = .empty,
+    package_download: bool = false,
 
     /// If null is passed for config it will use the default /etc/pacman.conf
     pub fn init(allocator: std.mem.Allocator, root: bool, configPath: ?[]const u8) InitError!Manager {
@@ -62,6 +63,19 @@ pub const Manager = struct {
         self.applyConfig(self.config, root);
         self.setupCallbacks();
         return self;
+    }
+
+    pub fn sync(self: *Manager, force: bool) InitError!void {
+        _ = force;
+        self.package_download = false;
+        if (self.handle == null) return InitError.InitFailed;
+        var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
+        if (sync_dbs == null) return InitError.RegisterDbFailed;
+        while (sync_dbs != null) : (sync_dbs = sync_dbs.?.next) {
+            const db = sync_dbs.?.data orelse continue;
+            var database: libalpm.Database = .{ .ptr = db };
+            if (database.name() != null) {}
+        }
     }
 
     pub fn io(self: *Manager) std.Io {
