@@ -140,9 +140,7 @@ pub const CoreDownloader = struct {
         };
         defer req.deinit();
 
-        // Request the resource verbatim: disable compression so the bytes we
-        // write to disk are exactly what the server serves and so Content-Length
-        // reflects the real download size for progress reporting.
+
         req.accept_encoding[@intFromEnum(std.http.ContentEncoding.gzip)] = false;
         req.accept_encoding[@intFromEnum(std.http.ContentEncoding.deflate)] = false;
 
@@ -162,7 +160,6 @@ pub const CoreDownloader = struct {
             .success => {},
             .server_error => {
                 std.log.err("Server error {d} for {s}", .{ @intFromEnum(status), url });
-                // Retryable: transient server-side failure.
                 return DownloadError.NetworkError;
             },
             else => {
@@ -193,9 +190,6 @@ pub const CoreDownloader = struct {
         const copy_buffer = self.allocator.alloc(u8, copy_buffer_size) catch return DownloadError.FileError;
         defer self.allocator.free(copy_buffer);
 
-        // The transfer buffer is working space for the HTTP body reader
-        // (e.g. chunked-transfer framing); the body itself streams into
-        // `copy_buffer` directly.
         var transfer_buffer: [4 * 1024]u8 = undefined;
         const body_reader = response.reader(&transfer_buffer);
 
@@ -319,4 +313,160 @@ fn mapReceiveHeadError(err: std.http.Client.Request.ReceiveHeadError) DownloadEr
         error.TlsInitializationFailed, error.CertificateBundleLoadFailure => DownloadError.SslError,
         else => DownloadError.NetworkError,
     };
+}
+
+// Unit tests for downloader.zig
+test "DownloadConfiguration.default() returns correct default values" {
+    const config = DownloadConfiguration.default();
+    try std.testing.expectEqualStrings("ShellyPackageManager/2.0", config.user_agent.?);
+    try std.testing.expectEqual(@as(u32, 30), config.timeout_in_seconds);
+    try std.testing.expectEqual(@as(u8, 3), config.max_retries);
+    try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
+    try std.testing.expectEqual(true, config.verify_ssl);
+    try std.testing.expectEqual(@as(u8, 10), config.parallel_downloads);
+}
+
+test "makeProgress calculates progress correctly with total size" {
+    const progress = makeProgress(50, 100, null);
+    try std.testing.expectEqual(@as(u64, 50), progress.bytes_downloaded);
+    try std.testing.expectEqual(@as(?u64, 100), progress.bytes_total);
+    try std.testing.expectEqual(@as(u8, 50), progress.percent);
+    try std.testing.expectEqual(@as(?u64, null), progress.speed_bytes_per_sec);
+
+    const progress_full = makeProgress(100, 100, null);
+    try std.testing.expectEqual(@as(u8, 100), progress_full.percent);
+
+    const progress_zero_total = makeProgress(50, 0, null);
+    try std.testing.expectEqual(@as(u8, 100), progress_zero_total.percent);
+}
+
+test "makeProgress calculates progress correctly without total size" {
+    const progress = makeProgress(50, null, null);
+    try std.testing.expectEqual(@as(u64, 50), progress.bytes_downloaded);
+    try std.testing.expectEqual(@as(?u64, null), progress.bytes_total);
+    try std.testing.expectEqual(@as(u8, 0), progress.percent);
+    try std.testing.expectEqual(@as(?u64, null), progress.speed_bytes_per_sec);
+}
+
+test "isRetryable returns true for NetworkError and Timeout" {
+    try std.testing.expect(isRetryable(DownloadError.NetworkError));
+    try std.testing.expect(isRetryable(DownloadError.Timeout));
+}
+
+test "isRetryable returns false for other errors" {
+    try std.testing.expect(!isRetryable(DownloadError.HttpError));
+    try std.testing.expect(!isRetryable(DownloadError.FileError));
+    try std.testing.expect(!isRetryable(DownloadError.InvalidUrl));
+    try std.testing.expect(!isRetryable(DownloadError.RetryExceeded));
+    try std.testing.expect(!isRetryable(DownloadError.SslError));
+}
+
+test "mapRequestError maps UnsupportedUriScheme and UriMissingHost to InvalidUrl" {
+    try std.testing.expectEqual(DownloadError.InvalidUrl, mapRequestError(error.UnsupportedUriScheme));
+    try std.testing.expectEqual(DownloadError.InvalidUrl, mapRequestError(error.UriMissingHost));
+}
+
+test "mapRequestError maps TLS errors to SslError" {
+    try std.testing.expectEqual(DownloadError.SslError, mapRequestError(error.TlsInitializationFailed));
+    try std.testing.expectEqual(DownloadError.SslError, mapRequestError(error.CertificateBundleLoadFailure));
+}
+
+test "mapRequestError maps other errors to NetworkError" {
+    try std.testing.expectEqual(DownloadError.NetworkError, mapRequestError(error.ConnectionRefused));
+}
+
+test "mapReceiveHeadError maps redirect and header errors to HttpError" {
+    try std.testing.expectEqual(DownloadError.HttpError, mapReceiveHeadError(error.TooManyHttpRedirects));
+    try std.testing.expectEqual(DownloadError.HttpError, mapReceiveHeadError(error.RedirectRequiresResend));
+    try std.testing.expectEqual(DownloadError.HttpError, mapReceiveHeadError(error.HttpRedirectLocationMissing));
+    try std.testing.expectEqual(DownloadError.HttpError, mapReceiveHeadError(error.HttpHeadersInvalid));
+    try std.testing.expectEqual(DownloadError.HttpError, mapReceiveHeadError(error.HttpChunkInvalid));
+}
+
+test "mapReceiveHeadError maps UnsupportedUriScheme to InvalidUrl" {
+    try std.testing.expectEqual(DownloadError.InvalidUrl, mapReceiveHeadError(error.UnsupportedUriScheme));
+}
+
+test "mapReceiveHeadError maps TLS errors to SslError" {
+    try std.testing.expectEqual(DownloadError.SslError, mapReceiveHeadError(error.TlsInitializationFailed));
+    try std.testing.expectEqual(DownloadError.SslError, mapReceiveHeadError(error.CertificateBundleLoadFailure));
+}
+
+test "mapReceiveHeadError maps other errors to NetworkError" {
+    try std.testing.expectEqual(DownloadError.NetworkError, mapReceiveHeadError(error.ConnectionRefused));
+}
+
+test "shouldEmitProgress emits on percentage change when total is known" {
+    var downloader: CoreDownloader = undefined;
+    var last_percent: i16 = -1;
+    var last_reported: u64 = 0;
+
+    // First call should emit progress (0%)
+    try std.testing.expect(downloader.shouldEmitProgress(0, 100, &last_percent, &last_reported));
+    try std.testing.expectEqual(@as(i16, 0), last_percent);
+
+    // Second call at 1 byte (1%) should emit (percent changes from 0 to 1)
+    try std.testing.expect(downloader.shouldEmitProgress(1, 100, &last_percent, &last_reported));
+    try std.testing.expectEqual(@as(i16, 1), last_percent);
+
+    // Call at 50 bytes (50%) should emit (percent changes from 1 to 50)
+    try std.testing.expect(downloader.shouldEmitProgress(50, 100, &last_percent, &last_reported));
+    try std.testing.expectEqual(@as(i16, 50), last_percent);
+
+    // Call at 100 bytes (100%) should emit (percent changes from 50 to 100)
+    try std.testing.expect(downloader.shouldEmitProgress(100, 100, &last_percent, &last_reported));
+    try std.testing.expectEqual(@as(i16, 100), last_percent);
+
+    // Call at 100 bytes again should not emit (percent is still 100%)
+    try std.testing.expect(!downloader.shouldEmitProgress(100, 100, &last_percent, &last_reported));
+}
+
+test "shouldEmitProgress emits every 256KiB when total is unknown" {
+    var downloader: CoreDownloader = undefined;
+    var last_percent: i16 = -1;
+    var last_reported: u64 = 0;
+
+    // Call at 100KiB should not emit (less than 256KiB)
+    try std.testing.expect(!downloader.shouldEmitProgress(100 * 1024, null, &last_percent, &last_reported));
+    try std.testing.expectEqual(@as(u64, 0), last_reported);
+
+    // Call at 256KiB should emit
+    try std.testing.expect(downloader.shouldEmitProgress(256 * 1024, null, &last_percent, &last_reported));
+    try std.testing.expectEqual(@as(u64, 256 * 1024), last_reported);
+
+    // Call at 300KiB should not emit (less than 256KiB from last reported)
+    try std.testing.expect(!downloader.shouldEmitProgress(300 * 1024, null, &last_percent, &last_reported));
+
+    // Call at 512KiB should emit (256KiB from last reported)
+    try std.testing.expect(downloader.shouldEmitProgress(512 * 1024, null, &last_percent, &last_reported));
+    try std.testing.expectEqual(@as(u64, 512 * 1024), last_reported);
+}
+
+test "DownloadResult union variants are correctly defined" {
+    const success_result = DownloadResult{
+        .succes = .{ .destination_path = "/tmp/test.zip" },
+    };
+    switch (success_result) {
+        .succes => |s| try std.testing.expectEqualStrings("/tmp/test.zip", s.destination_path),
+        else => try std.testing.expect(false),
+    }
+
+    const failure_result = DownloadResult{
+        .failure = DownloadError.HttpError,
+    };
+    switch (failure_result) {
+        .failure => |f| try std.testing.expectEqual(DownloadError.HttpError, f),
+        else => try std.testing.expect(false),
+    }
+
+    const skipped_result = DownloadResult{
+        .skipped = .{ .destination_path = "/tmp/test.zip", .reason = .ExistsAndUpToDate },
+    };
+    switch (skipped_result) {
+        .skipped => |s| {
+            try std.testing.expectEqualStrings("/tmp/test.zip", s.destination_path);
+            try std.testing.expectEqual(SkippedReason.ExistsAndUpToDate, s.reason);
+        },
+        else => try std.testing.expect(false),
+    }
 }
