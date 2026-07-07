@@ -140,7 +140,6 @@ pub const CoreDownloader = struct {
         };
         defer req.deinit();
 
-
         req.accept_encoding[@intFromEnum(std.http.ContentEncoding.gzip)] = false;
         req.accept_encoding[@intFromEnum(std.http.ContentEncoding.deflate)] = false;
 
