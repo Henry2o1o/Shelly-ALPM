@@ -125,10 +125,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zig-xml", xml_dep.module("xml"));
     mod.addImport("zig-xml", xml_dep.module("xml"));
 
-    const httpx_dep = b.dependency("httpx", .{});
-    exe.root_module.addImport("httpx", httpx_dep.module("httpx"));
-    mod.addImport("httpx", httpx_dep.module("httpx"));
-
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
