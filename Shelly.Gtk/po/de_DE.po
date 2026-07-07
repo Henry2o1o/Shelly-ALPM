@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
-"POT-Creation-Date: 2026-06-27 07:15+0000\n"
-"PO-Revision-Date: 2026-07-03 23:04+0200\n"
+"POT-Creation-Date: 2026-07-03 00:26+0000\n"
+"PO-Revision-Date: 2026-07-07 15:01+0200\n"
 "Last-Translator: helge1o1o1@gmail.com\n"
 "Language-Team: Deutschland (Deutsch) helge1o1o1@gmail.com\n"
 "Language: de\n"
@@ -69,25 +69,19 @@ msgid "Any"
 msgstr "Alles"
 
 msgid "color-scheme"
-msgstr ""
+msgstr "color-scheme"
 
 msgid "Install"
 msgstr "Installieren"
 
 msgid "Updates"
-msgstr ""
+msgstr "Updates"
 
 msgid "Manage"
 msgstr "Verwalten"
 
 msgid "Remove"
 msgstr "Entfernen"
-
-msgid "Happy pride month!"
-msgstr "Frohen Pride-Monat!"
-
-msgid "You found Chel's hidden page."
-msgstr "Du hast Chel's versteckte Seite gefunden."
 
 msgid "Search packages..."
 msgstr "Pakete suchen..."
@@ -99,7 +93,7 @@ msgid "Install Aur Package(s)"
 msgstr "Aur-Paket(e) installieren"
 
 msgid "Name"
-msgstr ""
+msgstr "Name"
 
 msgid "Votes"
 msgstr "Stimmen"
@@ -279,8 +273,8 @@ msgstr "Lizenz: -"
 msgid "Summary"
 msgstr "Zusammenfassung"
 
-msgid "No description available."
-msgstr "Keine Beschreibung verfügbar."
+msgid "Show more"
+msgstr "Mehr anzeigen"
 
 msgid "App Permissions"
 msgstr "App-Berechtigungen"
@@ -664,7 +658,7 @@ msgid "View Changelog"
 msgstr "Änderungsprotokoll anzeigen"
 
 msgid "GitHub"
-msgstr ""
+msgstr "Github"
 
 msgid "Community fluxer"
 msgstr "Community-Fluxer"
@@ -851,16 +845,16 @@ msgid "None"
 msgstr "Keine"
 
 msgid "StaticUrl"
-msgstr ""
+msgstr "StaticUrl"
 
 msgid "GitLab"
-msgstr ""
+msgstr "GitLab"
 
 msgid "Codeberg"
-msgstr ""
+msgstr "Codeber"
 
 msgid "Forgejo"
-msgstr ""
+msgstr "Forgejo"
 
 #, csharp-format
 msgid "Update Available: {0}"
@@ -1106,8 +1100,15 @@ msgstr ""
 "Diese Befehle rufen Code ab und führen ihn aus, der außerhalb der Kontrolle "
 "von shelly und libalpm liegt. Überprüfen, bevor du fortfährst."
 
-msgid "Source files"
-msgstr "Quelldateien"
+#, csharp-format
+msgid "Warnings ({0})"
+msgstr "Warnungen ({0})"
+
+msgid "Changes"
+msgstr "Änderungen"
+
+msgid "Review Changes"
+msgstr "Änderungen überprüfen"
 
 msgid "Install Anyway"
 msgstr "Trotzdem installieren"
@@ -1140,6 +1141,9 @@ msgstr "Benutzerdaten und Konfiguration löschen"
 
 msgid "Keep Config?"
 msgstr "Konfiguration beibehalten?"
+
+msgid "Show less"
+msgstr "Weniger anzeigen"
 
 msgid "Name and URL are required"
 msgstr "Name und URL sind Pflichtangaben"
@@ -1294,11 +1298,14 @@ msgstr "Build-Datum"
 msgid "Required By"
 msgstr "Vorgeschrieben von"
 
+msgid "View Dependency Graph"
+msgstr "Abhängigkeitsgraph anzeigen"
+
 msgid "Failed to load packages."
 msgstr "Pakete laden fehlgeschlagen."
 
 msgid "--- Packages to Upgrade ---"
-msgstr "--- Zu aktualisierende Pakete ---"
+msgstr "--- Pakete zum Upgraden ---"
 
 msgid "Install Local Package"
 msgstr "Lokales Paket installieren"
@@ -1459,6 +1466,12 @@ msgstr "Flatpak installieren..."
 msgid "Reboot required to complete installation."
 msgstr "Neustart ist erforderlich, um die Installation abzuschließen."
 
+msgid "Missing Starfish"
+msgstr "Starfish fehlt"
+
+msgid "Installing starfish..."
+msgstr "Starfish installieren ..."
+
 msgid "Synchronizing databases..."
 msgstr "Datenbanken synchronisieren..."
 
@@ -1535,94 +1548,23 @@ msgstr "Installation von {0} Paket(en) fehlgeschlagen."
 msgid "Failed to remove packages: {0}"
 msgstr "Pakete entfernen fehlgeschlagen: {0}"
 
-#~ msgid "Follow system language"
-#~ msgstr "Systemsprache folgen"
+msgid "Package Statistics"
+msgstr "Paketstatistiken"
 
-#~ msgid "Export AUR install log"
-#~ msgstr "AUR-Installationsprotokoll exportieren"
+msgid "Total Aur"
+msgstr "AUR  gesamt"
 
-#~ msgid "Log Files (*.log)"
-#~ msgstr "Protokolldateien (*.log)"
+msgid "Total Packages"
+msgstr "Pakete gesamt"
 
-#~ msgid "Exported AUR install log"
-#~ msgstr "AUR-Installationsprotokoll exportiert"
+msgid "Total Flatpak"
+msgstr "Flatpak gesamt"
 
-#~ msgid "Failed to export AUR install log"
-#~ msgstr "AUR-Installationsprotokoll exportieren fehlgeschlagen"
+msgid "Up to date"
+msgstr "Auf dem neuesten Stand"
 
-#~ msgid "package"
-#~ msgstr "Paket"
+msgid "Calculating"
+msgstr "Berechnen"
 
-#~ msgid "packages"
-#~ msgstr "Pakete"
-
-#~ msgid "AUR installation failed"
-#~ msgstr "AUR-Installation fehlgeschlagen"
-
-#, csharp-format
-#~ msgid ""
-#~ "Shelly couldn't finish building or installing the selected AUR {0}. "
-#~ "Export the logs and attach them to your report so the team can check "
-#~ "whether the issue came from the PKGBUILD or from Shelly."
-#~ msgstr ""
-#~ "Shelly konnte den Aufbau oder die Installation des ausgewählten AUR {0} "
-#~ "nicht abschließen. Exportiere die Protokolle und füge sie deinem Bericht "
-#~ "bei, damit das Team überprüfen kann, ob das Problem vom PKGBUILD oder von "
-#~ "Shelly herrührt."
-
-#~ msgid "Recent output"
-#~ msgstr "Aktuelle Veröffentlichungen"
-
-#~ msgid "Export Logs"
-#~ msgstr "Protokolle exportieren"
-
-#~ msgid "Fingerprint Disable Instructions"
-#~ msgstr "Anleitung zum Deaktivieren der Fingerabdruckerkennung"
-
-#~ msgid "Disable fingerprint authentication for sudo"
-#~ msgstr "Fingerabdruck-Authentifizierung für sudo deaktivieren"
-
-#~ msgid "1. Inspect"
-#~ msgstr "1. Prüfen"
-
-#~ msgid "2. Disable for sudo"
-#~ msgstr "2. Für sudo deaktivieren"
-
-#~ msgid "3. Re-enable later"
-#~ msgstr "3. Später wieder aktivieren"
-
-#~ msgid "Copy"
-#~ msgstr "Kopieren"
-
-#, csharp-format
-#~ msgid "PKGBUILD Diff - {0}"
-#~ msgstr "PKGBUILD Diff - {0}"
-
-#~ msgid "Review the PKGBUILD changes before continuing."
-#~ msgstr "Änderungen am PKGBUILD überprüfen, bevor du fortfährst."
-
-#~ msgid "Accept Changes"
-#~ msgstr "Änderungen akzeptieren"
-
-#~ msgid "Package installation failed"
-#~ msgstr "Paketeinstallation ist fehlgeschlagen"
-
-#, csharp-format
-#~ msgid ""
-#~ "Shelly couldn't finish building or installing the selected {0}. Export "
-#~ "the logs and attach them to your report so the team can check whether the "
-#~ "issue came from the PKGBUILD or from Shelly."
-#~ msgstr ""
-#~ "Shelly konnte den Aufbau oder die Installation des ausgewählten {0} nicht "
-#~ "abschließen. Exportiere die Protokolle und füge sie deinem Bericht bei, "
-#~ "damit das Team überprüfen kann, ob das Problem auf das PKGBUILD oder auf "
-#~ "Shelly zurückzuführen ist."
-
-#~ msgid "Export Shelly install log"
-#~ msgstr "Shelly-Installationsprotokoll exportieren"
-
-#~ msgid "Exported Shelly install log"
-#~ msgstr "Shelly-Installationsprotokoll exportiert"
-
-#~ msgid "Failed to export Shelly install log"
-#~ msgstr "Shelly-Installationsprotokoll exportieren fehlgeschlagen"
+#~ msgid "No description available."
+#~ msgstr "Keine Beschreibung verfügbar."
