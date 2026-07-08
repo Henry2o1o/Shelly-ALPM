@@ -93,6 +93,26 @@ pub const Manager = struct {
         const syncDirectory = self.config.database_path ++ "/sync" orelse "/var/lib/pacman/sync";
         //Dropping the response as we don't care if it was successful or not just that it was done
         _ = try std.Io.Dir.cwd().createDirPath(self.io, syncDirectory);
+
+        var futures: std.ArrayList(std.Io.Future(void)) = .empty;
+        defer futures.deinit(self.allocator);
+
+        var dict_iterator = dict.map.iterator();
+        while (dict_iterator.next()) |entry| {
+            const database_name = entry.key_ptr.*;
+            const urls = entry.value_ptr.*;
+            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory }) catch {
+                self.download_database(database_name, urls, syncDirectory);
+                continue;
+            };
+
+            futures.append(self.allocator, future) catch {
+                var f = future;
+                f.await(self.io());
+            };
+        }
+
+        for (futures.items) |*future| future.await(self.io());
     }
 
     fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8) void {
