@@ -4,6 +4,7 @@ const events = @import("events.zig");
 const configuration = @import("configuration.zig");
 const builtin = @import("builtin");
 const downloader = @import("../shared/downloader.zig");
+const listDictionary = @import("../shared/list_dictionary.zig");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
@@ -72,10 +73,12 @@ pub const Manager = struct {
         defer databaseMap.deinit();
         self.package_download = false;
         if (self.handle == null) return libalpm.Error.HandleNull;
-        var database: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
-        if (database == null) return libalpm.Error.RegisterDbFailed;
-        while (database != null) : (database = database.?.next) {
-            const db = database.?.data orelse continue;
+        var databases: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
+        if (databases == null) return libalpm.Error.RegisterDbFailed;
+        var dict = listDictionary.ListDictionary.init(self.allocator);
+        defer dict.deinit();
+        while (databases != null) : (databases = databases.?.next) {
+            const db = databases.?.data orelse continue;
             var db_struct: libalpm.Database = .{ .ptr = db };
             var servers = db_struct.servers();
             while (servers != null) : (servers = servers.next()) {
@@ -83,8 +86,33 @@ pub const Manager = struct {
                 var server_urls = rawLibalpm.alpm_db_get_servers(server);
                 while (server_urls != null) : (server_urls = server_urls.?.next) {
                     const url = server_urls.?.data orelse continue;
-                    _ = url;
+                    dict.add(rawLibalpm.alpm_db_get_name(db), url);
                 }
+            }
+        }
+        const syncDirectory = self.config.database_path ++ "/sync" orelse "/var/lib/pacman/sync";
+        //Dropping the response as we don't care if it was successful or not just that it was done
+        _ = try std.Io.Dir.cwd().createDirPath(self.io, syncDirectory);
+    }
+
+    fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8) void {
+        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
+        var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
+        defer downloader_instance.deinit();
+        downloader_instance.setEventCallback(onDownloadEvent, self);
+
+        const dest = std.fs.path.join(self.allocator, &.{ sync_directory, database_name }) catch return;
+        defer self.allocator.free(dest);
+
+        for (urls.items) |url_base| {
+            const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name });
+            const db_sig_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db.sig", .{ url_base, database_name });
+            defer self.allocator.free(db_url);
+            defer self.allocator.free(db_sig_url);
+
+            switch (downloader_instance.downloadToFile(db_url, dest, false)) {
+                .success, .skipped => return,
+                .failure => continue,
             }
         }
     }
