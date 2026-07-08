@@ -66,16 +66,17 @@ pub const Manager = struct {
         return self;
     }
 
-    pub fn sync(self: *Manager, force: bool) InitError!void {
+    pub fn sync(self: *Manager, force: bool) libalpm.Error!void {
         _ = force;
         self.package_download = false;
-        if (self.handle == null) return InitError.InitFailed;
-        var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
-        if (sync_dbs == null) return InitError.RegisterDbFailed;
-        while (sync_dbs != null) : (sync_dbs = sync_dbs.?.next) {
-            const db = sync_dbs.?.data orelse continue;
-            var database: libalpm.Database = .{ .ptr = db };
-            if (database.name() != null) {}
+        if (self.handle == null) return libalpm.Error.HandleNull;
+        var database: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
+        if (database == null) return libalpm.Error.RegisterDbFailed;
+        while (database != null) : (database = database.?.next) {
+            const db = database.?.data orelse continue;
+            var db_struct: libalpm.Database = .{ .ptr = db };
+            var servers = db_struct.servers();
+            while (servers != null) : (servers = servers.next()) {}
         }
     }
 
@@ -94,6 +95,7 @@ pub const Manager = struct {
         _ = rawLibalpm.alpm_option_set_progresscb(h, progressCallback, self);
         _ = rawLibalpm.alpm_option_set_eventcb(h, eventCallback, self);
         _ = rawLibalpm.alpm_option_set_questioncb(h, questionCallback, self);
+        _ = rawLibalpm.alpm_option_set_fetchcb(h, fetchCallback, self);
     }
 
     fn applyConfig(self: *Manager, config: configuration.Configuration.Config, root: bool) void {
