@@ -3,6 +3,8 @@ const bindings = @import("bindings.zig");
 const events = @import("events.zig");
 const configuration = @import("configuration.zig");
 const builtin = @import("builtin");
+const downloader = @import("../shared/downloader.zig");
+const listDictionary = @import("../shared/list_dictionary.zig");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
@@ -65,16 +67,73 @@ pub const Manager = struct {
         return self;
     }
 
-    pub fn sync(self: *Manager, force: bool) InitError!void {
+    pub fn sync(self: *Manager, force: bool) libalpm.Error!void {
         _ = force;
+        var databaseMap = std.StringHashMap(std.ArrayList([]const u8)).init(self.allocator);
+        defer databaseMap.deinit();
         self.package_download = false;
-        if (self.handle == null) return InitError.InitFailed;
-        var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
-        if (sync_dbs == null) return InitError.RegisterDbFailed;
-        while (sync_dbs != null) : (sync_dbs = sync_dbs.?.next) {
-            const db = sync_dbs.?.data orelse continue;
-            var database: libalpm.Database = .{ .ptr = db };
-            if (database.name() != null) {}
+        if (self.handle == null) return libalpm.Error.HandleNull;
+        var databases: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
+        if (databases == null) return libalpm.Error.RegisterDbFailed;
+        var dict = listDictionary.ListDictionary.init(self.allocator);
+        defer dict.deinit();
+        while (databases != null) : (databases = databases.?.next) {
+            const db = databases.?.data orelse continue;
+            var db_struct: libalpm.Database = .{ .ptr = db };
+            var servers = db_struct.servers();
+            while (servers != null) : (servers = servers.next()) {
+                const server = servers.?.data orelse continue;
+                var server_urls = rawLibalpm.alpm_db_get_servers(server);
+                while (server_urls != null) : (server_urls = server_urls.?.next) {
+                    const url = server_urls.?.data orelse continue;
+                    dict.add(rawLibalpm.alpm_db_get_name(db), url);
+                }
+            }
+        }
+        const syncDirectory = self.config.database_path ++ "/sync" orelse "/var/lib/pacman/sync";
+        //Dropping the response as we don't care if it was successful or not just that it was done
+        _ = try std.Io.Dir.cwd().createDirPath(self.io, syncDirectory);
+
+        var futures: std.ArrayList(std.Io.Future(void)) = .empty;
+        defer futures.deinit(self.allocator);
+
+        var dict_iterator = dict.map.iterator();
+        while (dict_iterator.next()) |entry| {
+            const database_name = entry.key_ptr.*;
+            const urls = entry.value_ptr.*;
+            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory }) catch {
+                self.download_database(database_name, urls, syncDirectory);
+                continue;
+            };
+
+            futures.append(self.allocator, future) catch {
+                var f = future;
+                f.await(self.io());
+            };
+        }
+
+        for (futures.items) |*future| future.await(self.io());
+    }
+
+    fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8) void {
+        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
+        var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
+        defer downloader_instance.deinit();
+        downloader_instance.setEventCallback(onDownloadEvent, self);
+
+        const dest = std.fs.path.join(self.allocator, &.{ sync_directory, database_name }) catch return;
+        defer self.allocator.free(dest);
+
+        for (urls.items) |url_base| {
+            const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name });
+            const db_sig_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db.sig", .{ url_base, database_name });
+            defer self.allocator.free(db_url);
+            defer self.allocator.free(db_sig_url);
+
+            switch (downloader_instance.downloadToFile(db_url, dest, false)) {
+                .success, .skipped => return,
+                .failure => continue,
+            }
         }
     }
 
@@ -93,6 +152,7 @@ pub const Manager = struct {
         _ = rawLibalpm.alpm_option_set_progresscb(h, progressCallback, self);
         _ = rawLibalpm.alpm_option_set_eventcb(h, eventCallback, self);
         _ = rawLibalpm.alpm_option_set_questioncb(h, questionCallback, self);
+        _ = rawLibalpm.alpm_option_set_fetchcb(h, fetchCallback, self);
     }
 
     fn applyConfig(self: *Manager, config: configuration.Configuration.Config, root: bool) void {
@@ -260,6 +320,52 @@ pub const Manager = struct {
         const step2 = std.mem.replaceOwned(u8, self.allocator, step1, "$arch", resolved_arch) catch return null;
         defer self.allocator.free(step2);
         return self.allocator.dupeSentinel(u8, step2, 0) catch null;
+    }
+
+    fn fetchCallback(
+        ctx: ?*anyopaque,
+        url: [:0]const u8,
+        local_path: [:0]const u8,
+        force: bool,
+    ) callconv(.c) void {
+        const self: *Manager = @ptrCast(@alignCast(ctx));
+        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
+        var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
+        defer downloader_instance.deinit();
+
+        downloader_instance.setEventCallback(onDownloadEvent, self);
+        const result = downloader_instance.downloadToFile(url, local_path, !force);
+        switch (result) {
+            .succes => |succ| self.dispatcher.raiseInformational(.{ .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE, .message = succ.destination_path }),
+            .failure => |err| self.dispatcher.raiseError(.{ .message = if (err) |e| @errorName(e) else "download failed" }),
+            .skipped => |skip| self.dispatcher.raiseInformational(.{ .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE, .message = skip.destination_path }),
+        }
+    }
+
+    fn onDownloadEvent(ctx: ?*anyopaque, event: downloader.DownloadEvent) void {
+        const self: *Manager = @ptrCast(@alignCast(ctx));
+        const path = event.destination_path orelse "";
+        switch (event.event_type) {
+            .Start => self.dispatcher.raiseInformational(.{
+                .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_START,
+                .message = path,
+            }),
+            .Progress => if (event.progress) |p| self.dispatcher.raiseProgress(.{
+                .progress_type = @intCast(rawLibalpm.ALPM_PROGRESS_ADD_START), // pick an appropriate alpm_progress_t
+                .pkg_name = std.fs.path.basename(path),
+                .percent = p.percent,
+                .howmany = 1,
+                .current = 1,
+            }),
+            .Complete => self.dispatcher.raiseInformational(.{
+                .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE,
+                .message = path,
+            }),
+            .Error => self.dispatcher.raiseError(.{
+                .message = if (event.download_error) |e| @errorName(e) else "download failed",
+            }),
+            .Skipped => {},
+        }
     }
 
     fn progressCallback(
