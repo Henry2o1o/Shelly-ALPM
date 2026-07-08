@@ -76,7 +76,14 @@ pub const Manager = struct {
             const db = database.?.data orelse continue;
             var db_struct: libalpm.Database = .{ .ptr = db };
             var servers = db_struct.servers();
-            while (servers != null) : (servers = servers.next()) {}
+            while (servers != null) : (servers = servers.next()) {
+                const server = servers.?.data orelse continue;
+                var server_urls = rawLibalpm.alpm_db_get_servers(server);
+                while (server_urls != null) : (server_urls = server_urls.?.next) {
+                    const url = server_urls.?.data orelse continue;
+                    _ = url;
+                }
+            }
         }
     }
 
