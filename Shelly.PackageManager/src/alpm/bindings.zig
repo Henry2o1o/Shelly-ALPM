@@ -438,7 +438,7 @@ pub const libalpm = struct {
     };
 
     pub const RemovePackagesQuestion = struct {
-        ptr: *alpm.alpm_question_remove_t,
+        ptr: *alpm.alpm_question_remove_pkgs_t,
 
         pub fn from(data: *anyopaque) ?RemovePackagesQuestion {
             return .{ .ptr = @ptrCast(@alignCast(data)) };

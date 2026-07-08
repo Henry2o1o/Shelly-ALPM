@@ -26,7 +26,9 @@ pub const TransactionError = error{
     UnsatisfiedDeps,
     ConflictingDeps,
     FileConflicts,
+    SyncDbFailed,
 };
+
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
 pub const Manager = struct {
@@ -52,7 +54,9 @@ pub const Manager = struct {
             .threaded = .init(allocator, .{}),
             .config = undefined,
         };
-        self.config = configuration.Configuration.parse(allocator, self.io(), database_path);
+        self.config = configuration.Configuration.parse(allocator, self.io(), database_path) catch {
+            return InitError.ConfigParseFailed;
+        };
 
         var err: rawLibalpm.alpm_errno_t = 0;
         const handle = rawLibalpm.alpm_initialize(root, database_path, &err) orelse {
@@ -67,31 +71,27 @@ pub const Manager = struct {
         return self;
     }
 
-    pub fn sync(self: *Manager, force: bool) libalpm.Error!void {
+    pub fn sync(self: *Manager, force: bool) TransactionError!void {
         var databaseMap = std.StringHashMap(std.ArrayList([]const u8)).init(self.allocator);
         defer databaseMap.deinit();
         self.package_download = false;
-        if (self.handle == null) return libalpm.Error.HandleNull;
+        if (self.handle == null) return TransactionError.SyncDbFailed;
         var databases: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
-        if (databases == null) return libalpm.Error.RegisterDbFailed;
+        if (databases == null) return TransactionError.SyncDbFailed;
         var dict = listDictionary.ListDictionary.init(self.allocator);
         defer dict.deinit();
         while (databases != null) : (databases = databases.?.next) {
             const db = databases.?.data orelse continue;
             var db_struct: libalpm.Database = .{ .ptr = db };
+            const db_name: []const u8 = db_struct.name() orelse continue;
             var servers = db_struct.servers();
-            while (servers != null) : (servers = servers.next()) {
-                const server = servers.?.data orelse continue;
-                var server_urls = rawLibalpm.alpm_db_get_servers(server);
-                while (server_urls != null) : (server_urls = server_urls.?.next) {
-                    const url = server_urls.?.data orelse continue;
-                    dict.add(rawLibalpm.alpm_db_get_name(db), url);
-                }
+            while (servers.next()) |server| {
+                try dict.add(db_name, server);
             }
         }
-        const syncDirectory = self.config.database_path ++ "/sync" orelse "/var/lib/pacman/sync";
+        const syncDirectory = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.config.database_path, "/sync" });
         //Dropping the response as we don't care if it was successful or not just that it was done
-        _ = try std.Io.Dir.cwd().createDirPath(self.io, syncDirectory);
+        _ = try std.Io.Dir.cwd().createDirPath(self.io(), syncDirectory);
 
         var futures: std.ArrayList(std.Io.Future(void)) = .empty;
         defer futures.deinit(self.allocator);
@@ -319,23 +319,39 @@ pub const Manager = struct {
         return self.allocator.dupeSentinel(u8, step2, 0) catch null;
     }
 
+    // Matches libalpm's `alpm_cb_fetch`: receives C strings and an int flag and
+    // returns 0 (downloaded), 1 (already up to date), or -1 (error).
     fn fetchCallback(
         ctx: ?*anyopaque,
-        url: [:0]const u8,
-        local_path: [:0]const u8,
-        force: bool,
-    ) callconv(.c) void {
+        url: [*c]const u8,
+        local_path: [*c]const u8,
+        force: c_int,
+    ) callconv(.c) c_int {
         const self: *Manager = @ptrCast(@alignCast(ctx));
+
+        // libalpm may hand us null pointers; treat that as a hard error.
+        if (url == null or local_path == null) return -1;
+        const url_slice = std.mem.span(url);
+        const local_slice = std.mem.span(local_path);
+
         const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
 
         downloader_instance.setEventCallback(onDownloadEvent, self);
-        const result = downloader_instance.downloadToFile(url, local_path, force);
-        switch (result) {
-            .succes => |succ| self.dispatcher.raiseInformational(.{ .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE, .message = succ.destination_path }),
-            .failure => |err| self.dispatcher.raiseError(.{ .message = if (err) |e| @errorName(e) else "download failed" }),
-            .skipped => |skip| self.dispatcher.raiseInformational(.{ .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE, .message = skip.destination_path }),
+        switch (downloader_instance.downloadToFile(url_slice, local_slice, force != 0)) {
+            .succes => |succ| {
+                self.dispatcher.raiseInformational(.{ .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE, .message = succ.destination_path });
+                return 0;
+            },
+            .skipped => |skip| {
+                self.dispatcher.raiseInformational(.{ .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE, .message = skip.destination_path });
+                return 1;
+            },
+            .failure => |err| {
+                self.dispatcher.raiseError(.{ .message = @errorName(err) });
+                return -1;
+            },
         }
     }
 
