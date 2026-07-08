@@ -68,7 +68,7 @@ pub const AppImageManager = struct {
         try writer.interface.flush();
     }
 
-    fn setExecutable(self: AppImageManager, path: []const u8) !void {
+    pub fn setExecutable(self: AppImageManager, path: []const u8) !void {
         var proc = try std.process.spawn(self.io, .{
             .argv = &.{ "chmod", "a+x", path },
             .stdin = .ignore,

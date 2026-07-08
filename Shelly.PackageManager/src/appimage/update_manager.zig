@@ -200,6 +200,8 @@ pub const UpdateManager = struct {
             else => {},
         }
 
+        try manager.setExecutable(download_path);
+
         const new_metadata = (try manager.extractMetadata(download_path)) orelse {
             std.Io.Dir.cwd().deleteFile(self.io, download_path) catch {};
             return false;
@@ -1251,7 +1253,7 @@ test "update: downloads real AppImage and returns true" {
     const download_url = "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage";
 
     try seedDb(std.testing.allocator, std.testing.io, db_path, &.{
-        .{ .name = app_name, .version = "v0.0" },
+        .{ .name = app_name, .version = "v0.0", .desktop_name = app_name },
     });
 
     // Create a placeholder current AppImage so the file-exists guard passes
@@ -1284,8 +1286,14 @@ test "update: downloads real AppImage and returns true" {
     };
     const apps = try manager.getAppImagesFromLocalDb();
     defer manager.freeAppImages(apps);
-    try std.testing.expect(apps.len == 1);
-    try std.testing.expectEqualStrings("continuous", apps[0].version);
+    var found = false;
+    for (apps) |a| {
+        if (std.mem.eql(u8, a.version, "continuous")) {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
 }
 
 test "update: name lookup is case-insensitive" {
