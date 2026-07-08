@@ -68,7 +68,6 @@ pub const Manager = struct {
     }
 
     pub fn sync(self: *Manager, force: bool) libalpm.Error!void {
-        _ = force;
         var databaseMap = std.StringHashMap(std.ArrayList([]const u8)).init(self.allocator);
         defer databaseMap.deinit();
         self.package_download = false;
@@ -101,8 +100,8 @@ pub const Manager = struct {
         while (dict_iterator.next()) |entry| {
             const database_name = entry.key_ptr.*;
             const urls = entry.value_ptr.*;
-            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory }) catch {
-                self.download_database(database_name, urls, syncDirectory);
+            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory, force }) catch {
+                self.download_database(database_name, urls, syncDirectory, force);
                 continue;
             };
 
@@ -115,7 +114,7 @@ pub const Manager = struct {
         for (futures.items) |*future| future.await(self.io());
     }
 
-    fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8) void {
+    fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8, force_download: bool) void {
         const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
@@ -125,13 +124,11 @@ pub const Manager = struct {
         defer self.allocator.free(dest);
 
         for (urls.items) |url_base| {
-            const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name });
-            const db_sig_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db.sig", .{ url_base, database_name });
+            const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name }) catch continue;
             defer self.allocator.free(db_url);
-            defer self.allocator.free(db_sig_url);
 
-            switch (downloader_instance.downloadToFile(db_url, dest, false)) {
-                .success, .skipped => return,
+            switch (downloader_instance.downloadToFile(db_url, dest, force_download)) {
+                .succes, .skipped => return,
                 .failure => continue,
             }
         }
@@ -334,7 +331,7 @@ pub const Manager = struct {
         defer downloader_instance.deinit();
 
         downloader_instance.setEventCallback(onDownloadEvent, self);
-        const result = downloader_instance.downloadToFile(url, local_path, !force);
+        const result = downloader_instance.downloadToFile(url, local_path, force);
         switch (result) {
             .succes => |succ| self.dispatcher.raiseInformational(.{ .event_type = rawLibalpm.ALPM_EVENT_PKG_RETRIEVE_DONE, .message = succ.destination_path }),
             .failure => |err| self.dispatcher.raiseError(.{ .message = if (err) |e| @errorName(e) else "download failed" }),
