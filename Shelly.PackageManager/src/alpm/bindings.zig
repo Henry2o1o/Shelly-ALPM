@@ -381,7 +381,7 @@ pub const libalpm = struct {
         }
 
         pub fn package(self: InstallIgnoredQuestion) Package {
-            return .{ .ptr = self.ptr.pkg };
+            return .{ .ptr = self.ptr.pkg.? };
         }
     };
 
@@ -397,11 +397,11 @@ pub const libalpm = struct {
         }
 
         pub fn old_package(self: ReplacePackageQuestion) Package {
-            return .{ .ptr = self.ptr.oldpkg };
+            return .{ .ptr = self.ptr.oldpkg.? };
         }
 
         pub fn new_package(self: ReplacePackageQuestion) Package {
-            return .{ .ptr = self.ptr.newpkg };
+            return .{ .ptr = self.ptr.newpkg.? };
         }
 
         pub fn new_database(self: ReplacePackageQuestion) Database {
@@ -425,7 +425,7 @@ pub const libalpm = struct {
         }
 
         pub fn filepath(self: RemoveCorruptedPackagesQuestion) [:0]const u8 {
-            return str(self.ptr.filepath);
+            return str(self.ptr.filepath) orelse "";
         }
 
         pub fn reason(self: RemoveCorruptedPackagesQuestion) Error {
@@ -438,7 +438,7 @@ pub const libalpm = struct {
     };
 
     pub const RemovePackagesQuestion = struct {
-        ptr: *alpm.alpm_question_remove_t,
+        ptr: *alpm.alpm_question_remove_pkgs_t,
 
         pub fn from(data: *anyopaque) ?RemovePackagesQuestion {
             return .{ .ptr = @ptrCast(@alignCast(data)) };
