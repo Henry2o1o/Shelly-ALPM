@@ -123,6 +123,23 @@ pub const libalpm = struct {
         pub fn unregister(self: Database) bool {
             return alpm.alpm_db_unregister(self.ptr) == 0;
         }
+
+        pub fn verifyAndReport(self: Database) bool {
+            var siglist: alpm.alpm_siglist_t = .{};
+            defer _ = alpm.alpm_siglist_cleanup(&siglist);
+            const ret = alpm.alpm_db_check_pgp_signature(self.ptr, &siglist);
+            if (ret == 0) return true;
+            var i: usize = 0;
+            while (i < siglist.count) : (i += 1) {
+                const r = siglist.results[i];
+                if (r.status != alpm.ALPM_SIGSTATUS_VALID) {
+                    std.log.warn("{s}.db signature bad: status={d} validity={d}", .{
+                        self.name() orelse "?", @intFromEnum(r.status), @intFromEnum(r.validity),
+                    });
+                }
+            }
+            return false;
+        }
     };
 
     pub const Package = struct {
@@ -489,7 +506,7 @@ pub const libalpm = struct {
         }
 
         pub fn import(self: ImportKeyQuestion, confirmImport: bool) void {
-            if (confirmImport) self.ptr.confirm = 1 else self.ptr.confirm = 0;
+            if (confirmImport) self.ptr.import = 1 else self.ptr.import = 0;
         }
 
         pub fn uid(self: ImportKeyQuestion) ?[:0]const u8 {
