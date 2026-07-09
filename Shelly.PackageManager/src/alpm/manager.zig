@@ -19,15 +19,7 @@ pub const InitError = error{
     RegisterDbFailed,
     ConfigParseFailed,
 };
-pub const TransactionError = error{
-    TransInitFailed,
-    PrepareFailed,
-    CommitFailed,
-    UnsatisfiedDeps,
-    ConflictingDeps,
-    FileConflicts,
-    SyncDbFailed,
-};
+pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
@@ -180,6 +172,22 @@ pub const Manager = struct {
             std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
             return TransactionError.SyncDbFailed;
         }
+    }
+
+    pub fn get_installed_packages(self: *Manager) TransactionError!std.ArrayList(libalpm.Package) {
+        if (self.handle == null) return TransactionError.NoHandle;
+        const database = rawLibalpm.alpm_get_localdb(self.handle);
+        const packages: libalpm.DatabaseList = rawLibalpm.alpm_db_get_pkgcache(database);
+        var package_list: std.ArrayList(libalpm.Package) = .empty;
+        var pkg_ptr = packages;
+        while (pkg_ptr != null) : (pkg_ptr = pkg_ptr.?.*.next) {
+            const package_ptr = pkg_ptr.?.data orelse continue;
+            const package = libalpm.Package.from(package_ptr) orelse continue;
+            package_list.append(self.allocator, package) catch {
+                return TransactionError.PackageFetchFailed;
+            };
+        }
+        return package_list;
     }
 
     fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8, force_download: bool) void {
@@ -1218,4 +1226,37 @@ test "Manager.sync downloads the configured database into DBPath/sync" {
     defer allocator.free(core_db);
     const stat = try std.Io.Dir.cwd().statFile(io, core_db, .{});
     try testing.expect(stat.size > 0);
+}
+
+// ---------------------------------------------------------------------------
+// get_installed_packages
+// ---------------------------------------------------------------------------
+
+test "get_installed_packages returns NoHandle when the handle is null" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    mgr.allocator = testing.allocator;
+
+    const result = mgr.get_installed_packages();
+    try testing.expectError(error.NoHandle, result);
+}
+
+test "get_installed_packages returns an empty list when no packages are installed" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    var packages = try mgr.get_installed_packages();
+    defer packages.deinit(mgr.allocator);
+
+    // A fresh temporary database has no installed packages.
+    try testing.expectEqual(@as(usize, 0), packages.items.len);
 }
