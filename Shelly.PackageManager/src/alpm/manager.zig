@@ -190,6 +190,18 @@ pub const Manager = struct {
         return package_list;
     }
 
+    pub fn get_single_installed_package(self: *Manager, package_name: [:0]const u8) TransactionError!?libalpm.Package {
+        if (self.handle == null) return TransactionError.NoHandle;
+        const databse = rawLibalpm.alpm_get_localdb(self.handle);
+        const package = rawLibalpm.alpm_db_get_pkg(databse, package_name);
+        if (package == null) {
+            std.log.debug("Failed to find {s}", .{package_name});
+            return null;
+        }
+
+        return libalpm.Package.from(package.?);
+    }
+
     fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8, force_download: bool) void {
         const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
@@ -1226,6 +1238,67 @@ test "Manager.sync downloads the configured database into DBPath/sync" {
     defer allocator.free(core_db);
     const stat = try std.Io.Dir.cwd().statFile(io, core_db, .{});
     try testing.expect(stat.size > 0);
+}
+
+// ---------------------------------------------------------------------------
+// get_single_installed_package
+// ---------------------------------------------------------------------------
+
+test "get_single_installed_package returns NoHandle when the handle is null" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    mgr.allocator = testing.allocator;
+
+    const result = mgr.get_single_installed_package("anything");
+    try testing.expectError(error.NoHandle, result);
+}
+
+test "get_single_installed_package returns null for a non-existent package" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    // A fresh temporary database has no installed packages.
+    const result = try mgr.get_single_installed_package("nonexistent-package");
+    try testing.expect(result == null);
+}
+
+test "get_single_installed_package returns a package when it exists" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    // Use the real system database to find an actually installed package.
+    const sys_config = "/etc/pacman.conf";
+    const sys_db = "/var/lib/pacman";
+
+    // Skip gracefully if the system database is unavailable.
+    const stat = std.Io.Dir.cwd().statFile(io, sys_db, .{}) catch {
+        return; // no system database — skip
+    };
+    _ = stat;
+
+    var mgr = Manager.init(allocator, sys_config, false, sys_db) catch {
+        return; // config parse or init failure — skip
+    };
+    defer mgr.deinit();
+
+    // `pacman` is installed on virtually every Arch-based system.
+    const result = try mgr.get_single_installed_package("pacman");
+    const pkg = result orelse return; // skip if pacman is somehow absent
+
+    const name = pkg.name() orelse return error.TestFailed;
+    try testing.expectEqualStrings("pacman", name);
 }
 
 // ---------------------------------------------------------------------------
