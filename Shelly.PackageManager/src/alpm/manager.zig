@@ -169,22 +169,16 @@ pub const Manager = struct {
 
         for (futures.items) |*future| future.await(self.io());
 
-        const sig_database: i32 = @intCast(@intFromEnum(libalpm.SigLevel.database));
-        const sig_optional: i32 = @intCast(@intFromEnum(libalpm.SigLevel.database_optional));
         for (self.sync_dbs.items) |db| {
-            const level = db.sigLevel();
-            // do only when needed for sig enorcement
-            if (level & sig_database == 0 or level & sig_optional != 0) continue;
-            if (db.checkPgpSignature() != 0) {
-                const name = db.name() orelse continue;
-                const db_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ syncDirectory, name }) catch continue;
-                defer self.allocator.free(db_path);
-                const sig_path = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_path}) catch continue;
-                defer self.allocator.free(sig_path);
-                std.Io.Dir.cwd().deleteFile(self.io(), db_path) catch {};
-                std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
-                return TransactionError.SyncDbFailed;
-            }
+            if (db.verify()) continue;
+            const name = db.name() orelse continue;
+            const db_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ syncDirectory, name }) catch continue;
+            defer self.allocator.free(db_path);
+            const sig_path = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_path}) catch continue;
+            defer self.allocator.free(sig_path);
+            std.Io.Dir.cwd().deleteFile(self.io(), db_path) catch {};
+            std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
+            return TransactionError.SyncDbFailed;
         }
     }
 

@@ -116,10 +116,49 @@ pub const libalpm = struct {
             return @intCast(alpm.alpm_db_get_siglevel(self.ptr));
         }
 
+        // Basic sig validity
         pub fn checkPgpSignature(self: Database) c_int {
             var siglist: alpm.alpm_siglist_t = .{};
             defer _ = alpm.alpm_siglist_cleanup(&siglist);
             return alpm.alpm_db_check_pgp_signature(self.ptr, &siglist);
+        }
+
+        // Full context aware sig validation
+        pub fn verify(self: Database) bool {
+            const level: c_int = @intCast(alpm.alpm_db_get_siglevel(self.ptr));
+            // Database signature checking not enabled -> nothing to enforce.
+            if (level & alpm.ALPM_SIG_DATABASE == 0) return true;
+
+            const optional = level & alpm.ALPM_SIG_DATABASE_OPTIONAL != 0;
+            const marginal_ok = level & alpm.ALPM_SIG_DATABASE_MARGINAL_OK != 0;
+            const unknown_ok = level & alpm.ALPM_SIG_DATABASE_UNKNOWN_OK != 0;
+
+            var siglist: alpm.alpm_siglist_t = .{};
+            defer _ = alpm.alpm_siglist_cleanup(&siglist);
+
+            if (alpm.alpm_db_check_pgp_signature(self.ptr, &siglist) != 0) {
+                // The only tolerable failure is a missing-but-optional signature.
+                const errno: c_int = @intCast(alpm.alpm_errno(alpm.alpm_db_get_handle(self.ptr)));
+                return optional and errno == alpm.ALPM_ERR_SIG_MISSING;
+            }
+
+            // A signature is present: every result must be valid and trusted to
+            // the configured level (libalpm groups VALID and KEY_EXPIRED as valid).
+            var i: usize = 0;
+            while (i < siglist.count) : (i += 1) {
+                const status: c_int = @intCast(siglist.results[i].status);
+                const validity: c_int = @intCast(siglist.results[i].validity);
+                switch (status) {
+                    alpm.ALPM_SIGSTATUS_VALID, alpm.ALPM_SIGSTATUS_KEY_EXPIRED => switch (validity) {
+                        alpm.ALPM_SIGVALIDITY_FULL => {},
+                        alpm.ALPM_SIGVALIDITY_MARGINAL => if (!marginal_ok) return false,
+                        alpm.ALPM_SIGVALIDITY_UNKNOWN => if (!unknown_ok) return false,
+                        else => return false, // NEVER
+                    },
+                    else => return false, // SIG_EXPIRED, KEY_UNKNOWN, KEY_DISABLED, INVALID
+                }
+            }
+            return true;
         }
 
         pub fn handle(self: Database) Handle {
