@@ -116,6 +116,12 @@ pub const libalpm = struct {
             return @intCast(alpm.alpm_db_get_siglevel(self.ptr));
         }
 
+        pub fn checkPgpSignature(self: Database) c_int {
+            var siglist: alpm.alpm_siglist_t = .{};
+            defer _ = alpm.alpm_siglist_cleanup(&siglist);
+            return alpm.alpm_db_check_pgp_signature(self.ptr, &siglist);
+        }
+
         pub fn handle(self: Database) Handle {
             return alpm.alpm_db_get_handle(self.ptr);
         }

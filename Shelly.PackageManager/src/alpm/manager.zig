@@ -145,7 +145,8 @@ pub const Manager = struct {
         };
         defer self.allocator.free(syncDirectory);
 
-        //Dropping the response as we don't care if it was successful or not just that it was done
+        //Dropping the response as we don't care if it was successful or not just that it was done.
+        // This will never come back to bite me right?
         if (std.Io.Dir.cwd().createDirPath(self.io(), syncDirectory)) |_| {} else |_| {}
 
         var futures: std.ArrayList(std.Io.Future(void)) = .empty;
@@ -168,10 +169,20 @@ pub const Manager = struct {
 
         for (futures.items) |*future| future.await(self.io());
 
+        const sig_database: i32 = @intCast(@intFromEnum(libalpm.SigLevel.database));
+        const sig_optional: i32 = @intCast(@intFromEnum(libalpm.SigLevel.database_optional));
         for (self.sync_dbs.items) |db| {
+            const level = db.sigLevel();
+            // do only when needed for sig enorcement
+            if (level & sig_database == 0 or level & sig_optional != 0) continue;
             if (db.checkPgpSignature() != 0) {
                 const name = db.name() orelse continue;
-                // remove <name>.db and <name>.db.sig from syncDirectory, return error
+                const db_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ syncDirectory, name }) catch continue;
+                defer self.allocator.free(db_path);
+                const sig_path = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_path}) catch continue;
+                defer self.allocator.free(sig_path);
+                std.Io.Dir.cwd().deleteFile(self.io(), db_path) catch {};
+                std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
                 return TransactionError.SyncDbFailed;
             }
         }
@@ -182,16 +193,22 @@ pub const Manager = struct {
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
         downloader_instance.setEventCallback(onDownloadEvent, self);
-
-        const dest = std.fs.path.join(self.allocator, &.{ sync_directory, database_name }) catch return;
+        const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ sync_directory, database_name }) catch return;
         defer self.allocator.free(dest);
+        const sig_dest = std.fmt.allocPrint(self.allocator, "{s}.sig", .{dest}) catch return;
+        defer self.allocator.free(sig_dest);
 
         for (urls.items) |url_base| {
             const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name }) catch continue;
             defer self.allocator.free(db_url);
 
             switch (downloader_instance.downloadToFile(db_url, dest, force_download)) {
-                .succes, .skipped => return,
+                .succes, .skipped => {
+                    const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
+                    defer self.allocator.free(sig_url);
+                    _ = downloader_instance.downloadToFile(sig_url, sig_dest, force_download);
+                    return;
+                },
                 .failure => continue,
             }
         }
@@ -1133,8 +1150,9 @@ const SyncTestWorkspace = struct {
                 "SigLevel = Never\n" ++
                 "DBPath = {s}\n" ++
                 "\n" ++
-                "[core]\n" ++
-                "Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch\n",
+                "[seafoam-labs]\n" ++
+                "Server =  https://repo.seafoam-labs.org/x86_64\n",
+            //"Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch\n",
             .{db_path},
         );
         defer allocator.free(config);
@@ -1202,7 +1220,7 @@ test "Manager.sync downloads the configured database into DBPath/sync" {
     defer allocator.free(sync_dir);
     _ = try std.Io.Dir.cwd().statFile(io, sync_dir, .{});
 
-    const core_db = try std.fmt.allocPrint(allocator, "{s}/core", .{sync_dir});
+    const core_db = try std.fmt.allocPrint(allocator, "{s}/seafoam-labs.db", .{sync_dir});
     defer allocator.free(core_db);
     const stat = try std.Io.Dir.cwd().statFile(io, core_db, .{});
     try testing.expect(stat.size > 0);
