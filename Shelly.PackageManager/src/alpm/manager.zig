@@ -219,6 +219,7 @@ pub const Manager = struct {
         defer packages.deinit(self.allocator);
 
         var foreign_packages: std.ArrayList(libalpm.Package) = .empty;
+        defer foreign_packages.deinit(self.allocator);
         errdefer foreign_packages.deinit(self.allocator);
 
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
@@ -245,13 +246,14 @@ pub const Manager = struct {
             errdefer filtered_packages.deinit(self.allocator);
             for (foreign_packages.items) |*package| {
                 var ignored: bool = false;
+                const name = package.name() orelse continue;
                 for (self.config.ignore_package.items) |ignore| {
-                    if (std.mem.eql(u8, package.name, ignore)) {
+                    if (std.mem.eql(u8, name, ignore)) {
                         ignored = true;
                         break;
                     }
                 }
-                if (!ignored) filtered_packages.append(self.allocator, package);
+                if (!ignored) filtered_packages.append(self.allocator, package.*) catch return TransactionError.PackageFetchFailed;
             }
             return filtered_packages;
         }
