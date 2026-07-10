@@ -36,6 +36,7 @@ pub const Manager = struct {
     package_download: bool = false,
     is_root: bool = false,
     temp_root_path: []const u8,
+    show_hidden_packages: bool = false,
 
     /// If null is passed for config it will use the default /etc/pacman.conf
     pub fn init(allocator: std.mem.Allocator, configPath: ?[]const u8, use_root: bool, temp_root_path: ?[]const u8) InitError!Manager {
@@ -110,6 +111,11 @@ pub const Manager = struct {
         self.applyConfig(self.config, self.is_root);
         self.setupCallbacks();
         return self;
+    }
+
+    pub fn toggle_hidden_packages(self: *Manager) bool {
+        self.show_hidden_packages = !self.show_hidden_packages;
+        return self.show_hidden_packages;
     }
 
     pub fn sync(self: *Manager, force: bool) TransactionError!void {
@@ -233,6 +239,21 @@ pub const Manager = struct {
                     return TransactionError.PackageFetchFailed;
                 };
             }
+        }
+        if (!self.show_hidden_packages) {
+            var filtered_packages: std.ArrayList(libalpm.Package) = .empty;
+            errdefer filtered_packages.deinit(self.allocator);
+            for (foreign_packages.items) |*package| {
+                var ignored: bool = false;
+                for (self.config.ignore_package.items) |ignore| {
+                    if (std.mem.eql(u8, package.name, ignore)) {
+                        ignored = true;
+                        break;
+                    }
+                }
+                if (!ignored) filtered_packages.append(self.allocator, package);
+            }
+            return filtered_packages;
         }
         return foreign_packages;
     }
