@@ -280,24 +280,127 @@ pub const Manager = struct {
         return packages;
     }
 
-    pub fn get_updates_available(self: *Manager) TransactionError!void {
+    pub fn get_updates_available(self: *Manager) TransactionError!std.ArrayList(libalpm.PackageWithUpdate) {
         if (self.handle == null) return TransactionError.NoHandle;
         var package_updates: std.ArrayList(libalpm.PackageWithUpdate) = .empty;
-        defer package_updates.deinit();
+        defer package_updates.deinit(self.allocator);
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
         const local_packages = self.get_installed_packages() catch {
             return TransactionError.PackageFetchFailed;
         };
         for (local_packages.items) |local_pkg| {
-            const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg, sync_databases) orelse continue;
-            package_updates.append(.{
-                .old_package = local_pkg,
-                .new_package = new_version,
+            const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg.ptr, sync_databases) orelse continue;
+            package_updates.append(self.allocator, .{
+                .old_package = .{ .ptr = local_pkg.ptr },
+                .new_package = .{ .ptr = new_version },
             }) catch {
                 return TransactionError.PackageFetchFailed;
             };
         }
         return package_updates;
+    }
+
+    pub fn install_packages(
+        self: *Manager,
+        package_names: [][:0]const u8,
+        trans_flags: [][]const bindings.libalpm.TransFlag,
+    ) TransactionError!void {
+        const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        _ = trans_flags;
+        if (self.handle == null) return TransactionError.NoHandle;
+        var packages: std.ArrayList(rawLibalpm.alpm_pkg_t) = .empty;
+        defer packages.deinit(self.allocator);
+        var repo_package = std.StringHashMap([:0]const u8);
+        repo_package.init(self.allocator);
+        defer repo_package.deinit();
+        var name_only_packages: std.ArrayList([:0]const u8) = .empty;
+        defer name_only_packages.deinit(self.allocator);
+
+        // Split package names into repo/pkg and name-only packages
+        for (package_names) |name| {
+            const split = std.mem.splitScalar([]const u8, name, '/');
+            if (split.buffer == null) continue;
+            const repo = split.next() orelse {
+                name_only_packages.append(self.allocator, name) orelse continue;
+                continue;
+            };
+            const pkg_name = split.next() orelse continue;
+            repo_package.put(pkg_name, repo);
+        }
+
+        var sync_dbs = sync_databases.*;
+        while (sync_dbs != null) : (sync_dbs = sync_dbs.next()) {
+            var repo_package_iterator = repo_package.iterator();
+            const db_ptr = sync_dbs.data orelse continue;
+            const db: libalpm.Database = .{ .ptr = db_ptr };
+
+            // Iterates repo/pkg combinations
+            while (repo_package_iterator.next()) |entry| {
+                if (std.ascii.eqlIgnoreCase(entry.value_ptr.*, db.name() orelse "")) {
+                    const temp_pkg = db.getPackage(entry.key) orelse continue;
+                    packages.append(self.allocator, temp_pkg.ptr) catch {
+                        return TransactionError.PrepareFailed;
+                    };
+
+                    const message = try std.fmt.allocPrint(self.allocator, "Found package {s} in repository {s}", .{ entry.key_ptr.*, entry.value_ptr.* });
+                    defer self.allocator.free(message);
+                    self.dispatcher.raiseInformational(.{ .message = message });
+                    _ = repo_package.remove(entry.key_ptr.*);
+                    break;
+                }
+            }
+        }
+
+        if (repo_package.count() > 0) {
+            var repo_package_iterator = repo_package.iterator();
+            while (repo_package_iterator.next()) |entry| {
+                const message = try std.fmt.allocPrint(self.allocator, "Package {s} not found in any repository", .{entry.key_ptr.*});
+                defer self.allocator.free(message);
+                self.dispatcher.raiseInformational(.{ .message = message });
+            }
+        }
+
+        //TODO: this should be refactored to completely replace the iteration with a multithreaded approach and resolution
+        // currently single threaded and exact copy of the original c# implementation
+        //Iterates name only input checking in a single db for correct pkg in the order of pkg->group pkg->generic satisfier
+        for (name_only_packages.items) |package_name| {
+            // reassigning to head to iterate again
+            sync_dbs = sync_databases.*;
+            while (sync_dbs != null) : (sync_dbs = sync_dbs.next()) {
+                const db_ptr = sync_dbs.data orelse continue;
+                const db: libalpm.Database = .{ .ptr = db_ptr };
+                // Lookgs for pkgname match falls to group if fails
+                const pkg = rawLibalpm.alpm_db_get_pkg(db.ptr, package_name) orelse {
+                    // Looks for group match falls to satisfier if fails
+                    const group = rawLibalpm.alpm_db_get_group(db.ptr, package_name.ptr) orelse {
+                        // Looks for satisfier gives up if fails and moves to next db
+                        const pkg_cache = rawLibalpm.alpm_db_get_pkgcache(db.ptr) orelse {
+                            continue;
+                        };
+                        // I guess I'll definitely die and go to the next db if this fails
+                        const match = rawLibalpm.alpm_find_satisfier(pkg_cache, package_name.ptr) orelse {
+                            continue;
+                        };
+                        packages.append(self.allocator, match) orelse {
+                            return TransactionError.PrepareFailed;
+                        };
+                        break;
+                    };
+                    var group_packages = group.*.packages.?.*;
+                    while (group_packages != null) : (group_packages = group_packages.next()) {
+                        const pkg = group_packages.data.?;
+                        packages.append(self.allocator, pkg) orelse {
+                            return TransactionError.PrepareFailed;
+                        };
+                    }
+                    break;
+                };
+                packages.append(self.allocator, pkg) orelse {
+                    return TransactionError.PrepareFailed;
+                };
+                break;
+            }
+        }
     }
 
     fn refresh(self: *Manager) TransactionError!void {
@@ -1914,4 +2017,78 @@ test "toggle_hidden_packages flips state and returns the new value" {
     try testing.expectEqual(true, mgr.show_hidden_packages);
     try testing.expectEqual(false, mgr.toggle_hidden_packages());
     try testing.expectEqual(false, mgr.show_hidden_packages);
+}
+
+// ---------------------------------------------------------------------------
+// get_updates_available
+// ---------------------------------------------------------------------------
+
+test "get_updates_available returns NoHandle when the handle is null" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    mgr.allocator = testing.allocator;
+
+    const result = mgr.get_updates_available();
+    try testing.expectError(error.NoHandle, result);
+}
+
+test "get_updates_available returns an empty list when no packages are installed" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    // A fresh temporary database has no installed packages, so there are no
+    // updates available even after a sync.
+    try mgr.sync(true);
+
+    var updates = try mgr.get_updates_available();
+    defer updates.deinit(mgr.allocator);
+
+    try testing.expectEqual(@as(usize, 0), updates.items.len);
+}
+
+test "get_updates_available returns updates when installed packages have newer versions" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    // Skip gracefully when there is no real system database to link against.
+    _ = std.Io.Dir.cwd().statFile(io, "/var/lib/pacman/local", .{}) catch return;
+
+    // A unique temp root plays the role of the C# `tempPath` cache directory.
+    const anchor: u8 = 0;
+    var prng = std.Random.DefaultPrng.init(@intFromPtr(&anchor));
+    const temp_root = try std.fmt.allocPrint(allocator, "/tmp/shelly-alpm-updates-{x}", .{prng.random().int(u32)});
+    defer allocator.free(temp_root);
+    try std.Io.Dir.cwd().createDirPath(io, temp_root);
+    defer std.Io.Dir.cwd().deleteTree(io, temp_root) catch {};
+
+    // Initialize against the real system configuration with a throwaway temp root.
+    var mgr = Manager.init(allocator, "/etc/pacman.conf", false, temp_root) catch return;
+    defer mgr.deinit();
+
+    // Download the remote databases so alpm_sync_get_new_version can compare
+    // installed packages against the repository versions.
+    mgr.sync(true) catch return;
+
+    var updates = try mgr.get_updates_available();
+    defer updates.deinit(mgr.allocator);
+
+    // Each entry must have both an old (installed) and a new (repository) package.
+    for (updates.items) |update| {
+        const old_name = update.old_package.name() orelse return error.TestFailed;
+        const new_name = update.new_package.name() orelse return error.TestFailed;
+        // The package names must match — we are comparing the same package.
+        try testing.expectEqualStrings(old_name, new_name);
+    }
 }
