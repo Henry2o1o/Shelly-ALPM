@@ -70,6 +70,76 @@ pub const libalpm = struct {
         }
     };
 
+    pub const TransFlag = enum(u32) {
+        nodeps = 1 << 0,
+        nosave = 1 << 2,
+        nodepversion = 1 << 3,
+        cascade = 1 << 4,
+        recurse = 1 << 5,
+        dbonly = 1 << 6,
+        nohooks = 1 << 7,
+        alldeps = 1 << 8,
+        downloadonly = 1 << 9,
+        noscriptlet = 1 << 10,
+        noconflicts = 1 << 11,
+        needed = 1 << 13,
+        allexplicit = 1 << 14,
+        unneeded = 1 << 15,
+        recurseall = 1 << 16,
+        nolock = 1 << 17,
+
+        pub fn from_trans_flag(trans_flag: alpm.alpm_transflag_t) TransFlag {
+            return switch (trans_flag) {
+                alpm.ALPM_TRANS_FLAG_NODEPS => .nodeps,
+                alpm.ALPM_TRANS_FLAG_NOSAVE => .nosave,
+                alpm.ALPM_TRANS_FLAG_NODEPVERSION => .nodepversion,
+                alpm.ALPM_TRANS_FLAG_CASCADE => .cascade,
+                alpm.ALPM_TRANS_FLAG_RECURSE => .recurse,
+                alpm.ALPM_TRANS_FLAG_DBONLY => .dbonly,
+                alpm.ALPM_TRANS_FLAG_NOHOOKS => .nohooks,
+                alpm.ALPM_TRANS_FLAG_ALLDEPS => .alldeps,
+                alpm.ALPM_TRANS_FLAG_DOWNLOADONLY => .downloadonly,
+                alpm.ALPM_TRANS_FLAG_NOSCRIPTLET => .noscriptlet,
+                alpm.ALPM_TRANS_FLAG_NOCONFLICTS => .noconflicts,
+                alpm.ALPM_TRANS_FLAG_NEEDED => .needed,
+                alpm.ALPM_TRANS_FLAG_ALLEXPLICIT => .allexplicit,
+                alpm.ALPM_TRANS_FLAG_UNNEEDED => .unneeded,
+                alpm.ALPM_TRANS_FLAG_RECURSEALL => .recurseall,
+                alpm.ALPM_TRANS_FLAG_NOLOCK => .nolock,
+                else => unreachable,
+            };
+        }
+
+        pub fn to_trans_flag(trans_flag: TransFlag) alpm.alpm_transflag_t {
+            return switch (trans_flag) {
+                .nodeps => alpm.ALPM_TRANS_FLAG_NODEPS,
+                .nosave => alpm.ALPM_TRANS_FLAG_NOSAVE,
+                .nodepversion => alpm.ALPM_TRANS_FLAG_NODEPVERSION,
+                .cascade => alpm.ALPM_TRANS_FLAG_CASCADE,
+                .recurse => alpm.ALPM_TRANS_FLAG_RECURSE,
+                .dbonly => alpm.ALPM_TRANS_FLAG_DBONLY,
+                .nohooks => alpm.ALPM_TRANS_FLAG_NOHOOKS,
+                .alldeps => alpm.ALPM_TRANS_FLAG_ALLDEPS,
+                .downloadonly => alpm.ALPM_TRANS_FLAG_DOWNLOADONLY,
+                .noscriptlet => alpm.ALPM_TRANS_FLAG_NOSCRIPTLET,
+                .noconflicts => alpm.ALPM_TRANS_FLAG_NOCONFLICTS,
+                .needed => alpm.ALPM_TRANS_FLAG_NEEDED,
+                .allexplicit => alpm.ALPM_TRANS_FLAG_ALLEXPLICIT,
+                .unneeded => alpm.ALPM_TRANS_FLAG_UNNEEDED,
+                .recurseall => alpm.ALPM_TRANS_FLAG_RECURSEALL,
+                .nolock => alpm.ALPM_TRANS_FLAG_NOLOCK,
+            };
+        }
+
+        pub fn stack(flags: []const TransFlag) alpm.alpm_transflag_t {
+            var combined: alpm.alpm_transflag_t = 0;
+            for (flags) |flag| {
+                combined |= to_trans_flag(flag);
+            }
+            return combined;
+        }
+    };
+
     pub const Database = struct {
         ptr: *alpm.alpm_db_t,
 
@@ -283,6 +353,11 @@ pub const libalpm = struct {
         pub fn base(self: Package) [:0]const u8 {
             return str(alpm.alpm_pkg_get_base(self.ptr));
         }
+    };
+
+    pub const PackageWithUpdate = struct {
+        old_package: Package,
+        new_package: Package,
     };
 
     pub const Dependency = struct {
