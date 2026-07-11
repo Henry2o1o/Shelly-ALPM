@@ -112,6 +112,7 @@ public class FlatpakInstall(
     {
         var builder = Builder.NewFromString(ResourceHelper.LoadUiFile("UiFiles/Flatpak/FlatpakInstallWindow.ui"), -1);
         var box = (Box)builder.GetObject("FlatpakInstallWindow")!;
+        FlatpakRefHandler.InstallRequested += OnInstallRequested;
 
         _gridView = (GridView)builder.GetObject("list_flatpaks")!;
         _scroller = _gridView.GetParent() as ScrolledWindow;
@@ -652,6 +653,17 @@ public class FlatpakInstall(
         return box;
     }
 
+    private Task OnInstallRequested(string appId, string remote)
+    {
+        return InstallFromIdAsync(appId, remote: "flathub", isRuntime: false);
+    }
+    
+    public void Unsubscribe()
+    {
+        FlatpakRefHandler.InstallRequested -= OnInstallRequested;
+    }
+
+
     public void Reload() => _ = LoadDataAsync(_cts.Token);
 
     private bool FilterPackage(GObject.Object obj)
@@ -966,7 +978,7 @@ public class FlatpakInstall(
                 ApplyFilter();
                 return false;
             });
-
+            
             const int batchSize = 100;
             for (var i = 0; i < _allPackages.Count; i += batchSize)
             {
@@ -985,6 +997,7 @@ public class FlatpakInstall(
                 });
                 await Task.Delay(10, ct);
             }
+            
         }
         catch (OperationCanceledException)
         {
@@ -1002,6 +1015,7 @@ public class FlatpakInstall(
                 _loadingSpinner?.Stop();
                 return false;
             });
+            FlatpakRefHandler.OnPageLoaded();
         }
     }
 
@@ -1177,7 +1191,7 @@ public class FlatpakInstall(
         {
             UnprivilegedOperationResult result;
             lockoutService.Show(Translations.T("Installing {0}...", _selectedPackage.Id));
-            if (_selectedRemote.Contains("user"))
+            if (_selectedRemote.Contains("user", StringComparison.OrdinalIgnoreCase))
             {
                 result = await unprivilegedOperationService.InstallFlatpakPackage(_selectedPackage.Id,
                     true, _selectedRemote.Split(":")[0].Trim(),
@@ -1215,8 +1229,24 @@ public class FlatpakInstall(
         }
     }
 
-    private async Task InstallFromIdAsync(string id)
+    private async Task InstallFromIdAsync(string id, string? remote = null, bool isRuntime = true)
     {
+        
+        if (remote != null)
+        {
+            var installedPackages = await unprivilegedOperationService.ListFlatpakPackages();
+
+            if (installedPackages.Any(p => p.Id == id))
+            {
+                genericQuestionService.RaiseToastMessage(
+                    new ToastMessageEventArgs(
+                        Translations.T("Package is already installed")));
+                return;
+            }
+        }
+        
+        var selectedRemote = remote ?? _selectedRemote;
+        
         if (!configService.LoadConfig().NoConfirm)
         {
             var args = new GenericQuestionEventArgs(
@@ -1234,26 +1264,28 @@ public class FlatpakInstall(
         {
             UnprivilegedOperationResult result;
             lockoutService.Show(Translations.T("Installing {0}...", id));
-            if (_selectedRemote.Contains("user"))
+            
+            if (selectedRemote.Contains("user", StringComparison.OrdinalIgnoreCase))
             {
                 result = await unprivilegedOperationService.InstallFlatpakPackage(id,
-                    true, _selectedRemote.Split(":")[0].Trim(),
-                    _selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", true);
+                    true, selectedRemote.Split(":")[0].Trim(),
+                    selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", isRuntime);
             }
             else
             {
                 result = await unprivilegedOperationService.InstallFlatpakPackage(id,
-                    false, _selectedRemote.Split(":")[0].Trim(),
-                    _selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", true);
+                    false, selectedRemote.Split(":")[0].Trim(),
+                    selectedRemote.Contains("beta", StringComparison.InvariantCulture) ? "beta" : "stable", isRuntime);
             }
 
 
             if (result.Success)
             {
-                var args = new ToastMessageEventArgs(
-                    Translations.T("Installed Flatpak addon")
-                );
-                genericQuestionService.RaiseToastMessage(args);
+                var message = remote != null
+                    ? Translations.T("Installed Flatpak")
+                    : Translations.T("Installed Flatpak addon");
+
+                genericQuestionService.RaiseToastMessage(new ToastMessageEventArgs(message));
             }
             else
             {
@@ -1626,8 +1658,7 @@ public class FlatpakInstall(
         });
         return Task.CompletedTask;
     }
-
-
+    
     public void Dispose()
     {
         _sub?.Dispose();

@@ -1,7 +1,7 @@
 # Maintainer: Zoey Bauer <zoey.erin.bauer@gmail.com>
 # Maintainer: Caroline Snyder <hirpeng@gmail.com>
 pkgname=shelly
-pkgver=2.4.1.1
+pkgver=2.4.1.2
 pkgrel=1
 pkgdesc="Shelly: A Modern Arch Package Manager"
 arch=('x86_64')
@@ -59,7 +59,7 @@ build() {
       msgfmt "$po_file" -o "shelly-ui-${lang}.mo"
     fi
   done
-  
+
   # Compile tray service translations
     for po_file in Shelly.Notifications/po/*.po; do
       if [ -f "$po_file" ]; then
@@ -89,12 +89,14 @@ package() {
 [Desktop Entry]
 Name=Shelly
 Comment=A Modern Arch Package Manager
-Exec=/usr/bin/shelly-ui
+Exec=/usr/bin/shelly-ui %u
 Icon=shelly
 Type=Application
 Categories=System;Utility;
 Keywords=program;software;store;repository;package;add;install;uninstall;remove;update;apps;applications;flatpak;pacman;aur;appimage;
+MimeType=x-scheme-handler/appstream;x-scheme-handler/flatpak+https;
 Terminal=false
+X-GNOME-UsesNotifications=true
 Actions=FlatpakInstall;FlatpakUpdate;FlatpakRemove;
 
 [Desktop Action FlatpakInstall]
@@ -174,7 +176,7 @@ EOF
       install -Dm644 "$mo_file" "$pkgdir/usr/share/locale/$lang/LC_MESSAGES/shelly-ui.mo"
     fi
   done
-  
+
   # Install tray service translations
     for mo_file in shelly-notifications-*.mo; do
       if [ -f "$mo_file" ]; then

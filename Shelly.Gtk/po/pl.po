@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
-"POT-Creation-Date: 2026-06-27 07:15+0000\n"
-"PO-Revision-Date: 2026-06-27 07:27+0000\n"
+"POT-Creation-Date: 2026-07-03 00:26+0000\n"
+"PO-Revision-Date: 2026-07-02 05:31+0000\n"
 "Last-Translator: juliazero <juliazero2@gmail.com>\n"
 "Language-Team: Polish\n"
 "Language: pl\n"
@@ -84,12 +84,6 @@ msgstr "Zarządzaj"
 
 msgid "Remove"
 msgstr "Usuń"
-
-msgid "Happy pride month!"
-msgstr "Szczęśliwego Miesiąca Dumy!"
-
-msgid "You found Chel's hidden page."
-msgstr "Odkryto stronę Chel."
 
 msgid "Search packages..."
 msgstr "Wyszukaj pakiety..."
@@ -282,8 +276,8 @@ msgstr "Licencja: -"
 msgid "Summary"
 msgstr "Podsumowanie"
 
-msgid "No description available."
-msgstr "Brak opisu."
+msgid "Show more"
+msgstr "Pokaż więcej"
 
 msgid "App Permissions"
 msgstr "Uprawnienia aplikacji"
@@ -709,7 +703,7 @@ msgstr "Łatwe zarządzanie i konfigurowanie aktualizacji pakietów AppImage."
 msgid ""
 "Show a status icon in your system tray for quick access and notifications."
 msgstr ""
-"Wyświetl ikonę stanu w zasobniku systemowym, aby zapewnić szybki dostęp i "
+"Pokaż ikonę stanu w zasobniku systemowym, aby zapewnić szybki dostęp i "
 "powiadomienia."
 
 msgid "Tray Icon Autostart"
@@ -1104,8 +1098,15 @@ msgstr ""
 "Te polecenia pobierają i wykonują kod poza kontrolą Shelly i Libalpm. "
 "Zapoznaj się z nimi przed kontynuowaniem."
 
-msgid "Source files"
-msgstr "Pliki źródłowe"
+#, csharp-format
+msgid "Warnings ({0})"
+msgstr "Ostrzeżenia ({0})"
+
+msgid "Changes"
+msgstr "Zmiany"
+
+msgid "Review Changes"
+msgstr "Przejrzyj zmiany"
 
 msgid "Install Anyway"
 msgstr "Zainstaluj mimo wszystko"
@@ -1138,6 +1139,9 @@ msgstr "Usuń dane użytkownika i konfigurację"
 
 msgid "Keep Config?"
 msgstr "Zachować konfigurację?"
+
+msgid "Show less"
+msgstr "Pokaż mniej"
 
 msgid "Name and URL are required"
 msgstr "Nazwa i adres URL są wymagane"
@@ -1291,6 +1295,9 @@ msgstr "Data kompilacji"
 
 msgid "Required By"
 msgstr "Wymagane przez"
+
+msgid "View Dependency Graph"
+msgstr "Wyświetl wykres zależności"
 
 msgid "Failed to load packages."
 msgstr "Nie udało się załadować pakietów."
@@ -1457,6 +1464,12 @@ msgstr "Instalowanie flatpak..."
 msgid "Reboot required to complete installation."
 msgstr "Do zakończenia instalacji wymagane jest ponowne uruchomienie."
 
+msgid "Missing Starfish"
+msgstr "Brakuje Starfish"
+
+msgid "Installing starfish..."
+msgstr "Instalowanie starfish..."
+
 msgid "Synchronizing databases..."
 msgstr "Synchronizacja baz danych..."
 
@@ -1532,3 +1545,21 @@ msgstr "Instalacja {0} pakiet(ów) nie powiodła się."
 #, csharp-format
 msgid "Failed to remove packages: {0}"
 msgstr "Nie udało się usunąć pakietów: {0}"
+
+msgid "Package Statistics"
+msgstr "Statystyki pakietu"
+
+msgid "Total Aur"
+msgstr "Łącznie pakietów AUR"
+
+msgid "Total Packages"
+msgstr "Łącznie pakietów"
+
+msgid "Total Flatpak"
+msgstr "Łącznie pakietów Flatpak"
+
+msgid "Up to date"
+msgstr "Aktualny"
+
+msgid "Calculating"
+msgstr "Obliczanie"
