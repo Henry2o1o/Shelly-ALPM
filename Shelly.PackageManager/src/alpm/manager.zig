@@ -19,7 +19,7 @@ pub const InitError = error{
     RegisterDbFailed,
     ConfigParseFailed,
 };
-pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed };
+pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
@@ -178,6 +178,7 @@ pub const Manager = struct {
             std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
             return TransactionError.SyncDbFailed;
         }
+        try self.refresh();
     }
 
     pub fn get_installed_packages(self: *Manager) TransactionError!std.ArrayList(libalpm.Package) {
@@ -258,6 +259,65 @@ pub const Manager = struct {
             return filtered_packages;
         }
         return foreign_packages;
+    }
+
+    pub fn get_available_packages(self: *Manager) TransactionError!std.ArrayList(libalpm.Package) {
+        if (self.handle == null) return TransactionError.NoHandle;
+        var packages: std.ArrayList(libalpm.Package) = .empty;
+        errdefer packages.deinit(self.allocator);
+
+        var sync_database: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
+        while (sync_database != null) : (sync_database = sync_database.?.*.next) {
+            const db_data = sync_database.?.*.data orelse continue;
+            const database = libalpm.Database.from(db_data) orelse continue;
+            var tempPackages = database.packages();
+            while (tempPackages.next()) |pkg| {
+                packages.append(self.allocator, pkg) catch {
+                    return TransactionError.PackageFetchFailed;
+                };
+            }
+        }
+        return packages;
+    }
+
+    pub fn get_updates_available(self: *Manager) TransactionError!void {
+        if (self.handle == null) return TransactionError.NoHandle;
+        var package_updates: std.ArrayList(libalpm.PackageWithUpdate) = .empty;
+        defer package_updates.deinit();
+        const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        const local_packages = self.get_installed_packages() catch {
+            return TransactionError.PackageFetchFailed;
+        };
+        for (local_packages.items) |local_pkg| {
+            const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg, sync_databases) orelse continue;
+            package_updates.append(.{
+                .old_package = local_pkg,
+                .new_package = new_version,
+            }) catch {
+                return TransactionError.PackageFetchFailed;
+            };
+        }
+        return package_updates;
+    }
+
+    fn refresh(self: *Manager) TransactionError!void {
+        if (self.handle != null) {
+            const refresh_result = rawLibalpm.alpm_release(self.handle);
+            if (refresh_result != 0) {
+                return TransactionError.RefreshFailed;
+            }
+        }
+
+        self.sync_dbs.clearRetainingCapacity();
+
+        var err2: rawLibalpm.alpm_errno_t = 0;
+        self.handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err2);
+        if (self.handle == null) {
+            return TransactionError.RefreshFailed;
+        }
+
+        self.applyConfig(self.config, self.is_root);
+        self.setupCallbacks();
     }
 
     fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8, force_download: bool) void {
@@ -1774,4 +1834,84 @@ test "get_foreign_packages excludes repository packages after a non-root sync" {
     // database is loaded it must never be reported as a foreign package.
     try testing.expect(!containsPackage(foreign.items, "pacman"));
     try testing.expect(foreign.items.len < installed.items.len);
+}
+
+// ---------------------------------------------------------------------------
+// get_available_packages
+// ---------------------------------------------------------------------------
+
+test "get_available_packages returns NoHandle when the handle is null" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    mgr.allocator = testing.allocator;
+
+    const result = mgr.get_available_packages();
+    try testing.expectError(error.NoHandle, result);
+}
+
+test "get_available_packages returns an empty list when no sync databases are populated" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    // init registers the sync database but does not download it, so there are
+    // no packages available until sync() is called.
+    var packages = try mgr.get_available_packages();
+    defer packages.deinit(mgr.allocator);
+
+    try testing.expectEqual(@as(usize, 0), packages.items.len);
+}
+
+test "get_available_packages returns packages after a successful sync" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    // Download the remote database so packages become available.
+    try mgr.sync(true);
+
+    var packages = try mgr.get_available_packages();
+    defer packages.deinit(mgr.allocator);
+
+    // A real repository always exposes packages, each with a readable name.
+    try testing.expect(packages.items.len > 0);
+    for (packages.items) |package| {
+        _ = package.name() orelse return error.TestFailed;
+    }
+}
+
+test "toggle_hidden_packages flips state and returns the new value" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    try testing.expectEqual(false, mgr.show_hidden_packages);
+    try testing.expectEqual(true, mgr.toggle_hidden_packages());
+    try testing.expectEqual(true, mgr.show_hidden_packages);
+    try testing.expectEqual(false, mgr.toggle_hidden_packages());
+    try testing.expectEqual(false, mgr.show_hidden_packages);
 }

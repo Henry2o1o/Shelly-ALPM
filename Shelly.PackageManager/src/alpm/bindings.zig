@@ -285,6 +285,11 @@ pub const libalpm = struct {
         }
     };
 
+    pub const PackageWithUpdate = struct {
+        old_package: Package,
+        new_package: Package,
+    };
+
     pub const Dependency = struct {
         ptr: *alpm.alpm_depend_t,
 
