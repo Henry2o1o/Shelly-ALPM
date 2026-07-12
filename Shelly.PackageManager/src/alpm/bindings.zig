@@ -294,6 +294,11 @@ pub const libalpm = struct {
             return str(alpm.alpm_db_get_name(db));
         }
 
+        pub fn database(self: Package) ?Database {
+            const db = alpm.alpm_pkg_get_db(self.ptr) orelse return null;
+            return .{ .ptr = db };
+        }
+
         pub fn replaces(self: Package) ListIterator(Dependency, Dependency.from) {
             return .{ .node = alpm.alpm_pkg_get_replaces(self.ptr) };
         }
@@ -350,6 +355,10 @@ pub const libalpm = struct {
 
         pub fn files(self: Package) AlpmFileList {
             return AlpmFileList{ .ptr = alpm.alpm_pkg_get_files(self.ptr) };
+        }
+
+        pub fn file_name(self: Package) [:0]const u8 {
+            return alpm.alpm_pkg_get_filename(self.ptr);
         }
 
         pub fn base(self: Package) [:0]const u8 {
