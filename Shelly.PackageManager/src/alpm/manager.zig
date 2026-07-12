@@ -1083,11 +1083,95 @@ pub const Manager = struct {
         ctx: ?*anyopaque,
         event: [*c]rawLibalpm.alpm_event_t,
     ) callconv(.c) void {
+        if (event == null) return;
+
         const self: *Manager = @ptrCast(@alignCast(ctx));
-        self.dispatcher.raiseInformational(.{
-            .event_type = libalpm.EventType.from_libalpm(@intCast(event.*.type)),
-            .message = "Temp Message",
-        });
+        const type_value: u32 = @intCast(event.*.type);
+        if (type_value < rawLibalpm.ALPM_EVENT_CHECKDEPS_START or type_value > rawLibalpm.ALPM_EVENT_HOOK_RUN_DONE) return;
+
+        const event_type = libalpm.EventType.from_libalpm(@intCast(type_value));
+        switch (event_type) {
+            .scriptlet_info => {
+                const line = spanC(event.*.scriptlet_info.line) orelse return;
+                if (line.len != 0) self.dispatcher.raiseScriptlet(.{ .line = line });
+            },
+            .hook_run_start => {
+                const hook = event.*.hook_run;
+                const name = spanC(hook.name);
+                const description = spanC(hook.desc);
+                var message_buffer: [512]u8 = undefined;
+                const message = if (description) |desc|
+                    std.fmt.bufPrint(&message_buffer, "({d}/{d}) {s}", .{ hook.position, hook.total, desc }) catch desc
+                else if (name) |hook_name|
+                    std.fmt.bufPrint(&message_buffer, "({d}/{d}) {s}", .{ hook.position, hook.total, hook_name }) catch hook_name
+                else
+                    std.fmt.bufPrint(&message_buffer, "({d}/{d}) Running hook...", .{ hook.position, hook.total }) catch "Running hook...";
+
+                self.dispatcher.raiseHook(.{
+                    .description = message,
+                    .position = @intCast(hook.position),
+                    .total = @intCast(hook.total),
+                });
+            },
+            .pacnew_created => self.dispatcher.raisePacnew(.{
+                .file = spanC(event.*.pacnew_created.file),
+            }),
+            .pacsave_created => {
+                const pacsave = event.*.pacsave_created;
+                const pkg_name = if (pacsave.oldpkg) |pkg|
+                    (libalpm.Package{ .ptr = pkg }).name()
+                else
+                    null;
+                self.dispatcher.raisePacsave(.{
+                    .pkg_name = pkg_name,
+                    .file = spanC(pacsave.file),
+                });
+            },
+            else => self.dispatcher.raiseInformational(.{
+                .event_type = event_type,
+                .message = informationalEventMessage(event_type) orelse return,
+            }),
+        }
+    }
+
+    fn informationalEventMessage(event_type: libalpm.EventType) ?[]const u8 {
+        return switch (event_type) {
+            .checkdeps_start => "Checking dependencies...",
+            .checkdeps_done => "Dependency check finished.",
+            .fileconflicts_start => "Checking for file conflicts...",
+            .fileconflicts_done => "File conflict check finished.",
+            .resolvedeps_start => "Resolving dependencies...",
+            .resolvedeps_done => "Dependency resolution finished.",
+            .interconflicts_start => "Checking for package conflicts...",
+            .interconflicts_done => "Package conflict check finished.",
+            .transaction_start => "Starting transaction...",
+            .transaction_done => "Transaction completed.",
+            .package_operation_start => "Starting package operation...",
+            .package_operation_done => "Package operation completed.",
+            .integrity_start => "Checking package integrity...",
+            .integrity_done => "Package integrity check finished.",
+            .load_start => "Loading packages...",
+            .load_done => "Packages loaded.",
+            .db_retrieve_start => "Retrieving database...",
+            .db_retrieve_done => "Database retrieved.",
+            .db_retrieve_failed => "Failed to retrieve database.",
+            .pkg_retrieve_start => "Retrieving package...",
+            .pkg_retrieve_done => "Package retrieved.",
+            .pkg_retrieve_failed => "Package retrieval failed.",
+            .diskspace_start => "Checking disk space...",
+            .diskspace_done => "Disk space check finished.",
+            .optdep_removal => "Removing optional dependencies...",
+            .database_missing => "Database missing. Please run `shelly keyring init` to initialize the keyring.",
+            .keyring_start => "Checking keyring...",
+            .keyring_done => "Keyring check finished.",
+            .key_download_start => "Downloading key...",
+            .key_download_done => "Key download finished.",
+            .hook_start => "Running hooks...",
+            .hook_done => "Finished running hooks.",
+            .hook_run_done => "Finished running hook.",
+            .scriptlet_info, .pacnew_created, .pacsave_created, .hook_run_start => null,
+            else => null,
+        };
     }
 
     fn questionCallback(ctx: ?*anyopaque, question: [*c]rawLibalpm.alpm_question_t) callconv(.c) void {
@@ -1511,7 +1595,7 @@ test "progressCallback forwards a null package name as null" {
 // eventCallback
 // ---------------------------------------------------------------------------
 
-test "eventCallback dispatches an informational event carrying the event type" {
+test "eventCallback dispatches the C# informational message for an event type" {
     var mgr: Manager = undefined;
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
     defer mgr.dispatcher.deinit();
@@ -1527,7 +1611,86 @@ test "eventCallback dispatches an informational event carrying the event type" {
 
     const args = cap.args orelse return error.TestFailed;
     try testing.expectEqual(libalpm.EventType.transaction_start, args.event_type);
-    try testing.expectEqualStrings("Temp Message", args.message);
+    try testing.expectEqualStrings("Starting transaction...", args.message);
+}
+
+test "eventCallback dispatches scriptlet output to the scriptlet handlers" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = ScriptletCapture{};
+    _ = mgr.dispatcher.addScriptletHandler(.{
+        .function = captureScriptlet,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    var ev: rawLibalpm.alpm_event_t = .{ .scriptlet_info = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_SCRIPTLET_INFO),
+        .line = "Running post-install script",
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &ev);
+
+    const args = cap.args orelse return error.TestFailed;
+    try testing.expectEqualStrings("Running post-install script", args.line);
+}
+
+test "eventCallback formats and dispatches hook progress" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = HookCapture{};
+    _ = mgr.dispatcher.addHookHandler(.{
+        .function = captureHook,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    var ev: rawLibalpm.alpm_event_t = .{ .hook_run = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_HOOK_RUN_START),
+        .name = "update-cache.hook",
+        .desc = "Updating package cache",
+        .position = 2,
+        .total = 4,
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &ev);
+
+    try testing.expectEqualStrings("(2/4) Updating package cache", cap.text());
+    try testing.expectEqual(@as(c_ulong, 2), cap.position);
+    try testing.expectEqual(@as(c_ulong, 4), cap.total);
+}
+
+test "eventCallback dispatches pacnew and pacsave paths" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var pacnew_cap = PacnewCapture{};
+    var pacsave_cap = PacsaveCapture{};
+    _ = mgr.dispatcher.addPacnewHandler(.{
+        .function = capturePacnew,
+        .data = @ptrCast(&pacnew_cap),
+    }) catch unreachable;
+    _ = mgr.dispatcher.addPacsaveHandler(.{
+        .function = capturePacsave,
+        .data = @ptrCast(&pacsave_cap),
+    }) catch unreachable;
+
+    var pacnew_event: rawLibalpm.alpm_event_t = .{ .pacnew_created = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_PACNEW_CREATED),
+        .file = "/etc/example.conf.pacnew",
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &pacnew_event);
+
+    var pacsave_event: rawLibalpm.alpm_event_t = .{ .pacsave_created = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_PACSAVE_CREATED),
+        .file = "/etc/example.conf.pacsave",
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &pacsave_event);
+
+    try testing.expectEqualStrings("/etc/example.conf.pacnew", pacnew_cap.file orelse return error.TestFailed);
+    try testing.expect(pacsave_cap.pkg_name == null);
+    try testing.expectEqualStrings("/etc/example.conf.pacsave", pacsave_cap.file orelse return error.TestFailed);
 }
 
 // ---------------------------------------------------------------------------
@@ -1675,6 +1838,56 @@ const InfoCapture = struct {
 fn captureInfo(data: ?*anyopaque, args: events.InformationalArgs) void {
     const cap: *InfoCapture = @ptrCast(@alignCast(data));
     cap.args = args;
+}
+
+const ScriptletCapture = struct {
+    args: ?events.ScriptletArgs = null,
+};
+
+fn captureScriptlet(data: ?*anyopaque, args: events.ScriptletArgs) void {
+    const cap: *ScriptletCapture = @ptrCast(@alignCast(data));
+    cap.args = args;
+}
+
+const HookCapture = struct {
+    buf: [512]u8 = undefined,
+    len: usize = 0,
+    position: c_ulong = 0,
+    total: c_ulong = 0,
+
+    fn text(self: *const HookCapture) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+fn captureHook(data: ?*anyopaque, args: events.HookArgs) void {
+    const cap: *HookCapture = @ptrCast(@alignCast(data));
+    if (args.description) |description| {
+        cap.len = @min(description.len, cap.buf.len);
+        @memcpy(cap.buf[0..cap.len], description[0..cap.len]);
+    }
+    cap.position = args.position;
+    cap.total = args.total;
+}
+
+const PacnewCapture = struct {
+    file: ?[]const u8 = null,
+};
+
+fn capturePacnew(data: ?*anyopaque, args: events.PacnewArgs) void {
+    const cap: *PacnewCapture = @ptrCast(@alignCast(data));
+    cap.file = args.file;
+}
+
+const PacsaveCapture = struct {
+    pkg_name: ?[]const u8 = null,
+    file: ?[]const u8 = null,
+};
+
+fn capturePacsave(data: ?*anyopaque, args: events.PacsaveArgs) void {
+    const cap: *PacsaveCapture = @ptrCast(@alignCast(data));
+    cap.pkg_name = args.pkg_name;
+    cap.file = args.file;
 }
 
 const ErrorCapture = struct {
