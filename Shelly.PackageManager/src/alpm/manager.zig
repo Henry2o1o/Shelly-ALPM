@@ -20,7 +20,7 @@ pub const InitError = error{
     RegisterDbFailed,
     ConfigParseFailed,
 };
-pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed };
+pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
@@ -321,8 +321,9 @@ pub const Manager = struct {
                 const name = target[i + 1 ..];
                 var node = sync_databases;
                 var found: ?*rawLibalpm.alpm_pkg_t = null;
-                while (node != null) : (node = node.?.next) {
-                    const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(node.?.data orelse continue));
+                while (node != null) : (node = node.*.next) {
+                    const db_data: ?*anyopaque = node.*.data;
+                    const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
                     const db_name = libalpm.str(rawLibalpm.alpm_db_get_name(db_ptr)) orelse continue;
                     if (!std.ascii.eqlIgnoreCase(repo, db_name)) continue;
                     found = rawLibalpm.alpm_db_get_pkg(db_ptr, name.ptr);
@@ -332,17 +333,19 @@ pub const Manager = struct {
             } else {
                 var node = sync_databases;
                 var found_any = false;
-                while (node != null) : (node = node.?.next) {
-                    const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(node.?.data orelse continue));
+                while (node != null) : (node = node.*.next) {
+                    const db_data: ?*anyopaque = node.*.data;
+                    const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
                     if (rawLibalpm.alpm_db_get_pkg(db_ptr, target.ptr)) |pkg| {
                         try packages.append(self.allocator, pkg);
                         found_any = true;
                         break;
                     }
                     if (rawLibalpm.alpm_db_get_group(db_ptr, target.ptr)) |group| {
-                        var pkg_node = group.packages;
-                        while (pkg_node != null) : (pkg_node = pkg_node.?.next) {
-                            const pkg: *rawLibalpm.alpm_pkg_t = @ptrCast(@alignCast(pkg_node.?.data orelse continue));
+                        var pkg_node = group.*.packages;
+                        while (pkg_node != null) : (pkg_node = pkg_node.*.next) {
+                            const pkg_data: ?*anyopaque = pkg_node.*.data;
+                            const pkg: *rawLibalpm.alpm_pkg_t = @ptrCast(@alignCast(pkg_data orelse continue));
                             try packages.append(self.allocator, pkg);
                         }
                         found_any = true;
@@ -394,8 +397,9 @@ pub const Manager = struct {
             defer self.allocator.free(selected_z);
             if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(rawLibalpm.alpm_get_localdb(self.handle)), selected_z.ptr) != null) continue;
             var node = sync_databases;
-            while (node != null) : (node = node.?.next) {
-                const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(node.?.data orelse continue));
+            while (node != null) : (node = node.*.next) {
+                const db_data: ?*anyopaque = node.*.data;
+                const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
                 const selected_pkg = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db_ptr), selected_z.ptr) orelse continue;
                 try packages.append(self.allocator, selected_pkg);
                 if (libalpm.str(rawLibalpm.alpm_pkg_get_name(selected_pkg))) |resolved_name|
@@ -407,7 +411,7 @@ pub const Manager = struct {
         // Starts transaction impleentation
         var trans_flags = trans_flags_arg;
         if (libalpm.TransFlag.contains(trans_flags, .dbonly)) trans_flags |= rawLibalpm.ALPM_TRANS_FLAG_NODEPS;
-        if (rawLibalpm.alpm_trans_init(self.handle, trans_flags) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags)) != 0) return TransactionError.TransInitFailed;
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
         for (packages.items) |pkg| {
@@ -438,8 +442,9 @@ pub const Manager = struct {
         var sync_dbs = sync_database;
         // Essentially same as above but iterates just for a single package name
         // Discarding the results as we don't need them here and it removes unnecessary allocations.
-        while (sync_dbs != null) : (sync_dbs = sync_dbs.?.next) {
-            const db: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(sync_dbs.?.data orelse continue));
+        while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
+            const db_data: ?*anyopaque = sync_dbs.*.data;
+            const db: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
             if (rawLibalpm.alpm_db_get_pkg(db, pkg_name.ptr) != null) return true;
             if (rawLibalpm.alpm_db_get_group(db, pkg_name.ptr) != null) return true;
             if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db), pkg_name.ptr) != null) return true;
@@ -2061,6 +2066,91 @@ test "toggle_hidden_packages flips state and returns the new value" {
     try testing.expectEqual(true, mgr.show_hidden_packages);
     try testing.expectEqual(false, mgr.toggle_hidden_packages());
     try testing.expectEqual(false, mgr.show_hidden_packages);
+}
+
+// ---------------------------------------------------------------------------
+// install_packages
+// ---------------------------------------------------------------------------
+
+test "install_packages returns NoHandle when the handle is null" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    mgr.allocator = testing.allocator;
+
+    var package_names = [_][:0]const u8{"anything"};
+    try testing.expectError(
+        error.NoHandle,
+        mgr.install_packages(&package_names, 0),
+    );
+}
+
+test "install_packages rejects an empty package list" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    var package_names = [_][:0]const u8{};
+    try testing.expectError(
+        error.PackageFetchFailed,
+        mgr.install_packages(&package_names, 0),
+    );
+}
+
+test "install_packages rejects malformed repository-qualified targets" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    const malformed = [_][:0]const u8{ "/package", "repository/" };
+    for (malformed) |target| {
+        var package_names = [_][:0]const u8{target};
+        try testing.expectError(
+            error.PackageFetchFailed,
+            mgr.install_packages(&package_names, 0),
+        );
+    }
+}
+
+test "install_packages returns PackageFetchFailed when a target cannot be resolved" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    var unqualified = [_][:0]const u8{"shelly-package-that-does-not-exist"};
+    try testing.expectError(
+        error.PackageFetchFailed,
+        mgr.install_packages(&unqualified, 0),
+    );
+
+    var qualified = [_][:0]const u8{"seafoam-labs/shelly-package-that-does-not-exist"};
+    try testing.expectError(
+        error.PackageFetchFailed,
+        mgr.install_packages(&qualified, 0),
+    );
 }
 
 // ---------------------------------------------------------------------------
