@@ -23,6 +23,7 @@ test "basic add functionality" {
 test {
     _ = @import("alpm/bindings.zig");
     _ = @import("alpm/manager.zig");
+    _ = @import("alpm/manager_test.zig");
     _ = @import("alpm/events.zig");
     _ = @import("alpm/configuration.zig");
     _ = @import("alpm/distribution-hooks/CachyOS/update_notice.zig");
