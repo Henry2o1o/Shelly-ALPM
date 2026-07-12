@@ -22,7 +22,7 @@ pub const InitError = error{
     RegisterDbFailed,
     ConfigParseFailed,
 };
-pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory, NoPackageFound, RemovalFailed, UpdateFetchFailed };
+pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory, NoPackageFound, RemovalFailed, UpdateFetchFailed, SetReasonFailed };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
@@ -668,6 +668,13 @@ pub const Manager = struct {
             return TransactionError.CommitFailed;
         }
         return true;
+    }
+
+    pub fn update_package_reason(self: *Manager, pkg_name: [:0]const u8, reason: libalpm.PackageReason) TransactionError!void {
+        if (self.handle == null) return TransactionError.NoHandle;
+        const local_database = rawLibalpm.alpm_get_localdb(self.handle) orelse return TransactionError.DatabaseReadFailed;
+        const pkg = rawLibalpm.alpm_db_get_pkg(local_database, pkg_name) orelse return TransactionError.PackageFetchFailed;
+        if (rawLibalpm.alpm_pkg_set_reason(pkg, @intCast(@intFromEnum(reason))) != 0) return TransactionError.SetReasonFailed;
     }
 
     //Essentially same as above but iterates just for a single package name to determine
@@ -2143,6 +2150,46 @@ test "get_single_installed_package returns a package when it exists" {
 
     const name = pkg.name() orelse return error.TestFailed;
     try testing.expectEqualStrings("pacman", name);
+}
+
+// ---------------------------------------------------------------------------
+// update_package_reason
+// ---------------------------------------------------------------------------
+
+test "update_package_reason returns NoHandle when the handle is null" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+
+    try testing.expectError(
+        error.NoHandle,
+        mgr.update_package_reason("shelly-test", .Dependency),
+    );
+}
+
+test "update_package_reason changes an installed package reason" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-reason-test", "1.0-1");
+
+    var mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const initial = (try mgr.get_single_installed_package("shelly-reason-test")) orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.PackageReason.Explicit, initial.install_reason());
+
+    try mgr.update_package_reason("shelly-reason-test", .Dependency);
+    const dependency = (try mgr.get_single_installed_package("shelly-reason-test")) orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.PackageReason.Dependency, dependency.install_reason());
+
+    try mgr.update_package_reason("shelly-reason-test", .Explicit);
+    const explicit = (try mgr.get_single_installed_package("shelly-reason-test")) orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.PackageReason.Explicit, explicit.install_reason());
 }
 
 // ---------------------------------------------------------------------------
