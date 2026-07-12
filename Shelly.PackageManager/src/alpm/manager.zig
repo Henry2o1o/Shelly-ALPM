@@ -5,7 +5,7 @@ const configuration = @import("configuration.zig");
 const builtin = @import("builtin");
 const downloader = @import("../shared/downloader.zig");
 const listDictionary = @import("../shared/list_dictionary.zig");
-const transFlag = bindings.libalpm.TransFlag;
+const TransFlag = bindings.libalpm.TransFlag;
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
@@ -304,7 +304,7 @@ pub const Manager = struct {
     pub fn install_packages(
         self: *Manager,
         package_names: [][:0]const u8,
-        trans_flags_arg: rawLibalpm.alpm_transflag_t,
+        trans_flags_arg: TransFlag,
     ) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
@@ -409,8 +409,8 @@ pub const Manager = struct {
         }
 
         // Starts transaction impleentation
-        var trans_flags = trans_flags_arg;
-        if (libalpm.TransFlag.contains(trans_flags, .dbonly)) trans_flags |= rawLibalpm.ALPM_TRANS_FLAG_NODEPS;
+        var trans_flags = trans_flags_arg.to_trans_flag();
+        if (trans_flags_arg == .dbonly) trans_flags |= TransFlag.nodeps.to_trans_flag();
         if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags)) != 0) return TransactionError.TransInitFailed;
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
@@ -2080,7 +2080,7 @@ test "install_packages returns NoHandle when the handle is null" {
     var package_names = [_][:0]const u8{"anything"};
     try testing.expectError(
         error.NoHandle,
-        mgr.install_packages(&package_names, 0),
+        mgr.install_packages(&package_names, .none),
     );
 }
 
@@ -2100,7 +2100,7 @@ test "install_packages rejects an empty package list" {
     var package_names = [_][:0]const u8{};
     try testing.expectError(
         error.PackageFetchFailed,
-        mgr.install_packages(&package_names, 0),
+        mgr.install_packages(&package_names, .none),
     );
 }
 
@@ -2122,7 +2122,7 @@ test "install_packages rejects malformed repository-qualified targets" {
         var package_names = [_][:0]const u8{target};
         try testing.expectError(
             error.PackageFetchFailed,
-            mgr.install_packages(&package_names, 0),
+            mgr.install_packages(&package_names, .none),
         );
     }
 }
@@ -2143,13 +2143,13 @@ test "install_packages returns PackageFetchFailed when a target cannot be resolv
     var unqualified = [_][:0]const u8{"shelly-package-that-does-not-exist"};
     try testing.expectError(
         error.PackageFetchFailed,
-        mgr.install_packages(&unqualified, 0),
+        mgr.install_packages(&unqualified, .none),
     );
 
     var qualified = [_][:0]const u8{"seafoam-labs/shelly-package-that-does-not-exist"};
     try testing.expectError(
         error.PackageFetchFailed,
-        mgr.install_packages(&qualified, 0),
+        mgr.install_packages(&qualified, .none),
     );
 }
 

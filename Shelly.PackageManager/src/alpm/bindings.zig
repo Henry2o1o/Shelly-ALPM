@@ -71,6 +71,7 @@ pub const libalpm = struct {
     };
 
     pub const TransFlag = enum(u32) {
+        none = 0,
         nodeps = 1 << 0,
         nosave = 1 << 2,
         nodepversion = 1 << 3,
@@ -90,6 +91,7 @@ pub const libalpm = struct {
 
         pub fn from_trans_flag(trans_flag: alpm.alpm_transflag_t) TransFlag {
             return switch (trans_flag) {
+                0 => .none,
                 alpm.ALPM_TRANS_FLAG_NODEPS => .nodeps,
                 alpm.ALPM_TRANS_FLAG_NOSAVE => .nosave,
                 alpm.ALPM_TRANS_FLAG_NODEPVERSION => .nodepversion,
@@ -112,6 +114,7 @@ pub const libalpm = struct {
 
         pub fn to_trans_flag(trans_flag: TransFlag) alpm.alpm_transflag_t {
             return switch (trans_flag) {
+                .none => 0,
                 .nodeps => alpm.ALPM_TRANS_FLAG_NODEPS,
                 .nosave => alpm.ALPM_TRANS_FLAG_NOSAVE,
                 .nodepversion => alpm.ALPM_TRANS_FLAG_NODEPVERSION,
