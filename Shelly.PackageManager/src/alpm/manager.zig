@@ -20,7 +20,7 @@ pub const InitError = error{
     RegisterDbFailed,
     ConfigParseFailed,
 };
-pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory, NoPackageFound };
+pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory, NoPackageFound, RemovalFailed };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
@@ -438,7 +438,6 @@ pub const Manager = struct {
 
     pub fn remove_packages(self: *Manager, packages_names: [][:0]const u8, flags: TransFlag, keep_optional_dependencis: bool) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
-        _ = flags;
 
         for (self.config.hold_packages.items) |hold_pkg| {
             for (packages_names) |pkg| {
@@ -493,6 +492,7 @@ pub const Manager = struct {
                 const package = libalpm.Package{ .ptr = *ptr };
                 const optional_deps = package.optional_depends();
                 while (optional_deps.next()) |deps| {
+                    // looks for local package continues on if failes to find.
                     const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, deps.name()) orelse {
                         const message = std.fmt.allocPrint(self.allocator, "Failed to find {s} in local database. Skipping...", .{deps.name()});
                         defer self.allocator.free(message);
@@ -500,13 +500,88 @@ pub const Manager = struct {
                             .event_type = libalpm.EventType.failed_optional_dependency_operation,
                             .message = message,
                         });
+                        continue;
                     };
-                    const pkg_reason = rawLibalpm.alpm_pkg_get_reason(local_ptr);
-                    _ = pkg_reason;
+                    const local_pkg = libalpm.Package{ .ptr = local_ptr };
+                    // checks reason and continues loop if explicit
+                    const pkg_reason = local_pkg.install_reason();
+                    if (pkg_reason == libalpm.PackageReason.Explicit) {
+                        const message = std.fmt.allocPrint(self.allocator, "Package {s} is explicit. Skipping...", .{deps.name()});
+                        defer self.allocator.free(message);
+                        self.dispatcher.raiseInformational(.{
+                            .event_type = libalpm.EventType.package_explicit,
+                            .message = message,
+                        });
+                        continue;
+                    }
+
+                    // checks if package is still in use by other applications
+                    const required_by = local_pkg.required_by();
+                    var still_required: bool = false;
+                    while (required_by.next()) |package_name| {
+                        _ = rawLibalpm.alpm_db_get_pkg(local_db, package_name) orelse {
+                            // continuing on as this package is not installed and we can ignore.
+                            continue;
+                        };
+                        const message = std.fmt.allocPrint(self.allocator, "Found {s} is still needed. Skipping removal...", .{package_name});
+                        defer self.allocator.free(message);
+                        self.dispatcher.raiseInformational(.{ .event_type = libalpm.EventType.failed_optional_dependency_operation, .message = message });
+                        still_required = true;
+                        break;
+                    }
+                    // skips optional dependency removal as the package is still required
+                    if (still_required) {
+                        continue;
+                    }
+                    const message = std.fmt.allocPrint(self.allocator, "Found {s} is unneeded after removal. queing for removal", .{package.name()});
+                    defer self.allocator.free(message);
+                    self.dispatcher.raiseInformational(.{ .event_type = libalpm.EventType.optdep_removal, .message = message });
+                    package_pointers.append(self.allocator, local_ptr);
                 }
             }
         }
-        return false;
+
+        if (TransFlag.contains(flags, .dbonly)) {
+            flags |= TransFlag.nodeps;
+        }
+
+        if (rawLibalpm.alpm_trans_init(self.handle, flags.to_trans_flag()) != 0) return TransactionError.TransInitFailed;
+        defer _ = rawLibalpm.alpm_trans_release(self.handle);
+
+        for (package_pointers) |pkg_ptr| {
+            if (rawLibalpm.alpm_remove_pkg(self.handle, pkg_ptr) == 0) continue;
+            const errno = rawLibalpm.alpm_errno(self.handle);
+            const reason = libalpm.str(rawLibalpm.alpm_strerror(errno)) orelse
+                "Unknown libalpm error";
+            const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg_ptr)) orelse
+                "unknown package";
+
+            const message = std.fmt.allocPrint(
+                self.allocator,
+                "Failed to queue {s} for removal: {s}",
+                .{ name, reason },
+            ) catch {
+                self.dispatcher.raiseError(.{
+                    .message = "Failed to queue package for removal.",
+                });
+                return TransactionError.RemovalFailed;
+            };
+            defer self.allocator.free(message);
+
+            self.dispatcher.raiseError(.{ .message = message });
+            return TransactionError.RemovalFailed;
+        }
+
+        var data: [*c]rawLibalpm.alpm_list_t = null;
+        if (rawLibalpm.alpm_trans_prepare(self.handle, &data) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {};
+            return TransactionError.PrepareFailed;
+        }
+        if (rawLibalpm.alpm_trans_commit(self.handle, &data) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {};
+            return TransactionError.CommitFailed;
+        }
+        return true;
     }
 
     //Essentially same as above but iterates just for a single package name to determine
