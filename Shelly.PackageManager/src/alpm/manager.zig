@@ -677,6 +677,12 @@ pub const Manager = struct {
         if (rawLibalpm.alpm_pkg_set_reason(pkg, @intCast(@intFromEnum(reason))) != 0) return TransactionError.SetReasonFailed;
     }
 
+    pub fn install_local_packages(self: *Manager, paths: [][]const u8, flags: TransFlag) TransactionError!void {
+        if (self.handle == null) return TransactionError.NoHandle;
+        _ = flags;
+        if (paths.len == 0) return TransactionError.NoPackageFound;
+    }
+
     //Essentially same as above but iterates just for a single package name to determine
     fn get_opt_depend_if_available(self: *Manager, pkg_name: [:0]const u8) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
