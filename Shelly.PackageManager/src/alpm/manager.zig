@@ -20,7 +20,7 @@ pub const InitError = error{
     RegisterDbFailed,
     ConfigParseFailed,
 };
-pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory };
+pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory, NoPackageFound };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
@@ -305,7 +305,7 @@ pub const Manager = struct {
         self: *Manager,
         package_names: [][:0]const u8,
         trans_flags_arg: TransFlag,
-    ) TransactionError!void {
+    ) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
         var packages: std.ArrayList(*rawLibalpm.alpm_pkg_t) = .empty;
@@ -433,6 +433,80 @@ pub const Manager = struct {
             const installed = rawLibalpm.alpm_db_get_pkg(local_db, name.ptr) orelse continue;
             _ = rawLibalpm.alpm_pkg_set_reason(installed, rawLibalpm.ALPM_PKG_REASON_DEPEND);
         }
+        return true;
+    }
+
+    pub fn remove_packages(self: *Manager, packages_names: [][:0]const u8, flags: TransFlag, keep_optional_dependencis: bool) TransactionError!bool {
+        if (self.handle == null) return TransactionError.NoHandle;
+        _ = flags;
+
+        for (self.config.hold_packages.items) |hold_pkg| {
+            for (packages_names) |pkg| {
+                if (std.ascii.eqlIgnoreCase(hold_pkg, pkg)) {
+                    const prompt = std.fmt.allocPrint(self.allocator, "Are you sure you want to remove {s} is it listed as a held package", .{pkg});
+                    defer self.allocator.free(prompt);
+                    const response = self.askYesNo(self.io(), @intFromEnum(libalpm.QuestionType.remove_packages), prompt);
+                    if (!response) {
+                        self.dispatcher.raiseError(.{"Held package removal cancelled."});
+                        return TransactionError.PrepareFailed;
+                    }
+                }
+            }
+        }
+
+        const local_db = rawLibalpm.alpm_get_localdb(self.handle);
+        var package_pointers: std.ArrayList(*rawLibalpm.alpm_pkg_t) = .empty;
+        defer package_pointers.deinit(self.allocator);
+        for (packages_names) |pkg| {
+            // Check for regular package
+            const package = rawLibalpm.alpm_db_get_pkg(local_db, pkg) orelse {
+                // Check for group name
+                const group_ptr = rawLibalpm.alpm_db_get_group(local_db, pkg) orelse {
+                    const satisfier = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(local_db), pkg) orelse {
+                        self.dispatcher.raiseError(.{ .message = "Failed to find package" });
+                        return TransactionError.NoPackageFound;
+                    };
+                    package_pointers.append(self.allocator, satisfier) catch {
+                        return TransactionError.OutOfMemory;
+                    };
+                    continue;
+                };
+                const group = libalpm.AlpmPackageGroup{ .ptr = group_ptr };
+                var packages = group.packages();
+
+                while (packages.next()) |package| {
+                    package_pointers.append(self.allocator, package) catch {
+                        return TransactionError.OutOfMemory;
+                    };
+                }
+                continue;
+            };
+
+            package_pointers.append(self.allocator, package) catch {
+                return TransactionError.OutOfMemory;
+            };
+        }
+
+        if (!keep_optional_dependencis) {
+            const current_count = package_pointers.items.len;
+            for (package_pointers.items[0..current_count]) |*ptr| {
+                const package = libalpm.Package{ .ptr = *ptr };
+                const optional_deps = package.optional_depends();
+                while (optional_deps.next()) |deps| {
+                    const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, deps.name()) orelse {
+                        const message = std.fmt.allocPrint(self.allocator, "Failed to find {s} in local database. Skipping...", .{deps.name()});
+                        defer self.allocator.free(message);
+                        self.dispatcher.raiseInformational(.{
+                            .event_type = libalpm.EventType.failed_optional_dependency_operation,
+                            .message = message,
+                        });
+                    };
+                    const pkg_reason = rawLibalpm.alpm_pkg_get_reason(local_ptr);
+                    _ = pkg_reason;
+                }
+            }
+        }
+        return false;
     }
 
     //Essentially same as above but iterates just for a single package name to determine
