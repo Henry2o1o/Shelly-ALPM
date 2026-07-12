@@ -438,15 +438,19 @@ pub const Manager = struct {
 
     pub fn remove_packages(self: *Manager, packages_names: [][:0]const u8, flags: TransFlag, keep_optional_dependencis: bool) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
+        if (packages_names.len == 0) return TransactionError.NoPackageFound;
+        // init returns Manager by value, so refresh callback userdata with this
+        // stable caller-owned address before libalpm raises transaction events.
+        self.setupCallbacks();
 
         for (self.config.hold_packages.items) |hold_pkg| {
             for (packages_names) |pkg| {
                 if (std.ascii.eqlIgnoreCase(hold_pkg, pkg)) {
-                    const prompt = std.fmt.allocPrint(self.allocator, "Are you sure you want to remove {s} is it listed as a held package", .{pkg});
+                    const prompt = try std.fmt.allocPrint(self.allocator, "Are you sure you want to remove {s}? It is listed as a held package.", .{pkg});
                     defer self.allocator.free(prompt);
                     const response = self.askYesNo(self.io(), @intFromEnum(libalpm.QuestionType.remove_packages), prompt);
                     if (!response) {
-                        self.dispatcher.raiseError(.{"Held package removal cancelled."});
+                        self.dispatcher.raiseError(.{ .message = "Held package removal cancelled." });
                         return TransactionError.PrepareFailed;
                     }
                 }
@@ -458,10 +462,10 @@ pub const Manager = struct {
         defer package_pointers.deinit(self.allocator);
         for (packages_names) |pkg| {
             // Check for regular package
-            const package = rawLibalpm.alpm_db_get_pkg(local_db, pkg) orelse {
+            const package = rawLibalpm.alpm_db_get_pkg(local_db, pkg.ptr) orelse {
                 // Check for group name
-                const group_ptr = rawLibalpm.alpm_db_get_group(local_db, pkg) orelse {
-                    const satisfier = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(local_db), pkg) orelse {
+                const group_ptr = rawLibalpm.alpm_db_get_group(local_db, pkg.ptr) orelse {
+                    const satisfier = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(local_db), pkg.ptr) orelse {
                         self.dispatcher.raiseError(.{ .message = "Failed to find package" });
                         return TransactionError.NoPackageFound;
                     };
@@ -474,7 +478,7 @@ pub const Manager = struct {
                 var packages = group.packages();
 
                 while (packages.next()) |package| {
-                    package_pointers.append(self.allocator, package) catch {
+                    package_pointers.append(self.allocator, package.ptr) catch {
                         return TransactionError.OutOfMemory;
                     };
                 }
@@ -488,13 +492,15 @@ pub const Manager = struct {
 
         if (!keep_optional_dependencis) {
             const current_count = package_pointers.items.len;
-            for (package_pointers.items[0..current_count]) |*ptr| {
-                const package = libalpm.Package{ .ptr = *ptr };
-                const optional_deps = package.optional_depends();
+            var package_index: usize = 0;
+            while (package_index < current_count) : (package_index += 1) {
+                const package = libalpm.Package{ .ptr = package_pointers.items[package_index] };
+                var optional_deps = package.optional_depends();
                 while (optional_deps.next()) |deps| {
+                    const dep_name = deps.name() orelse continue;
                     // looks for local package continues on if failes to find.
-                    const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, deps.name()) orelse {
-                        const message = std.fmt.allocPrint(self.allocator, "Failed to find {s} in local database. Skipping...", .{deps.name()});
+                    const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, dep_name.ptr) orelse {
+                        const message = try std.fmt.allocPrint(self.allocator, "Failed to find {s} in local database. Skipping...", .{dep_name});
                         defer self.allocator.free(message);
                         self.dispatcher.raiseInformational(.{
                             .event_type = libalpm.EventType.failed_optional_dependency_operation,
@@ -506,7 +512,7 @@ pub const Manager = struct {
                     // checks reason and continues loop if explicit
                     const pkg_reason = local_pkg.install_reason();
                     if (pkg_reason == libalpm.PackageReason.Explicit) {
-                        const message = std.fmt.allocPrint(self.allocator, "Package {s} is explicit. Skipping...", .{deps.name()});
+                        const message = try std.fmt.allocPrint(self.allocator, "Package {s} is explicit. Skipping...", .{dep_name});
                         defer self.allocator.free(message);
                         self.dispatcher.raiseInformational(.{
                             .event_type = libalpm.EventType.package_explicit,
@@ -516,14 +522,14 @@ pub const Manager = struct {
                     }
 
                     // checks if package is still in use by other applications
-                    const required_by = local_pkg.required_by();
+                    var required_by = local_pkg.required_by();
                     var still_required: bool = false;
                     while (required_by.next()) |package_name| {
-                        _ = rawLibalpm.alpm_db_get_pkg(local_db, package_name) orelse {
+                        _ = rawLibalpm.alpm_db_get_pkg(local_db, package_name.ptr) orelse {
                             // continuing on as this package is not installed and we can ignore.
                             continue;
                         };
-                        const message = std.fmt.allocPrint(self.allocator, "Found {s} is still needed. Skipping removal...", .{package_name});
+                        const message = try std.fmt.allocPrint(self.allocator, "Found {s} is still needed. Skipping removal...", .{package_name});
                         defer self.allocator.free(message);
                         self.dispatcher.raiseInformational(.{ .event_type = libalpm.EventType.failed_optional_dependency_operation, .message = message });
                         still_required = true;
@@ -533,22 +539,22 @@ pub const Manager = struct {
                     if (still_required) {
                         continue;
                     }
-                    const message = std.fmt.allocPrint(self.allocator, "Found {s} is unneeded after removal. queing for removal", .{package.name()});
+                    const package_name = package.name() orelse "unknown package";
+                    const message = try std.fmt.allocPrint(self.allocator, "Found {s} is unneeded after removal. queuing for removal", .{package_name});
                     defer self.allocator.free(message);
                     self.dispatcher.raiseInformational(.{ .event_type = libalpm.EventType.optdep_removal, .message = message });
-                    package_pointers.append(self.allocator, local_ptr);
+                    package_pointers.append(self.allocator, local_ptr) catch return TransactionError.OutOfMemory;
                 }
             }
         }
 
-        if (TransFlag.contains(flags, .dbonly)) {
-            flags |= TransFlag.nodeps;
-        }
+        var trans_flags = flags.to_trans_flag();
+        if (TransFlag.contains(trans_flags, .dbonly)) trans_flags |= TransFlag.nodeps.to_trans_flag();
 
-        if (rawLibalpm.alpm_trans_init(self.handle, flags.to_trans_flag()) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags)) != 0) return TransactionError.TransInitFailed;
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
-        for (package_pointers) |pkg_ptr| {
+        for (package_pointers.items) |pkg_ptr| {
             if (rawLibalpm.alpm_remove_pkg(self.handle, pkg_ptr) == 0) continue;
             const errno = rawLibalpm.alpm_errno(self.handle);
             const reason = libalpm.str(rawLibalpm.alpm_strerror(errno)) orelse
@@ -1575,6 +1581,10 @@ const SyncTestWorkspace = struct {
         const config_path = try std.fmt.allocPrint(allocator, "{s}/pacman.conf", .{root});
         errdefer allocator.free(config_path);
 
+        // The pointer-seeded test name can repeat across separate test
+        // processes, particularly after an interrupted run left files behind.
+        std.Io.Dir.cwd().deleteTree(io, root) catch {};
+
         // Create the root and database directories up front.
         try std.Io.Dir.cwd().createDirPath(io, db_path);
 
@@ -1605,6 +1615,51 @@ const SyncTestWorkspace = struct {
             .config_path = config_path,
             .db_path = db_path,
         };
+    }
+
+    fn addLocalPackage(
+        self: *const SyncTestWorkspace,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        version: []const u8,
+    ) !void {
+        const package_dir = try std.fmt.allocPrint(
+            allocator,
+            "{s}/local/{s}-{s}",
+            .{ self.db_path, name, version },
+        );
+        defer allocator.free(package_dir);
+        try std.Io.Dir.cwd().createDirPath(self.io, package_dir);
+
+        const version_path = try std.fmt.allocPrint(allocator, "{s}/local/ALPM_DB_VERSION", .{self.db_path});
+        defer allocator.free(version_path);
+        var version_file = try std.Io.Dir.cwd().createFile(self.io, version_path, .{});
+        defer version_file.close(self.io);
+        try version_file.writeStreamingAll(self.io, "9\n");
+
+        const desc_path = try std.fmt.allocPrint(allocator, "{s}/desc", .{package_dir});
+        defer allocator.free(desc_path);
+        const desc = try std.fmt.allocPrint(
+            allocator,
+            "%NAME%\n{s}\n\n" ++
+                "%VERSION%\n{s}\n\n" ++
+                "%DESC%\nTemporary package used by remove_packages tests\n\n" ++
+                "%ARCH%\nany\n\n" ++
+                "%REASON%\n0\n\n" ++
+                "%VALIDATION%\nnone\n\n",
+            .{ name, version },
+        );
+        defer allocator.free(desc);
+
+        var desc_file = try std.Io.Dir.cwd().createFile(self.io, desc_path, .{});
+        defer desc_file.close(self.io);
+        try desc_file.writeStreamingAll(self.io, desc);
+
+        const files_path = try std.fmt.allocPrint(allocator, "{s}/files", .{package_dir});
+        defer allocator.free(files_path);
+        var files = try std.Io.Dir.cwd().createFile(self.io, files_path, .{});
+        defer files.close(self.io);
+        try files.writeStreamingAll(self.io, "%FILES%\n\n");
     }
 
     // Removes the entire temp tree (config + downloaded databases) and frees the
@@ -2300,6 +2355,119 @@ test "install_packages returns PackageFetchFailed when a target cannot be resolv
         error.PackageFetchFailed,
         mgr.install_packages(&qualified, .none),
     );
+}
+
+// ---------------------------------------------------------------------------
+// remove_packages
+// ---------------------------------------------------------------------------
+
+test "remove_packages returns NoHandle when the handle is null" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    mgr.allocator = testing.allocator;
+
+    var package_names = [_][:0]const u8{"anything"};
+    try testing.expectError(
+        error.NoHandle,
+        mgr.remove_packages(&package_names, .none, true),
+    );
+}
+
+test "remove_packages rejects an empty package list" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    var package_names = [_][:0]const u8{};
+    try testing.expectError(
+        error.NoPackageFound,
+        mgr.remove_packages(&package_names, .none, true),
+    );
+}
+
+test "remove_packages returns NoPackageFound for an unknown target" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    var capture = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{ .function = captureError, .data = @ptrCast(&capture) });
+
+    var package_names = [_][:0]const u8{"shelly-package-that-does-not-exist"};
+    try testing.expectError(
+        error.NoPackageFound,
+        mgr.remove_packages(&package_names, .none, true),
+    );
+    try testing.expectEqualStrings("Failed to find package", capture.text());
+}
+
+test "remove_packages cancels removal of a held package without confirmation" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    var mgr = try Manager.init(allocator, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+
+    var capture = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{ .function = captureError, .data = @ptrCast(&capture) });
+
+    // "shelly" is included in the configuration's default HoldPkg entries.
+    // With no question handler, askYesNo defaults to false.
+    var package_names = [_][:0]const u8{"shelly"};
+    try testing.expectError(
+        error.PrepareFailed,
+        mgr.remove_packages(&package_names, .none, true),
+    );
+    try testing.expectEqualStrings("Held package removal cancelled.", capture.text());
+}
+
+test "remove_packages removes an installed package in a DB-only transaction when root" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-remove-test", "1.0-1");
+
+    // libalpm rejects removal transactions for unprivileged processes even
+    // when DBONLY confines the mutation to this temporary database.
+    if (builtin.os.tag != .linux or std.os.linux.geteuid() != 0) return;
+
+    // DBPath already points at the isolated workspace. Passing it again as the
+    // non-root temp path would replace its local database with a symlink.
+    var mgr = try Manager.init(allocator, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expect((try mgr.get_single_installed_package("shelly-remove-test")) != null);
+
+    var package_names = [_][:0]const u8{"shelly-remove-test"};
+    try testing.expect(try mgr.remove_packages(&package_names, .dbonly, true));
+    try testing.expect((try mgr.get_single_installed_package("shelly-remove-test")) == null);
 }
 
 // ---------------------------------------------------------------------------

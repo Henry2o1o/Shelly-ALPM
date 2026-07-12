@@ -325,7 +325,7 @@ pub const libalpm = struct {
         pub fn install_reason(self: Package) PackageReason {
             return switch (alpm.alpm_pkg_get_reason(self.ptr)) {
                 alpm.ALPM_PKG_REASON_EXPLICIT => .Explicit,
-                alpm.ALPM_PKG_REASON_DEPEND => .Depend,
+                alpm.ALPM_PKG_REASON_DEPEND => .Dependency,
                 else => .Unknown,
             };
         }
