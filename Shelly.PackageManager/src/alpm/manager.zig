@@ -22,7 +22,26 @@ pub const InitError = error{
     RegisterDbFailed,
     ConfigParseFailed,
 };
-pub const TransactionError = error{ NoHandle, TransInitFailed, PrepareFailed, CommitFailed, UnsatisfiedDeps, ConflictingDeps, FileConflicts, SyncDbFailed, PackageFetchFailed, DatabaseReadFailed, RefreshFailed, OutOfMemory, NoPackageFound, RemovalFailed, UpdateFetchFailed, SetReasonFailed };
+pub const TransactionError = error{
+    NoHandle,
+    TransInitFailed,
+    PrepareFailed,
+    CommitFailed,
+    UnsatisfiedDeps,
+    ConflictingDeps,
+    FileConflicts,
+    SyncDbFailed,
+    PackageFetchFailed,
+    DatabaseReadFailed,
+    RefreshFailed,
+    OutOfMemory,
+    NoPackageFound,
+    RemovalFailed,
+    UpdateFetchFailed,
+    SetReasonFailed,
+    PackageLoadFailed,
+    PackageAddFailed,
+};
 
 pub const QueryError = error{ DbNotFound, PkgNotFound };
 
@@ -42,16 +61,19 @@ pub const Manager = struct {
     temp_root_path: []const u8,
     show_hidden_packages: bool = false,
 
-    /// If null is passed for config it will use the default /etc/pacman.conf
+    /// If null is passed for config it will use the default /etc/pacman.conf.
+    /// The caller owns the returned manager and must call deinit when finished.
     pub fn init(
         allocator: std.mem.Allocator,
         environ: std.process.Environ,
         configPath: ?[]const u8,
         use_root: bool,
         temp_root_path: ?[]const u8,
-    ) InitError!Manager {
+    ) InitError!*Manager {
         const config_path = configPath orelse "/etc/pacman.conf";
-        var self = Manager{
+        const self = allocator.create(Manager) catch return InitError.InitFailed;
+        errdefer allocator.destroy(self);
+        self.* = Manager{
             .handle = null,
             .is_initialized = true,
             .allocator = allocator,
@@ -465,9 +487,6 @@ pub const Manager = struct {
     pub fn remove_packages(self: *Manager, packages_names: [][:0]const u8, flags: TransFlag, keep_optional_dependencis: bool) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
         if (packages_names.len == 0) return TransactionError.NoPackageFound;
-        // init returns Manager by value, so refresh callback userdata with this
-        // stable caller-owned address before libalpm raises transaction events.
-        self.setupCallbacks();
 
         for (self.config.hold_packages.items) |hold_pkg| {
             for (packages_names) |pkg| {
@@ -677,6 +696,73 @@ pub const Manager = struct {
         if (rawLibalpm.alpm_pkg_set_reason(pkg, @intCast(@intFromEnum(reason))) != 0) return TransactionError.SetReasonFailed;
     }
 
+    pub fn install_local_packages(self: *Manager, paths: [][]const u8, flags: TransFlag) TransactionError!void {
+        if (self.handle == null) return TransactionError.NoHandle;
+        if (paths.len == 0) return TransactionError.NoPackageFound;
+
+        var package_ptrs: std.ArrayList(libalpm.Package) = .empty;
+        defer package_ptrs.deinit(self.allocator);
+        const sig_level = rawLibalpm.ALPM_SIG_PACKAGE_OPTIONAL | rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL;
+        for (paths) |path| {
+            const path_z = self.allocator.dupeZ(u8, path) catch {
+                for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
+                return TransactionError.OutOfMemory;
+            };
+            defer self.allocator.free(path_z);
+
+            var temp_pkg: ?*rawLibalpm.alpm_pkg_t = null;
+            if (rawLibalpm.alpm_pkg_load(self.handle, path_z.ptr, @intFromBool(true), sig_level, &temp_pkg) != 0 or temp_pkg == null) {
+                const errno = rawLibalpm.alpm_errno(self.handle);
+                if (temp_pkg) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg);
+                for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
+                self.handleErrorMessage(@intCast(errno), null) catch {};
+                return TransactionError.PackageLoadFailed;
+            }
+            package_ptrs.append(self.allocator, .{ .ptr = temp_pkg.? }) catch {
+                _ = rawLibalpm.alpm_pkg_free(temp_pkg);
+                for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
+                return TransactionError.OutOfMemory;
+            };
+        }
+
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(flags.to_trans_flag())) != 0) {
+            for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
+            return TransactionError.TransInitFailed;
+        }
+        defer _ = rawLibalpm.alpm_trans_release(self.handle);
+
+        for (package_ptrs.items, 0..) |pkg, index| {
+            if (rawLibalpm.alpm_add_pkg(self.handle, pkg.ptr) != 0) {
+                const errno = rawLibalpm.alpm_errno(self.handle);
+                _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
+                if (errno == rawLibalpm.ALPM_ERR_TRANS_DUP_TARGET) {
+                    self.handleInformationMessage(libalpm.EventType.failed_add_local_package);
+                    continue;
+                }
+                for (package_ptrs.items[index + 1 ..]) |remaining_pkg| _ = rawLibalpm.alpm_pkg_free(remaining_pkg.ptr);
+                self.handleErrorMessage(@intCast(errno), null) catch {};
+                return TransactionError.PackageAddFailed;
+            }
+        }
+
+        var data: [*c]rawLibalpm.alpm_list_t = null;
+        if (rawLibalpm.alpm_trans_prepare(self.handle, &data) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {
+                // drop here has now use
+            };
+            return TransactionError.PrepareFailed;
+        }
+
+        data = null;
+        if (rawLibalpm.alpm_trans_commit(self.handle, &data) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {
+                // Abandon hope all yee who enter here
+            };
+            return TransactionError.CommitFailed;
+        }
+    }
+
     //Essentially same as above but iterates just for a single package name to determine
     fn get_opt_depend_if_available(self: *Manager, pkg_name: [:0]const u8) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
@@ -822,6 +908,7 @@ pub const Manager = struct {
     }
 
     pub fn deinit(self: *Manager) void {
+        const allocator = self.allocator;
         if (self.handle) |h| _ = libalpm.alpm.alpm_release(h);
         self.handle = null;
         self.is_initialized = false;
@@ -829,6 +916,7 @@ pub const Manager = struct {
         self.config.deinitialize();
         self.dispatcher.deinit();
         self.threaded.deinit();
+        allocator.destroy(self);
     }
 
     fn setupCallbacks(self: *Manager) void {
@@ -1134,15 +1222,12 @@ pub const Manager = struct {
                     .file = spanC(pacsave.file),
                 });
             },
-            else => self.dispatcher.raiseInformational(.{
-                .event_type = event_type,
-                .message = informationalEventMessage(event_type) orelse return,
-            }),
+            else => self.handleInformationMessage(event_type),
         }
     }
 
-    fn informationalEventMessage(event_type: libalpm.EventType) ?[]const u8 {
-        return switch (event_type) {
+    fn handleInformationMessage(self: *Manager, event_type: libalpm.EventType) void {
+        const message = switch (event_type) {
             .checkdeps_start => "Checking dependencies...",
             .checkdeps_done => "Dependency check finished.",
             .fileconflicts_start => "Checking for file conflicts...",
@@ -1176,9 +1261,17 @@ pub const Manager = struct {
             .hook_start => "Running hooks...",
             .hook_done => "Finished running hooks.",
             .hook_run_done => "Finished running hook.",
-            .scriptlet_info, .pacnew_created, .pacsave_created, .hook_run_start => null,
-            else => null,
+            .scriptlet_info, .pacnew_created, .pacsave_created, .hook_run_start => return,
+            .failed_optional_dependency_operation => "Failed to remove optional dependency.",
+            .package_explicit => "Package marked as explicitly installed.",
+            .failed_add_local_package => "Failed to add local package.",
+            else => return,
         };
+
+        self.dispatcher.raiseInformational(.{
+            .event_type = event_type,
+            .message = message,
+        });
     }
 
     fn questionCallback(ctx: ?*anyopaque, question: [*c]rawLibalpm.alpm_question_t) callconv(.c) void {
@@ -1599,10 +1692,44 @@ test "progressCallback forwards a null package name as null" {
 }
 
 // ---------------------------------------------------------------------------
-// eventCallback
+// handleInformationMessage + eventCallback
 // ---------------------------------------------------------------------------
 
-test "eventCallback dispatches the C# informational message for an event type" {
+test "handleInformationMessage emits a known informational description" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = InfoCapture{};
+    _ = mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    mgr.handleInformationMessage(.transaction_start);
+
+    const args = cap.args orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.EventType.transaction_start, args.event_type);
+    try testing.expectEqualStrings("Starting transaction...", args.message);
+}
+
+test "handleInformationMessage ignores specialized event types" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = InfoCapture{};
+    _ = mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&cap),
+    }) catch unreachable;
+
+    mgr.handleInformationMessage(.scriptlet_info);
+
+    try testing.expect(cap.args == null);
+}
+
+test "eventCallback dispatches the informational message for an event type" {
     var mgr: Manager = undefined;
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
     defer mgr.dispatcher.deinit();
