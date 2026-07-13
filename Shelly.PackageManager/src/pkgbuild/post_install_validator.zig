@@ -14,6 +14,15 @@ pub const ValidationFinding = struct {
 pub const ValidationResult = struct {
     has_findings: bool,
     findings: std.ArrayList(ValidationFinding),
+
+    pub fn deinit(self: *ValidationResult, allocator: std.mem.Allocator) void {
+        for (self.findings.items) |finding| {
+            allocator.free(finding.hook);
+            allocator.free(finding.matched_line);
+            allocator.free(finding.message);
+        }
+        self.findings.deinit(allocator);
+    }
 };
 
 pub const PostInstallValidator = struct {
@@ -77,8 +86,9 @@ pub const PostInstallValidator = struct {
 
         try self.scan_hook(pkg_build.post_install, "post_install", &result);
 
-        for (pkg_build.local_source_contents) |content| {
-            try self.scan_hook(content, content, &result);
+        var iter = pkg_build.local_source_contents.iterator();
+        while (iter.next()) |entry| {
+            try self.scan_hook(entry.value_ptr.*, entry.key_ptr.*, &result);
         }
 
         return result;
@@ -110,11 +120,13 @@ pub const PostInstallValidator = struct {
                         "'{s}' is invoked in {s}() — this fetches/executes external code outside pacman's control.",
                         .{ tool, hook },
                     );
+                const dup_hook = try self.allocator.dupe(u8, hook);
+                const dup_line = try self.allocator.dupe(u8, line);
                 try result.findings.append(self.allocator, ValidationFinding{
                     .tool = tool,
-                    .hook = hook,
+                    .hook = dup_hook,
                     .severity = if (was_obfuscated) .critical else .warning,
-                    .matched_line = line,
+                    .matched_line = dup_line,
                     .message = message,
                 });
                 result.has_findings = true;
@@ -219,11 +231,13 @@ pub const PostInstallValidator = struct {
                 .{hook},
             );
 
+        const dup_hook = try self.allocator.dupe(u8, hook);
+        const dup_line = try self.allocator.dupe(u8, line);
         try result.findings.append(self.allocator, ValidationFinding{
             .tool = "<dynamic-command>",
-            .hook = hook,
+            .hook = dup_hook,
             .severity = if (is_eval_into_shell) .critical else .warning,
-            .matched_line = line,
+            .matched_line = dup_line,
             .message = message,
         });
         result.has_findings = true;
@@ -386,15 +400,10 @@ fn empty_result() ValidationResult {
     };
 }
 
-fn free_findings(result: *ValidationResult, allocator: std.mem.Allocator) void {
-    for (result.findings.items) |finding| allocator.free(finding.message);
-    result.findings.deinit(allocator);
-}
-
 test "bare eval at start of line is critical" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("eval \"$cmd\"", "postInstall", &result);
 
@@ -406,7 +415,7 @@ test "bare eval at start of line is critical" {
 test "eval as a substring inside another word is not flagged" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("myeval value", "postInstall", &result);
 
@@ -417,7 +426,7 @@ test "eval as a substring inside another word is not flagged" {
 test "eval preceded by pipe and at end of line is critical (matches C# leniency)" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("cat file | grep eval", "postInstall", &result);
 
@@ -429,7 +438,7 @@ test "eval preceded by pipe and at end of line is critical (matches C# leniency)
 test "echo piped into bash is critical" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("echo $encoded | bash", "postInstall", &result);
 
@@ -441,7 +450,7 @@ test "echo piped into bash is critical" {
 test "base64 decode piped into sh is critical" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("base64 -d file.txt | sh -c -", "postInstall", &result);
 
@@ -453,7 +462,7 @@ test "base64 decode piped into sh is critical" {
 test "echo without a pipe is not flagged" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("echo hello world", "postInstall", &result);
 
@@ -464,7 +473,7 @@ test "echo without a pipe is not flagged" {
 test "command substitution with $() is a warning" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("VAR=$(hostname)", "postInstall", &result);
 
@@ -476,7 +485,7 @@ test "command substitution with $() is a warning" {
 test "command substitution with backticks is a warning" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("echo `whoami`", "postInstall", &result);
 
@@ -488,7 +497,7 @@ test "command substitution with backticks is a warning" {
 test "bash indirect variable expansion is a warning" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("cmd=${!name}; $cmd", "postInstall", &result);
 
@@ -500,7 +509,7 @@ test "bash indirect variable expansion is a warning" {
 test "ordinary parameter expansion is benign and not flagged" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_dynamic_execution("echo ${HOME}/bin", "postInstall", &result);
 
@@ -511,7 +520,7 @@ test "ordinary parameter expansion is benign and not flagged" {
 test "scan_hook returns immediately for a null scriptlet" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_hook(null, "post_install", &result);
 
@@ -522,7 +531,7 @@ test "scan_hook returns immediately for a null scriptlet" {
 test "scan_hook finds nothing in a benign multi-line scriptlet" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     const scriptlet =
         \\echo "installing package"
@@ -538,7 +547,7 @@ test "scan_hook finds nothing in a benign multi-line scriptlet" {
 test "scan_hook skips blank and comment-only lines without crashing" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     const scriptlet =
         \\
@@ -555,7 +564,7 @@ test "scan_hook skips blank and comment-only lines without crashing" {
 test "a risky tool mentioned only in a trailing comment is not flagged" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_hook("true # curl is not actually run here", "post_install", &result);
 
@@ -566,7 +575,7 @@ test "a risky tool mentioned only in a trailing comment is not flagged" {
 test "a plainly invoked risky tool is a warning" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_hook("curl https://example.com/install.sh -o installer.sh", "post_install", &result);
 
@@ -579,7 +588,7 @@ test "a plainly invoked risky tool is a warning" {
 test "a quote-obfuscated risky tool is critical" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_hook("c''u''r''l https://example.com/install.sh", "post_install", &result);
 
@@ -592,7 +601,7 @@ test "a quote-obfuscated risky tool is critical" {
 test "multiple risky tools on one line each produce their own finding" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
 
     try validator.scan_hook("npm install && curl https://example.com/x", "post_install", &result);
 
@@ -603,11 +612,237 @@ test "multiple risky tools on one line each produce their own finding" {
 test "scan_hook delegates to scan_dynamic_execution for eval-only lines" {
     const validator = PostInstallValidator{ .allocator = std.testing.allocator };
     var result = empty_result();
-    defer free_findings(&result, std.testing.allocator);
-
+    defer result.deinit(std.testing.allocator);
     try validator.scan_hook("eval $(cat payload.b64 | base64 -d)", "post_install", &result);
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
     try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+fn make_test_pkgbuild(
+    allocator: std.mem.Allocator,
+    post_install: ?[]const u8,
+) !pkgbuild.pkgbuild_info {
+    const lsc = std.StringHashMap([]const u8).init(allocator);
+    return pkgbuild.pkgbuild_info{
+        .variables = std.StringHashMap([]const u8).init(allocator),
+        .post_install = post_install,
+        .local_source_contents = lsc,
+    };
+}
+
+fn deinit_test_pkgbuild(pkg: *pkgbuild.pkgbuild_info, allocator: std.mem.Allocator) void {
+    if (pkg.post_install) |v| allocator.free(v);
+
+    var lsc_it = pkg.local_source_contents.iterator();
+    while (lsc_it.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        allocator.free(entry.value_ptr.*);
+    }
+    pkg.local_source_contents.deinit();
+
+    var var_it = pkg.variables.iterator();
+    while (var_it.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        allocator.free(entry.value_ptr.*);
+    }
+    pkg.variables.deinit();
+}
+
+test "validate: empty pkgbuild produces no findings" {
+    const allocator = std.testing.allocator;
+    var pkg = try make_test_pkgbuild(allocator, null);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.findings.items.len);
+    try std.testing.expect(!result.has_findings);
+}
+
+test "validate: benign post_install produces no findings" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8,
+        \\echo "installing package"
+        \\mkdir -p /opt/myapp
+        \\chmod +x /opt/myapp/run.sh
+    );
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.findings.items.len);
+    try std.testing.expect(!result.has_findings);
+}
+
+test "validate: risky tool in post_install produces warning finding" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "curl https://example.com/install.sh -o installer.sh");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
+    try std.testing.expectEqualStrings("post_install", result.findings.items[0].hook);
+    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
+}
+
+test "validate: eval in post_install produces critical finding" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "eval \"$(cat payload.b64 | base64 -d)\"");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+test "validate: obfuscated tool in post_install is critical" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "c''u''r''l https://example.com/install.sh");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
+    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+test "validate: risky tool in local_source_contents produces finding" {
+    const allocator = std.testing.allocator;
+    var pkg = try make_test_pkgbuild(allocator, null);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const key = try allocator.dupe(u8, "install.sh");
+    const value = try allocator.dupe(u8, "wget https://example.com/binary");
+    try pkg.local_source_contents.put(key, value);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("wget", result.findings.items[0].tool);
+}
+
+test "validate: findings from both post_install and local_source_contents" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "curl https://example.com/a");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const key = try allocator.dupe(u8, "hook.sh");
+    const value = try allocator.dupe(u8, "npm install -g some-package");
+    try pkg.local_source_contents.put(key, value);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), result.findings.items.len);
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
+    try std.testing.expectEqualStrings("post_install", result.findings.items[0].hook);
+    try std.testing.expectEqualStrings("npm", result.findings.items[1].tool);
+}
+
+test "validate: multiple risky tools in post_install produce multiple findings" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "npm install && curl https://example.com/x");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), result.findings.items.len);
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("npm", result.findings.items[0].tool);
+    try std.testing.expectEqualStrings("curl", result.findings.items[1].tool);
+}
+
+test "validate: null post_install with risky local_source_contents" {
+    const allocator = std.testing.allocator;
+    var pkg = try make_test_pkgbuild(allocator, null);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const key = try allocator.dupe(u8, "post.install");
+    const value = try allocator.dupe(u8, "eval \"malicious code\"");
+    try pkg.local_source_contents.put(key, value);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    // eval in local_source_contents should produce a critical finding
+    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+test "validate: empty post_install string produces no findings" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.findings.items.len);
+    try std.testing.expect(!result.has_findings);
+}
+
+test "validate: post_install with command substitution is warning" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "VAR=$(hostname)");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer {
+        deinit_test_pkgbuild(&pkg, allocator);
+    }
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
 }
