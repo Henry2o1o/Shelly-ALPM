@@ -705,7 +705,7 @@ pub const Manager = struct {
         const sig_level = rawLibalpm.ALPM_SIG_PACKAGE_OPTIONAL | rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL;
         for (paths) |path| {
             const path_z = self.allocator.dupeZ(u8, path) catch {
-                freeLoadedPackages(package_ptrs.items);
+                for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
                 return TransactionError.OutOfMemory;
             };
             defer self.allocator.free(path_z);
@@ -714,19 +714,19 @@ pub const Manager = struct {
             if (rawLibalpm.alpm_pkg_load(self.handle, path_z.ptr, @intFromBool(true), sig_level, &temp_pkg) != 0 or temp_pkg == null) {
                 const errno = rawLibalpm.alpm_errno(self.handle);
                 if (temp_pkg) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg);
-                freeLoadedPackages(package_ptrs.items);
+                for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
                 self.handleErrorMessage(@intCast(errno), null) catch {};
                 return TransactionError.PackageLoadFailed;
             }
             package_ptrs.append(self.allocator, .{ .ptr = temp_pkg.? }) catch {
                 _ = rawLibalpm.alpm_pkg_free(temp_pkg);
-                freeLoadedPackages(package_ptrs.items);
+                for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
                 return TransactionError.OutOfMemory;
             };
         }
 
         if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(flags.to_trans_flag())) != 0) {
-            freeLoadedPackages(package_ptrs.items);
+            for (package_ptrs.items) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
             self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
             return TransactionError.TransInitFailed;
         }
@@ -740,7 +740,7 @@ pub const Manager = struct {
                     self.handleInformationMessage(libalpm.EventType.failed_add_local_package);
                     continue;
                 }
-                freeLoadedPackages(package_ptrs.items[index + 1 ..]);
+                for (package_ptrs.items[index + 1 ..]) |remaining_pkg| _ = rawLibalpm.alpm_pkg_free(remaining_pkg.ptr);
                 self.handleErrorMessage(@intCast(errno), null) catch {};
                 return TransactionError.PackageAddFailed;
             }
@@ -761,10 +761,6 @@ pub const Manager = struct {
             };
             return TransactionError.CommitFailed;
         }
-    }
-
-    fn freeLoadedPackages(packages: []const libalpm.Package) void {
-        for (packages) |pkg| _ = rawLibalpm.alpm_pkg_free(pkg.ptr);
     }
 
     //Essentially same as above but iterates just for a single package name to determine
