@@ -5,14 +5,30 @@ const shared_validator = @import("shared_validtor.zig");
 pub const HomographValidator = struct {
     allocator: std.mem.Allocator,
 
-    pub fn validate(self: HomographValidator, pkg_build: pkgbuild.pkgbuild_info) shared_validator.ValidationResult {
-        _ = self;
-        _ = pkg_build;
+    pub fn validate(self: HomographValidator, pkg_build: pkgbuild.pkgbuild_info) !shared_validator.ValidationResult {
+        var result = shared_validator.ValidationResult{
+            .has_findings = false,
+            .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
+        };
+
+        try self.scan(pkg_build.pkg_name, "pkgname", &result);
+        if (pkg_build.depends) |deps| for (deps) |dep| try self.scan(dep, "depends", &result);
+        if (pkg_build.make_depends) |deps| for (deps) |dep| try self.scan(dep, "makedepends", &result);
+        try self.scan(pkg_build.url, "url", &result);
+        if (pkg_build.source) |srcs| for (srcs) |src| try self.scan(src, "source", &result);
+
+        return result;
     }
 
-    pub fn validate_field(value: ?[]const u8, field: []const u8) bool {
-        _ = value;
-        _ = field;
+    pub fn validate_field(self: HomographValidator, value: ?[]const u8, field: []const u8) !shared_validator.ValidationResult {
+        var result = shared_validator.ValidationResult{
+            .has_findings = false,
+            .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
+        };
+
+        try self.scan(value, field, &result);
+
+        return result;
     }
 
     const script_class = enum(i32) { latin, cyrillic, greek, armenian, other };
@@ -861,4 +877,202 @@ test "scan - matched_line shows codepoints for non-ascii" {
 
     try std.testing.expect(std.mem.indexOf(u8, result.findings.items[0].matched_line, "[U+") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.findings.items[0].matched_line, "U+0430]") != null);
+}
+
+fn cleanup_pkgbuild_test_fields(info: *pkgbuild.pkgbuild_info) void {
+    info.variables.deinit();
+    info.local_source_contents.deinit();
+}
+
+test "validate - clean pkgbuild has no findings" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+    var depends = [_][]const u8{ "glibc", "openssl" };
+    var make_depends = [_][]const u8{"cmake"};
+    var source = [_][]const u8{"https://example.com/src.tar.gz"};
+
+    var info = pkgbuild.pkgbuild_info{
+        .pkg_name = "valid-package",
+        .depends = &depends,
+        .make_depends = &make_depends,
+        .url = "https://example.com",
+        .source = &source,
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(false, result.has_findings);
+    try std.testing.expectEqual(@as(usize, 0), result.findings.items.len);
+}
+
+test "validate - hidden character in pkgname" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+
+    var info = pkgbuild.pkgbuild_info{
+        .pkg_name = "pkg\u{200B}name",
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expectEqualStrings("pkgname", result.findings.items[0].hook);
+}
+
+test "validate - hidden character in one of several depends" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+    var depends = [_][]const u8{ "glibc", "open\u{200B}ssl", "zlib" };
+
+    var info = pkgbuild.pkgbuild_info{
+        .pkg_name = "valid-package",
+        .depends = &depends,
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expectEqualStrings("depends", result.findings.items[0].hook);
+}
+
+test "validate - hidden character in makedepends" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+    var make_depends = [_][]const u8{"cmake\u{FEFF}"};
+
+    var info = pkgbuild.pkgbuild_info{
+        .pkg_name = "valid-package",
+        .make_depends = &make_depends,
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("makedepends", result.findings.items[0].hook);
+}
+
+test "validate - mixed script in url" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+
+    var info = pkgbuild.pkgbuild_info{
+        .pkg_name = "valid-package",
+        .url = "https://exampl\u{0435}.com", // Cyrillic е instead of e
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("url", result.findings.items[0].hook);
+}
+
+test "validate - hidden character in one of several source entries" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+    var source = [_][]const u8{ "https://example.com/a.tar.gz", "https://example.com/b\u{200D}.tar.gz" };
+
+    var info = pkgbuild.pkgbuild_info{
+        .pkg_name = "valid-package",
+        .source = &source,
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("source", result.findings.items[0].hook);
+}
+
+test "validate - findings accumulate across multiple fields" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+    var depends = [_][]const u8{"open\u{200B}ssl"};
+
+    var info = pkgbuild.pkgbuild_info{
+        .pkg_name = "pkg\u{200B}name",
+        .depends = &depends,
+        .url = "https://exampl\u{0435}.com",
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqual(@as(usize, 3), result.findings.items.len);
+}
+
+test "validate - null and unset fields are skipped safely" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+
+    var info = pkgbuild.pkgbuild_info{
+        .variables = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(std.testing.allocator),
+    };
+    defer cleanup_pkgbuild_test_fields(&info);
+
+    var result = try validator.validate(info);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(false, result.has_findings);
+    try std.testing.expectEqual(@as(usize, 0), result.findings.items.len);
+}
+
+test "validate_field - clean value has no findings" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+
+    var result = try validator.validate_field("John Smith", "Maintainer");
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(false, result.has_findings);
+}
+
+test "validate_field - hidden character flagged under given field name" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+
+    var result = try validator.validate_field("John\u{200B}Smith", "Maintainer");
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expectEqualStrings("Maintainer", result.findings.items[0].hook);
+}
+
+test "validate_field - mixed script flagged" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+
+    var result = try validator.validate_field("Smith\u{0430}", "Name"); // Cyrillic а
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqualStrings("Name", result.findings.items[0].hook);
+}
+
+test "validate_field - null value produces no findings" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+
+    var result = try validator.validate_field(null, "Url");
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(false, result.has_findings);
 }
