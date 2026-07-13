@@ -6,3 +6,4 @@ riderModule.iml
 .idea/
 Shelly-UI.sln.DotSettings.user
 .junie/
+Shelly.Ui.Gtk/.zig-cache/
