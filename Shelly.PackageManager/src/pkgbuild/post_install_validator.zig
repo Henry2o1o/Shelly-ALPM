@@ -2,20 +2,6 @@ const std = @import("std");
 const pkgbuild = @import("pkgbuild_parser.zig");
 const shared_validator = @import("shared_validtor.zig");
 
-pub const ValidationResult = struct {
-    has_findings: bool,
-    findings: std.ArrayList(shared_validator.ValidationFinding),
-
-    pub fn deinit(self: *ValidationResult, allocator: std.mem.Allocator) void {
-        for (self.findings.items) |finding| {
-            allocator.free(finding.hook);
-            allocator.free(finding.matched_line);
-            allocator.free(finding.message);
-        }
-        self.findings.deinit(allocator);
-    }
-};
-
 pub const PostInstallValidator = struct {
     allocator: std.mem.Allocator,
 
@@ -69,8 +55,8 @@ pub const PostInstallValidator = struct {
         "gvm",    "asdf",
     };
 
-    pub fn validate(self: PostInstallValidator, pkg_build: pkgbuild.pkgbuild_info) !ValidationResult {
-        var result = ValidationResult{
+    pub fn validate(self: PostInstallValidator, pkg_build: pkgbuild.pkgbuild_info) !shared_validator.ValidationResult {
+        var result = shared_validator.ValidationResult{
             .has_findings = false,
             .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
         };
@@ -85,7 +71,7 @@ pub const PostInstallValidator = struct {
         return result;
     }
 
-    fn scan_hook(self: PostInstallValidator, scriptlet: ?[]const u8, hook: []const u8, result: *ValidationResult) !void {
+    fn scan_hook(self: PostInstallValidator, scriptlet: ?[]const u8, hook: []const u8, result: *shared_validator.ValidationResult) !void {
         const content = scriptlet orelse return;
         var iter = std.mem.splitScalar(u8, content, '\n');
         while (iter.next()) |line| {
@@ -201,7 +187,7 @@ pub const PostInstallValidator = struct {
         return std.mem.indexOf(u8, line, "${!") != null;
     }
 
-    pub fn scan_dynamic_execution(self: PostInstallValidator, line: []const u8, hook: []const u8, result: *ValidationResult) !void {
+    pub fn scan_dynamic_execution(self: PostInstallValidator, line: []const u8, hook: []const u8, result: *shared_validator.ValidationResult) !void {
         const is_eval_into_shell = has_eval_token(line) or has_encode_pipe_shell(line);
         const has_command_substitution = contains_command_substitution(line);
         const has_variable_indirection = contains_variable_indirection(line);
@@ -384,7 +370,7 @@ test "empty string" {
     try std.testing.expectEqualStrings("", out);
 }
 
-fn empty_result() ValidationResult {
+fn empty_result() shared_validator.ValidationResult {
     return .{
         .has_findings = false,
         .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
