@@ -1,19 +1,10 @@
 const std = @import("std");
 const pkgbuild = @import("pkgbuild_parser.zig");
-
-pub const ValidationSeverity = enum(i32) { info, warning, critical };
-
-pub const ValidationFinding = struct {
-    tool: []const u8,
-    severity: ValidationSeverity,
-    hook: []const u8,
-    matched_line: []const u8,
-    message: []const u8,
-};
+const shared_validator = @import("shared_validtor.zig");
 
 pub const ValidationResult = struct {
     has_findings: bool,
-    findings: std.ArrayList(ValidationFinding),
+    findings: std.ArrayList(shared_validator.ValidationFinding),
 
     pub fn deinit(self: *ValidationResult, allocator: std.mem.Allocator) void {
         for (self.findings.items) |finding| {
@@ -81,7 +72,7 @@ pub const PostInstallValidator = struct {
     pub fn validate(self: PostInstallValidator, pkg_build: pkgbuild.pkgbuild_info) !ValidationResult {
         var result = ValidationResult{
             .has_findings = false,
-            .findings = std.ArrayList(ValidationFinding).empty,
+            .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
         };
 
         try self.scan_hook(pkg_build.post_install, "post_install", &result);
@@ -122,7 +113,7 @@ pub const PostInstallValidator = struct {
                     );
                 const dup_hook = try self.allocator.dupe(u8, hook);
                 const dup_line = try self.allocator.dupe(u8, line);
-                try result.findings.append(self.allocator, ValidationFinding{
+                try result.findings.append(self.allocator, shared_validator.ValidationFinding{
                     .tool = tool,
                     .hook = dup_hook,
                     .severity = if (was_obfuscated) .critical else .warning,
@@ -233,7 +224,7 @@ pub const PostInstallValidator = struct {
 
         const dup_hook = try self.allocator.dupe(u8, hook);
         const dup_line = try self.allocator.dupe(u8, line);
-        try result.findings.append(self.allocator, ValidationFinding{
+        try result.findings.append(self.allocator, shared_validator.ValidationFinding{
             .tool = "<dynamic-command>",
             .hook = dup_hook,
             .severity = if (is_eval_into_shell) .critical else .warning,
@@ -396,7 +387,7 @@ test "empty string" {
 fn empty_result() ValidationResult {
     return .{
         .has_findings = false,
-        .findings = std.ArrayList(ValidationFinding).empty,
+        .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
     };
 }
 
@@ -409,7 +400,7 @@ test "bare eval at start of line is critical" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "eval as a substring inside another word is not flagged" {
@@ -432,7 +423,7 @@ test "eval preceded by pipe and at end of line is critical (matches C# leniency)
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "echo piped into bash is critical" {
@@ -444,7 +435,7 @@ test "echo piped into bash is critical" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "base64 decode piped into sh is critical" {
@@ -456,7 +447,7 @@ test "base64 decode piped into sh is critical" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "echo without a pipe is not flagged" {
@@ -479,7 +470,7 @@ test "command substitution with $() is a warning" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.warning, result.findings.items[0].severity);
 }
 
 test "command substitution with backticks is a warning" {
@@ -491,7 +482,7 @@ test "command substitution with backticks is a warning" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.warning, result.findings.items[0].severity);
 }
 
 test "bash indirect variable expansion is a warning" {
@@ -503,7 +494,7 @@ test "bash indirect variable expansion is a warning" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.warning, result.findings.items[0].severity);
 }
 
 test "ordinary parameter expansion is benign and not flagged" {
@@ -582,7 +573,7 @@ test "a plainly invoked risky tool is a warning" {
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
     try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
-    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.warning, result.findings.items[0].severity);
 }
 
 test "a quote-obfuscated risky tool is critical" {
@@ -595,7 +586,7 @@ test "a quote-obfuscated risky tool is critical" {
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
     try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "multiple risky tools on one line each produce their own finding" {
@@ -617,7 +608,7 @@ test "scan_hook delegates to scan_dynamic_execution for eval-only lines" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 fn make_test_pkgbuild(
@@ -699,7 +690,7 @@ test "validate: risky tool in post_install produces warning finding" {
     try std.testing.expect(result.has_findings);
     try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
     try std.testing.expectEqualStrings("post_install", result.findings.items[0].hook);
-    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.warning, result.findings.items[0].severity);
 }
 
 test "validate: eval in post_install produces critical finding" {
@@ -716,7 +707,7 @@ test "validate: eval in post_install produces critical finding" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "validate: obfuscated tool in post_install is critical" {
@@ -734,7 +725,7 @@ test "validate: obfuscated tool in post_install is critical" {
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
     try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "validate: risky tool in local_source_contents produces finding" {
@@ -811,7 +802,7 @@ test "validate: null post_install with risky local_source_contents" {
 
     try std.testing.expect(result.has_findings);
     // eval in local_source_contents should produce a critical finding
-    try std.testing.expectEqual(ValidationSeverity.critical, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "validate: empty post_install string produces no findings" {
@@ -844,5 +835,5 @@ test "validate: post_install with command substitution is warning" {
 
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
-    try std.testing.expectEqual(ValidationSeverity.warning, result.findings.items[0].severity);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.warning, result.findings.items[0].severity);
 }
