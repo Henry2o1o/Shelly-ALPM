@@ -43,7 +43,7 @@ pub const TransactionError = error{
     PackageAddFailed,
 };
 
-pub const QueryError = error{ DbNotFound, PkgNotFound };
+pub const QueryError = error{ DbNotFound, PkgNotFound, NoHandle };
 
 pub const Manager = struct {
     handle: libalpm.Handle = null,
@@ -763,7 +763,20 @@ pub const Manager = struct {
         }
     }
 
-    //Essentially same as above but iterates just for a single package name to determine
+    pub fn get_package_from_provides(self: *Manager, provides: [:0]const u8) QueryError![:0]const u8 {
+        if (self.handle == null) return QueryError.NoHandle;
+        const sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
+        while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
+            const db_ptr = sync_dbs.*.data orelse continue;
+            const db: libalpm.Database = libalpm.Database.from(db_ptr) orelse continue;
+            const pkg_cache = db.package_cache();
+            const satisfier = rawLibalpm.alpm_find_satisfier(pkg_cache, provides.ptr) orelse continue;
+            const pkg = libalpm.Package.from(satisfier) orelse continue;
+            return pkg.name();
+        }
+    }
+
+    // Determines if a single package is available for optional dependency install.
     fn get_opt_depend_if_available(self: *Manager, pkg_name: [:0]const u8) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
         const sync_database = rawLibalpm.alpm_get_syncdbs(self.handle);
