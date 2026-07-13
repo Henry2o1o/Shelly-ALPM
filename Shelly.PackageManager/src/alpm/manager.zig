@@ -763,15 +763,16 @@ pub const Manager = struct {
         }
     }
 
-    pub fn get_package_from_provider(self: *Manager, provides: [:0]const u8) QueryError![:0]const u8 {
+    pub fn get_package_from_provides(self: *Manager, provides: [:0]const u8) QueryError![:0]const u8 {
         if (self.handle == null) return QueryError.NoHandle;
         const sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
-            _ = provides;
             const db_ptr = sync_dbs.*.data orelse continue;
             const db: libalpm.Database = libalpm.Database.from(db_ptr) orelse continue;
             const pkg_cache = db.package_cache();
-            _ = pkg_cache;
+            const satisfier = rawLibalpm.alpm_find_satisfier(pkg_cache, provides.ptr) orelse continue;
+            const pkg = libalpm.Package.from(satisfier) orelse continue;
+            return pkg.name();
         }
     }
 
