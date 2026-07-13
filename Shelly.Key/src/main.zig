@@ -18,13 +18,13 @@ fn run(init: std.process.Init) !void {
         .init => {
             try Shelly_Key.elevate.ensureRoot(
                 init.io,
-                init.gpa,
+                init.arena,
                 args,
                 init.environ_map.get("PATH").?,
             );
 
             const init_path = opts.init_path;
-            try Shelly_Key.keyring.init(init_path);
+            try Shelly_Key.keyring.init(init.io, init_path);
             try stdout.print("Keyring initialized at {s}\n", .{init_path});
         },
     }
