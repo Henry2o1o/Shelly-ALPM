@@ -1,12 +1,11 @@
 const std = @import("std");
 const Io = std.Io;
 
-pub const KeyfilesError = error{
-    NotARegularFile,
-} || std.Io.Dir.OpenError ||
-    std.Io.Dir.StatFileError ||
-    std.Io.Dir.SetFilePermissionsError ||
-    std.Io.File.OpenError;
+const fsutil = @import("../helpers/fsutil.zig");
+
+pub const KeyfilesError = fsutil.FsUtilError ||
+    std.Io.Dir.OpenError ||
+    std.Io.Dir.SetFilePermissionsError;
 
 // Old GnuPG keyring format for parity with older setups / `gpg1` interop.
 // TODO: No longer needed? Modern GnuPG commonly uses `pubring.kbx` and private-key storage under `private-keys-v1.d`.
@@ -18,8 +17,8 @@ pub fn ensureKeyringFilesCreated(
     var dir = try base.openDir(io, keyring_dir, .{});
     defer dir.close(io);
 
-    try ensureRegularFile(dir, io, "pubring.gpg");
-    try ensureRegularFile(dir, io, "secring.gpg");
+    try fsutil.ensureRegularFile(dir, io, "pubring.gpg");
+    try fsutil.ensureRegularFile(dir, io, "secring.gpg");
 }
 
 pub fn trustdbNeedsInit(
@@ -30,7 +29,7 @@ pub fn trustdbNeedsInit(
     var dir = try base.openDir(io, keyring_dir, .{});
     defer dir.close(io);
 
-    return !try isRegularFile(dir, io, "trustdb.gpg");
+    return !try fsutil.isRegularFile(dir, io, "trustdb.gpg");
 }
 
 pub fn applyKeyringPermissions(
@@ -41,27 +40,9 @@ pub fn applyKeyringPermissions(
     var dir = try base.openDir(io, keyring_dir, .{});
     defer dir.close(io);
 
-    try dir.setFilePermissions(io, "pubring.gpg", @enumFromInt(0o644), .{});
-    try dir.setFilePermissions(io, "trustdb.gpg", @enumFromInt(0o644), .{});
-    try dir.setFilePermissions(io, "secring.gpg", @enumFromInt(0o600), .{});
-}
-
-fn ensureRegularFile(dir: std.Io.Dir, io: Io, name: []const u8) KeyfilesError!void {
-    if (try isRegularFile(dir, io, name)) return;
-
-    var f = dir.createFile(io, name, .{}) catch |err| switch (err) {
-        error.IsDir => return error.NotARegularFile,
-        else => |e| return e,
-    };
-    f.close(io);
-}
-
-fn isRegularFile(dir: std.Io.Dir, io: Io, name: []const u8) KeyfilesError!bool {
-    const st = dir.statFile(io, name, .{}) catch |err| switch (err) {
-        error.FileNotFound => return false,
-        else => |e| return e,
-    };
-    return st.kind == .file;
+    try dir.setFilePermissions(io, "pubring.gpg", fsutil.mode.readable, .{});
+    try dir.setFilePermissions(io, "trustdb.gpg", fsutil.mode.readable, .{});
+    try dir.setFilePermissions(io, "secring.gpg", fsutil.mode.private, .{});
 }
 
 const testing = std.testing;
@@ -77,7 +58,7 @@ fn statSize(dir: Io.Dir, io: Io, sub_path: []const u8) !u64 {
     return st.size;
 }
 
-test "ensureLegacyKeyringFilesCreated creates pubring.gpg and secring.gpg when absent" {
+test "ensureKeyringFilesCreated creates pubring.gpg and secring.gpg when absent" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
 
@@ -97,7 +78,7 @@ test "ensureLegacyKeyringFilesCreated creates pubring.gpg and secring.gpg when a
     try testing.expectEqual(@as(u64, 0), try statSize(gnupg, testing.io, "secring.gpg"));
 }
 
-test "ensureLegacyKeyringFilesCreated is idempotent and preserves existing content" {
+test "ensureKeyringFilesCreated is idempotent and preserves existing content" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
 
@@ -123,7 +104,7 @@ test "ensureLegacyKeyringFilesCreated is idempotent and preserves existing conte
     try testing.expectEqual(@as(u64, 0), try statSize(gnupg, testing.io, "secring.gpg"));
 }
 
-test "ensureLegacyKeyringFilesCreated fails when pubring.gpg is a directory" {
+test "ensureKeyringFilesCreated fails when pubring.gpg is a directory" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
 
@@ -160,7 +141,7 @@ test "trustdbNeedsInit returns false when trustdb.gpg exists as a regular file" 
     try testing.expect(!try trustdbNeedsInit(tmp.dir, testing.io, "gnupg"));
 }
 
-test "applyLegacyKeyringPermissions sets the canonical modes on all three files" {
+test "applyKeyringPermissions sets the canonical modes on all three files" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
 
@@ -181,12 +162,12 @@ test "applyLegacyKeyringPermissions sets the canonical modes on all three files"
     var gnupg = try tmp.dir.openDir(testing.io, "gnupg", .{});
     defer gnupg.close(testing.io);
 
-    try testing.expectEqual(@as(std.posix.mode_t, 0o644), try statMode(gnupg, testing.io, "pubring.gpg"));
-    try testing.expectEqual(@as(std.posix.mode_t, 0o644), try statMode(gnupg, testing.io, "trustdb.gpg"));
-    try testing.expectEqual(@as(std.posix.mode_t, 0o600), try statMode(gnupg, testing.io, "secring.gpg"));
+    try testing.expectFmt("0644", "{o:0>4}", .{try statMode(gnupg, testing.io, "pubring.gpg")});
+    try testing.expectFmt("0644", "{o:0>4}", .{try statMode(gnupg, testing.io, "trustdb.gpg")});
+    try testing.expectFmt("0600", "{o:0>4}", .{try statMode(gnupg, testing.io, "secring.gpg")});
 }
 
-test "applyLegacyKeyringPermissions reports missing trustdb.gpg" {
+test "applyKeyringPermissions reports missing trustdb.gpg" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
 

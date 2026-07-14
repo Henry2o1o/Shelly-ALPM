@@ -780,8 +780,14 @@ pub const Manager = struct {
         if (self.handle == null) return QueryError.NoHandle;
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
         const db = libalpm.Database.from(local_db) orelse return QueryError.DbNotFound;
+        _ = rawLibalpm.alpm_find_satisfier(db.package_cache(), dependency) orelse return false;
+        return true;
+    }
+
+    pub fn find_remote_satisfier_for_dependency(self: *Manager, dependency: [:0]const u8) QueryError![:0]const u8 {
+        _ = self;
         _ = dependency;
-        _ = db;
+        return "";
     }
 
     // Determines if a single package is available for optional dependency install.
