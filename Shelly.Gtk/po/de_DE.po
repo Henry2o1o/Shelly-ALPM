@@ -494,6 +494,9 @@ msgstr "AUR aktivieren"
 msgid "Language"
 msgstr "Sprache"
 
+msgid "Follow system language"
+msgstr "Systemsprache folgen"
+
 msgid "Enable Flatpak"
 msgstr "Flatpak aktivieren"
 
