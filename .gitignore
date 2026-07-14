@@ -8,4 +8,3 @@ Shelly-UI.sln.DotSettings.user
 .junie/
 Shelly.Ui.Gtk/.zig-cache/
 Shelly.Ui.Gtk/zig-pkg/
-Shelly.Ui.Gtk/generated/zig-gobject/

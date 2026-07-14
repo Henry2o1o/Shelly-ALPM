@@ -4,7 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const gobject_codegen = b.dependency("gobject_codegen", .{});
     const gobject = b.dependency("gobject", .{
         .target = target,
         .optimize = optimize,
@@ -40,16 +39,6 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
-
-    const generate_bindings_cmd = b.addSystemCommand(&.{"sh"});
-    generate_bindings_cmd.addFileArg(b.path("scripts/generate-bindings.sh"));
-    generate_bindings_cmd.addDirectoryArg(gobject_codegen.path("."));
-
-    const generate_bindings_step = b.step(
-        "generate-bindings",
-        "Regenerate GTK4 bindings from the pinned zig-gobject source",
-    );
-    generate_bindings_step.dependOn(&generate_bindings_cmd.step);
 
     const root_tests = b.addTest(.{ .root_module = shelly_ui_gtk });
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
