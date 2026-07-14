@@ -776,6 +776,14 @@ pub const Manager = struct {
         }
     }
 
+    pub fn is_dependency_satisfied_by_installed_packages(self: *Manager, dependency: [:0]const u8) QueryError!bool {
+        if (self.handle == null) return QueryError.NoHandle;
+        const local_db = rawLibalpm.alpm_get_localdb(self.handle);
+        const db = libalpm.Database.from(local_db) orelse return QueryError.DbNotFound;
+        _ = dependency;
+        _ = db;
+    }
+
     // Determines if a single package is available for optional dependency install.
     fn get_opt_depend_if_available(self: *Manager, pkg_name: [:0]const u8) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;

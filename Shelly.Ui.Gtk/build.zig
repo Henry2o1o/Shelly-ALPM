@@ -4,22 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // GTK's pkg-config file validates the development package and supplies the
-    // complete transitive set of libraries needed at link time.
-    const gtk4 = b.addModule("gtk4", .{
-        .root_source_file = b.path("src/gtk/gtk.zig"),
+    const gobject_codegen = b.dependency("gobject_codegen", .{});
+    const gobject = b.dependency("gobject", .{
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
     });
-    gtk4.linkSystemLibrary("gtk4", .{ .use_pkg_config = .force });
 
     const shelly_ui_gtk = b.addModule("Shelly_Ui_Gtk", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    shelly_ui_gtk.addImport("gtk4", gtk4);
+    shelly_ui_gtk.addImport("glib2", gobject.module("glib2"));
+    shelly_ui_gtk.addImport("gobject2", gobject.module("gobject2"));
+    shelly_ui_gtk.addImport("gio2", gobject.module("gio2"));
+    shelly_ui_gtk.addImport("pango1", gobject.module("pango1"));
+    shelly_ui_gtk.addImport("gtk4", gobject.module("gtk4"));
 
     const exe = b.addExecutable(.{
         .name = "Shelly_Ui_Gtk",
@@ -40,6 +40,16 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const generate_bindings_cmd = b.addSystemCommand(&.{"sh"});
+    generate_bindings_cmd.addFileArg(b.path("scripts/generate-bindings.sh"));
+    generate_bindings_cmd.addDirectoryArg(gobject_codegen.path("."));
+
+    const generate_bindings_step = b.step(
+        "generate-bindings",
+        "Regenerate GTK4 bindings from the pinned zig-gobject source",
+    );
+    generate_bindings_step.dependOn(&generate_bindings_cmd.step);
 
     const root_tests = b.addTest(.{ .root_module = shelly_ui_gtk });
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
