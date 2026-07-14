@@ -353,7 +353,7 @@ pub const Manager = struct {
         self: *Manager,
         package_names: [][:0]const u8,
         trans_flags_arg: TransFlag,
-    ) TransactionError!bool {
+    ) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
         var packages: std.ArrayList(*rawLibalpm.alpm_pkg_t) = .empty;
@@ -481,10 +481,9 @@ pub const Manager = struct {
             const installed = rawLibalpm.alpm_db_get_pkg(local_db, name.ptr) orelse continue;
             _ = rawLibalpm.alpm_pkg_set_reason(installed, rawLibalpm.ALPM_PKG_REASON_DEPEND);
         }
-        return true;
     }
 
-    pub fn remove_packages(self: *Manager, packages_names: [][:0]const u8, flags: TransFlag, keep_optional_dependencis: bool) TransactionError!bool {
+    pub fn remove_packages(self: *Manager, packages_names: [][:0]const u8, flags: TransFlag, keep_optional_dependencis: bool) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
         if (packages_names.len == 0) return TransactionError.NoPackageFound;
 
@@ -632,16 +631,15 @@ pub const Manager = struct {
             self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {};
             return TransactionError.CommitFailed;
         }
-        return true;
     }
 
-    pub fn sync_system_update(self: *Manager, flags: TransFlag) TransactionError!bool {
+    pub fn sync_system_update(self: *Manager, flags: TransFlag) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
 
         // This is first before updating so it can bail before database is downloaded
         if (self.is_cachyos) {
             const update_notice = cachyos.UpdateNotice.init(self.allocator, self.io());
-            if (!update_notice.check(self.environ, &self.dispatcher)) return false;
+            if (!update_notice.check(self.environ, &self.dispatcher)) return;
         }
         self.sync(true) orelse return TransactionError.SyncDbFailed;
 
@@ -686,7 +684,6 @@ pub const Manager = struct {
             };
             return TransactionError.CommitFailed;
         }
-        return true;
     }
 
     pub fn update_package_reason(self: *Manager, pkg_name: [:0]const u8, reason: libalpm.PackageReason) TransactionError!void {
@@ -798,10 +795,16 @@ pub const Manager = struct {
         return QueryError.PkgNotFound;
     }
 
-    pub fn install_dependencies_only(self: *Manager, package_name: [:0]const u8, include_make_deps: bool, flags: TransFlag){
-        _ = self;
-        _ = package_name;
-        _ include_make_deps;
+    pub fn install_dependencies_only(self: *Manager, package_name: [:0]const u8, include_make_deps: bool, flags: TransFlag) TransactionError!void {
+        if (self.handle == null) return TransactionError.NoHandle;
+        const sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
+        const local_db = rawLibalpm.alpm_get_localdb(self.handle);
+        var deps_to_install: std.ArrayList(libalpm.Package) = .empty;
+        defer deps_to_install.deinit(self.allocator);
+        const pkg: libalpm.Package = null;
+        pkg = rawLibalpm.alpm_db_get_pkg(local_db, package_name) catch {};
+        _ = sync_dbs;
+        _ = include_make_deps;
         _ = flags;
     }
 

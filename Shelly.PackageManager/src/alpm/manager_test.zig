@@ -1154,7 +1154,7 @@ test "remove_packages removes an installed package in a DB-only transaction when
     try testing.expect((try mgr.get_single_installed_package("shelly-remove-test")) != null);
 
     var package_names = [_][:0]const u8{"shelly-remove-test"};
-    try testing.expect(try mgr.remove_packages(&package_names, .dbonly, true));
+    try mgr.remove_packages(&package_names, .dbonly, true);
     try testing.expect((try mgr.get_single_installed_package("shelly-remove-test")) == null);
 }
 
