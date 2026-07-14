@@ -798,6 +798,13 @@ pub const Manager = struct {
         return QueryError.PkgNotFound;
     }
 
+    pub fn install_dependencies_only(self: *Manager, package_name: [:0]const u8, include_make_deps: bool, flags: TransFlag){
+        _ = self;
+        _ = package_name;
+        _ include_make_deps;
+        _ = flags;
+    }
+
     // Determines if a single package is available for optional dependency install.
     fn get_opt_depend_if_available(self: *Manager, pkg_name: [:0]const u8) TransactionError!bool {
         if (self.handle == null) return TransactionError.NoHandle;
