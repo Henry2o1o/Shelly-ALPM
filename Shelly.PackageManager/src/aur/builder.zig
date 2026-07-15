@@ -512,3 +512,59 @@ test "streaming process execution forwards stdout stderr and a final unterminate
     try std.testing.expectEqualStrings("first|last", capture.stdout_buffer[0..capture.stdout_len]);
     try std.testing.expectEqualStrings("problem", capture.stderr_buffer[0..capture.stderr_len]);
 }
+
+test "streaming process execution delivers output before the child exits" {
+    const Capture = struct {
+        io: std.Io,
+        acknowledgement_path: []const u8,
+        saw_first: bool = false,
+        saw_second: bool = false,
+
+        fn onLine(data: ?*anyopaque, stream: StreamKind, line: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(data));
+            if (stream != .stdout) return;
+            if (std.mem.eql(u8, line, "first")) {
+                self.saw_first = true;
+                var acknowledgement = std.Io.Dir.cwd().createFile(
+                    self.io,
+                    self.acknowledgement_path,
+                    .{},
+                ) catch return;
+                acknowledgement.close(self.io);
+            } else if (std.mem.eql(u8, line, "second")) {
+                self.saw_second = true;
+            }
+        }
+    };
+
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const temporary_path = try temporary.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(temporary_path);
+    const acknowledgement_path = try std.fs.path.join(std.testing.allocator, &.{ temporary_path, "acknowledged" });
+    defer std.testing.allocator.free(acknowledgement_path);
+
+    var capture = Capture{
+        .io = std.testing.io,
+        .acknowledgement_path = acknowledgement_path,
+    };
+    const exit_code = try runStreamingWithEnvironment(
+        std.testing.allocator,
+        std.testing.io,
+        std.testing.environ,
+        &.{
+            "sh",
+            "-c",
+            "printf 'first\\n'; i=0; while [ ! -e \"$1\" ] && [ \"$i\" -lt 100 ]; do sleep 0.01; i=$((i + 1)); done; [ -e \"$1\" ] || exit 9; printf 'second\\n'",
+            "sh",
+            acknowledgement_path,
+        },
+        null,
+        null,
+        .{ .function = Capture.onLine, .data = &capture },
+    );
+
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expect(capture.saw_first);
+    try std.testing.expect(capture.saw_second);
+}

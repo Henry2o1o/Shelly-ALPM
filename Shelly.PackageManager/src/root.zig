@@ -1,11 +1,66 @@
 //! By convention, root.zig is the root source file when making a package.
 const std = @import("std");
-const alpm = @import("alpm/manager.zig");
-const flatpak = @import("flatpak/remote_manager.zig");
-const downloader = @import("shared/downloader.zig");
 const Io = std.Io;
 
+pub const alpm = struct {
+    pub const manager = @import("alpm/manager.zig");
+    pub const bindings = @import("alpm/bindings.zig");
+    pub const events = @import("alpm/events.zig");
+    pub const configuration = @import("alpm/configuration.zig");
+
+    pub const Manager = manager.Manager;
+    pub const TransFlag = bindings.libalpm.TransFlag;
+    pub const SigLevel = bindings.libalpm.SigLevel;
+    pub const OwnedPackage = bindings.libalpm.OwnedPackage;
+    pub const OwnedPackageWithUpdate = bindings.libalpm.OwnedPackageWithUpdate;
+};
+
 pub const aur = @import("aur/manager.zig");
+
+pub const flatpak = struct {
+    pub const manager = @import("flatpak/manager.zig");
+    pub const remote_manager = @import("flatpak/remote_manager.zig");
+    pub const appstream_manager = @import("flatpak/appstream_manager.zig");
+    pub const appstream_parser = @import("flatpak/appstream_parser.zig");
+    pub const bindings = @import("flatpak/bindings.zig");
+
+    pub const Manager = manager.Manager;
+    pub const RemoteManager = remote_manager.RemoteManager;
+    pub const AppstreamManager = appstream_manager.AppstreamManager;
+};
+
+pub const appimage = struct {
+    pub const manager = @import("appimage/manager.zig");
+    pub const update_manager = @import("appimage/update_manager.zig");
+    pub const bindings = @import("appimage/bindings.zig");
+
+    pub const Manager = manager.AppImageManager;
+    pub const UpdateManager = update_manager.UpdateManager;
+};
+
+pub const pkgbuild = struct {
+    pub const parser = @import("pkgbuild/pkgbuild_parser.zig");
+    pub const validation = @import("pkgbuild/shared_validtor.zig");
+    pub const homograph_validator = @import("pkgbuild/homograph_validator.zig");
+    pub const post_install_validator = @import("pkgbuild/post_install_validator.zig");
+
+    pub const Parser = parser.PkgbuildParser;
+    pub const HomographValidator = homograph_validator.HomographValidator;
+    pub const PostInstallValidator = post_install_validator.PostInstallValidator;
+};
+
+pub const shared = struct {
+    pub const downloader = @import("shared/downloader.zig");
+    pub const list_dictionary = @import("shared/list_dictionary.zig");
+    pub const xdg_paths = @import("shared/xdg_paths.zig");
+
+    pub const Downloader = downloader.CoreDownloader;
+};
+
+pub const AlpmManager = alpm.Manager;
+pub const AurManager = aur.Manager;
+pub const FlatpakManager = flatpak.Manager;
+pub const AppImageManager = appimage.Manager;
 
 /// This is a documentation comment to explain the `printAnotherMessage` function below.
 ///
@@ -25,6 +80,24 @@ test "basic add functionality" {
 test "public AUR module exposes the package manager" {
     _ = aur.Manager;
     _ = aur.models.Package;
+}
+
+test "public library surface exposes package manager APIs" {
+    _ = AlpmManager;
+    _ = AurManager;
+    _ = FlatpakManager;
+    _ = AppImageManager;
+    _ = alpm.TransFlag;
+    _ = alpm.SigLevel;
+    _ = alpm.events.Dispatcher;
+    _ = alpm.configuration.Configuration;
+    _ = flatpak.RemoteManager;
+    _ = flatpak.AppstreamManager;
+    _ = appimage.UpdateManager;
+    _ = pkgbuild.Parser;
+    _ = pkgbuild.HomographValidator;
+    _ = pkgbuild.PostInstallValidator;
+    _ = shared.Downloader;
 }
 
 test {
