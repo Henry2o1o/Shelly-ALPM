@@ -1462,3 +1462,138 @@ test "get_allowed_architecture returns the resolved host architecture and any" {
     try testing.expectEqualStrings(expected_host, architectures[0]);
     try testing.expectEqualStrings("any", architectures[1]);
 }
+
+// ---------------------------------------------------------------------------
+// Priority 1 behavioral and error-path coverage
+// ---------------------------------------------------------------------------
+
+test "valid managers without sync databases report SyncDbFailed for sync update APIs" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = auto\n" ++
+            "SigLevel = Never\n" ++
+            "DBPath = {s}\n",
+        .{workspace.db_path},
+    );
+    defer allocator.free(config);
+
+    var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+    defer config_file.close(io);
+    try config_file.writeStreamingAll(io, config);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expectError(error.SyncDbFailed, mgr.sync(false));
+    try testing.expectError(error.SyncDbFailed, mgr.sync_system_update(.{ .dbonly = true }));
+
+    var package_names = [_][:0]const u8{"not-installed"};
+    try testing.expectError(
+        error.SyncDbFailed,
+        mgr.update_packages(&package_names, .{ .dbonly = true }),
+    );
+}
+
+test "update_package_reason reports PackageFetchFailed for a missing package" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expectError(
+        error.PackageFetchFailed,
+        mgr.update_package_reason("shelly-missing-reason-package", .Dependency),
+    );
+}
+
+test "install_dependencies_only succeeds when the target has no dependencies" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-no-dependencies", "1.0-1");
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try mgr.install_dependencies_only(
+        "shelly-no-dependencies",
+        true,
+        .{ .dbonly = true },
+    );
+    try testing.expect(mgr.is_package_installed("shelly-no-dependencies"));
+}
+
+test "purify dry run identifies dependency packages that are no longer required" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-orphan", "1.0-1");
+    try workspace.addLocalPackage(allocator, "shelly-explicit", "1.0-1");
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+    try mgr.update_package_reason("shelly-orphan", .Dependency);
+
+    const targets = try mgr.purify(true, true, false);
+    defer allocator.free(targets);
+
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expectEqualStrings("shelly-orphan", targets[0]);
+    try testing.expect(mgr.is_package_installed("shelly-orphan"));
+    try testing.expect(mgr.is_package_installed("shelly-explicit"));
+}
+
+test "purify reports DirectoryReadFailed when the package cache cannot be opened" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const missing_cache = try std.fmt.allocPrintSentinel(
+        allocator,
+        "{s}/missing-cache",
+        .{workspace.root},
+        0,
+    );
+    defer allocator.free(missing_cache);
+    mgr.config.cache_directory = missing_cache;
+
+    try testing.expectError(
+        error.DirectoryReadFailed,
+        mgr.purify(true, false, true),
+    );
+}

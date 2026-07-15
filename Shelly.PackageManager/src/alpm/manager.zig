@@ -842,8 +842,9 @@ pub const Manager = struct {
             errdefer self.allocator.free(dep_string);
             pkgs_to_install.append(self.allocator, dep_string) catch return TransactionError.OutOfMemory;
         }
-
-        self.install_packages(pkgs_to_install.items, flags) catch |err| return err;
+        if (pkgs_to_install.items.len > 0) {
+            self.install_packages(pkgs_to_install.items, flags) catch |err| return err;
+        }
     }
 
     pub fn update_packages(self: *Manager, package_list: [][:0]const u8, flags: libalpm.TransFlag) TransactionError!void {
@@ -2098,6 +2099,152 @@ test "eventCallback dispatches pacnew and pacsave paths" {
     try testing.expectEqualStrings("/etc/example.conf.pacsave", pacsave_cap.file orelse return error.TestFailed);
 }
 
+test "eventCallback ignores null out-of-range and empty scriptlet events" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var info_cap = InfoCapture{};
+    var scriptlet_cap = ScriptletCapture{};
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&info_cap),
+    });
+    _ = try mgr.dispatcher.addScriptletHandler(.{
+        .function = captureScriptlet,
+        .data = @ptrCast(&scriptlet_cap),
+    });
+
+    Manager.eventCallback(@ptrCast(&mgr), null);
+
+    var out_of_range: rawLibalpm.alpm_event_t = .{ .type = 0 };
+    Manager.eventCallback(@ptrCast(&mgr), &out_of_range);
+
+    var empty_scriptlet: rawLibalpm.alpm_event_t = .{ .scriptlet_info = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_SCRIPTLET_INFO),
+        .line = "",
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &empty_scriptlet);
+
+    try testing.expect(info_cap.args == null);
+    try testing.expect(scriptlet_cap.args == null);
+}
+
+test "eventCallback falls back from hook description to name and generic text" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = HookCapture{};
+    _ = try mgr.dispatcher.addHookHandler(.{
+        .function = captureHook,
+        .data = @ptrCast(&cap),
+    });
+
+    var named: rawLibalpm.alpm_event_t = .{ .hook_run = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_HOOK_RUN_START),
+        .name = "named-hook",
+        .desc = null,
+        .position = 1,
+        .total = 2,
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &named);
+    try testing.expectEqualStrings("(1/2) named-hook", cap.text());
+
+    var generic: rawLibalpm.alpm_event_t = .{ .hook_run = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_HOOK_RUN_START),
+        .name = null,
+        .desc = null,
+        .position = 2,
+        .total = 2,
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &generic);
+    try testing.expectEqualStrings("(2/2) Running hook...", cap.text());
+}
+
+test "onDownloadEvent translates start progress and completion events" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var info_cap = InfoCapture{};
+    var progress_cap = ProgressCapture{};
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&info_cap),
+    });
+    _ = try mgr.dispatcher.addProgressHandler(.{
+        .function = captureProgress,
+        .data = @ptrCast(&progress_cap),
+    });
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Start,
+        .destination_path = "/tmp/example.pkg.tar.zst",
+    });
+    var info = info_cap.args orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.EventType.pkg_retrieve_start, info.event_type);
+    try testing.expectEqualStrings("/tmp/example.pkg.tar.zst", info.message);
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Progress,
+        .destination_path = "/tmp/example.pkg.tar.zst",
+        .progress = .{
+            .bytes_downloaded = 50,
+            .bytes_total = 100,
+            .percent = 50,
+            .speed_bytes_per_sec = 25,
+        },
+    });
+    const progress = progress_cap.args orelse return error.TestFailed;
+    try testing.expectEqualStrings("example.pkg.tar.zst", progress.pkg_name orelse return error.TestFailed);
+    try testing.expectEqual(@as(c_int, 50), progress.percent);
+    try testing.expectEqual(@as(c_ulong, 1), progress.howmany);
+    try testing.expectEqual(@as(c_ulong, 1), progress.current);
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Complete,
+        .destination_path = "/tmp/example.pkg.tar.zst",
+    });
+    info = info_cap.args orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.EventType.pkg_retrieve_done, info.event_type);
+    try testing.expectEqualStrings("/tmp/example.pkg.tar.zst", info.message);
+}
+
+test "onDownloadEvent reports concrete and fallback errors and ignores skipped events" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var error_cap = ErrorCapture{};
+    var info_cap = InfoCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&error_cap),
+    });
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&info_cap),
+    });
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Error,
+        .download_error = downloader.DownloadError.NetworkError,
+    });
+    try testing.expectEqualStrings("NetworkError", error_cap.text());
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{ .event_type = .Error });
+    try testing.expectEqualStrings("download failed", error_cap.text());
+
+    error_cap.len = 0;
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Skipped,
+        .destination_path = "/tmp/skipped.pkg.tar.zst",
+    });
+    try testing.expectEqual(@as(usize, 0), error_cap.len);
+    try testing.expect(info_cap.args == null);
+}
+
 // ---------------------------------------------------------------------------
 // askYesNo
 // ---------------------------------------------------------------------------
@@ -2136,6 +2283,79 @@ test "askYesNo returns false for a zero answer" {
     }) catch unreachable;
 
     try testing.expect(!mgr.askYesNo(tio, 0, "proceed?"));
+}
+
+test "questionCallback applies affirmative answers to simple libalpm questions" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+    mgr.threaded = .init(testing.allocator, .{});
+    defer mgr.threaded.deinit();
+
+    var responder = AskResponder{
+        .disp = &mgr.dispatcher,
+        .io = mgr.io(),
+        .answer = 1,
+    };
+    _ = try mgr.dispatcher.addQuestionHandler(.{
+        .function = askResponder,
+        .data = @ptrCast(&responder),
+    });
+
+    var corrupted: rawLibalpm.alpm_question_t = .{ .corrupted = .{
+        .type = rawLibalpm.ALPM_QUESTION_CORRUPTED_PKG,
+        .filepath = "/tmp/corrupt.pkg.tar.zst",
+    } };
+    Manager.questionCallback(@ptrCast(&mgr), &corrupted);
+    try testing.expectEqual(@as(c_int, 1), corrupted.corrupted.remove);
+
+    var remove: rawLibalpm.alpm_question_t = .{ .remove_pkgs = .{
+        .type = rawLibalpm.ALPM_QUESTION_REMOVE_PKGS,
+    } };
+    Manager.questionCallback(@ptrCast(&mgr), &remove);
+    try testing.expectEqual(@as(c_int, 1), remove.remove_pkgs.skip);
+
+    var import_key: rawLibalpm.alpm_question_t = .{ .import_key = .{
+        .type = rawLibalpm.ALPM_QUESTION_IMPORT_KEY,
+        .uid = "Shelly Test Key",
+    } };
+    Manager.questionCallback(@ptrCast(&mgr), &import_key);
+    try testing.expectEqual(@as(c_int, 1), import_key.import_key.import);
+}
+
+test "questionCallback keeps unknown answers and applies selected provider choices" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+    mgr.threaded = .init(testing.allocator, .{});
+    defer mgr.threaded.deinit();
+
+    var unknown: rawLibalpm.alpm_question_t = .{ .any = .{
+        .type = 0,
+        .answer = 7,
+    } };
+    Manager.questionCallback(@ptrCast(&mgr), &unknown);
+    try testing.expectEqual(@as(c_int, 7), unknown.any.answer);
+
+    var responder = ChoiceResponder{
+        .disp = &mgr.dispatcher,
+        .io = mgr.io(),
+        .choice = 3,
+    };
+    _ = try mgr.dispatcher.addQuestionHandler(.{
+        .function = choiceResponder,
+        .data = @ptrCast(&responder),
+    });
+
+    var provider: rawLibalpm.alpm_question_t = .{ .select_provider = .{
+        .type = rawLibalpm.ALPM_QUESTION_SELECT_PROVIDER,
+        .providers = null,
+        .depend = null,
+    } };
+    Manager.questionCallback(@ptrCast(&mgr), &provider);
+    try testing.expectEqual(@as(c_int, 3), provider.select_provider.use_index);
 }
 
 // ---------------------------------------------------------------------------
@@ -2321,4 +2541,16 @@ fn askResponder(data: ?*anyopaque, args: events.QuestionArgs) void {
     _ = args;
     const ctx: *AskResponder = @ptrCast(@alignCast(data));
     ctx.disp.respond(ctx.io, .{ .answer = ctx.answer, .pkg = null, .choice = null });
+}
+
+const ChoiceResponder = struct {
+    disp: *events.Dispatcher,
+    io: std.Io,
+    choice: c_int,
+};
+
+fn choiceResponder(data: ?*anyopaque, args: events.QuestionArgs) void {
+    _ = args;
+    const ctx: *ChoiceResponder = @ptrCast(@alignCast(data));
+    ctx.disp.respond(ctx.io, .{ .choice = ctx.choice });
 }
