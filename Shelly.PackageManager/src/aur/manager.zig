@@ -395,9 +395,68 @@ pub const Manager = struct {
             for (updates.items) |*update| update.deinit(self.allocator);
             updates.deinit(self.allocator);
         }
-        for (installed.items) |local| {
+        var candidates: std.ArrayList(VcsCheckCandidate) = .empty;
+        defer {
+            for (candidates.items) |*candidate| candidate.deinit(self.allocator);
+            candidates.deinit(self.allocator);
+        }
+        for (installed.items, 0..) |local, installed_index| {
             if (!isVcsPackage(local.name) or containsUpdate(updates.items, local.name)) continue;
-            if (!(self.checkVcsPackageNeedsUpdate(local.name) catch false)) continue;
+            const stored = self.vcs_store.get(local.name);
+            if (stored.len != 0) {
+                var candidate = try VcsCheckCandidate.init(
+                    self.allocator,
+                    local.name,
+                    installed_index,
+                    stored,
+                    null,
+                );
+                candidates.append(self.allocator, candidate) catch |err| {
+                    candidate.deinit(self.allocator);
+                    return err;
+                };
+                continue;
+            }
+
+            const entries = self.getVcsSourceEntries(local.name) catch continue;
+            const owned_entries = entries orelse continue;
+            var candidate = VcsCheckCandidate.init(
+                self.allocator,
+                local.name,
+                installed_index,
+                owned_entries,
+                owned_entries,
+            ) catch |err| {
+                vcs.deinitEntries(self.allocator, owned_entries);
+                return err;
+            };
+            candidates.append(self.allocator, candidate) catch |err| {
+                candidate.deinit(self.allocator);
+                return err;
+            };
+        }
+
+        runVcsChecksConcurrently(self.io(), self.environ, candidates.items, .{
+            .function = fetchRemoteSha,
+        });
+
+        var vcs_store_changed = false;
+        for (candidates.items) |*candidate| {
+            if (candidate.first_seen) {
+                const entries = candidate.owned_entries.?;
+                for (entries, candidate.remote_shas) |*entry, *remote_sha| {
+                    const sha = remote_sha.slice();
+                    if (sha.len == 0) continue;
+                    const owned_sha = try self.allocator.dupe(u8, sha);
+                    self.allocator.free(entry.commit_sha);
+                    entry.commit_sha = owned_sha;
+                }
+                try self.vcs_store.set(candidate.package_name, entries);
+                vcs_store_changed = true;
+                continue;
+            }
+            if (!candidate.needs_update) continue;
+            const local = installed.items[candidate.installed_index];
             const metadata = findPackage(response.results, local.name);
             try updates.append(self.allocator, try models.Update.init(
                 self.allocator,
@@ -409,6 +468,7 @@ pub const Manager = struct {
                 if (metadata) |package| package.description orelse "" else "",
             ));
         }
+        if (vcs_store_changed) self.vcs_store.saveFile(self.io(), self.vcs_store_path) catch {};
         return updates.toOwnedSlice(self.allocator);
     }
 
@@ -1160,31 +1220,6 @@ pub const Manager = struct {
         return clone;
     }
 
-    fn checkVcsPackageNeedsUpdate(self: *Self, package_name: []const u8) !bool {
-        const stored = self.vcs_store.get(package_name);
-        if (stored.len == 0) {
-            const entries = try self.getVcsSourceEntries(package_name);
-            defer if (entries) |values| vcs.deinitEntries(self.allocator, values);
-            if (entries == null or entries.?.len == 0) return false;
-            for (entries.?) |*entry| {
-                if (try self.getRemoteCommitSha(entry.url, entry.branch)) |sha| {
-                    self.allocator.free(entry.commit_sha);
-                    entry.commit_sha = sha;
-                }
-            }
-            try self.vcs_store.set(package_name, entries.?);
-            try self.vcs_store.saveFile(self.io(), self.vcs_store_path);
-            return false;
-        }
-        for (stored) |entry| {
-            if (entry.commit_sha.len == 0) continue;
-            const remote = try self.getRemoteCommitSha(entry.url, entry.branch) orelse continue;
-            defer self.allocator.free(remote);
-            if (!std.mem.eql(u8, remote, entry.commit_sha)) return true;
-        }
-        return false;
-    }
-
     fn getVcsSourceEntries(self: *Self, package_name: []const u8) !?[]vcs.SourceEntry {
         const package_base = try self.resolvePkgbase(package_name);
         const cache_path = try self.cachePath(package_base);
@@ -1205,18 +1240,8 @@ pub const Manager = struct {
     }
 
     fn getRemoteCommitSha(self: *Self, url: []const u8, branch: []const u8) !?[]u8 {
-        var args: std.ArrayList([]const u8) = .empty;
-        defer args.deinit(self.allocator);
-        try args.appendSlice(self.allocator, &.{ "git", "ls-remote", url });
-        if (branch.len != 0) try args.append(self.allocator, branch);
-        var result = try builder.runWithEnvironment(self.allocator, self.io(), self.environ, args.items, null, 15);
-        defer result.deinit(self.allocator);
-        if (result.exit_code != 0) return null;
-        const line_end = std.mem.indexOfScalar(u8, result.stdout, '\n') orelse result.stdout.len;
-        const line = result.stdout[0..line_end];
-        const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return null;
-        const sha = std.mem.trim(u8, line[0..tab], " \t\r");
-        return if (sha.len == 0) null else self.allocator.dupe(u8, sha);
+        const remote = try fetchRemoteSha(null, self.io(), self.environ, url, branch) orelse return null;
+        return self.allocator.dupe(u8, remote.slice());
     }
 
     fn updateVcsStoreForPackage(self: *Self, package_name: []const u8, _: []const u8) !void {
@@ -1365,6 +1390,135 @@ pub const Manager = struct {
         });
     }
 };
+
+const max_concurrent_vcs_checks = 15;
+const max_remote_sha_length = 128;
+
+const RemoteSha = struct {
+    bytes: [max_remote_sha_length]u8 = undefined,
+    len: u8 = 0,
+
+    fn fromSlice(value: []const u8) ?RemoteSha {
+        if (value.len == 0 or value.len > max_remote_sha_length) return null;
+        var result = RemoteSha{};
+        @memcpy(result.bytes[0..value.len], value);
+        result.len = @intCast(value.len);
+        return result;
+    }
+
+    fn slice(self: *const RemoteSha) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+const VcsCheckCandidate = struct {
+    package_name: []const u8,
+    installed_index: usize,
+    entries: []const vcs.SourceEntry,
+    owned_entries: ?[]vcs.SourceEntry,
+    remote_shas: []RemoteSha,
+    first_seen: bool,
+    needs_update: bool = false,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        package_name: []const u8,
+        installed_index: usize,
+        entries: []const vcs.SourceEntry,
+        owned_entries: ?[]vcs.SourceEntry,
+    ) !VcsCheckCandidate {
+        const remote_shas = try allocator.alloc(RemoteSha, entries.len);
+        @memset(remote_shas, RemoteSha{});
+        return .{
+            .package_name = package_name,
+            .installed_index = installed_index,
+            .entries = entries,
+            .owned_entries = owned_entries,
+            .remote_shas = remote_shas,
+            .first_seen = owned_entries != null,
+        };
+    }
+
+    fn deinit(self: *VcsCheckCandidate, allocator: std.mem.Allocator) void {
+        if (self.owned_entries) |entries| vcs.deinitEntries(allocator, entries);
+        allocator.free(self.remote_shas);
+        self.* = undefined;
+    }
+};
+
+const VcsRemoteFetcher = struct {
+    function: *const fn (
+        data: ?*anyopaque,
+        io: std.Io,
+        environ: std.process.Environ,
+        url: []const u8,
+        branch: []const u8,
+    ) anyerror!?RemoteSha,
+    data: ?*anyopaque = null,
+};
+
+fn fetchRemoteSha(
+    _: ?*anyopaque,
+    io: std.Io,
+    environ: std.process.Environ,
+    url: []const u8,
+    branch: []const u8,
+) !?RemoteSha {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var args: std.ArrayList([]const u8) = .empty;
+    try args.appendSlice(allocator, &.{ "git", "ls-remote", url });
+    if (branch.len != 0) try args.append(allocator, branch);
+    const result = try builder.runWithEnvironment(allocator, io, environ, args.items, null, 15);
+    if (result.exit_code != 0) return null;
+    const line_end = std.mem.indexOfScalar(u8, result.stdout, '\n') orelse result.stdout.len;
+    const line = result.stdout[0..line_end];
+    const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return null;
+    return RemoteSha.fromSlice(std.mem.trim(u8, line[0..tab], " \t\r"));
+}
+
+fn runVcsCheck(
+    io: std.Io,
+    environ: std.process.Environ,
+    candidate: *VcsCheckCandidate,
+    fetcher: VcsRemoteFetcher,
+) void {
+    for (candidate.entries, candidate.remote_shas) |entry, *remote_sha| {
+        if (!candidate.first_seen and entry.commit_sha.len == 0) continue;
+        const fetched = fetcher.function(fetcher.data, io, environ, entry.url, entry.branch) catch continue;
+        remote_sha.* = fetched orelse continue;
+        if (!candidate.first_seen and !std.mem.eql(u8, remote_sha.slice(), entry.commit_sha)) {
+            candidate.needs_update = true;
+            return;
+        }
+    }
+}
+
+fn runVcsChecksConcurrently(
+    io: std.Io,
+    environ: std.process.Environ,
+    candidates: []VcsCheckCandidate,
+    fetcher: VcsRemoteFetcher,
+) void {
+    const VcsFuture = std.Io.Future(void);
+    var futures: [max_concurrent_vcs_checks]VcsFuture = undefined;
+    var future_count: usize = 0;
+
+    for (candidates) |*candidate| {
+        if (future_count == futures.len) {
+            for (futures[0..future_count]) |*future| future.await(io);
+            future_count = 0;
+        }
+        const future = io.concurrent(runVcsCheck, .{ io, environ, candidate, fetcher }) catch {
+            runVcsCheck(io, environ, candidate, fetcher);
+            continue;
+        };
+        futures[future_count] = future;
+        future_count += 1;
+    }
+    for (futures[0..future_count]) |*future| future.await(io);
+}
 
 const BuildStreamContext = struct {
     manager: *Manager,
@@ -1568,6 +1722,88 @@ test "helper cache identity recognizes installed split-package members" {
     try std.testing.expect(cloneIdentityMatches("demo-suite", &package_names, "demo-ui"));
     try std.testing.expect(cloneIdentityMatches("demo-suite", &package_names, "demo-suite"));
     try std.testing.expect(!cloneIdentityMatches("demo-suite", &package_names, "unrelated"));
+}
+
+test "VCS package checks execute concurrently and retain per-package results" {
+    const Probe = struct {
+        active: std.atomic.Value(usize) = .init(0),
+        peak: std.atomic.Value(usize) = .init(0),
+
+        fn fetch(
+            data: ?*anyopaque,
+            io: std.Io,
+            _: std.process.Environ,
+            _: []const u8,
+            _: []const u8,
+        ) anyerror!?RemoteSha {
+            const probe: *@This() = @ptrCast(@alignCast(data));
+            const active = probe.active.fetchAdd(1, .monotonic) + 1;
+            defer _ = probe.active.fetchSub(1, .monotonic);
+            var observed = probe.peak.load(.monotonic);
+            while (active > observed) {
+                if (probe.peak.cmpxchgWeak(observed, active, .monotonic, .monotonic)) |actual| {
+                    observed = actual;
+                } else break;
+            }
+            std.Io.Clock.Duration.sleep(.{
+                .clock = .awake,
+                .raw = .fromMilliseconds(20),
+            }, io) catch {};
+            return RemoteSha.fromSlice("new");
+        }
+    };
+
+    var first_url = [_]u8{'1'};
+    var second_url = [_]u8{'2'};
+    var first_branch: [0]u8 = .{};
+    var second_branch: [0]u8 = .{};
+    var first_protocols: [0][]u8 = .{};
+    var second_protocols: [0][]u8 = .{};
+    var first_commit = [_]u8{ 'o', 'l', 'd' };
+    var second_commit = [_]u8{ 'o', 'l', 'd' };
+    var first_entries = [_]vcs.SourceEntry{.{
+        .url = &first_url,
+        .branch = &first_branch,
+        .protocols = &first_protocols,
+        .commit_sha = &first_commit,
+    }};
+    var second_entries = [_]vcs.SourceEntry{.{
+        .url = &second_url,
+        .branch = &second_branch,
+        .protocols = &second_protocols,
+        .commit_sha = &second_commit,
+    }};
+    var first_remote = [_]RemoteSha{.{}};
+    var second_remote = [_]RemoteSha{.{}};
+    var candidates = [_]VcsCheckCandidate{
+        .{
+            .package_name = "first-git",
+            .installed_index = 0,
+            .entries = &first_entries,
+            .owned_entries = null,
+            .remote_shas = &first_remote,
+            .first_seen = false,
+        },
+        .{
+            .package_name = "second-git",
+            .installed_index = 1,
+            .entries = &second_entries,
+            .owned_entries = null,
+            .remote_shas = &second_remote,
+            .first_seen = false,
+        },
+    };
+    var probe = Probe{};
+    runVcsChecksConcurrently(std.testing.io, .empty, &candidates, .{
+        .function = Probe.fetch,
+        .data = &probe,
+    });
+
+    try std.testing.expect(probe.peak.load(.monotonic) >= 2);
+    try std.testing.expect(candidates[0].needs_update);
+    try std.testing.expect(candidates[1].needs_update);
+    try std.testing.expectEqualStrings("new", candidates[0].remote_shas[0].slice());
+    try std.testing.expectEqualStrings("new", candidates[1].remote_shas[0].slice());
 }
 
 test {
