@@ -2011,3 +2011,160 @@ test "get_foreign_packages hides ignored packages until hidden packages are enab
         visible[0].name() orelse return error.TestFailed,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Priority 5 owned-package lifetime and failure cleanup coverage
+// ---------------------------------------------------------------------------
+
+fn findOwnedPackage(packages: []const libalpm.OwnedPackage, expected_name: []const u8) ?*const libalpm.OwnedPackage {
+    for (packages) |*package| {
+        const name = package.name() orelse continue;
+        if (std.mem.eql(u8, name, expected_name)) return package;
+    }
+    return null;
+}
+
+test "owned package results remain valid after Manager.deinit" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "local-only", "1.0-1");
+    try workspace.addLocalPackage(allocator, "remote-provider", "1.0-1");
+    try workspace.createSyncDatabase(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    var manager_alive = true;
+    defer if (manager_alive) mgr.deinit();
+
+    const installed = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, installed);
+    const foreign = try mgr.get_foreign_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, foreign);
+    const available = try mgr.get_available_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, available);
+    const updates = try mgr.get_updates_available();
+    defer libalpm.OwnedPackageWithUpdate.deinitSlice(allocator, updates);
+
+    mgr.deinit();
+    manager_alive = false;
+
+    try testing.expectEqual(@as(usize, 2), installed.len);
+    const installed_local = findOwnedPackage(installed, "local-only") orelse return error.TestFailed;
+    try testing.expectEqualStrings("1.0-1", installed_local.version() orelse return error.TestFailed);
+    try testing.expectEqualStrings("local", installed_local.repository() orelse return error.TestFailed);
+
+    try testing.expectEqual(@as(usize, 1), foreign.len);
+    try testing.expectEqualStrings("local-only", foreign[0].name() orelse return error.TestFailed);
+
+    try testing.expectEqual(@as(usize, 1), available.len);
+    try testing.expectEqualStrings("remote-provider", available[0].name() orelse return error.TestFailed);
+    try testing.expectEqualStrings("2.0-1", available[0].version() orelse return error.TestFailed);
+    try testing.expectEqualStrings("seafoam-labs", available[0].repository() orelse return error.TestFailed);
+
+    try testing.expectEqual(@as(usize, 1), updates.len);
+    try testing.expectEqualStrings("remote-provider", updates[0].old_package.name() orelse return error.TestFailed);
+    try testing.expectEqualStrings("1.0-1", updates[0].old_package.version() orelse return error.TestFailed);
+    try testing.expectEqualStrings("remote-provider", updates[0].new_package.name() orelse return error.TestFailed);
+    try testing.expectEqualStrings("2.0-1", updates[0].new_package.version() orelse return error.TestFailed);
+}
+
+const OwnedPackageOperation = enum {
+    installed,
+    foreign,
+    available,
+};
+
+fn callOwnedPackageOperation(mgr: *Manager, comptime operation: OwnedPackageOperation) ![]libalpm.OwnedPackage {
+    return switch (operation) {
+        .installed => mgr.get_installed_packages(),
+        .foreign => mgr.get_foreign_packages(),
+        .available => mgr.get_available_packages(),
+    };
+}
+
+fn expectOwnedPackageAllocationCleanup(mgr: *Manager, comptime operation: OwnedPackageOperation) !void {
+    const original_allocator = mgr.allocator;
+    defer mgr.allocator = original_allocator;
+
+    var observed_failure = false;
+    var observed_success = false;
+    for (0..64) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{
+            .fail_index = fail_index,
+        });
+        mgr.allocator = failing.allocator();
+
+        if (callOwnedPackageOperation(mgr, operation)) |packages| {
+            libalpm.OwnedPackage.deinitSlice(failing.allocator(), packages);
+            try testing.expect(!failing.has_induced_failure);
+            try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+            observed_success = true;
+            break;
+        } else |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expect(failing.has_induced_failure);
+            try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+            observed_failure = true;
+        }
+    }
+
+    try testing.expect(observed_failure);
+    try testing.expect(observed_success);
+}
+
+fn expectOwnedUpdateAllocationCleanup(mgr: *Manager) !void {
+    const original_allocator = mgr.allocator;
+    defer mgr.allocator = original_allocator;
+
+    var observed_failure = false;
+    var observed_success = false;
+    for (0..64) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{
+            .fail_index = fail_index,
+        });
+        mgr.allocator = failing.allocator();
+
+        if (mgr.get_updates_available()) |updates| {
+            libalpm.OwnedPackageWithUpdate.deinitSlice(failing.allocator(), updates);
+            try testing.expect(!failing.has_induced_failure);
+            try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+            observed_success = true;
+            break;
+        } else |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expect(failing.has_induced_failure);
+            try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+            observed_failure = true;
+        }
+    }
+
+    try testing.expect(observed_failure);
+    try testing.expect(observed_success);
+}
+
+test "owned package result builders release partial snapshots after allocation failure" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "local-only", "1.0-1");
+    try workspace.addLocalPackage(allocator, "remote-provider", "1.0-1");
+    try workspace.createSyncDatabase(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try expectOwnedPackageAllocationCleanup(mgr, .installed);
+    try expectOwnedPackageAllocationCleanup(mgr, .foreign);
+    try expectOwnedPackageAllocationCleanup(mgr, .available);
+    try expectOwnedUpdateAllocationCleanup(mgr);
+}
