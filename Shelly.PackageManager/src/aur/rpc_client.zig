@@ -67,9 +67,11 @@ pub const Client = struct {
             const end = @min(offset + 100, package_names.len);
             const body = try buildInfoFormBody(self.allocator, package_names[offset..end]);
             defer self.allocator.free(body);
-            const payload = try self.postForm(self.rpc_url, body);
+            const payload = self.postForm(self.rpc_url, body) catch |err|
+                return self.partialInfoError(&all_packages, response_type, err);
             defer self.allocator.free(payload);
-            var response = try models.Response.parse(self.allocator, payload);
+            var response = models.Response.parse(self.allocator, payload) catch |err|
+                return self.partialInfoError(&all_packages, response_type, err);
 
             if (std.mem.eql(u8, response.response_type, "error")) {
                 for (all_packages.items) |*package| package.deinit(self.allocator);
@@ -96,10 +98,32 @@ pub const Client = struct {
         };
     }
 
+    fn partialInfoError(
+        self: *Client,
+        all_packages: *std.ArrayList(models.Package),
+        response_type: []u8,
+        err: anyerror,
+    ) !models.Response {
+        const error_type = try self.allocator.dupe(u8, "error");
+        errdefer self.allocator.free(error_type);
+        const message = try self.allocator.dupe(u8, @errorName(err));
+        errdefer self.allocator.free(message);
+        const results = try all_packages.toOwnedSlice(self.allocator);
+        self.allocator.free(response_type);
+        return .{
+            .version = 5,
+            .response_type = error_type,
+            .result_count = results.len,
+            .results = results,
+            .error_message = message,
+        };
+    }
+
     pub fn getPackageBase(self: *Client, package_name: []const u8) ![]u8 {
         if (std.mem.trim(u8, package_name, " \t\r\n").len == 0)
             return self.allocator.dupe(u8, package_name);
-        var response = try self.getInfo(&.{package_name});
+        var response = self.getInfo(&.{package_name}) catch
+            return self.allocator.dupe(u8, package_name);
         defer response.deinit(self.allocator);
         if (response.results.len > 0 and response.results[0].package_base.len != 0)
             return self.allocator.dupe(u8, response.results[0].package_base);
@@ -110,19 +134,22 @@ pub const Client = struct {
         if (std.mem.trim(u8, dependency_name, " \t\r\n").len == 0)
             return self.allocator.alloc([]u8, 0);
 
-        var direct = try self.getInfo(&.{dependency_name});
-        defer direct.deinit(self.allocator);
-        if (direct.results.len > 0 and direct.results[0].name.len != 0) {
-            const result = try self.allocator.alloc([]u8, 1);
-            result[0] = try self.allocator.dupe(u8, direct.results[0].name);
-            return result;
-        }
+        if (self.getInfo(&.{dependency_name})) |direct_value| {
+            var direct = direct_value;
+            defer direct.deinit(self.allocator);
+            if (direct.results.len > 0 and direct.results[0].name.len != 0) {
+                const result = try self.allocator.alloc([]u8, 1);
+                errdefer self.allocator.free(result);
+                result[0] = try self.allocator.dupe(u8, direct.results[0].name);
+                return result;
+            }
+        } else |_| {}
 
         const url = try buildSearchUrl(self.allocator, self.rpc_url, dependency_name, "provides");
         defer self.allocator.free(url);
-        const payload = try self.get(url);
+        const payload = self.get(url) catch return self.allocator.alloc([]u8, 0);
         defer self.allocator.free(payload);
-        var response = try models.Response.parse(self.allocator, payload);
+        var response = models.Response.parse(self.allocator, payload) catch return self.allocator.alloc([]u8, 0);
         defer response.deinit(self.allocator);
 
         var names: std.ArrayList([]u8) = .empty;
@@ -285,4 +312,28 @@ test "AUR suggestions are returned as owned strings" {
     defer deinitStrings(std.testing.allocator, suggestions);
     try std.testing.expectEqual(@as(usize, 2), suggestions.len);
     try std.testing.expectEqualStrings("yay-bin", suggestions[1]);
+}
+
+test "partial info failures preserve packages returned by earlier chunks" {
+    const allocator = std.testing.allocator;
+    const parsed = try models.Response.parse(allocator,
+        \\{"version":5,"type":"info","resultcount":1,"results":[
+        \\{"Name":"first","PackageBase":"first","Version":"1.0-1"}
+        \\]}
+    );
+    var packages: std.ArrayList(models.Package) = .empty;
+    try packages.appendSlice(allocator, parsed.results);
+    allocator.free(parsed.results);
+    allocator.free(parsed.response_type);
+    if (parsed.error_message) |message| allocator.free(message);
+
+    var client = Client.init(allocator, std.testing.io);
+    defer client.deinit();
+    const response_type = try allocator.dupe(u8, "info");
+    var partial = try client.partialInfoError(&packages, response_type, error.Timeout);
+    defer partial.deinit(allocator);
+    try std.testing.expectEqualStrings("error", partial.response_type);
+    try std.testing.expectEqualStrings("Timeout", partial.error_message.?);
+    try std.testing.expectEqual(@as(usize, 1), partial.results.len);
+    try std.testing.expectEqualStrings("first", partial.results[0].name);
 }

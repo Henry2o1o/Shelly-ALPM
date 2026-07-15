@@ -3,7 +3,6 @@ const std = @import("std");
 const alpm_module = @import("../alpm/manager.zig");
 const alpm_bindings = @import("../alpm/bindings.zig");
 const alpm_events = @import("../alpm/events.zig");
-const xdg_paths = @import("../shared/xdg_paths.zig").xdg_paths;
 const pkgbuild_parser = @import("../pkgbuild/pkgbuild_parser.zig");
 const homograph_validator = @import("../pkgbuild/homograph_validator.zig");
 const post_install_validator = @import("../pkgbuild/post_install_validator.zig");
@@ -17,6 +16,7 @@ pub const events = @import("events.zig");
 pub const builder = @import("builder.zig");
 pub const dependency_resolver = @import("dependency_resolver.zig");
 pub const version = @import("version.zig");
+pub const native_events = alpm_events;
 
 const AlpmManager = alpm_module.Manager;
 const TransFlag = alpm_bindings.libalpm.TransFlag;
@@ -168,9 +168,13 @@ pub const Manager = struct {
         environ: std.process.Environ,
         options: InitOptions,
     ) !*Self {
-        const cache_home = try xdg_paths.xdgCacheHome(allocator, environ);
+        const temporary_root = if (options.use_temp_path) options.temp_path else null;
+        const alpm = try AlpmManager.init(allocator, environ, options.config_path, options.root, temporary_root);
+        errdefer alpm.deinit();
+
+        const cache_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_CACHE_HOME", ".cache");
         defer allocator.free(cache_home);
-        const data_home = try xdg_paths.xdgDataHome(allocator, environ);
+        const data_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_DATA_HOME", ".local/share");
         defer allocator.free(data_home);
         const cache_root = try std.fs.path.join(allocator, &.{ cache_home, "Shelly" });
         errdefer allocator.free(cache_root);
@@ -179,9 +183,6 @@ pub const Manager = struct {
         const chroot_path = try allocator.dupe(u8, options.chroot_path);
         errdefer allocator.free(chroot_path);
 
-        const temporary_root = if (options.use_temp_path) options.temp_path else null;
-        const alpm = try AlpmManager.init(allocator, environ, options.config_path, options.root, temporary_root);
-        errdefer alpm.deinit();
         try std.Io.Dir.cwd().createDirPath(alpm.io(), cache_root);
         if (options.show_hidden_packages and !alpm.show_hidden_packages) _ = alpm.toggle_hidden_packages();
 
@@ -242,6 +243,82 @@ pub const Manager = struct {
 
     pub fn alpmDispatcher(self: *Self) *alpm_events.Dispatcher {
         return &self.alpm.dispatcher;
+    }
+
+    pub fn addAlpmProgressHandler(self: *Self, handler: alpm_events.Handler(alpm_events.ProgressArgs).T) !usize {
+        return self.alpm.dispatcher.addProgressHandler(handler);
+    }
+
+    pub fn removeAlpmProgressHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removeProgressHandler(index);
+    }
+
+    pub fn addAlpmQuestionHandler(self: *Self, handler: alpm_events.Handler(alpm_events.QuestionArgs).T) !usize {
+        return self.alpm.dispatcher.addQuestionHandler(handler);
+    }
+
+    pub fn removeAlpmQuestionHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removeQuestionHandler(index);
+    }
+
+    pub fn addAlpmErrorHandler(self: *Self, handler: alpm_events.Handler(alpm_events.ErrorArgs).T) !usize {
+        return self.alpm.dispatcher.addErrorHandler(handler);
+    }
+
+    pub fn removeAlpmErrorHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removeErrorHandler(index);
+    }
+
+    pub fn addAlpmInformationalHandler(self: *Self, handler: alpm_events.Handler(alpm_events.InformationalArgs).T) !usize {
+        return self.alpm.dispatcher.addInformationalHandler(handler);
+    }
+
+    pub fn removeAlpmInformationalHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removeInformationalHandler(index);
+    }
+
+    pub fn addAlpmScriptletHandler(self: *Self, handler: alpm_events.Handler(alpm_events.ScriptletArgs).T) !usize {
+        return self.alpm.dispatcher.addScriptletHandler(handler);
+    }
+
+    pub fn removeAlpmScriptletHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removeScriptletHandler(index);
+    }
+
+    pub fn addAlpmHookHandler(self: *Self, handler: alpm_events.Handler(alpm_events.HookArgs).T) !usize {
+        return self.alpm.dispatcher.addHookHandler(handler);
+    }
+
+    pub fn removeAlpmHookHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removeHookHandler(index);
+    }
+
+    pub fn addAlpmPacnewHandler(self: *Self, handler: alpm_events.Handler(alpm_events.PacnewArgs).T) !usize {
+        return self.alpm.dispatcher.addPacnewHandler(handler);
+    }
+
+    pub fn removeAlpmPacnewHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removePacnewHandler(index);
+    }
+
+    pub fn addAlpmPacsaveHandler(self: *Self, handler: alpm_events.Handler(alpm_events.PacsaveArgs).T) !usize {
+        return self.alpm.dispatcher.addPacsaveHandler(handler);
+    }
+
+    pub fn removeAlpmPacsaveHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removePacsaveHandler(index);
+    }
+
+    pub fn addAlpmReplacesHandler(self: *Self, handler: alpm_events.Handler(alpm_events.ReplacesArgs).T) !usize {
+        return self.alpm.dispatcher.addReplacesHandler(handler);
+    }
+
+    pub fn removeAlpmReplacesHandler(self: *Self, index: usize) void {
+        self.alpm.dispatcher.removeReplacesHandler(index);
+    }
+
+    pub fn respondToAlpmQuestion(self: *Self, response: alpm_events.QuestionResponse) void {
+        self.alpm.dispatcher.respond(self.io(), response);
     }
 
     pub fn setPkgbuildApprovalHandler(self: *Self, handler: ?PkgbuildApprovalHandler) void {
@@ -353,6 +430,7 @@ pub const Manager = struct {
     }
 
     pub fn installDependenciesOnly(self: *Self, package_name: []const u8, include_make_dependencies: bool) !void {
+        try self.alpm.sync(false);
         self.raisePackageProgress(.aur_download_start, package_name, 1, 1, "Downloading PKGBUILD to analyze dependencies");
         if (!try self.downloadPackage(package_name)) {
             self.raisePackageProgress(.aur_package_failed, package_name, 1, 1, "Failed to download package");
@@ -366,17 +444,30 @@ pub const Manager = struct {
         var info = try (pkgbuild_parser.PkgbuildParser{ .allocator = self.allocator, .io = self.io() }).parser(pkgbuild_path);
         defer info.deinit(self.allocator);
 
-        var direct = try self.resolveSelectedDependencies(&info, include_make_dependencies);
-        defer direct.deinit(self.allocator);
-        if (direct.repo_packages.len == 0 and direct.aur_packages.len == 0) {
+        var selected = info;
+        selected.parsed_check_depends = null;
+        if (!include_make_dependencies) selected.parsed_make_depends = null;
+
+        var collection = DependencyCollection.init(self.allocator);
+        defer collection.deinit();
+        var visited = std.StringHashMap(void).init(self.allocator);
+        defer {
+            var keys = visited.keyIterator();
+            while (keys.next()) |key| self.allocator.free(key.*);
+            visited.deinit();
+        }
+        try self.collectDependenciesRecursive(&selected, &collection, &visited);
+        if (collection.repo.items.len == 0 and collection.aur.items.len == 0) {
             self.raisePackageProgress(.aur_package_completed, package_name, 1, 1, "All dependencies are already installed");
             return;
         }
-        try self.installResolution(&direct);
+        self.raisePackageProgress(.aur_install_start, package_name, 1, 1, "Installing dependencies");
+        try self.installCollection(&collection);
         self.raisePackageProgress(.aur_package_completed, package_name, 1, 1, "Dependencies installed successfully");
     }
 
     pub fn installPackages(self: *Self, package_names: []const []const u8) !void {
+        try self.alpm.sync(false);
         for (package_names, 0..) |package_name, index| {
             const current = index + 1;
             self.raisePackageProgress(.aur_download_start, package_name, current, package_names.len, "");
@@ -413,7 +504,7 @@ pub const Manager = struct {
 
             try self.prepareBuildDirectory(cache_path);
             self.raisePackageProgress(.aur_build_start, package_name, current, package_names.len, "Building package with makepkg");
-            if (!(try self.buildPackage(package_name, cache_path))) {
+            if (!(try self.buildPackage(package_name, cache_path, false))) {
                 self.raisePackageProgress(.aur_package_failed, package_name, current, package_names.len, "Failed to build package with makepkg");
                 continue;
             }
@@ -434,7 +525,7 @@ pub const Manager = struct {
                 const build_names: []const []const u8 = @ptrCast(build_only);
                 self.removeRepoPackages(build_names, .{}, true) catch {};
             }
-            builder.cleanBuildArtifacts(self.io(), cache_path);
+            self.cleanBuildArtifacts(cache_path);
             self.raisePackageProgress(.aur_package_completed, package_name, current, package_names.len, "");
         }
     }
@@ -451,14 +542,18 @@ pub const Manager = struct {
             const package_base = try self.resolvePkgbase(package_name);
             const cache_path = try self.cachePath(package_base);
             defer self.allocator.free(cache_path);
-            std.Io.Dir.cwd().deleteTree(self.io(), cache_path) catch {};
+            _ = self.removeCacheDirectory(cache_path) catch false;
         }
         try self.vcs_store.saveFile(self.io(), self.vcs_store_path);
     }
 
     pub fn installPackageVersion(self: *Self, package_name: []const u8, commit: []const u8) !void {
         self.raisePackageProgress(.aur_download_start, package_name, 1, 1, "");
-        if (!(try self.downloadPackageAtCommit(package_name, commit))) return error.DownloadFailed;
+        if (!(try self.downloadPackageAtCommit(package_name, commit))) {
+            self.raisePackageProgress(.aur_package_failed, package_name, 1, 1, "Failed to download package at the requested commit");
+            return error.DownloadFailed;
+        }
+        try self.alpm.sync(false);
         const package_base = try self.resolvePkgbase(package_name);
         const cache_path = try self.cachePath(package_base);
         defer self.allocator.free(cache_path);
@@ -478,10 +573,18 @@ pub const Manager = struct {
         }
         try self.collectDependenciesRecursive(&info, &collection, &visited);
         try self.installCollection(&collection);
-        if (!(try self.buildPackage(package_name, cache_path))) return error.BuildFailed;
+        self.raisePackageProgress(.aur_build_start, package_name, 1, 1, "Building package with makepkg");
+        if (!(try self.buildPackage(package_name, cache_path, true))) {
+            self.raisePackageProgress(.aur_package_failed, package_name, 1, 1, "Failed to build package with makepkg");
+            return error.BuildFailed;
+        }
         const package_files = try builder.selectBuiltPackageFiles(self.allocator, self.io(), cache_path, package_name);
         defer builder.deinitPaths(self.allocator, package_files);
-        if (package_files.len == 0) return error.NoBuiltPackages;
+        if (package_files.len == 0) {
+            self.raisePackageProgress(.aur_package_failed, package_name, 1, 1, "No matching package files produced by makepkg");
+            return error.NoBuiltPackages;
+        }
+        self.raisePackageProgress(.aur_install_start, package_name, 1, 1, "");
         try self.alpm.install_local_packages(package_files, .{});
         if (build_only.len > 0) {
             self.raisePackageProgress(.aur_cleanup_start, package_name, 1, 1, "Removing build-only dependencies");
@@ -489,15 +592,6 @@ pub const Manager = struct {
             self.removeRepoPackages(build_names, .{}, true) catch {};
         }
         self.raisePackageProgress(.aur_package_completed, package_name, 1, 1, "");
-    }
-
-    fn resolveSelectedDependencies(self: *Self, info: *const PkgbuildInfo, include_make: bool) !dependency_resolver.Resolution {
-        var selected = info.*;
-        if (!include_make) {
-            selected.parsed_make_depends = null;
-            selected.parsed_check_depends = null;
-        }
-        return dependency_resolver.resolve(self.allocator, &selected, true, self.dependencyBackend());
     }
 
     fn dependencyBackend(self: *Self) dependency_resolver.Backend {
@@ -516,11 +610,6 @@ pub const Manager = struct {
     fn dependencyRepoSatisfier(context: ?*anyopaque, dependency: [:0]const u8) ?[]const u8 {
         const self: *Self = @ptrCast(@alignCast(context));
         return self.alpm.find_remote_satisfier_for_dependency(dependency) catch null;
-    }
-
-    fn installResolution(self: *Self, resolution: *const dependency_resolver.Resolution) !void {
-        if (resolution.repo_packages.len > 0) try self.installRepoPackages(resolution.repo_packages, .{ .alldeps = true });
-        for (resolution.aur_packages) |dependency| try self.buildAndInstallDependency(dependency);
     }
 
     fn collectDependenciesRecursive(
@@ -584,7 +673,7 @@ pub const Manager = struct {
         const package_base = try self.resolvePkgbase(dependency.name);
         const cache_path = try self.cachePath(package_base);
         defer self.allocator.free(cache_path);
-        if (!(try self.buildPackage(dependency.name, cache_path))) return error.BuildFailed;
+        if (!(try self.buildPackage(dependency.name, cache_path, false))) return error.BuildFailed;
         const files = try builder.selectBuiltPackageFiles(self.allocator, self.io(), cache_path, dependency.name);
         defer builder.deinitPaths(self.allocator, files);
         if (files.len == 0) return error.NoBuiltPackages;
@@ -888,8 +977,8 @@ pub const Manager = struct {
             }
         } else |_| {}
         if (clone_needed) {
-            builder.cleanBuildArtifacts(self.io(), cache_path);
-            std.Io.Dir.cwd().deleteTree(self.io(), cache_path) catch {};
+            self.cleanBuildArtifacts(cache_path);
+            if (!(try self.removeCacheDirectory(cache_path))) return false;
             var clone = try self.runAsInvokingUser(&.{ "git", "clone", expected_remote, cache_path }, null, null);
             defer clone.deinit(self.allocator);
             if (clone.exit_code != 0) return false;
@@ -906,13 +995,17 @@ pub const Manager = struct {
         defer self.allocator.free(cache_path);
         const remote = try std.fmt.allocPrint(self.allocator, "https://aur.archlinux.org/{s}.git", .{package_base});
         defer self.allocator.free(remote);
-        std.Io.Dir.cwd().deleteTree(self.io(), cache_path) catch {};
+        if (!(try self.removeCacheDirectory(cache_path))) return false;
         var clone = try self.runAsInvokingUser(&.{ "git", "clone", remote, cache_path }, null, null);
         defer clone.deinit(self.allocator);
         if (clone.exit_code != 0) return false;
         var checkout = try self.runAsInvokingUser(&.{ "git", "checkout", commit }, cache_path, null);
         defer checkout.deinit(self.allocator);
-        return checkout.exit_code == 0;
+        if (checkout.exit_code != 0) return false;
+        const pkgbuild_path = try std.fs.path.join(self.allocator, &.{ cache_path, "PKGBUILD" });
+        defer self.allocator.free(pkgbuild_path);
+        _ = std.Io.Dir.cwd().statFile(self.io(), pkgbuild_path, .{}) catch return false;
+        return true;
     }
 
     fn prepareBuildDirectory(self: *Self, cache_path: []const u8) !void {
@@ -960,26 +1053,56 @@ pub const Manager = struct {
         }
     }
 
-    fn buildPackage(self: *Self, package_name: []const u8, cache_path: []const u8) !bool {
-        if (self.use_chroot) try self.ensureChrootExists();
-        var command = try builder.makepkgCommand(self.allocator, self.io(), self.environ, self.use_chroot, self.chroot_path, self.no_check);
-        defer command.deinit(self.allocator);
-        var result = try builder.runWithEnvironment(self.allocator, self.io(), self.environ, command.asConst(), cache_path, null);
-        defer result.deinit(self.allocator);
-        var output_lines = std.mem.splitScalar(u8, result.stdout, '\n');
-        while (output_lines.next()) |line| {
-            if (line.len == 0) continue;
-            self.raiseBuildLine(package_name, line, false);
-            if (builder.parseBuildProgress(line)) |progress| self.dispatcher.raiseProgress(.{
-                .progress_type = .makepkg_build,
-                .package_name = package_name,
-                .percent = progress.percent,
-                .message = progress.message,
-            });
+    fn cleanBuildArtifacts(self: *Self, cache_path: []const u8) void {
+        for ([_][]const u8{ "src", "pkg" }) |name| {
+            const path = std.fs.path.join(self.allocator, &.{ cache_path, name }) catch continue;
+            defer self.allocator.free(path);
+            _ = std.Io.Dir.cwd().statFile(self.io(), path, .{}) catch continue;
+            if (self.removeCacheDirectory(path) catch false) continue;
+            const message = std.fmt.allocPrint(self.allocator, "Failed to clean build artifact directory {s}", .{path}) catch continue;
+            defer self.allocator.free(message);
+            self.raiseInfo(.debug_output, null, message, null, null);
         }
-        var error_lines = std.mem.splitScalar(u8, result.stderr, '\n');
-        while (error_lines.next()) |line| if (line.len != 0) self.raiseBuildLine(package_name, line, true);
-        return result.exit_code == 0;
+    }
+
+    fn removeCacheDirectory(self: *Self, path: []const u8) !bool {
+        _ = std.Io.Dir.cwd().statFile(self.io(), path, .{}) catch return true;
+        if (self.runAsInvokingUser(&.{ "rm", "-rf", path }, null, null)) |result_value| {
+            var result = result_value;
+            defer result.deinit(self.allocator);
+            if (result.exit_code == 0) return true;
+        } else |_| {}
+
+        var fallback = try builder.runWithEnvironment(
+            self.allocator,
+            self.io(),
+            self.environ,
+            &.{ "rm", "-rf", path },
+            null,
+            null,
+        );
+        defer fallback.deinit(self.allocator);
+        return fallback.exit_code == 0;
+    }
+
+    fn buildPackage(self: *Self, package_name: []const u8, cache_path: []const u8, historical: bool) !bool {
+        if (self.use_chroot) try self.ensureChrootExists();
+        var command = if (historical and !self.use_chroot)
+            try builder.makepkgHistoricalCommand(self.allocator, self.io(), self.environ, self.no_check)
+        else
+            try builder.makepkgCommand(self.allocator, self.io(), self.environ, self.use_chroot, self.chroot_path, self.no_check);
+        defer command.deinit(self.allocator);
+        var stream_context = BuildStreamContext{ .manager = self, .package_name = package_name };
+        const exit_code = try builder.runStreamingWithEnvironment(
+            self.allocator,
+            self.io(),
+            self.environ,
+            command.asConst(),
+            cache_path,
+            null,
+            .{ .function = forwardBuildLine, .data = &stream_context },
+        );
+        return exit_code == 0;
     }
 
     fn ensureChrootExists(self: *Self) !void {
@@ -1111,7 +1234,8 @@ pub const Manager = struct {
     }
 
     fn importOtherAurHelperCaches(self: *Self) !void {
-        const home = self.environ.getPosix("HOME") orelse return;
+        const home = try builder.resolveInvokingUserHome(self.allocator, self.io(), self.environ);
+        defer self.allocator.free(home);
         const foreign = try self.alpm.get_foreign_packages();
         defer alpm_bindings.libalpm.OwnedPackage.deinitSlice(self.allocator, foreign);
         for ([_][]const u8{ ".cache/paru/clone", ".cache/yay" }) |relative| {
@@ -1149,7 +1273,7 @@ pub const Manager = struct {
             if (copy.exit_code == 0) {
                 const git = try std.fs.path.join(self.allocator, &.{ destination, ".git" });
                 defer self.allocator.free(git);
-                std.Io.Dir.cwd().deleteTree(self.io(), git) catch {};
+                _ = self.removeCacheDirectory(git) catch false;
             }
         }
     }
@@ -1242,6 +1366,24 @@ pub const Manager = struct {
     }
 };
 
+const BuildStreamContext = struct {
+    manager: *Manager,
+    package_name: []const u8,
+};
+
+fn forwardBuildLine(data: ?*anyopaque, stream: builder.StreamKind, line: []const u8) void {
+    const context: *BuildStreamContext = @ptrCast(@alignCast(data));
+    context.manager.raiseBuildLine(context.package_name, line, stream == .stderr);
+    if (stream == .stdout) if (builder.parseBuildProgress(line)) |progress| {
+        context.manager.dispatcher.raiseProgress(.{
+            .progress_type = .makepkg_build,
+            .package_name = context.package_name,
+            .percent = progress.percent,
+            .message = progress.message,
+        });
+    };
+}
+
 const DependencyCollection = struct {
     allocator: std.mem.Allocator,
     repo: std.ArrayList([]u8) = .empty,
@@ -1299,6 +1441,21 @@ fn cloneIdentityMatches(package_base: []const u8, package_names: []const []const
     if (std.mem.eql(u8, package_base, installed_name)) return true;
     for (package_names) |name| if (std.mem.eql(u8, name, installed_name)) return true;
     return false;
+}
+
+fn resolveXdgHome(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    variable_name: []const u8,
+    fallback_relative: []const u8,
+) ![]u8 {
+    if (environ.getPosix(variable_name)) |configured| {
+        if (configured.len != 0 and std.fs.path.isAbsolute(configured)) return allocator.dupe(u8, configured);
+    }
+    const home = try builder.resolveInvokingUserHome(allocator, io, environ);
+    defer allocator.free(home);
+    return std.fs.path.join(allocator, &.{ home, fallback_relative });
 }
 
 fn parseAurGitRemote(allocator: std.mem.Allocator, remote: []const u8) !?[]u8 {

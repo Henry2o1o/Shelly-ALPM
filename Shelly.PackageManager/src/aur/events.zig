@@ -111,14 +111,26 @@ pub const Dispatcher = struct {
         return self.informational.items.len - 1;
     }
 
+    pub fn removeInformationalHandler(self: *Dispatcher, index: usize) void {
+        removeHandler(InformationalHandler, &self.informational, index);
+    }
+
     pub fn addProgressHandler(self: *Dispatcher, handler: ProgressHandler) !usize {
         try self.progress.append(self.allocator, handler);
         return self.progress.items.len - 1;
     }
 
+    pub fn removeProgressHandler(self: *Dispatcher, index: usize) void {
+        removeHandler(ProgressHandler, &self.progress, index);
+    }
+
     pub fn addErrorHandler(self: *Dispatcher, handler: ErrorHandler) !usize {
         try self.errors.append(self.allocator, handler);
         return self.errors.items.len - 1;
+    }
+
+    pub fn removeErrorHandler(self: *Dispatcher, index: usize) void {
+        removeHandler(ErrorHandler, &self.errors, index);
     }
 
     pub fn setQuestionHandler(self: *Dispatcher, handler: ?QuestionHandler) void {
@@ -156,6 +168,11 @@ pub const Dispatcher = struct {
         };
         defer self.allocator.free(snapshot);
         for (snapshot) |handler| handler.call(args);
+    }
+
+    fn removeHandler(comptime HandlerType: type, handlers: *std.ArrayList(HandlerType), index: usize) void {
+        if (index >= handlers.items.len) return;
+        _ = handlers.swapRemove(index);
     }
 };
 
@@ -222,4 +239,21 @@ test "AUR dispatcher returns provider selections" {
         .options = &options,
     });
     try std.testing.expectEqualSlices(usize, &.{1}, response.selected_indices);
+}
+
+test "AUR handlers can be removed through the manager-facing dispatcher" {
+    const Capture = struct {
+        called: bool = false,
+        fn onError(data: ?*anyopaque, _: ErrorArgs) void {
+            const self: *@This() = @ptrCast(@alignCast(data));
+            self.called = true;
+        }
+    };
+    var dispatcher = Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    var capture = Capture{};
+    const index = try dispatcher.addErrorHandler(.{ .function = Capture.onError, .data = &capture });
+    dispatcher.removeErrorHandler(index);
+    dispatcher.raiseError(.{ .message = "ignored" });
+    try std.testing.expect(!capture.called);
 }

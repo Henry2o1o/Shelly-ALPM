@@ -12,6 +12,20 @@ pub const ProcessResult = struct {
     }
 };
 
+pub const StreamKind = enum {
+    stdout,
+    stderr,
+};
+
+pub const LineHandler = struct {
+    function: *const fn (data: ?*anyopaque, stream: StreamKind, line: []const u8) void,
+    data: ?*anyopaque = null,
+
+    fn call(self: LineHandler, stream: StreamKind, line: []const u8) void {
+        self.function(self.data, stream, line);
+    }
+};
+
 pub const OwnedCommand = struct {
     argv: [][]u8,
 
@@ -47,6 +61,67 @@ pub fn runWithEnvironment(
     var environ_map = try executionEnvironment(allocator, environ);
     defer environ_map.deinit();
     return runWithEnvironmentMap(allocator, io, argv, working_directory, timeout_seconds, &environ_map);
+}
+
+pub fn runStreamingWithEnvironment(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    argv: []const []const u8,
+    working_directory: ?[]const u8,
+    timeout_seconds: ?u32,
+    line_handler: LineHandler,
+) !u8 {
+    var environ_map = try executionEnvironment(allocator, environ);
+    defer environ_map.deinit();
+    var child = try std.process.spawn(io, .{
+        .argv = argv,
+        .cwd = if (working_directory) |path| .{ .path = path } else .inherit,
+        .environ_map = &environ_map,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    defer child.kill(io);
+
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(allocator, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+
+    const timeout: std.Io.Timeout = if (timeout_seconds) |seconds|
+        .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(seconds) } }
+    else
+        .none;
+    while (multi_reader.fill(4096, timeout)) |_| {
+        drainLines(multi_reader.reader(0), .stdout, false, line_handler);
+        drainLines(multi_reader.reader(1), .stderr, false, line_handler);
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |other| return other,
+    }
+    try multi_reader.checkAnyError();
+    drainLines(multi_reader.reader(0), .stdout, true, line_handler);
+    drainLines(multi_reader.reader(1), .stderr, true, line_handler);
+
+    return switch ((try child.wait(io))) {
+        .exited => |code| code,
+        else => 255,
+    };
+}
+
+fn drainLines(reader: *std.Io.Reader, stream: StreamKind, flush_tail: bool, line_handler: LineHandler) void {
+    while (std.mem.indexOfScalar(u8, reader.buffered(), '\n')) |line_end| {
+        const line = std.mem.trimEnd(u8, reader.buffered()[0..line_end], "\r");
+        if (line.len != 0) line_handler.call(stream, line);
+        reader.toss(line_end + 1);
+    }
+    if (flush_tail and reader.bufferedLen() != 0) {
+        const len = reader.bufferedLen();
+        const line = std.mem.trimEnd(u8, reader.buffered(), "\r");
+        if (line.len != 0) line_handler.call(stream, line);
+        reader.toss(len);
+    }
 }
 
 fn runWithEnvironmentMap(
@@ -125,6 +200,47 @@ pub fn resolveUsernameForUid(
     return allocator.dupe(u8, resolveUsernameForUidFromPasswd(uid, passwd));
 }
 
+pub fn resolveInvokingUserHome(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+) ![]u8 {
+    const fallback = environ.getPosix("HOME") orelse return error.HomeNotSet;
+    const passwd = std.Io.Dir.cwd().readFileAlloc(io, "/etc/passwd", allocator, .limited(4 * 1024 * 1024)) catch
+        return allocator.dupe(u8, fallback);
+    defer allocator.free(passwd);
+
+    if (environ.getPosix("SUDO_USER")) |user| {
+        if (user.len != 0 and !std.mem.eql(u8, user, "root")) {
+            if (homeFromPasswd(passwd, user, null)) |home| return allocator.dupe(u8, home);
+        }
+    } else if (environ.getPosix("PKEXEC_UID")) |uid| {
+        if (homeFromPasswd(passwd, null, uid)) |home| return allocator.dupe(u8, home);
+    }
+    return allocator.dupe(u8, fallback);
+}
+
+pub fn homeFromPasswd(passwd: []const u8, username: ?[]const u8, uid: ?[]const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, passwd, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+        var fields = std.mem.splitScalar(u8, trimmed, ':');
+        const field_user = fields.next() orelse continue;
+        _ = fields.next() orelse continue;
+        const field_uid = fields.next() orelse continue;
+        _ = fields.next() orelse continue;
+        _ = fields.next() orelse continue;
+        const home = fields.next() orelse continue;
+        if (username) |expected| {
+            if (std.mem.eql(u8, field_user, expected)) return home;
+        } else if (uid) |expected| {
+            if (std.mem.eql(u8, field_uid, expected)) return home;
+        }
+    }
+    return null;
+}
+
 pub fn invokingUserCommand(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -183,6 +299,19 @@ pub fn makepkgCommand(
     var args: std.ArrayList([]const u8) = .empty;
     defer args.deinit(allocator);
     try args.appendSlice(allocator, &base);
+    if (no_check) try args.append(allocator, "--nocheck");
+    return invokingUserCommand(allocator, io, environ, "makepkg", args.items);
+}
+
+pub fn makepkgHistoricalCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    no_check: bool,
+) !OwnedCommand {
+    var args: std.ArrayList([]const u8) = .empty;
+    defer args.deinit(allocator);
+    try args.append(allocator, "--noconfirm");
     if (no_check) try args.append(allocator, "--nocheck");
     return invokingUserCommand(allocator, io, environ, "makepkg", args.items);
 }
@@ -281,6 +410,8 @@ test "UID lookup and VCS build commands replicate invoking-user behavior" {
     const passwd = "root:x:0:0::/root:/bin/bash\nzoey:x:1000:1000::/home/zoey:/bin/bash\n";
     try std.testing.expectEqualStrings("zoey", resolveUsernameForUidFromPasswd("1000", passwd));
     try std.testing.expectEqualStrings("55", resolveUsernameForUidFromPasswd("55", passwd));
+    try std.testing.expectEqualStrings("/home/zoey", homeFromPasswd(passwd, "zoey", null).?);
+    try std.testing.expectEqualStrings("/home/zoey", homeFromPasswd(passwd, null, "1000").?);
 
     var command = try makepkgCommand(
         std.testing.allocator,
@@ -296,6 +427,22 @@ test "UID lookup and VCS build commands replicate invoking-user behavior" {
         if (std.mem.eql(u8, argument, "--nocheck")) found_nocheck = true;
     }
     try std.testing.expect(found_nocheck);
+
+    var historical = try makepkgHistoricalCommand(
+        std.testing.allocator,
+        std.testing.io,
+        std.testing.environ,
+        true,
+    );
+    defer historical.deinit(std.testing.allocator);
+    var found_force = false;
+    var found_historical_nocheck = false;
+    for (historical.argv) |argument| {
+        if (std.mem.eql(u8, argument, "-f")) found_force = true;
+        if (std.mem.eql(u8, argument, "--nocheck")) found_historical_nocheck = true;
+    }
+    try std.testing.expect(!found_force);
+    try std.testing.expect(found_historical_nocheck);
 }
 
 test "built package selection mirrors split-package and stale-output safeguards" {
@@ -323,4 +470,45 @@ test "built package selection mirrors split-package and stale-output safeguards"
     try std.testing.expect(isBuiltPackageFile("demo.pkg.tar.zst"));
     try std.testing.expect(!isBuiltPackageFile("demo.pkg.tar.zst.sig"));
     try std.testing.expect(isPackageArchiveArtifact("demo.pkg.tar.zst.sig"));
+}
+
+test "streaming process execution forwards stdout stderr and a final unterminated line" {
+    const Capture = struct {
+        stdout_buffer: [64]u8 = undefined,
+        stdout_len: usize = 0,
+        stderr_buffer: [64]u8 = undefined,
+        stderr_len: usize = 0,
+
+        fn append(target: []u8, len: *usize, line: []const u8) void {
+            if (len.* != 0 and len.* < target.len) {
+                target[len.*] = '|';
+                len.* += 1;
+            }
+            const amount = @min(line.len, target.len - len.*);
+            @memcpy(target[len.*..][0..amount], line[0..amount]);
+            len.* += amount;
+        }
+
+        fn onLine(data: ?*anyopaque, stream: StreamKind, line: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(data));
+            switch (stream) {
+                .stdout => append(&self.stdout_buffer, &self.stdout_len, line),
+                .stderr => append(&self.stderr_buffer, &self.stderr_len, line),
+            }
+        }
+    };
+
+    var capture = Capture{};
+    const exit_code = try runStreamingWithEnvironment(
+        std.testing.allocator,
+        std.testing.io,
+        std.testing.environ,
+        &.{ "sh", "-c", "printf 'first\\nlast'; printf 'problem\\n' >&2" },
+        null,
+        null,
+        .{ .function = Capture.onLine, .data = &capture },
+    );
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqualStrings("first|last", capture.stdout_buffer[0..capture.stdout_len]);
+    try std.testing.expectEqualStrings("problem", capture.stderr_buffer[0..capture.stderr_len]);
 }
