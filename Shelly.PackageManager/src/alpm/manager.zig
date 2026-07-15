@@ -238,20 +238,26 @@ pub const Manager = struct {
         try self.refresh();
     }
 
-    pub fn get_installed_packages(self: *Manager) TransactionError!std.ArrayList(libalpm.Package) {
+    pub fn get_installed_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
         const database = rawLibalpm.alpm_get_localdb(self.handle);
         const packages: libalpm.DatabaseList = rawLibalpm.alpm_db_get_pkgcache(database);
-        var package_list: std.ArrayList(libalpm.Package) = .empty;
+        var package_list: std.ArrayList(libalpm.OwnedPackage) = .empty;
+        errdefer {
+            libalpm.OwnedPackage.deinitItems(self.allocator, package_list.items);
+            package_list.deinit(self.allocator);
+        }
         var pkg_ptr = packages;
         while (pkg_ptr != null) : (pkg_ptr = pkg_ptr.?.*.next) {
             const package_ptr = pkg_ptr.?.data orelse continue;
             const package = libalpm.Package.from(package_ptr) orelse continue;
-            package_list.append(self.allocator, package) catch {
-                return TransactionError.PackageFetchFailed;
+            var owned_package = libalpm.OwnedPackage.init(self.allocator, package) catch return TransactionError.OutOfMemory;
+            package_list.append(self.allocator, owned_package) catch {
+                owned_package.deinit(self.allocator);
+                return TransactionError.OutOfMemory;
             };
         }
-        return package_list;
+        return package_list.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
     }
 
     pub fn get_single_installed_package(self: *Manager, package_name: [:0]const u8) TransactionError!?libalpm.Package {
@@ -266,22 +272,23 @@ pub const Manager = struct {
         return libalpm.Package.from(package.?);
     }
 
-    pub fn get_foreign_packages(self: *Manager) TransactionError!std.ArrayList(libalpm.Package) {
+    pub fn get_foreign_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
 
         // Foreign packages are installed packages that are not provided by any
         // registered sync database (e.g. AUR or locally built packages).
-        var packages = self.get_installed_packages() catch {
-            return TransactionError.PackageFetchFailed;
-        };
-        defer packages.deinit(self.allocator);
-
-        var foreign_packages: std.ArrayList(libalpm.Package) = .empty;
-        defer foreign_packages.deinit(self.allocator);
-        errdefer foreign_packages.deinit(self.allocator);
+        var foreign_packages: std.ArrayList(libalpm.OwnedPackage) = .empty;
+        errdefer {
+            libalpm.OwnedPackage.deinitItems(self.allocator, foreign_packages.items);
+            foreign_packages.deinit(self.allocator);
+        }
 
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
-        for (packages.items) |package| {
+        const local_database = rawLibalpm.alpm_get_localdb(self.handle);
+        var packages = rawLibalpm.alpm_db_get_pkgcache(local_database);
+        while (packages != null) : (packages = packages.*.next) {
+            const package_data = packages.*.data orelse continue;
+            const package = libalpm.Package.from(package_data) orelse continue;
             const package_name = package.name() orelse continue;
             var found_in_sync: bool = false;
             var sync_ptr = sync_databases;
@@ -293,35 +300,35 @@ pub const Manager = struct {
                     break;
                 }
             }
-            if (!found_in_sync) {
-                foreign_packages.append(self.allocator, package) catch {
-                    return TransactionError.PackageFetchFailed;
-                };
-            }
-        }
-        if (!self.show_hidden_packages) {
-            var filtered_packages: std.ArrayList(libalpm.Package) = .empty;
-            errdefer filtered_packages.deinit(self.allocator);
-            for (foreign_packages.items) |*package| {
-                var ignored: bool = false;
-                const name = package.name() orelse continue;
+            if (found_in_sync) continue;
+
+            if (!self.show_hidden_packages) {
+                var ignored = false;
                 for (self.config.ignore_package.items) |ignore| {
-                    if (std.mem.eql(u8, name, ignore)) {
+                    if (std.mem.eql(u8, package_name, ignore)) {
                         ignored = true;
                         break;
                     }
                 }
-                if (!ignored) filtered_packages.append(self.allocator, package.*) catch return TransactionError.PackageFetchFailed;
+                if (ignored) continue;
             }
-            return filtered_packages;
+
+            var owned_package = libalpm.OwnedPackage.init(self.allocator, package) catch return TransactionError.OutOfMemory;
+            foreign_packages.append(self.allocator, owned_package) catch {
+                owned_package.deinit(self.allocator);
+                return TransactionError.OutOfMemory;
+            };
         }
-        return foreign_packages;
+        return foreign_packages.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
     }
 
-    pub fn get_available_packages(self: *Manager) TransactionError!std.ArrayList(libalpm.Package) {
+    pub fn get_available_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
-        var packages: std.ArrayList(libalpm.Package) = .empty;
-        errdefer packages.deinit(self.allocator);
+        var packages: std.ArrayList(libalpm.OwnedPackage) = .empty;
+        errdefer {
+            libalpm.OwnedPackage.deinitItems(self.allocator, packages.items);
+            packages.deinit(self.allocator);
+        }
 
         var sync_database: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
         while (sync_database != null) : (sync_database = sync_database.?.*.next) {
@@ -329,32 +336,41 @@ pub const Manager = struct {
             const database = libalpm.Database.from(db_data) orelse continue;
             var tempPackages = database.packages();
             while (tempPackages.next()) |pkg| {
-                packages.append(self.allocator, pkg) catch {
-                    return TransactionError.PackageFetchFailed;
+                var owned_package = libalpm.OwnedPackage.init(self.allocator, pkg) catch return TransactionError.OutOfMemory;
+                packages.append(self.allocator, owned_package) catch {
+                    owned_package.deinit(self.allocator);
+                    return TransactionError.OutOfMemory;
                 };
             }
         }
-        return packages;
+        return packages.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
     }
 
-    pub fn get_updates_available(self: *Manager) TransactionError!std.ArrayList(libalpm.PackageWithUpdate) {
+    pub fn get_updates_available(self: *Manager) TransactionError![]libalpm.OwnedPackageWithUpdate {
         if (self.handle == null) return TransactionError.NoHandle;
-        var package_updates: std.ArrayList(libalpm.PackageWithUpdate) = .empty;
-        defer package_updates.deinit(self.allocator);
+        var package_updates: std.ArrayList(libalpm.OwnedPackageWithUpdate) = .empty;
+        errdefer {
+            for (package_updates.items) |*update| update.deinit(self.allocator);
+            package_updates.deinit(self.allocator);
+        }
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
-        const local_packages = self.get_installed_packages() catch {
-            return TransactionError.PackageFetchFailed;
-        };
-        for (local_packages.items) |local_pkg| {
+        const local_database = rawLibalpm.alpm_get_localdb(self.handle);
+        var local_packages = rawLibalpm.alpm_db_get_pkgcache(local_database);
+        while (local_packages != null) : (local_packages = local_packages.*.next) {
+            const package_data = local_packages.*.data orelse continue;
+            const local_pkg = libalpm.Package.from(package_data) orelse continue;
             const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg.ptr, sync_databases) orelse continue;
-            package_updates.append(self.allocator, .{
-                .old_package = .{ .ptr = local_pkg.ptr },
-                .new_package = .{ .ptr = new_version },
-            }) catch {
-                return TransactionError.PackageFetchFailed;
+            var owned_update = libalpm.OwnedPackageWithUpdate.init(
+                self.allocator,
+                local_pkg,
+                .{ .ptr = new_version },
+            ) catch return TransactionError.OutOfMemory;
+            package_updates.append(self.allocator, owned_update) catch {
+                owned_update.deinit(self.allocator);
+                return TransactionError.OutOfMemory;
             };
         }
-        return package_updates;
+        return package_updates.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
     }
 
     pub fn install_packages(
@@ -888,19 +904,21 @@ pub const Manager = struct {
 
     pub fn purify(self: *Manager, dry_run: bool, shoot_orphans: bool, purge_corruption: bool) TransactionError![][:0]const u8 {
         if (self.handle == null) return TransactionError.NoHandle;
-        var purge_targets: std.ArrayList(libalpm.Package) = .empty;
-        defer purge_targets.deinit(self.allocator);
         var target_names: std.ArrayList([:0]const u8) = .empty;
-        errdefer target_names.deinit(self.allocator);
+        errdefer {
+            for (target_names.items) |target_name| self.allocator.free(target_name);
+            target_names.deinit(self.allocator);
+        }
         if (shoot_orphans) {
-            var orphans = self.get_orphans() catch return TransactionError.OrphanShootFailed;
-            defer orphans.deinit(self.allocator);
-            for (orphans.items) |orphan| {
-                purge_targets.append(self.allocator, orphan) catch return TransactionError.OutOfMemory;
-            }
+            const orphans = self.get_orphans() catch return TransactionError.OrphanShootFailed;
+            defer libalpm.OwnedPackage.deinitSlice(self.allocator, orphans);
 
-            for (purge_targets.items) |target| {
-                target_names.append(self.allocator, target.name() orelse "") catch return TransactionError.OutOfMemory;
+            for (orphans) |orphan| {
+                const target_name = self.allocator.dupeZ(u8, orphan.name() orelse "") catch return TransactionError.OutOfMemory;
+                target_names.append(self.allocator, target_name) catch {
+                    self.allocator.free(target_name);
+                    return TransactionError.OutOfMemory;
+                };
             }
             if (!dry_run) {
                 self.remove_packages(target_names.items, .{ .nosave = true, .recurse = true, .cascade = true }, true) catch |err| {
@@ -1024,12 +1042,15 @@ pub const Manager = struct {
         return arch_list.toOwnedSlice(self.allocator);
     }
 
-    fn get_orphans(self: *Manager) TransactionError!std.ArrayList(libalpm.Package) {
+    fn get_orphans(self: *Manager) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
         var pkgs_list = rawLibalpm.alpm_db_get_pkgcache(local_db) orelse return TransactionError.DatabaseReadFailed;
-        var orphans: std.ArrayList(libalpm.Package) = .empty;
-        errdefer orphans.deinit(self.allocator);
+        var orphans: std.ArrayList(libalpm.OwnedPackage) = .empty;
+        errdefer {
+            libalpm.OwnedPackage.deinitItems(self.allocator, orphans.items);
+            orphans.deinit(self.allocator);
+        }
         while (pkgs_list != null) : (pkgs_list = pkgs_list.*.next) {
             const pkg = libalpm.Package.from(pkgs_list.*.data.?) orelse continue;
             if (pkg.install_reason() == .Explicit) continue;
@@ -1039,9 +1060,13 @@ pub const Manager = struct {
                 bool_required_by = true;
             }
             if (bool_required_by) continue;
-            orphans.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
+            var owned_package = libalpm.OwnedPackage.init(self.allocator, pkg) catch return TransactionError.OutOfMemory;
+            orphans.append(self.allocator, owned_package) catch {
+                owned_package.deinit(self.allocator);
+                return TransactionError.OutOfMemory;
+            };
         }
-        return orphans;
+        return orphans.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
     }
 
     // Determines if a single package is available for optional dependency install.
@@ -2064,6 +2089,69 @@ test "handleInformationMessage ignores application-only event types" {
     try testing.expect(cap.args == null);
 }
 
+test "handleInformationMessage emits every generic informational description" {
+    const Case = struct {
+        event_type: libalpm.EventType,
+        message: []const u8,
+    };
+    const cases = [_]Case{
+        .{ .event_type = .checkdeps_start, .message = "Checking dependencies..." },
+        .{ .event_type = .checkdeps_done, .message = "Dependency check finished." },
+        .{ .event_type = .fileconflicts_start, .message = "Checking for file conflicts..." },
+        .{ .event_type = .fileconflicts_done, .message = "File conflict check finished." },
+        .{ .event_type = .resolvedeps_start, .message = "Resolving dependencies..." },
+        .{ .event_type = .resolvedeps_done, .message = "Dependency resolution finished." },
+        .{ .event_type = .interconflicts_start, .message = "Checking for package conflicts..." },
+        .{ .event_type = .interconflicts_done, .message = "Package conflict check finished." },
+        .{ .event_type = .transaction_start, .message = "Starting transaction..." },
+        .{ .event_type = .transaction_done, .message = "Transaction completed." },
+        .{ .event_type = .package_operation_start, .message = "Starting package operation..." },
+        .{ .event_type = .package_operation_done, .message = "Package operation completed." },
+        .{ .event_type = .integrity_start, .message = "Checking package integrity..." },
+        .{ .event_type = .integrity_done, .message = "Package integrity check finished." },
+        .{ .event_type = .load_start, .message = "Loading packages..." },
+        .{ .event_type = .load_done, .message = "Packages loaded." },
+        .{ .event_type = .db_retrieve_start, .message = "Retrieving database..." },
+        .{ .event_type = .db_retrieve_done, .message = "Database retrieved." },
+        .{ .event_type = .db_retrieve_failed, .message = "Failed to retrieve database." },
+        .{ .event_type = .pkg_retrieve_start, .message = "Retrieving package..." },
+        .{ .event_type = .pkg_retrieve_done, .message = "Package retrieved." },
+        .{ .event_type = .pkg_retrieve_failed, .message = "Package retrieval failed." },
+        .{ .event_type = .diskspace_start, .message = "Checking disk space..." },
+        .{ .event_type = .diskspace_done, .message = "Disk space check finished." },
+        .{ .event_type = .optdep_removal, .message = "Removing optional dependencies..." },
+        .{ .event_type = .database_missing, .message = "Database missing. Please run `shelly keyring init` to initialize the keyring." },
+        .{ .event_type = .keyring_start, .message = "Checking keyring..." },
+        .{ .event_type = .keyring_done, .message = "Keyring check finished." },
+        .{ .event_type = .key_download_start, .message = "Downloading key..." },
+        .{ .event_type = .key_download_done, .message = "Key download finished." },
+        .{ .event_type = .hook_start, .message = "Running hooks..." },
+        .{ .event_type = .hook_done, .message = "Finished running hooks." },
+        .{ .event_type = .hook_run_done, .message = "Finished running hook." },
+        .{ .event_type = .failed_optional_dependency_operation, .message = "Failed to remove optional dependency." },
+        .{ .event_type = .package_explicit, .message = "Package marked as explicitly installed." },
+        .{ .event_type = .failed_add_local_package, .message = "Failed to add local package." },
+    };
+
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = InfoCapture{};
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&cap),
+    });
+
+    for (cases) |case| {
+        cap.args = null;
+        mgr.handleInformationMessage(case.event_type);
+        const args = cap.args orelse return error.TestExpectedEqual;
+        try testing.expectEqual(case.event_type, args.event_type);
+        try testing.expectEqualStrings(case.message, args.message);
+    }
+}
+
 test "eventCallback dispatches the informational message for an event type" {
     var mgr: Manager = undefined;
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
@@ -2706,6 +2794,77 @@ test "handleErrorMessage formats populated file conflict details" {
         cap.text(),
         "target-package in file /usr/bin/example\n",
     ) != null);
+}
+
+test "handleErrorMessage emits descriptions for every scalar libalpm error" {
+    const Case = struct {
+        err: libalpm.Error,
+        detail: []const u8,
+    };
+    const cases = [_]Case{
+        .{ .err = .Memory, .detail = "Memory allocation failed." },
+        .{ .err = .System, .detail = "System error." },
+        .{ .err = .BadPerms, .detail = "Bad permissions." },
+        .{ .err = .NotAFile, .detail = "Expected a file, did not receive a file." },
+        .{ .err = .NotADir, .detail = "Expected a directory, did not receive a directory." },
+        .{ .err = .WrongArgs, .detail = "Wrong or NULL arguments" },
+        .{ .err = .DiskSpace, .detail = "Not enough disk space" },
+        .{ .err = .HandleNull, .detail = "Lost the handle." },
+        .{ .err = .HandleNotNull, .detail = "Handle is not null." },
+        .{ .err = .HandleLock, .detail = "You have a db.lck." },
+        .{ .err = .DbOpen, .detail = "Failed to open the database." },
+        .{ .err = .DbCreate, .detail = "Failed to create the database." },
+        .{ .err = .DbNull, .detail = "Database is null." },
+        .{ .err = .DbNotNull, .detail = "Database is not null." },
+        .{ .err = .DbNotFound, .detail = "Database not found." },
+        .{ .err = .DbInvalid, .detail = "Database is invalid." },
+        .{ .err = .DbInvalidSig, .detail = "Database signature is invalid." },
+        .{ .err = .DbVersion, .detail = "Database version is invalid." },
+        .{ .err = .DbWrite, .detail = "Failed to write to the database." },
+        .{ .err = .DbRemove, .detail = "Failed to remove the database." },
+        .{ .err = .ServerBadUrl, .detail = "Server URL is invalid." },
+        .{ .err = .ServerNone, .detail = "No server found." },
+        .{ .err = .TransNotNull, .detail = "Transaction is not null." },
+        .{ .err = .TransNull, .detail = "Transaction is null." },
+        .{ .err = .TransDupTarget, .detail = "Transaction target is duplicated." },
+        .{ .err = .TransDupFilename, .detail = "Transaction filename is duplicated." },
+        .{ .err = .TransNotInitialized, .detail = "Transaction is not initialized." },
+        .{ .err = .TransNotPrepared, .detail = "Transaction is not prepared." },
+        .{ .err = .TransAbort, .detail = "Transaction aborted." },
+        .{ .err = .TransType, .detail = "Transaction type is invalid." },
+        .{ .err = .TransNotLocked, .detail = "Transaction is not locked." },
+        .{ .err = .TransHookFailed, .detail = "Transaction hook failed." },
+        .{ .err = .PkgNotFound, .detail = "Package not found." },
+        .{ .err = .PkgIgnored, .detail = "Package ignored." },
+        .{ .err = .PkgInvalid, .detail = "Package is invalid." },
+        .{ .err = .PkgInvalidChecksum, .detail = "Package checksum is invalid." },
+        .{ .err = .PkgInvalidSig, .detail = "Package signature is invalid." },
+        .{ .err = .PkgMissingSig, .detail = "Package signature is missing." },
+        .{ .err = .PkgOpen, .detail = "Failed to open package." },
+        .{ .err = .PkgCantRemove, .detail = "Failed to remove package." },
+        .{ .err = .PkgInvalidArch, .detail = "Package architecture is invalid." },
+        .{ .err = .SigMissing, .detail = "Signature is missing." },
+        .{ .err = .SigInvalid, .detail = "Signature is invalid." },
+        .{ .err = .DownloadFailed, .detail = "Download failed." },
+        .{ .err = .Gpgme, .detail = "Gpgme error." },
+        .{ .err = .ExternalDownload, .detail = "External download failed." },
+        .{ .err = .SandboxFailed, .detail = "Sandbox failed." },
+    };
+
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    });
+
+    for (cases) |case| {
+        cap.len = 0;
+        try mgr.handleErrorMessage(@intFromEnum(case.err), null);
+        try testing.expect(std.mem.indexOf(u8, cap.text(), case.detail) != null);
+    }
 }
 
 // ---------------------------------------------------------------------------

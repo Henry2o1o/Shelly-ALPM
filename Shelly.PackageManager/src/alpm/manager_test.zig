@@ -6,6 +6,7 @@ const events = @import("events.zig");
 
 const Manager = manager.Manager;
 const libalpm = bindings.libalpm;
+const rawLibalpm = libalpm.alpm;
 const testing = std.testing;
 
 const ErrorCapture = struct {
@@ -397,11 +398,11 @@ test "get_installed_packages returns an empty list when no packages are installe
     const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, workspace.db_path);
     defer mgr.deinit();
 
-    var packages = try mgr.get_installed_packages();
-    defer packages.deinit(mgr.allocator);
+    const packages = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, packages);
 
     // A fresh temporary database has no installed packages.
-    try testing.expectEqual(@as(usize, 0), packages.items.len);
+    try testing.expectEqual(@as(usize, 0), packages.len);
 }
 
 test "get_installed_packages lists packages from the system database" {
@@ -419,18 +420,18 @@ test "get_installed_packages lists packages from the system database" {
     const mgr = Manager.init(allocator, testing.environ, sys_config, false, sys_db) catch return;
     defer mgr.deinit();
 
-    var packages = try mgr.get_installed_packages();
-    defer packages.deinit(mgr.allocator);
+    const packages = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, packages);
 
     // A real system always has packages installed, each exposing a name.
-    try testing.expect(packages.items.len > 0);
-    for (packages.items) |package| {
+    try testing.expect(packages.len > 0);
+    for (packages) |package| {
         _ = package.name() orelse return error.TestFailed;
     }
 
     // `pacman` is installed on every Arch-based system.
     var found_pacman = false;
-    for (packages.items) |package| {
+    for (packages) |package| {
         const name = package.name() orelse continue;
         if (std.mem.eql(u8, name, "pacman")) {
             found_pacman = true;
@@ -454,12 +455,12 @@ test "get_single_installed_package matches an entry from get_installed_packages"
     const mgr = Manager.init(allocator, testing.environ, sys_config, false, sys_db) catch return;
     defer mgr.deinit();
 
-    var packages = try mgr.get_installed_packages();
-    defer packages.deinit(mgr.allocator);
-    if (packages.items.len == 0) return;
+    const packages = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, packages);
+    if (packages.len == 0) return;
 
     // Package names are null-terminated slices, so they can be looked up directly.
-    const first_name = packages.items[0].name() orelse return error.TestFailed;
+    const first_name = packages[0].name() orelse return error.TestFailed;
     const single = try mgr.get_single_installed_package(first_name);
     const pkg = single orelse return error.TestFailed;
     const single_name = pkg.name() orelse return error.TestFailed;
@@ -492,11 +493,11 @@ test "get_foreign_packages returns an empty list when no packages are installed"
     const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, workspace.db_path);
     defer mgr.deinit();
 
-    var foreign = try mgr.get_foreign_packages();
-    defer foreign.deinit(mgr.allocator);
+    const foreign = try mgr.get_foreign_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, foreign);
 
     // With no installed packages there is nothing that could be foreign.
-    try testing.expectEqual(@as(usize, 0), foreign.items.len);
+    try testing.expectEqual(@as(usize, 0), foreign.len);
 }
 
 test "get_foreign_packages excludes packages provided by a sync database" {
@@ -513,17 +514,17 @@ test "get_foreign_packages excludes packages provided by a sync database" {
     const mgr = Manager.init(allocator, testing.environ, sys_config, false, sys_db) catch return;
     defer mgr.deinit();
 
-    var installed = try mgr.get_installed_packages();
-    defer installed.deinit(mgr.allocator);
+    const installed = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, installed);
 
-    var foreign = try mgr.get_foreign_packages();
-    defer foreign.deinit(mgr.allocator);
+    const foreign = try mgr.get_foreign_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, foreign);
 
     // Foreign packages are always a subset of the installed packages.
-    try testing.expect(foreign.items.len <= installed.items.len);
+    try testing.expect(foreign.len <= installed.len);
 
     // Every foreign package is nonetheless installed, so it resolves locally.
-    for (foreign.items) |package| {
+    for (foreign) |package| {
         const name = package.name() orelse return error.TestFailed;
         const local = try mgr.get_single_installed_package(name);
         try testing.expect(local != null);
@@ -532,8 +533,8 @@ test "get_foreign_packages excludes packages provided by a sync database" {
     // If some packages were matched to a sync database, the sync caches are
     // loaded and repository packages must be excluded. `pacman` ships from the
     // official [core] repository, so it must never be reported as foreign.
-    if (foreign.items.len < installed.items.len) {
-        for (foreign.items) |package| {
+    if (foreign.len < installed.len) {
+        for (foreign) |package| {
             const name = package.name() orelse continue;
             try testing.expect(!std.mem.eql(u8, name, "pacman"));
         }
@@ -657,16 +658,16 @@ test "get_installed_packages reads real packages through the local symlink" {
     const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, workspace.root);
     defer mgr.deinit();
 
-    var packages = try mgr.get_installed_packages();
-    defer packages.deinit(mgr.allocator);
+    const packages = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, packages);
 
     // The real system database always has packages installed.
-    try testing.expect(packages.items.len > 0);
+    try testing.expect(packages.len > 0);
 
     // `pacman` is installed on every Arch-based system and must be visible
     // through the symlinked local database.
     var found_pacman = false;
-    for (packages.items) |package| {
+    for (packages) |package| {
         const name = package.name() orelse continue;
         if (std.mem.eql(u8, name, "pacman")) {
             found_pacman = true;
@@ -710,19 +711,19 @@ test "get_foreign_packages treats installed packages as foreign without a sync d
     const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, workspace.root);
     defer mgr.deinit();
 
-    var installed = try mgr.get_installed_packages();
-    defer installed.deinit(mgr.allocator);
-    try testing.expect(installed.items.len > 0);
+    const installed = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, installed);
+    try testing.expect(installed.len > 0);
 
-    var foreign = try mgr.get_foreign_packages();
-    defer foreign.deinit(mgr.allocator);
+    const foreign = try mgr.get_foreign_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, foreign);
 
     // The workspace configures no repositories, so no sync database is
     // registered and every installed package counts as foreign.
-    try testing.expectEqual(installed.items.len, foreign.items.len);
+    try testing.expectEqual(installed.len, foreign.len);
 }
 
-fn containsPackage(packages: []const libalpm.Package, name: []const u8) bool {
+fn containsPackage(packages: []const libalpm.OwnedPackage, name: []const u8) bool {
     for (packages) |package| {
         const pkg_name = package.name() orelse continue;
         if (std.mem.eql(u8, pkg_name, name)) return true;
@@ -762,25 +763,25 @@ test "get_foreign_packages excludes repository packages after a non-root sync" {
     defer mgr.deinit();
     mgr.sync(true) catch return;
 
-    var installed = try mgr.get_installed_packages();
-    defer installed.deinit(mgr.allocator);
+    const installed = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, installed);
 
-    var foreign = try mgr.get_foreign_packages();
-    defer foreign.deinit(mgr.allocator);
+    const foreign = try mgr.get_foreign_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, foreign);
 
     // The linked local database always exposes the real installed packages.
-    try testing.expect(installed.items.len > 0);
-    try testing.expect(containsPackage(installed.items, "pacman"));
+    try testing.expect(installed.len > 0);
+    try testing.expect(containsPackage(installed, "pacman"));
 
     // Skip the exclusion assertions unless the sync actually loaded repository
     // data (network available and databases downloaded). Without it every
     // installed package would trivially be "foreign".
-    if (foreign.items.len == installed.items.len) return;
+    if (foreign.len == installed.len) return;
 
     // `pacman` is provided by the official [core] repository, so once its sync
     // database is loaded it must never be reported as a foreign package.
-    try testing.expect(!containsPackage(foreign.items, "pacman"));
-    try testing.expect(foreign.items.len < installed.items.len);
+    try testing.expect(!containsPackage(foreign, "pacman"));
+    try testing.expect(foreign.len < installed.len);
 }
 
 // ---------------------------------------------------------------------------
@@ -811,10 +812,10 @@ test "get_available_packages returns an empty list when no sync databases are po
 
     // init registers the sync database but does not download it, so there are
     // no packages available until sync() is called.
-    var packages = try mgr.get_available_packages();
-    defer packages.deinit(mgr.allocator);
+    const packages = try mgr.get_available_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, packages);
 
-    try testing.expectEqual(@as(usize, 0), packages.items.len);
+    try testing.expectEqual(@as(usize, 0), packages.len);
 }
 
 test "get_available_packages returns packages after a successful sync" {
@@ -833,12 +834,12 @@ test "get_available_packages returns packages after a successful sync" {
     // Download the remote database so packages become available.
     try mgr.sync(true);
 
-    var packages = try mgr.get_available_packages();
-    defer packages.deinit(mgr.allocator);
+    const packages = try mgr.get_available_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, packages);
 
     // A real repository always exposes packages, each with a readable name.
-    try testing.expect(packages.items.len > 0);
-    for (packages.items) |package| {
+    try testing.expect(packages.len > 0);
+    for (packages) |package| {
         _ = package.name() orelse return error.TestFailed;
     }
 }
@@ -1217,10 +1218,10 @@ test "get_updates_available returns an empty list when no packages are installed
     // updates available even after a sync.
     try mgr.sync(true);
 
-    var updates = try mgr.get_updates_available();
-    defer updates.deinit(mgr.allocator);
+    const updates = try mgr.get_updates_available();
+    defer libalpm.OwnedPackageWithUpdate.deinitSlice(allocator, updates);
 
-    try testing.expectEqual(@as(usize, 0), updates.items.len);
+    try testing.expectEqual(@as(usize, 0), updates.len);
 }
 
 test "get_updates_available returns updates when installed packages have newer versions" {
@@ -1249,11 +1250,11 @@ test "get_updates_available returns updates when installed packages have newer v
     // installed packages against the repository versions.
     mgr.sync(true) catch return;
 
-    var updates = try mgr.get_updates_available();
-    defer updates.deinit(mgr.allocator);
+    const updates = try mgr.get_updates_available();
+    defer libalpm.OwnedPackageWithUpdate.deinitSlice(allocator, updates);
 
     // Each entry must have both an old (installed) and a new (repository) package.
-    for (updates.items) |update| {
+    for (updates) |update| {
         const old_name = update.old_package.name() orelse return error.TestFailed;
         const new_name = update.new_package.name() orelse return error.TestFailed;
         // The package names must match — we are comparing the same package.
@@ -1562,7 +1563,10 @@ test "purify dry run identifies dependency packages that are no longer required"
     try mgr.update_package_reason("shelly-orphan", .Dependency);
 
     const targets = try mgr.purify(true, true, false);
-    defer allocator.free(targets);
+    defer {
+        for (targets) |target| allocator.free(target);
+        allocator.free(targets);
+    }
 
     try testing.expectEqual(@as(usize, 1), targets.len);
     try testing.expectEqualStrings("shelly-orphan", targets[0]);
@@ -1849,4 +1853,161 @@ test "get_allowed_architecture releases copied strings when list growth fails" {
     try testing.expectError(error.OutOfMemory, mgr.get_allowed_architecture());
     try testing.expect(failing.has_induced_failure);
     try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+}
+
+// ---------------------------------------------------------------------------
+// Priority 4 configuration and presentation coverage
+// ---------------------------------------------------------------------------
+
+fn rawStringListContains(list: [*c]rawLibalpm.alpm_list_t, expected: []const u8) bool {
+    var node = list;
+    while (node != null) : (node = node.*.next) {
+        const data = node.*.data orelse continue;
+        const value = std.mem.span(@as([*c]const u8, @ptrCast(data)));
+        if (std.mem.eql(u8, value, expected)) return true;
+    }
+    return false;
+}
+
+fn normalizedDirectory(path: []const u8) []const u8 {
+    if (path.len <= 1) return path;
+    return std.mem.trimEnd(u8, path, "/");
+}
+
+fn rawDirectoryListContains(list: [*c]rawLibalpm.alpm_list_t, expected: []const u8) bool {
+    var node = list;
+    while (node != null) : (node = node.*.next) {
+        const data = node.*.data orelse continue;
+        const value = std.mem.span(@as([*c]const u8, @ptrCast(data)));
+        if (std.mem.eql(u8, normalizedDirectory(value), normalizedDirectory(expected))) return true;
+    }
+    return false;
+}
+
+test "Manager.init applies configured libalpm options and callback contexts" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{workspace.root});
+    defer allocator.free(cache_path);
+    const hook_path = try std.fmt.allocPrint(allocator, "{s}/hooks", .{workspace.root});
+    defer allocator.free(hook_path);
+    const log_path = try std.fmt.allocPrint(allocator, "{s}/manager.log", .{workspace.root});
+    defer allocator.free(log_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, hook_path);
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = test-architecture\n" ++
+            "CacheDir = {s}\n" ++
+            "HookDir = {s}\n" ++
+            "LogFile = {s}\n" ++
+            "DBPath = {s}\n" ++
+            "IgnorePkg = hidden-package\n" ++
+            "IgnoreGroup = hidden-group\n" ++
+            "CheckSpace\n" ++
+            "SigLevel = Required DatabaseOptional\n" ++
+            "LocalFileSigLevel = Optional\n" ++
+            "RemoteFileSigLevel = Required\n" ++
+            "\n" ++
+            "[configured-repository]\n" ++
+            "Usage = Sync Search\n" ++
+            "Server = https://mirror.example.invalid/$repo/os/$arch\n",
+        .{ cache_path, hook_path, log_path, workspace.db_path },
+    );
+    defer allocator.free(config);
+
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expect(rawDirectoryListContains(rawLibalpm.alpm_option_get_cachedirs(mgr.handle), cache_path));
+    try testing.expect(rawDirectoryListContains(rawLibalpm.alpm_option_get_hookdirs(mgr.handle), hook_path));
+    try testing.expectEqualStrings(log_path, std.mem.span(rawLibalpm.alpm_option_get_logfile(mgr.handle)));
+    try testing.expectEqual(@as(c_int, 1), rawLibalpm.alpm_option_get_checkspace(mgr.handle));
+    try testing.expect(rawStringListContains(rawLibalpm.alpm_option_get_ignorepkgs(mgr.handle), "hidden-package"));
+    try testing.expect(rawStringListContains(rawLibalpm.alpm_option_get_ignoregroups(mgr.handle), "hidden-group"));
+    try testing.expect(rawStringListContains(rawLibalpm.alpm_option_get_architectures(mgr.handle), "test-architecture"));
+    try testing.expect(rawStringListContains(rawLibalpm.alpm_option_get_architectures(mgr.handle), "any"));
+
+    try testing.expect(rawLibalpm.alpm_option_get_fetchcb(mgr.handle) != null);
+    try testing.expect(rawLibalpm.alpm_option_get_eventcb(mgr.handle) != null);
+    try testing.expect(rawLibalpm.alpm_option_get_questioncb(mgr.handle) != null);
+    try testing.expect(rawLibalpm.alpm_option_get_progresscb(mgr.handle) != null);
+    try testing.expect(rawLibalpm.alpm_option_get_fetchcb_ctx(mgr.handle) == @as(?*anyopaque, @ptrCast(mgr)));
+    try testing.expect(rawLibalpm.alpm_option_get_eventcb_ctx(mgr.handle) == @as(?*anyopaque, @ptrCast(mgr)));
+    try testing.expect(rawLibalpm.alpm_option_get_questioncb_ctx(mgr.handle) == @as(?*anyopaque, @ptrCast(mgr)));
+    try testing.expect(rawLibalpm.alpm_option_get_progresscb_ctx(mgr.handle) == @as(?*anyopaque, @ptrCast(mgr)));
+
+    try testing.expectEqual(@as(usize, 1), mgr.sync_dbs.items.len);
+    const database = mgr.sync_dbs.items[0];
+    try testing.expectEqualStrings("configured-repository", database.name() orelse return error.TestFailed);
+
+    var servers = database.servers();
+    try testing.expectEqualStrings(
+        "https://mirror.example.invalid/configured-repository/os/test-architecture",
+        servers.next() orelse return error.TestFailed,
+    );
+    try testing.expect(servers.next() == null);
+
+    var usage: c_int = 0;
+    try testing.expectEqual(@as(c_int, 0), rawLibalpm.alpm_db_get_usage(database.ptr, &usage));
+    try testing.expectEqual(rawLibalpm.ALPM_DB_USAGE_SYNC | rawLibalpm.ALPM_DB_USAGE_SEARCH, usage);
+}
+
+test "get_foreign_packages hides ignored packages until hidden packages are enabled" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-hidden-foreign", "1.0-1");
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = auto\n" ++
+            "SigLevel = Never\n" ++
+            "DBPath = {s}\n" ++
+            "IgnorePkg = shelly-hidden-foreign\n",
+        .{workspace.db_path},
+    );
+    defer allocator.free(config);
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const hidden = try mgr.get_foreign_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, hidden);
+    try testing.expectEqual(@as(usize, 0), hidden.len);
+
+    try testing.expect(mgr.toggle_hidden_packages());
+    const visible = try mgr.get_foreign_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, visible);
+    try testing.expectEqual(@as(usize, 1), visible.len);
+    try testing.expectEqualStrings(
+        "shelly-hidden-foreign",
+        visible[0].name() orelse return error.TestFailed,
+    );
 }

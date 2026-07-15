@@ -331,9 +331,147 @@ pub const libalpm = struct {
         }
     };
 
+    /// A Zig-owned snapshot of package metadata.
+    ///
+    /// Unlike `Package`, none of these fields borrow memory from libalpm, so an
+    /// `OwnedPackage` remains valid after the originating handle is released.
+    pub const OwnedPackage = struct {
+        name_value: [:0]u8,
+        version_value: [:0]u8,
+        description_value: ?[:0]u8,
+        url_value: ?[:0]u8,
+        repository_value: ?[:0]u8,
+        file_name_value: [:0]u8,
+        download_size_value: i64,
+        install_size_value: i64,
+        reason_value: PackageReason,
+
+        pub fn init(allocator: std.mem.Allocator, package: Package) std.mem.Allocator.Error!OwnedPackage {
+            const name_value = try allocator.dupeZ(u8, package.name() orelse "");
+            errdefer allocator.free(name_value);
+
+            const version_value = try allocator.dupeZ(u8, package.version() orelse "");
+            errdefer allocator.free(version_value);
+
+            const description_value = try dupeOptional(allocator, package.description());
+            errdefer if (description_value) |value| allocator.free(value);
+
+            const url_value = try dupeOptional(allocator, package.url());
+            errdefer if (url_value) |value| allocator.free(value);
+
+            const repository_value = try dupeOptional(allocator, package.repository());
+            errdefer if (repository_value) |value| allocator.free(value);
+
+            const file_name_value = try allocator.dupeZ(u8, package.file_name());
+            errdefer allocator.free(file_name_value);
+
+            return .{
+                .name_value = name_value,
+                .version_value = version_value,
+                .description_value = description_value,
+                .url_value = url_value,
+                .repository_value = repository_value,
+                .file_name_value = file_name_value,
+                .download_size_value = package.download_size(),
+                .install_size_value = package.install_size(),
+                .reason_value = package.install_reason(),
+            };
+        }
+
+        fn dupeOptional(allocator: std.mem.Allocator, value: ?[:0]const u8) std.mem.Allocator.Error!?[:0]u8 {
+            return if (value) |text| try allocator.dupeZ(u8, text) else null;
+        }
+
+        pub fn deinit(self: *OwnedPackage, allocator: std.mem.Allocator) void {
+            allocator.free(self.name_value);
+            allocator.free(self.version_value);
+            if (self.description_value) |value| allocator.free(value);
+            if (self.url_value) |value| allocator.free(value);
+            if (self.repository_value) |value| allocator.free(value);
+            allocator.free(self.file_name_value);
+            self.* = undefined;
+        }
+
+        pub fn deinitItems(allocator: std.mem.Allocator, packages: []OwnedPackage) void {
+            for (packages) |*package| package.deinit(allocator);
+        }
+
+        pub fn deinitSlice(allocator: std.mem.Allocator, packages: []OwnedPackage) void {
+            deinitItems(allocator, packages);
+            allocator.free(packages);
+        }
+
+        pub fn name(self: OwnedPackage) ?[:0]const u8 {
+            return self.name_value;
+        }
+
+        pub fn version(self: OwnedPackage) ?[:0]const u8 {
+            return self.version_value;
+        }
+
+        pub fn description(self: OwnedPackage) ?[:0]const u8 {
+            return self.description_value;
+        }
+
+        pub fn url(self: OwnedPackage) ?[:0]const u8 {
+            return self.url_value;
+        }
+
+        pub fn repository(self: OwnedPackage) ?[:0]const u8 {
+            return self.repository_value;
+        }
+
+        pub fn file_name(self: OwnedPackage) [:0]const u8 {
+            return self.file_name_value;
+        }
+
+        pub fn download_size(self: OwnedPackage) i64 {
+            return self.download_size_value;
+        }
+
+        pub fn install_size(self: OwnedPackage) i64 {
+            return self.install_size_value;
+        }
+
+        pub fn install_reason(self: OwnedPackage) PackageReason {
+            return self.reason_value;
+        }
+    };
+
     pub const PackageWithUpdate = struct {
         old_package: Package,
         new_package: Package,
+    };
+
+    pub const OwnedPackageWithUpdate = struct {
+        old_package: OwnedPackage,
+        new_package: OwnedPackage,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            old_package: Package,
+            new_package: Package,
+        ) std.mem.Allocator.Error!OwnedPackageWithUpdate {
+            var owned_old = try OwnedPackage.init(allocator, old_package);
+            errdefer owned_old.deinit(allocator);
+
+            const owned_new = try OwnedPackage.init(allocator, new_package);
+            return .{
+                .old_package = owned_old,
+                .new_package = owned_new,
+            };
+        }
+
+        pub fn deinit(self: *OwnedPackageWithUpdate, allocator: std.mem.Allocator) void {
+            self.old_package.deinit(allocator);
+            self.new_package.deinit(allocator);
+            self.* = undefined;
+        }
+
+        pub fn deinitSlice(allocator: std.mem.Allocator, updates: []OwnedPackageWithUpdate) void {
+            for (updates) |*update| update.deinit(allocator);
+            allocator.free(updates);
+        }
     };
 
     pub const Dependency = struct {
