@@ -1910,6 +1910,23 @@ test "resolveServer replaces every occurrence of each marker" {
     try testing.expectEqualStrings("core/x86_64/core/x86_64", resolved);
 }
 
+test "fetchCallback rejects null C string arguments" {
+    var mgr: Manager = undefined;
+
+    try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
+        @ptrCast(&mgr),
+        null,
+        "/tmp",
+        0,
+    ));
+    try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
+        @ptrCast(&mgr),
+        "https://example.invalid/package",
+        null,
+        0,
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // check
 // ---------------------------------------------------------------------------
@@ -1997,6 +2014,24 @@ test "handleInformationMessage ignores specialized event types" {
     }) catch unreachable;
 
     mgr.handleInformationMessage(.scriptlet_info);
+
+    try testing.expect(cap.args == null);
+}
+
+test "handleInformationMessage ignores application-only event types" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = InfoCapture{};
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&cap),
+    });
+
+    mgr.handleInformationMessage(.download_start);
+    mgr.handleInformationMessage(.validation_failed);
+    mgr.handleInformationMessage(.rollback_complete);
 
     try testing.expect(cap.args == null);
 }
@@ -2245,6 +2280,31 @@ test "onDownloadEvent reports concrete and fallback errors and ignores skipped e
     try testing.expect(info_cap.args == null);
 }
 
+test "onDownloadEvent handles missing paths and missing progress payloads" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var info_cap = InfoCapture{};
+    var progress_cap = ProgressCapture{};
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&info_cap),
+    });
+    _ = try mgr.dispatcher.addProgressHandler(.{
+        .function = captureProgress,
+        .data = @ptrCast(&progress_cap),
+    });
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{ .event_type = .Start });
+    const info = info_cap.args orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.EventType.pkg_retrieve_start, info.event_type);
+    try testing.expectEqualStrings("", info.message);
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{ .event_type = .Progress });
+    try testing.expect(progress_cap.args == null);
+}
+
 // ---------------------------------------------------------------------------
 // askYesNo
 // ---------------------------------------------------------------------------
@@ -2358,6 +2418,25 @@ test "questionCallback keeps unknown answers and applies selected provider choic
     try testing.expectEqual(@as(c_int, 3), provider.select_provider.use_index);
 }
 
+test "questionCallback defaults provider selection to the first entry without handlers" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+    mgr.threaded = .init(testing.allocator, .{});
+    defer mgr.threaded.deinit();
+
+    var provider: rawLibalpm.alpm_question_t = .{ .select_provider = .{
+        .type = rawLibalpm.ALPM_QUESTION_SELECT_PROVIDER,
+        .use_index = 9,
+        .providers = null,
+        .depend = null,
+    } };
+    Manager.questionCallback(@ptrCast(&mgr), &provider);
+
+    try testing.expectEqual(@as(c_int, 0), provider.select_provider.use_index);
+}
+
 // ---------------------------------------------------------------------------
 // handleErrorMessage
 // ---------------------------------------------------------------------------
@@ -2441,6 +2520,86 @@ test "handleErrorMessage tolerates a null list for list-based errors" {
     cap.len = 0;
     try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.PkgInvalidName), null);
     try testing.expect(cap.len != 0);
+}
+
+test "handleErrorMessage includes invalid package names from a populated list" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    });
+
+    var invalid_name = [_:0]u8{ 'b', 'a', 'd', ' ', 'n', 'a', 'm', 'e' };
+    var node: rawLibalpm.alpm_list_t = .{
+        .data = @ptrCast(&invalid_name),
+    };
+
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.PkgInvalidName), &node);
+
+    try testing.expect(std.mem.indexOf(u8, cap.text(), "bad name\n") != null);
+}
+
+test "handleErrorMessage formats populated unsatisfied dependency details" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    });
+
+    var dependency: rawLibalpm.alpm_depend_t = .{
+        .name = @ptrCast(@constCast("libexample")),
+        .version = @ptrCast(@constCast("2")),
+        .mod = @intCast(rawLibalpm.ALPM_DEP_MOD_GE),
+    };
+    var missing: rawLibalpm.alpm_depmissing_t = .{
+        .target = @ptrCast(@constCast("target-package")),
+        .depend = &dependency,
+    };
+    var node: rawLibalpm.alpm_list_t = .{
+        .data = @ptrCast(&missing),
+    };
+
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.UnsatisfiedDeps), &node);
+
+    try testing.expect(std.mem.indexOf(
+        u8,
+        cap.text(),
+        "target-package => libexample>=2\n",
+    ) != null);
+}
+
+test "handleErrorMessage formats populated file conflict details" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    });
+
+    var conflict: rawLibalpm.alpm_fileconflict_t = .{
+        .target = @ptrCast(@constCast("target-package")),
+        .type = @intCast(rawLibalpm.ALPM_FILECONFLICT_FILESYSTEM),
+        .file = @ptrCast(@constCast("/usr/bin/example")),
+    };
+    var node: rawLibalpm.alpm_list_t = .{
+        .data = @ptrCast(&conflict),
+    };
+
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.FileConflicts), &node);
+
+    try testing.expect(std.mem.indexOf(
+        u8,
+        cap.text(),
+        "target-package in file /usr/bin/example\n",
+    ) != null);
 }
 
 // ---------------------------------------------------------------------------

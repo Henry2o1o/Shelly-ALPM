@@ -1597,3 +1597,131 @@ test "purify reports DirectoryReadFailed when the package cache cannot be opened
         mgr.purify(true, false, true),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Priority 2 low-level configuration and filesystem coverage
+// ---------------------------------------------------------------------------
+
+test "Manager.init registers and deduplicates repository microarchitectures" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = auto\n" ++
+            "SigLevel = Never\n" ++
+            "DBPath = {s}\n" ++
+            "\n" ++
+            "[microarchitecture-test]\n" ++
+            "Server = https://example.invalid/$archv4\n" ++
+            "Server = https://backup.example.invalid/$archv4\n",
+        .{workspace.db_path},
+    );
+    defer allocator.free(config);
+
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const architectures = try mgr.get_allowed_architecture();
+    defer {
+        for (architectures) |architecture| allocator.free(architecture);
+        allocator.free(architectures);
+    }
+
+    const host = switch (builtin.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        else => "x86_64",
+    };
+    const expected = [_][]const u8{
+        host,
+        "any",
+        try std.fmt.allocPrint(allocator, "{s}_v4", .{host}),
+        try std.fmt.allocPrint(allocator, "{s}_v3", .{host}),
+        try std.fmt.allocPrint(allocator, "{s}_v2", .{host}),
+    };
+    defer {
+        allocator.free(expected[2]);
+        allocator.free(expected[3]);
+        allocator.free(expected[4]);
+    }
+
+    try testing.expectEqual(expected.len, architectures.len);
+    for (expected) |wanted| {
+        var count: usize = 0;
+        for (architectures) |actual| {
+            if (std.mem.eql(u8, wanted, actual)) count += 1;
+        }
+        try testing.expectEqual(@as(usize, 1), count);
+    }
+}
+
+test "purify corruption dry run includes package archives and filters other cache entries" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const cache_path = try std.fmt.allocPrintSentinel(
+        allocator,
+        "{s}/cache",
+        .{workspace.root},
+        0,
+    );
+    defer allocator.free(cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+    mgr.config.cache_directory = cache_path;
+
+    const archive_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/candidate.pkg.tar.zst",
+        .{cache_path},
+    );
+    defer allocator.free(archive_path);
+    const signature_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/candidate.pkg.tar.zst.sig",
+        .{cache_path},
+    );
+    defer allocator.free(signature_path);
+    const unrelated_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/notes.txt",
+        .{cache_path},
+    );
+    defer allocator.free(unrelated_path);
+
+    for ([_][]const u8{ archive_path, signature_path, unrelated_path }) |path| {
+        var file = try std.Io.Dir.cwd().createFile(io, path, .{});
+        file.close(io);
+    }
+
+    const targets = try mgr.purify(true, false, true);
+    defer {
+        for (targets) |target| allocator.free(target);
+        allocator.free(targets);
+    }
+
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expectEqualStrings("candidate.pkg.tar.zst", targets[0]);
+}
