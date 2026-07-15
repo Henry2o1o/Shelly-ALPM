@@ -1003,13 +1003,23 @@ pub const Manager = struct {
         if (self.handle == null) return QueryError.NoHandle;
         var arches = rawLibalpm.alpm_option_get_architectures(self.handle);
         var arch_list: std.ArrayList([:0]const u8) = .empty;
-        errdefer arch_list.deinit(self.allocator);
+        errdefer {
+            for (arch_list.items) |owned_arch| {
+                self.allocator.free(owned_arch);
+            }
+            arch_list.deinit(self.allocator);
+        }
+
         while (arches != null) : (arches = arches.*.next) {
             const data = arches.*.data orelse continue;
             const arch: [:0]const u8 =
                 std.mem.span(@as([*c]const u8, @ptrCast(data)));
             const owned_arch = self.allocator.dupeZ(u8, arch) catch return QueryError.OutOfMemory;
-            arch_list.append(self.allocator, owned_arch) catch return QueryError.OutOfMemory;
+            arch_list.append(self.allocator, owned_arch) catch
+                {
+                    self.allocator.free(owned_arch);
+                    return QueryError.OutOfMemory;
+                };
         }
         return arch_list.toOwnedSlice(self.allocator);
     }
@@ -1910,6 +1920,24 @@ test "resolveServer replaces every occurrence of each marker" {
     try testing.expectEqualStrings("core/x86_64/core/x86_64", resolved);
 }
 
+test "resolveServer returns null and releases intermediates on allocation failure" {
+    for (0..3) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{
+            .fail_index = fail_index,
+        });
+        var mgr: Manager = undefined;
+        mgr.allocator = failing.allocator();
+
+        try testing.expect(mgr.resolveServer(
+            "https://mirror/$repo/os/$arch",
+            "core",
+            "x86_64",
+        ) == null);
+        try testing.expect(failing.has_induced_failure);
+        try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    }
+}
+
 test "fetchCallback rejects null C string arguments" {
     var mgr: Manager = undefined;
 
@@ -2163,6 +2191,59 @@ test "eventCallback ignores null out-of-range and empty scriptlet events" {
 
     try testing.expect(info_cap.args == null);
     try testing.expect(scriptlet_cap.args == null);
+}
+
+test "eventCallback ignores event values above the libalpm range" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var cap = InfoCapture{};
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&cap),
+    });
+
+    var event: rawLibalpm.alpm_event_t = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_HOOK_RUN_DONE + 1),
+    };
+    Manager.eventCallback(@ptrCast(&mgr), &event);
+
+    try testing.expect(cap.args == null);
+}
+
+test "eventCallback forwards nullable pacnew and pacsave payloads" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var pacnew_cap = PacnewCapture{};
+    var pacsave_cap = PacsaveCapture{};
+    _ = try mgr.dispatcher.addPacnewHandler(.{
+        .function = capturePacnew,
+        .data = @ptrCast(&pacnew_cap),
+    });
+    _ = try mgr.dispatcher.addPacsaveHandler(.{
+        .function = capturePacsave,
+        .data = @ptrCast(&pacsave_cap),
+    });
+
+    var pacnew: rawLibalpm.alpm_event_t = .{ .pacnew_created = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_PACNEW_CREATED),
+        .file = null,
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &pacnew);
+
+    var pacsave: rawLibalpm.alpm_event_t = .{ .pacsave_created = .{
+        .type = @intCast(rawLibalpm.ALPM_EVENT_PACSAVE_CREATED),
+        .oldpkg = null,
+        .file = null,
+    } };
+    Manager.eventCallback(@ptrCast(&mgr), &pacsave);
+
+    try testing.expect(pacnew_cap.file == null);
+    try testing.expect(pacsave_cap.pkg_name == null);
+    try testing.expect(pacsave_cap.file == null);
 }
 
 test "eventCallback falls back from hook description to name and generic text" {
@@ -2492,6 +2573,31 @@ test "handleErrorMessage reports an out-of-range error number as unknown" {
     try mgr.handleErrorMessage(9999, null);
 
     try testing.expect(std.mem.indexOf(u8, cap.text(), "Unknown error: 9999") != null);
+}
+
+test "handleErrorMessage propagates allocation failures without dispatching" {
+    for (0..2) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{
+            .fail_index = fail_index,
+        });
+        var mgr = newErrorManager();
+        defer mgr.dispatcher.deinit();
+        mgr.allocator = failing.allocator();
+
+        var cap = ErrorCapture{};
+        _ = try mgr.dispatcher.addErrorHandler(.{
+            .function = captureError,
+            .data = @ptrCast(&cap),
+        });
+
+        try testing.expectError(
+            error.OutOfMemory,
+            mgr.handleErrorMessage(@intFromEnum(libalpm.Error.Memory), null),
+        );
+        try testing.expectEqual(@as(usize, 0), cap.len);
+        try testing.expect(failing.has_induced_failure);
+        try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    }
 }
 
 test "handleErrorMessage tolerates a null list for list-based errors" {

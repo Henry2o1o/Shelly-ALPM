@@ -1725,3 +1725,128 @@ test "purify corruption dry run includes package archives and filters other cach
     try testing.expectEqual(@as(usize, 1), targets.len);
     try testing.expectEqualStrings("candidate.pkg.tar.zst", targets[0]);
 }
+
+// ---------------------------------------------------------------------------
+// Priority 3 resilience and fault-injection coverage
+// ---------------------------------------------------------------------------
+
+test "Manager.init ignores malformed and sub-v2 microarchitecture suffixes" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = auto\n" ++
+            "SigLevel = Never\n" ++
+            "DBPath = {s}\n" ++
+            "\n" ++
+            "[malformed-microarchitectures]\n" ++
+            "Server = https://one.example.invalid/$archv\n" ++
+            "Server = https://two.example.invalid/$archvbad\n" ++
+            "Server = https://three.example.invalid/$archv1\n" ++
+            "Server = https://four.example.invalid/$arch\n",
+        .{workspace.db_path},
+    );
+    defer allocator.free(config);
+
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const architectures = try mgr.get_allowed_architecture();
+    defer {
+        for (architectures) |architecture| allocator.free(architecture);
+        allocator.free(architectures);
+    }
+
+    try testing.expectEqual(@as(usize, 2), architectures.len);
+}
+
+test "purify removes an invalid package archive outside dry-run mode" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const cache_path = try std.fmt.allocPrintSentinel(
+        allocator,
+        "{s}/cache",
+        .{workspace.root},
+        0,
+    );
+    defer allocator.free(cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+    mgr.config.cache_directory = cache_path;
+
+    const corrupt_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/corrupt.pkg.tar.zst",
+        .{cache_path},
+    );
+    defer allocator.free(corrupt_path);
+    {
+        var corrupt_file = try std.Io.Dir.cwd().createFile(io, corrupt_path, .{});
+        defer corrupt_file.close(io);
+        try corrupt_file.writeStreamingAll(io, "not a package archive");
+    }
+
+    const targets = try mgr.purify(false, false, true);
+    defer {
+        for (targets) |target| allocator.free(target);
+        allocator.free(targets);
+    }
+
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expectEqualStrings("corrupt.pkg.tar.zst", targets[0]);
+    try testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().statFile(io, corrupt_path, .{}),
+    );
+}
+
+test "get_allowed_architecture releases copied strings when list growth fails" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var failing = testing.FailingAllocator.init(arena.allocator(), .{
+        .fail_index = 1,
+    });
+
+    const original_allocator = mgr.allocator;
+    mgr.allocator = failing.allocator();
+    defer mgr.allocator = original_allocator;
+
+    try testing.expectError(error.OutOfMemory, mgr.get_allowed_architecture());
+    try testing.expect(failing.has_induced_failure);
+    try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+}
