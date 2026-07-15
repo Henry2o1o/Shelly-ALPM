@@ -18,7 +18,7 @@ pub const IgnorePackageError = error{
 };
 
 inline fn sig(level: SigLevel) u32 {
-    return @intFromEnum(level);
+    return @bitCast(level.to_sig_level());
 }
 inline fn usageBit(flag: DatabaseUsage) u32 {
     return @intFromEnum(flag);
@@ -28,7 +28,7 @@ pub const Configuration = struct {
     pub const Repository = struct {
         name: []const u8,
         servers: std.ArrayList([]const u8) = .empty,
-        sig_level: u32 = sig(.use_default),
+        sig_level: u32 = sig(.{ .use_default = true }),
         usage: u32 = 0,
     };
 
@@ -80,9 +80,9 @@ pub const Configuration = struct {
                 .check_space = false,
                 .repositories = .empty,
 
-                .signature_level = sig(.package) | sig(.database) | sig(.database_optional),
-                .local_file_signature_level = sig(.package_optional) | sig(.database_optional),
-                .remote_file_signature_level = sig(.package) | sig(.database),
+                .signature_level = sig(.{ .package = true }) | sig(.{ .database = true }) | sig(.{ .database_optional = true }),
+                .local_file_signature_level = sig(.{ .package_optional = true }) | sig(.{ .database_optional = true }),
+                .remote_file_signature_level = sig(.{ .package = true }) | sig(.{ .database = true }),
             };
             try conf.hook_directory.append(alloc, "/usr/share/libalpm/hooks");
             try conf.hook_directory.append(alloc, "/etc/pacman.d/hooks");
@@ -395,28 +395,28 @@ pub const Configuration = struct {
             }
 
             if (equalIgnoreCase(name, "never")) {
-                if (package) level &= ~sig(.package);
-                if (database) level &= ~sig(.database);
+                if (package) level &= ~sig(.{ .package = true });
+                if (database) level &= ~sig(.{ .database = true });
             } else if (equalIgnoreCase(name, "optional")) {
-                if (package) level |= sig(.package) | sig(.package_optional);
-                if (database) level |= sig(.database) | sig(.database_optional);
+                if (package) level |= sig(.{ .package = true }) | sig(.{ .package_optional = true });
+                if (database) level |= sig(.{ .database = true }) | sig(.{ .database_optional = true });
             } else if (equalIgnoreCase(name, "required")) {
                 if (package) {
-                    level |= sig(.package);
-                    level &= ~sig(.package_optional);
+                    level |= sig(.{ .package = true });
+                    level &= ~sig(.{ .package_optional = true });
                 }
                 if (database) {
-                    level |= sig(.database);
-                    level &= ~sig(.database_optional);
+                    level |= sig(.{ .database = true });
+                    level &= ~sig(.{ .database_optional = true });
                 }
             } else if (equalIgnoreCase(name, "trustedonly")) {
-                if (package) level &= ~(sig(.package_marginal_ok) | sig(.package_unknown_ok));
-                if (database) level &= ~(sig(.database_marginal_ok) | sig(.database_unknown_ok));
+                if (package) level &= ~(sig(.{ .package_marginal_ok = true }) | sig(.{ .package_unknown_ok = true }));
+                if (database) level &= ~(sig(.{ .database_marginal_ok = true }) | sig(.{ .database_unknown_ok = true }));
             } else if (equalIgnoreCase(name, "trustall")) {
-                if (package) level |= sig(.package_marginal_ok) | sig(.package_unknown_ok);
-                if (database) level |= sig(.database_marginal_ok) | sig(.database_unknown_ok);
+                if (package) level |= sig(.{ .package_marginal_ok = true }) | sig(.{ .package_unknown_ok = true });
+                if (database) level |= sig(.{ .database_marginal_ok = true }) | sig(.{ .database_unknown_ok = true });
             }
-            level &= ~sig(.use_default);
+            level &= ~sig(.{ .use_default = true });
         }
         return level;
     }
@@ -627,7 +627,7 @@ test "empty input yields defaults" {
     try testing.expectEqualStrings("/var/lib/pacman", conf.database_path);
     try testing.expectEqual(@as(usize, 0), conf.repositories.items.len);
     try testing.expectEqual(@as(usize, 3), conf.hold_packages.items.len);
-    try testing.expectEqual(sig(.package) | sig(.database) | sig(.database_optional), conf.signature_level);
+    try testing.expectEqual(sig(.{ .package = true }) | sig(.{ .database = true }) | sig(.{ .database_optional = true }), conf.signature_level);
 }
 
 test "parses options section" {
@@ -651,7 +651,7 @@ test "parses options section" {
     try testing.expectEqualStrings("linux", conf.ignore_package.items[0]);
     try testing.expectEqualStrings("nvidia", conf.ignore_package.items[1]);
     try testing.expect(conf.check_space);
-    try testing.expectEqual(sig(.package) | sig(.database) | sig(.database_optional), conf.signature_level);
+    try testing.expectEqual(sig(.{ .package = true }) | sig(.{ .database = true }) | sig(.{ .database_optional = true }), conf.signature_level);
 }
 
 test "parses repositories, servers, siglevel and usage" {
@@ -673,7 +673,7 @@ test "parses repositories, servers, siglevel and usage" {
     const core = conf.repositories.items[0];
     try testing.expectEqualStrings("core", core.name);
     try testing.expectEqual(@as(usize, 1), core.servers.items.len);
-    try testing.expectEqual(sig(.package) | sig(.database) | sig(.database_optional), conf.signature_level);
+    try testing.expectEqual(sig(.{ .package = true }) | sig(.{ .database = true }) | sig(.{ .database_optional = true }), conf.signature_level);
     try testing.expectEqual(usageBit(.sync) | usageBit(.search), core.usage);
 
     const extra = conf.repositories.items[1];

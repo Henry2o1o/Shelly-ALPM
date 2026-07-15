@@ -184,6 +184,35 @@ const SyncTestWorkspace = struct {
         return package_path;
     }
 
+    fn createSyncDatabase(self: *const SyncTestWorkspace, allocator: std.mem.Allocator) !void {
+        const sync_dir = try std.fmt.allocPrint(allocator, "{s}/sync", .{self.db_path});
+        defer allocator.free(sync_dir);
+        try std.Io.Dir.cwd().createDirPath(self.io, sync_dir);
+
+        const database_path = try std.fmt.allocPrint(allocator, "{s}/seafoam-labs.db", .{sync_dir});
+        defer allocator.free(database_path);
+
+        const provider_desc =
+            "%FILENAME%\nremote-provider-2.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\nremote-provider\n\n" ++
+            "%BASE%\nremote-provider\n\n" ++
+            "%VERSION%\n2.0-1\n\n" ++
+            "%DESC%\nProvides a virtual dependency for Manager query tests\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n" ++
+            "%PROVIDES%\nvirtual-feature=2\n\n";
+
+        var file = try std.Io.Dir.cwd().createFile(self.io, database_path, .{});
+        defer file.close(self.io);
+        var write_buffer: [4096]u8 = undefined;
+        var file_writer = file.writer(self.io, &write_buffer);
+        var archive_writer: std.tar.Writer = .{ .underlying_writer = &file_writer.interface };
+        try archive_writer.writeFileBytes("remote-provider-2.0-1/desc", provider_desc, .{ .mode = 0o644 });
+        try archive_writer.finishPedantically();
+        try file_writer.interface.flush();
+    }
+
     // Removes the entire temp tree (config + downloaded databases) and frees the
     // owned path strings. Safe to call regardless of how far `create` got.
     fn cleanup(self: *SyncTestWorkspace, allocator: std.mem.Allocator) void {
@@ -846,7 +875,7 @@ test "install_packages returns NoHandle when the handle is null" {
     var package_names = [_][:0]const u8{"anything"};
     try testing.expectError(
         error.NoHandle,
-        mgr.install_packages(&package_names, .none),
+        mgr.install_packages(&package_names, .{}),
     );
 }
 
@@ -866,7 +895,7 @@ test "install_packages rejects an empty package list" {
     var package_names = [_][:0]const u8{};
     try testing.expectError(
         error.PackageFetchFailed,
-        mgr.install_packages(&package_names, .none),
+        mgr.install_packages(&package_names, .{}),
     );
 }
 
@@ -888,7 +917,7 @@ test "install_packages rejects malformed repository-qualified targets" {
         var package_names = [_][:0]const u8{target};
         try testing.expectError(
             error.PackageFetchFailed,
-            mgr.install_packages(&package_names, .none),
+            mgr.install_packages(&package_names, .{}),
         );
     }
 }
@@ -909,13 +938,13 @@ test "install_packages returns PackageFetchFailed when a target cannot be resolv
     var unqualified = [_][:0]const u8{"shelly-package-that-does-not-exist"};
     try testing.expectError(
         error.PackageFetchFailed,
-        mgr.install_packages(&unqualified, .none),
+        mgr.install_packages(&unqualified, .{}),
     );
 
     var qualified = [_][:0]const u8{"seafoam-labs/shelly-package-that-does-not-exist"};
     try testing.expectError(
         error.PackageFetchFailed,
-        mgr.install_packages(&qualified, .none),
+        mgr.install_packages(&qualified, .{}),
     );
 }
 
@@ -930,7 +959,7 @@ test "install_local_packages returns NoHandle when the handle is null" {
     var paths = [_][]const u8{"anything.pkg.tar"};
     try testing.expectError(
         error.NoHandle,
-        mgr.install_local_packages(&paths, .none),
+        mgr.install_local_packages(&paths, .{}),
     );
 }
 
@@ -950,7 +979,7 @@ test "install_local_packages rejects an empty path list" {
     var paths = [_][]const u8{};
     try testing.expectError(
         error.NoPackageFound,
-        mgr.install_local_packages(&paths, .none),
+        mgr.install_local_packages(&paths, .{}),
     );
 }
 
@@ -976,7 +1005,7 @@ test "install_local_packages reports an unreadable package archive" {
 
     try testing.expectError(
         error.PackageLoadFailed,
-        mgr.install_local_packages(&paths, .none),
+        mgr.install_local_packages(&paths, .{}),
     );
     try testing.expect(capture.len != 0);
 }
@@ -1005,7 +1034,7 @@ test "install_local_packages installs multiple archives in a DB-only transaction
     try testing.expectEqual(@as(c_int, 0), libalpm.alpm.alpm_option_set_hookdirs(mgr.handle, null));
 
     var paths = [_][]const u8{ first_path, second_path };
-    try mgr.install_local_packages(&paths, .dbonly);
+    try mgr.install_local_packages(&paths, .{ .dbonly = true });
 
     const first = (try mgr.get_single_installed_package("shelly-local-first")) orelse return error.TestFailed;
     const second = (try mgr.get_single_installed_package("shelly-local-second")) orelse return error.TestFailed;
@@ -1036,7 +1065,7 @@ test "install_local_packages skips a duplicate target and emits information" {
     _ = try mgr.dispatcher.addInformationalHandler(.{ .function = captureInfo, .data = @ptrCast(&capture) });
 
     var paths = [_][]const u8{ package_path, package_path };
-    try mgr.install_local_packages(&paths, .dbonly);
+    try mgr.install_local_packages(&paths, .{ .dbonly = true });
 
     const args = capture.args orelse return error.TestFailed;
     try testing.expectEqual(libalpm.EventType.failed_add_local_package, args.event_type);
@@ -1056,7 +1085,7 @@ test "remove_packages returns NoHandle when the handle is null" {
     var package_names = [_][:0]const u8{"anything"};
     try testing.expectError(
         error.NoHandle,
-        mgr.remove_packages(&package_names, .none, true),
+        mgr.remove_packages(&package_names, .{}, true),
     );
 }
 
@@ -1076,7 +1105,7 @@ test "remove_packages rejects an empty package list" {
     var package_names = [_][:0]const u8{};
     try testing.expectError(
         error.NoPackageFound,
-        mgr.remove_packages(&package_names, .none, true),
+        mgr.remove_packages(&package_names, .{}, true),
     );
 }
 
@@ -1099,7 +1128,7 @@ test "remove_packages returns NoPackageFound for an unknown target" {
     var package_names = [_][:0]const u8{"shelly-package-that-does-not-exist"};
     try testing.expectError(
         error.NoPackageFound,
-        mgr.remove_packages(&package_names, .none, true),
+        mgr.remove_packages(&package_names, .{}, true),
     );
     try testing.expectEqualStrings("Failed to find package", capture.text());
 }
@@ -1125,7 +1154,7 @@ test "remove_packages cancels removal of a held package without confirmation" {
     var package_names = [_][:0]const u8{"shelly"};
     try testing.expectError(
         error.PrepareFailed,
-        mgr.remove_packages(&package_names, .none, true),
+        mgr.remove_packages(&package_names, .{}, true),
     );
     try testing.expectEqualStrings("Held package removal cancelled.", capture.text());
 }
@@ -1154,7 +1183,7 @@ test "remove_packages removes an installed package in a DB-only transaction when
     try testing.expect((try mgr.get_single_installed_package("shelly-remove-test")) != null);
 
     var package_names = [_][:0]const u8{"shelly-remove-test"};
-    try mgr.remove_packages(&package_names, .dbonly, true);
+    try mgr.remove_packages(&package_names, .{ .dbonly = true }, true);
     try testing.expect((try mgr.get_single_installed_package("shelly-remove-test")) == null);
 }
 
@@ -1230,4 +1259,206 @@ test "get_updates_available returns updates when installed packages have newer v
         // The package names must match — we are comparing the same package.
         try testing.expectEqualStrings(old_name, new_name);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Priority 0 public API coverage
+// ---------------------------------------------------------------------------
+
+test "previously uncovered Manager APIs reject a null handle" {
+    var mgr: Manager = undefined;
+    mgr.handle = null;
+    mgr.allocator = testing.allocator;
+
+    try testing.expectError(error.NoHandle, mgr.sync_system_update(.{}));
+    try testing.expectError(error.NoHandle, mgr.get_package_from_provides("virtual-feature"));
+    try testing.expectError(error.NoHandle, mgr.is_dependency_satisfied_by_installed_packages("dependency"));
+    try testing.expectError(error.NoHandle, mgr.find_remote_satisfier_for_dependency("dependency"));
+    try testing.expectError(error.NoHandle, mgr.install_dependencies_only("package", false, .{}));
+
+    var no_packages = [_][:0]const u8{};
+    try testing.expectError(error.NoHandle, mgr.update_packages(&no_packages, .{}));
+
+    try testing.expectError(error.NoHandle, mgr.purify(true, false, false));
+    try testing.expect(!mgr.is_package_installed("package"));
+    try testing.expectError(error.NoHandle, mgr.get_allowed_architecture());
+}
+
+test "dependency query APIs resolve exact, versioned, and virtual remote packages" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.createSyncDatabase(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expectEqualStrings(
+        "remote-provider",
+        try mgr.get_package_from_provides("remote-provider"),
+    );
+    try testing.expectEqualStrings(
+        "remote-provider",
+        try mgr.find_remote_satisfier_for_dependency("remote-provider>=2.0"),
+    );
+    try testing.expectEqualStrings(
+        "remote-provider",
+        try mgr.get_package_from_provides("virtual-feature>=2"),
+    );
+    try testing.expectEqualStrings(
+        "remote-provider",
+        try mgr.find_remote_satisfier_for_dependency("virtual-feature>=2"),
+    );
+    try testing.expectError(error.PkgNotFound, mgr.get_package_from_provides("missing-feature"));
+    try testing.expectError(error.PkgNotFound, mgr.find_remote_satisfier_for_dependency("missing-feature"));
+}
+
+test "installed dependency query distinguishes satisfied and missing dependencies" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-installed-dependency", "2.0-1");
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expect(try mgr.is_dependency_satisfied_by_installed_packages("shelly-installed-dependency"));
+    try testing.expect(try mgr.is_dependency_satisfied_by_installed_packages("shelly-installed-dependency>=2.0"));
+    try testing.expect(!try mgr.is_dependency_satisfied_by_installed_packages("shelly-missing-dependency"));
+}
+
+test "install_dependencies_only reports a package missing from local and sync databases" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expectError(
+        error.NoPackageFound,
+        mgr.install_dependencies_only("shelly-package-that-does-not-exist", false, .{}),
+    );
+}
+
+test "purify with every mode disabled returns no targets" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const targets = try mgr.purify(true, false, false);
+    defer allocator.free(targets);
+    try testing.expectEqual(@as(usize, 0), targets.len);
+}
+
+test "is_package_installed reports installed and missing packages" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-installed-query", "1.0-1");
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try testing.expect(mgr.is_package_installed("shelly-installed-query"));
+    try testing.expect(!mgr.is_package_installed("shelly-missing-query"));
+}
+
+test "Manager ignore APIs mutate and report normalized ignored packages" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try mgr.ignore_package(" first-package ");
+    const additions = [_][]const u8{ "second-package", "first-package", " third-package " };
+    try mgr.ignore_packages(&additions);
+
+    var ignored = try mgr.get_ignored_packages();
+    defer ignored.deinit(allocator);
+    try testing.expectEqual(@as(usize, 3), ignored.items.len);
+    try testing.expectEqualStrings("first-package", ignored.items[0]);
+    try testing.expectEqualStrings("second-package", ignored.items[1]);
+    try testing.expectEqualStrings("third-package", ignored.items[2]);
+
+    try mgr.unignore_package(" second-package ");
+    const removals = [_][]const u8{ "first-package", "third-package", "not-ignored" };
+    try mgr.unignore_packages(&removals);
+
+    var after_remove = try mgr.get_ignored_packages();
+    defer after_remove.deinit(allocator);
+    try testing.expectEqual(@as(usize, 0), after_remove.items.len);
+
+    const rewritten = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        workspace.config_path,
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(rewritten);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "#IgnorePkg =") != null);
+}
+
+test "get_allowed_architecture returns the resolved host architecture and any" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const architectures = try mgr.get_allowed_architecture();
+    defer {
+        for (architectures) |architecture| allocator.free(architecture);
+        allocator.free(architectures);
+    }
+
+    const expected_host = switch (builtin.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        else => "x86_64",
+    };
+    try testing.expectEqual(@as(usize, 2), architectures.len);
+    try testing.expectEqualStrings(expected_host, architectures[0]);
+    try testing.expectEqualStrings("any", architectures[1]);
 }
