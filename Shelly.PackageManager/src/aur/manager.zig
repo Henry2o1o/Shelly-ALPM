@@ -467,7 +467,7 @@ pub const Manager = struct {
     }
 
     pub fn installPackages(self: *Self, package_names: []const []const u8) !void {
-        try self.alpm.sync(false);
+        try self.alpm.refresh();
         for (package_names, 0..) |package_name, index| {
             const current = index + 1;
             self.raisePackageProgress(.aur_download_start, package_name, current, package_names.len, "");

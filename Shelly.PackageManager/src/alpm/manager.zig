@@ -1086,7 +1086,7 @@ pub const Manager = struct {
         return false;
     }
 
-    fn refresh(self: *Manager) TransactionError!void {
+    pub fn refresh(self: *Manager) TransactionError!void {
         if (self.handle != null) {
             const refresh_result = rawLibalpm.alpm_release(self.handle);
             if (refresh_result != 0) {
