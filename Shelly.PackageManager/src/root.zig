@@ -39,4 +39,5 @@ test {
     _ = @import("pkgbuild/pkgbuild_parser.zig");
     _ = @import("pkgbuild/post_install_validator.zig");
     _ = @import("pkgbuild/homograph_validator.zig");
+    _ = @import("aur/manager.zig");
 }
