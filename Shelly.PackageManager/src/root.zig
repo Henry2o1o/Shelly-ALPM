@@ -7,12 +7,23 @@ pub const alpm = struct {
     pub const bindings = @import("alpm/bindings.zig");
     pub const events = @import("alpm/events.zig");
     pub const configuration = @import("alpm/configuration.zig");
+    pub const cache_manager = @import("alpm/cache_manager.zig");
 
     pub const Manager = manager.Manager;
     pub const TransFlag = bindings.libalpm.TransFlag;
     pub const SigLevel = bindings.libalpm.SigLevel;
     pub const OwnedPackage = bindings.libalpm.OwnedPackage;
     pub const OwnedPackageWithUpdate = bindings.libalpm.OwnedPackageWithUpdate;
+    pub const CacheManager = cache_manager.CacheManager;
+    pub const CacheManagerOptions = cache_manager.Options;
+    pub const CacheCleanOptions = cache_manager.CleanOptions;
+    pub const CacheInstalledFilter = cache_manager.InstalledFilter;
+    pub const CacheEntry = cache_manager.Entry;
+    pub const CacheRemovalItem = cache_manager.RemovalItem;
+    pub const CacheRemovalPlan = cache_manager.RemovalPlan;
+    pub const CacheExecutionResult = cache_manager.ExecutionResult;
+    pub const CacheError = cache_manager.Error;
+    pub const parse_cache_package_filename = cache_manager.parsePackageFilename;
 };
 
 pub const aur = @import("aur/manager.zig");
@@ -73,6 +84,7 @@ pub const shared = struct {
 };
 
 pub const AlpmManager = alpm.Manager;
+pub const CacheManager = alpm.CacheManager;
 pub const AurManager = aur.Manager;
 pub const FlatpakManager = flatpak.Manager;
 pub const AppImageManager = appimage.Manager;
@@ -100,6 +112,7 @@ test "public AUR module exposes the package manager" {
 
 test "public library surface exposes package manager APIs" {
     _ = AlpmManager;
+    _ = CacheManager;
     _ = AurManager;
     _ = FlatpakManager;
     _ = AppImageManager;
@@ -108,6 +121,15 @@ test "public library surface exposes package manager APIs" {
     _ = alpm.SigLevel;
     _ = alpm.events.Dispatcher;
     _ = alpm.configuration.Configuration;
+    _ = alpm.CacheCleanOptions;
+    _ = alpm.CacheManagerOptions;
+    _ = alpm.CacheInstalledFilter;
+    _ = alpm.CacheEntry;
+    _ = alpm.CacheRemovalItem;
+    _ = alpm.CacheRemovalPlan;
+    _ = alpm.CacheExecutionResult;
+    _ = alpm.CacheError;
+    _ = alpm.parse_cache_package_filename;
     _ = flatpak.RemoteManager;
     _ = flatpak.AppstreamManager;
     _ = appimage.UpdateManager;
@@ -130,6 +152,7 @@ test {
     _ = @import("alpm/manager_test.zig");
     _ = @import("alpm/events.zig");
     _ = @import("alpm/configuration.zig");
+    _ = @import("alpm/cache_manager.zig");
     _ = @import("alpm/distribution-hooks/CachyOS/update_notice.zig");
     _ = @import("alpm/distribution-hooks/os_utilities.zig");
     _ = @import("flatpak/bindings.zig");

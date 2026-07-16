@@ -199,6 +199,19 @@ pub fn build(b: *std.Build) void {
     const local_test_step = b.step("local-test", "Run safe local package tests");
     local_test_step.dependOn(&run_local_tests.step);
 
+    const cache_test_module = b.createModule(.{
+        .root_source_file = b.path("src/alpm/cache_manager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    cache_test_module.addImport("alpm_c", alpm_c);
+    cache_test_module.linkSystemLibrary("alpm", .{});
+    const cache_tests = b.addTest(.{ .name = "cache-test", .root_module = cache_test_module });
+    const run_cache_tests = b.addRunArtifact(cache_tests);
+    const cache_test_step = b.step("cache-test", "Run safe package-cache tests");
+    cache_test_step.dependOn(&run_cache_tests.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means
