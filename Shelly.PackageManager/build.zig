@@ -72,6 +72,7 @@ pub fn build(b: *std.Build) void {
     mod.linkSystemLibrary("alpm", .{});
     mod.addImport("flatpak", flatpak_mod);
     mod.linkSystemLibrary("flatpak", .{});
+    mod.linkSystemLibrary("archive", .{});
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -183,6 +184,20 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // Local package tests are isolated from the package manager's live-system
+    // integration tests and use only temporary configured roots.
+    const local_test_module = b.createModule(.{
+        .root_source_file = b.path("src/local/manager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    local_test_module.linkSystemLibrary("archive", .{});
+    const local_tests = b.addTest(.{ .root_module = local_test_module });
+    const run_local_tests = b.addRunArtifact(local_tests);
+    const local_test_step = b.step("local-test", "Run safe local package tests");
+    local_test_step.dependOn(&run_local_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

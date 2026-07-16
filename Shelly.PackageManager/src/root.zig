@@ -49,6 +49,21 @@ pub const pkgbuild = struct {
     pub const PostInstallValidator = post_install_validator.PostInstallValidator;
 };
 
+pub const local = struct {
+    pub const manager = @import("local/manager.zig");
+    pub const file_inspector = @import("local/file_inspector.zig");
+    pub const xdg_integration = @import("local/xdg_integration.zig");
+    pub const events = @import("local/events.zig");
+
+    pub const Manager = manager.Manager;
+    pub const Options = manager.Options;
+    pub const Error = manager.Error;
+    pub const Package = manager.Package;
+    pub const Inspector = file_inspector.Inspector;
+    pub const XdgIntegration = xdg_integration.Integration;
+    pub const MessageLevel = events.Level;
+};
+
 pub const shared = struct {
     pub const downloader = @import("shared/downloader.zig");
     pub const list_dictionary = @import("shared/list_dictionary.zig");
@@ -61,6 +76,7 @@ pub const AlpmManager = alpm.Manager;
 pub const AurManager = aur.Manager;
 pub const FlatpakManager = flatpak.Manager;
 pub const AppImageManager = appimage.Manager;
+pub const LocalManager = local.Manager;
 
 /// This is a documentation comment to explain the `printAnotherMessage` function below.
 ///
@@ -87,6 +103,7 @@ test "public library surface exposes package manager APIs" {
     _ = AurManager;
     _ = FlatpakManager;
     _ = AppImageManager;
+    _ = LocalManager;
     _ = alpm.TransFlag;
     _ = alpm.SigLevel;
     _ = alpm.events.Dispatcher;
@@ -97,6 +114,13 @@ test "public library surface exposes package manager APIs" {
     _ = pkgbuild.Parser;
     _ = pkgbuild.HomographValidator;
     _ = pkgbuild.PostInstallValidator;
+    _ = local.Package;
+    _ = local.Options;
+    _ = local.Error;
+    _ = local.Inspector;
+    _ = local.XdgIntegration;
+    _ = local.MessageLevel;
+    _ = local.events.Dispatcher;
     _ = shared.Downloader;
 }
 
@@ -120,4 +144,8 @@ test {
     _ = @import("pkgbuild/post_install_validator.zig");
     _ = @import("pkgbuild/homograph_validator.zig");
     _ = @import("aur/manager.zig");
+    _ = @import("local/manager.zig");
+    _ = @import("local/file_inspector.zig");
+    _ = @import("local/xdg_integration.zig");
+    _ = @import("local/events.zig");
 }
