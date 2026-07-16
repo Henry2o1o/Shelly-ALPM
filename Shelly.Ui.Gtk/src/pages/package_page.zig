@@ -5,11 +5,11 @@ const gio = bindings.gio;
 const glib = bindings.glib;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
-const PackageObject = @import("../objects/package_object.zig").PackageObject;
-const ShellyCli = @import("../shellpers/shelly_cli.zig").ShellyCli;
-const SizeConverter = @import("../shellpers/size_converts.zig").SizeConverter;
-const IconResolver = @import("../shellpers/icon_resolver.zig").IconResolver;
-const runtime = @import("../shellpers/runtime.zig");
+const PackageObject = @import("../g_objects/package_object.zig").PackageObject;
+const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
+const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
+const IconResolver = @import("../services/icon_resolver.zig").IconResolver;
+const runtime = @import("../services/runtime.zig");
 
 pub const PackagePage = extern struct {
     parent_instance: Parent,

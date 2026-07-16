@@ -4,7 +4,7 @@ const gtk = bindings.gtk;
 const gio = bindings.gio;
 const gobject = bindings.gobject;
 const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
-const runtime = @import("shellpers/runtime.zig");
+const runtime = @import("services/runtime.zig");
 
 pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
