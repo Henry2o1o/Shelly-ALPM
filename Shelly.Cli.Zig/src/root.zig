@@ -5,6 +5,7 @@ pub const log = @import("runtime/log.zig");
 pub const signals = @import("runtime/signals.zig");
 pub const xdg = @import("runtime/xdg.zig");
 pub const shortcodes = @import("cli/shortcodes.zig");
+pub const catalog = @import("cli/catalog.zig");
 pub const spec = @import("cli/spec.zig");
 pub const commands = @import("commands/dispatcher.zig");
 pub const config = @import("config/manager.zig");
@@ -19,6 +20,7 @@ test {
     _ = signals;
     _ = xdg;
     _ = shortcodes;
+    _ = catalog;
     _ = spec;
     _ = commands;
     _ = config;

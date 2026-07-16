@@ -8,10 +8,10 @@ pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !?u8 {
-    if (!std.mem.startsWith(u8, invocation.command.path, "shelly config ")) return null;
+    if (!std.mem.endsWith(u8, invocation.command.path, " config")) return null;
     const manager = config_manager.Manager.init(context);
 
-    if (std.mem.eql(u8, invocation.command.path, "shelly config list")) {
+    if (std.mem.eql(u8, invocation.command.path, "shelly list config")) {
         const config = try manager.read();
         if (invocation.globals.ui_mode) {
             try output.writeConfigFrame(context, &config);
@@ -24,7 +24,7 @@ pub fn dispatch(
         return 0;
     }
 
-    if (std.mem.eql(u8, invocation.command.path, "shelly config get")) {
+    if (std.mem.eql(u8, invocation.command.path, "shelly get config")) {
         const key = invocation.positionals[0];
         const value = try manager.get(key);
         if (invocation.globals.ui_mode) {
@@ -47,7 +47,7 @@ pub fn dispatch(
         return 0;
     }
 
-    if (std.mem.eql(u8, invocation.command.path, "shelly config set")) {
+    if (std.mem.eql(u8, invocation.command.path, "shelly set config")) {
         const key = invocation.positionals[0];
         const value = invocation.positionals[1];
         const updated = try manager.update(key, value);
@@ -65,7 +65,7 @@ pub fn dispatch(
         return 0;
     }
 
-    if (std.mem.eql(u8, invocation.command.path, "shelly config reset")) {
+    if (std.mem.eql(u8, invocation.command.path, "shelly reset config")) {
         try manager.reset();
         const message = "Configuration reset to defaults.";
         if (invocation.globals.ui_mode)
@@ -75,7 +75,7 @@ pub fn dispatch(
         return 0;
     }
 
-    if (std.mem.eql(u8, invocation.command.path, "shelly config parallel")) {
+    if (std.mem.eql(u8, invocation.command.path, "shelly parallel config")) {
         const value = invocation.positionals[0];
         const updated = try manager.update("ParallelDownloadCount", value);
         const message = if (updated)

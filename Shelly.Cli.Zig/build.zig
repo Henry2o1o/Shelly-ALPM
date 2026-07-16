@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {
     check_contract_step.dependOn(&check_contract_command.step);
 
     const check_foundation_command = b.addSystemCommand(&.{ "bash", "scripts/check-foundation.sh" });
-    const check_foundation_step = b.step("foundation-check", "Verify the Zig CLI foundation against C# golden files");
+    const check_foundation_step = b.step("foundation-check", "Verify the native action-first Zig CLI foundation");
     check_foundation_step.dependOn(&check_foundation_command.step);
 
     const check_phase3_command = b.addSystemCommand(&.{ "bash", "scripts/check-phase3.sh" });
