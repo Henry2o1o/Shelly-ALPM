@@ -214,6 +214,10 @@ pub const Renderer = struct {
             });
         } else if (std.mem.eql(u8, code, "alpm.replaces")) {
             try self.writeColoredLine(.white, ":: {s}", .{status.message});
+        } else if (std.mem.startsWith(u8, code, "download.")) {
+            // Progress events already communicate the download lifecycle. The
+            // separate started/completed status messages are redundant.
+            return;
         } else if (std.mem.startsWith(u8, code, "alpm.")) {
             // StandardSinglePaneOutput intentionally does not echo libalpm's
             // general informational event stream.
@@ -671,8 +675,10 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
 
     try renderer.begin("Synchronizing package databases...");
     var operation = operation_context.begin(.{ .backend = .download, .kind = .download, .subject = "extra.db" });
+    operation.status(.information, "Download started", "download.start", null);
     operation.progress(.{ .completed = 50, .total = 100, .percentage = 50, .stage = "download" });
     operation.progress(.{ .completed = 100, .total = 100, .percentage = 100, .stage = "download" });
+    operation.status(.success, "Download completed", "download.complete", null);
     operation.status(.information, "post-install output", "alpm.scriptlet", null);
     operation.progress(.{ .stage = "hook", .message = "Refreshing system state" });
     operation.status(.warning, "/etc/demo.conf", "alpm.pacnew", null);
@@ -695,6 +701,9 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
     try std.testing.expect(std.mem.indexOf(u8, rendered, ":: Synchronizing package databases...") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, ":: Retrieving packages...") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "DatabaseDownload extra.db"));
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "100%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Download started") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Download completed") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Scriptlet: post-install output") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Hook: Refreshing system state") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, ":: pacnew stored @ /etc/demo.conf.pacnew") != null);
