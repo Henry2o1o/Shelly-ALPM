@@ -1,5 +1,6 @@
 const std = @import("std");
 const appimage = @import("bindings.zig").appimage;
+const events = @import("events.zig");
 const xdg_paths = @import("../shared/xdg_paths.zig").xdg_paths;
 
 pub const AppImageManager = struct {
@@ -8,9 +9,25 @@ pub const AppImageManager = struct {
     environ: std.process.Environ,
     install_directory: []const u8,
     local_db_path: []const u8,
+    dispatcher: ?*events.Dispatcher = null,
+
+    pub fn setEventDispatcher(self: *AppImageManager, dispatcher: ?*events.Dispatcher) void {
+        self.dispatcher = dispatcher;
+    }
+
+    /// Classifies paths by the AppImage extension, matching the established
+    /// C# behavior without opening or executing the file.
+    pub fn isAppImage(file_path: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(std.fs.path.extension(file_path), ".AppImage");
+    }
+
+    pub fn is_app_image(file_path: []const u8) bool {
+        return isAppImage(file_path);
+    }
 
     pub fn installAppImage(self: AppImageManager, location: []const u8) !bool {
         const app_name = std.fs.path.stem(location);
+        self.emitStatusFmt(.information, "Installing AppImage {s}...", .{app_name});
         const dest_name = try std.fmt.allocPrint(self.allocator, "{s}.AppImage", .{app_name});
         defer self.allocator.free(dest_name);
         const dest_path = try std.fs.path.join(self.allocator, &.{ self.install_directory, dest_name });
@@ -22,6 +39,7 @@ pub const AppImageManager = struct {
 
         const metadata = (try self.extractMetadata(dest_path)) orelse {
             std.log.err("Failed to extract metadata during installation.", .{});
+            self.emitStatus(.err, "Failed to extract metadata during installation.");
             std.Io.Dir.cwd().deleteFile(self.io, dest_path) catch {};
             return false;
         };
@@ -35,6 +53,7 @@ pub const AppImageManager = struct {
                 std.ascii.eqlIgnoreCase(existing.desktop_name, metadata.desktop_name);
             if (name_match or desktop_match) {
                 std.log.warn("AppImage {s} already exists. Overwriting...", .{existing.name});
+                self.emitStatusFmt(.warning, "AppImage {s} already exists. Overwriting...", .{existing.name});
                 const old_path = if (existing.path.len > 0) existing.path else dest_path;
                 const removed_name = self.cleanDesktopEntries(existing.name, old_path) catch null;
                 if (removed_name) |n| self.allocator.free(n);
@@ -46,6 +65,7 @@ pub const AppImageManager = struct {
         }
 
         try self.addAppImageToLocalDb(metadata);
+        self.emitStatusFmt(.success, "Installed AppImage {s}.", .{app_name});
         return true;
     }
 
@@ -470,6 +490,7 @@ pub const AppImageManager = struct {
 
     pub fn removeAppImage(self: AppImageManager, appimage_path: []const u8, remove_config_files: bool) !bool {
         const app_name = std.fs.path.stem(appimage_path);
+        self.emitStatusFmt(.information, "Removing AppImage {s}...", .{app_name});
         const clean_name = try self.cleanInvalidNames(app_name);
         defer self.allocator.free(clean_name);
 
@@ -516,10 +537,12 @@ pub const AppImageManager = struct {
             self.removeAppConfigDirectories(desktop_app_name);
         }
 
+        self.emitStatusFmt(.success, "Removed AppImage {s}.", .{app_name});
         return true;
     }
 
     pub fn syncAppImageMeta(self: AppImageManager, app_image_names: []const []const u8) !bool {
+        self.emitStatus(.information, "Synchronizing AppImage metadata...");
         const db_images = try self.getAppImagesFromLocalDb();
         defer self.freeAppImages(db_images);
         var success = true;
@@ -601,6 +624,10 @@ pub const AppImageManager = struct {
             };
         }
 
+        self.emitStatus(
+            if (success) .success else .warning,
+            if (success) "AppImage metadata synchronized." else "Some AppImage metadata could not be synchronized.",
+        );
         return success;
     }
 
@@ -806,6 +833,19 @@ pub const AppImageManager = struct {
         return buf;
     }
 
+    fn emitStatus(self: AppImageManager, kind: events.StatusKind, message: []const u8) void {
+        if (self.dispatcher) |dispatcher| dispatcher.raiseStatus(.{ .kind = kind, .message = message });
+    }
+
+    fn emitStatusFmt(self: AppImageManager, kind: events.StatusKind, comptime format: []const u8, args: anytype) void {
+        const message = std.fmt.allocPrint(self.allocator, format, args) catch {
+            self.emitStatus(kind, "AppImage operation status unavailable.");
+            return;
+        };
+        defer self.allocator.free(message);
+        self.emitStatus(kind, message);
+    }
+
     pub fn freeAppImage(self: AppImageManager, appimage_struct: appimage.AppImage) void {
         self.allocator.free(appimage_struct.name);
         self.allocator.free(appimage_struct.version);
@@ -825,6 +865,13 @@ pub const AppImageManager = struct {
         self.allocator.free(appimage_structs);
     }
 };
+
+test "AppImage classification is case insensitive and extension based" {
+    try std.testing.expect(AppImageManager.isAppImage("Example.AppImage"));
+    try std.testing.expect(AppImageManager.is_app_image("/tmp/Example.appimage"));
+    try std.testing.expect(!AppImageManager.isAppImage("Example.AppImage.zsync"));
+    try std.testing.expect(!AppImageManager.isAppImage("AppImage"));
+}
 
 test "cleanInvalidNames lowercases and replaces separators" {
     var tmp = std.testing.tmpDir(.{});

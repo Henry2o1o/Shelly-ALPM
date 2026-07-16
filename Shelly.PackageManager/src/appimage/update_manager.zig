@@ -2,7 +2,7 @@ const std = @import("std");
 const appimage = @import("bindings.zig").appimage;
 const builtin = @import("builtin");
 const appimage_manager = @import("manager.zig");
-const http_client = @import("std.http.Client");
+const events = @import("events.zig");
 const xdg_paths = @import("../shared/xdg_paths.zig").xdg_paths;
 const downloader = @import("../shared/downloader.zig");
 
@@ -12,6 +12,11 @@ pub const UpdateManager = struct {
     environ: std.process.Environ,
     install_directory: []const u8,
     local_db_path: []const u8,
+    dispatcher: ?*events.Dispatcher = null,
+
+    pub fn setEventDispatcher(self: *UpdateManager, dispatcher: ?*events.Dispatcher) void {
+        self.dispatcher = dispatcher;
+    }
 
     pub fn configure_updates(self: UpdateManager, update_info: []const u8, name: []const u8, update_type: appimage.UpdateType, allow_prerelease: bool) !bool {
         std.log.info("Configuring updates for {s} {s}, type: {s}, allowPrerelease: {}", .{ name, update_info, @tagName(update_type), allow_prerelease });
@@ -22,6 +27,7 @@ pub const UpdateManager = struct {
             .environ = self.environ,
             .install_directory = self.install_directory,
             .local_db_path = self.local_db_path,
+            .dispatcher = self.dispatcher,
         };
 
         const app_images = try manager.getAppImagesFromLocalDb();
@@ -90,37 +96,98 @@ pub const UpdateManager = struct {
         return count;
     }
 
-    pub fn get_updates(self: UpdateManager) ![]appimage.AppImageUpdate {
-        const apps = try appimage_manager.AppImageManager.getAppImagesFromLocalDb();
-        var updates: []appimage.AppImageUpdate = &[]appimage.AppImageUpdate{};
-        for (apps) |app| {
-            const app_update = try self.get_update(app);
-            if (app_update.is_update_available) |u| {
-                updates = try std.mem.concat(self.allocator, appimage.AppImageUpdate, updates, u);
+    /// Returns an owned list containing only available updates. Call
+    /// `deinit` on the returned value when it is no longer needed.
+    pub fn get_updates(self: UpdateManager) !appimage.UpdateList {
+        const manager = self.appImageManager();
+        const apps = try manager.getAppImagesFromLocalDb();
+        defer manager.freeAppImages(apps);
+
+        var updates: std.ArrayList(appimage.AppImageUpdate) = .empty;
+        errdefer {
+            for (updates.items) |update_result| update_result.deinit(self.allocator);
+            updates.deinit(self.allocator);
+        }
+
+        self.emitStatus(.information, "Checking for AppImage updates...");
+        for (apps) |*app| {
+            if (try self.get_update(app)) |update_result| {
+                if (update_result.is_update_available) {
+                    try updates.append(self.allocator, update_result);
+                } else {
+                    update_result.deinit(self.allocator);
+                }
             }
         }
-        return updates;
+
+        const owned = try updates.toOwnedSlice(self.allocator);
+        self.emitStatusFmt(.success, "Found {d} AppImage update(s).", .{owned.len});
+        return appimage.UpdateList.init(self.allocator, owned);
     }
 
-    pub fn get_update(self: UpdateManager, app: *appimage.AppImage) !appimage.AppImageUpdate {
+    /// Returns one owned update result, or null when the application has no
+    /// valid update configuration/provider result. The caller owns a non-null
+    /// result and must call `deinit` on it.
+    pub fn get_update(self: UpdateManager, app: *const appimage.AppImage) !?appimage.AppImageUpdate {
         switch (app.update_type) {
             .none => return null,
             .static_url => {
-                return self.check_static_url_update(app.update_url.?, app.name.?, app.version);
+                if (app.update_url.len == 0) {
+                    self.emitStatusFmt(.warning, "AppImage {s} has no static update URL.", .{app.name});
+                    return null;
+                }
+                return self.check_static_url_update(app.update_url, app.name, app.version);
             },
             .github => {
-                return self.check_github_update(app.repo_owner.?, app.repo_name.?, app.name, app.version, app.allow_prerelease);
+                const owner = app.repo_owner orelse {
+                    self.emitMissingRepository(app.name);
+                    return null;
+                };
+                const repo = app.repo_name orelse {
+                    self.emitMissingRepository(app.name);
+                    return null;
+                };
+                return self.check_github_update(owner, repo, app.name, app.version, app.allow_prerelease);
             },
             .gitlab => {
-                return self.check_gitlab_update(app.repo_owner.?, app.repo_name.?, app.name, app.version, app.allow_prerelease);
+                const owner = app.repo_owner orelse {
+                    self.emitMissingRepository(app.name);
+                    return null;
+                };
+                const repo = app.repo_name orelse {
+                    self.emitMissingRepository(app.name);
+                    return null;
+                };
+                return self.check_gitlab_update(owner, repo, app.name, app.version, app.allow_prerelease);
             },
             .codeberg => {
-                return self.check_codeberg_update(app.repo_owner.?, app.repo_name.?, app.name, app.version, app.allow_prerelease);
+                const owner = app.repo_owner orelse {
+                    self.emitMissingRepository(app.name);
+                    return null;
+                };
+                const repo = app.repo_name orelse {
+                    self.emitMissingRepository(app.name);
+                    return null;
+                };
+                return self.check_codeberg_update(owner, repo, app.name, app.version, app.allow_prerelease);
             },
             .forgejo => {
+                if (app.update_url.len == 0) {
+                    self.emitStatusFmt(.warning, "AppImage {s} has no Forgejo update URL.", .{app.name});
+                    return null;
+                }
                 return self.check_forgejo_update(app.update_url, app.name, app.version, app.allow_prerelease);
             },
         }
+    }
+
+    pub fn deinit_update(self: UpdateManager, update_result: appimage.AppImageUpdate) void {
+        update_result.deinit(self.allocator);
+    }
+
+    pub fn deinit_updates(self: UpdateManager, update_results: []appimage.AppImageUpdate) void {
+        for (update_results) |update_result| update_result.deinit(self.allocator);
+        self.allocator.free(update_results);
     }
 
     pub fn update(self: UpdateManager, appimage_ptr: *appimage.AppImageUpdate) !bool {
@@ -130,6 +197,7 @@ pub const UpdateManager = struct {
             .environ = self.environ,
             .install_directory = self.install_directory,
             .local_db_path = self.local_db_path,
+            .dispatcher = self.dispatcher,
         };
 
         const apps = try manager.getAppImagesFromLocalDb();
@@ -145,13 +213,16 @@ pub const UpdateManager = struct {
 
         const app_to_update = if (found_index) |i| apps[i] else {
             std.log.debug("AppImage '{s}' not found in local database.", .{appimage_ptr.name});
+            self.emitStatusFmt(.err, "AppImage {s} was not found in the local database.", .{appimage_ptr.name});
             return false;
         };
 
         std.log.info("Updating {s}", .{app_to_update.name});
+        self.emitStatusFmt(.information, "Updating AppImage {s}...", .{app_to_update.name});
 
         if (appimage_ptr.download_url.len == 0) {
             std.log.debug("No download URL found for {s}.", .{appimage_ptr.name});
+            self.emitStatusFmt(.err, "No download URL was found for AppImage {s}.", .{appimage_ptr.name});
             return false;
         }
 
@@ -163,6 +234,7 @@ pub const UpdateManager = struct {
         const current_exists = std.Io.Dir.cwd().statFile(self.io, current_path, .{}) catch null;
         if (current_exists == null) {
             std.log.debug("Current AppImage not found at {s}.", .{current_path});
+            self.emitStatusFmt(.err, "Current AppImage was not found at {s}.", .{current_path});
             return false;
         }
 
@@ -189,11 +261,14 @@ pub const UpdateManager = struct {
 
         var dl = downloader.CoreDownloader.init(self.allocator, self.io, .default());
         defer dl.deinit();
+        var download_context = DownloadContext{ .manager = self, .app_name = appimage_ptr.name };
+        dl.setEventCallback(onDownloadEvent, &download_context);
 
         const dl_result = dl.downloadToFile(appimage_ptr.download_url, download_path, false);
         switch (dl_result) {
             .failure => |err| {
                 std.log.err("Failed to download update for {s}: {s}", .{ appimage_ptr.name, @errorName(err) });
+                self.emitStatusFmt(.err, "Failed to download update for {s}: {s}", .{ appimage_ptr.name, @errorName(err) });
                 std.Io.Dir.cwd().deleteFile(self.io, download_path) catch {};
                 return false;
             },
@@ -203,6 +278,7 @@ pub const UpdateManager = struct {
         try manager.setExecutable(download_path);
 
         const new_metadata = (try manager.extractMetadata(download_path)) orelse {
+            self.emitStatusFmt(.err, "Downloaded update for {s} is not a usable AppImage.", .{appimage_ptr.name});
             std.Io.Dir.cwd().deleteFile(self.io, download_path) catch {};
             return false;
         };
@@ -211,13 +287,16 @@ pub const UpdateManager = struct {
         const download_filename = std.fs.path.basename(appimage_ptr.download_url);
         if (!isCorrectArchitecture(download_filename)) {
             std.log.warn("The downloaded AppImage might not match your system architecture.", .{});
+            self.emitStatus(.warning, "The downloaded AppImage might not match your system architecture.");
         }
 
         std.log.info("Backing up current version to {s}...", .{backup_path});
+        self.emitStatusFmt(.information, "Backing up the current AppImage to {s}...", .{backup_path});
         try manager.copyFile(current_path, backup_path);
 
         manager.copyFile(download_path, current_path) catch |err| {
             std.log.err("Error installing new version: {s}. Rolling back...", .{@errorName(err)});
+            self.emitStatusFmt(.err, "Could not install the AppImage update: {s}. Rolling back...", .{@errorName(err)});
             manager.copyFile(backup_path, current_path) catch {};
             std.Io.Dir.cwd().deleteFile(self.io, download_path) catch {};
             return false;
@@ -242,6 +321,7 @@ pub const UpdateManager = struct {
         };
         try manager.addAppImageToLocalDb(updated_app);
 
+        self.emitStatusFmt(.success, "Updated AppImage {s} to {s}.", .{ app_to_update.name, appimage_ptr.version });
         return true;
     }
 
@@ -281,12 +361,7 @@ pub const UpdateManager = struct {
 
     fn build_static_url(allocator: std.mem.Allocator, app_name: []const u8, url: []const u8, current_version: []const u8, raw_version: []const u8) !?appimage.AppImageUpdate {
         const version = std.mem.trim(u8, raw_version, "\"");
-        return appimage.AppImageUpdate{
-            .name = try allocator.dupe(u8, app_name),
-            .version = try allocator.dupe(u8, version),
-            .download_url = try allocator.dupe(u8, url),
-            .is_update_available = try version_unknown_or_dif(current_version, version),
-        };
+        return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, version, url, current_version));
     }
 
     fn getSystemArchitecture() []const u8 {
@@ -387,17 +462,9 @@ pub const UpdateManager = struct {
         const url = try gitea_to_releases_api(self.allocator, domain, owner, repo);
         defer self.allocator.free(url);
 
-        var client = http_client.HttpClient.init(self.allocator, self.io, "Shelly-AppImage-Manager");
-        defer client.deinit();
-
-        const response = client.get(url, &.{
-            .{ .name = "Accept", .value = "application/json" },
-        }) catch return null;
-        defer response.deinit(self.allocator);
-
-        if (response.status != .ok) return null;
-
-        return parse_github_response(self.allocator, response.body, app_name, current_version, allow_prerelease);
+        const body = (try self.fetchJson(url, "application/json")) orelse return null;
+        defer self.allocator.free(body);
+        return parse_github_response(self.allocator, body, app_name, current_version, allow_prerelease);
     }
 
     pub fn check_codeberg_update(self: UpdateManager, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
@@ -427,17 +494,9 @@ pub const UpdateManager = struct {
         const url = try github_to_releases_api(self.allocator, owner, repo);
         defer self.allocator.free(url);
 
-        var client = http_client.HttpClient.init(self.allocator, self.io, "Shelly-AppImage-Manager");
-        defer client.deinit();
-
-        const response = client.get(url, &.{
-            .{ .name = "Accept", .value = "application/vnd.github+json" },
-        }) catch return null;
-        defer response.deinit(self.allocator);
-
-        if (response.status != .ok) return null;
-
-        return parse_github_response(self.allocator, response.body, app_name, current_version, allow_prerelease);
+        const body = (try self.fetchJson(url, "application/vnd.github+json")) orelse return null;
+        defer self.allocator.free(body);
+        return parse_github_response(self.allocator, body, app_name, current_version, allow_prerelease);
     }
 
     fn parse_github_response(allocator: std.mem.Allocator, body: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
@@ -464,12 +523,7 @@ pub const UpdateManager = struct {
         var download_url: ?[]const u8 = null;
 
         const assets_val = rel.object.get("assets") orelse {
-            return appimage.AppImageUpdate{
-                .name = try allocator.dupe(u8, app_name),
-                .version = try allocator.dupe(u8, latest_version),
-                .download_url = try allocator.dupe(u8, ""),
-                .is_update_available = try version_unknown_or_dif(current_version, latest_version),
-            };
+            return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, "", current_version));
         };
 
         if (assets_val != .array) return null;
@@ -511,29 +565,16 @@ pub const UpdateManager = struct {
             },
         }
 
-        return appimage.AppImageUpdate{
-            .name = try allocator.dupe(u8, app_name),
-            .version = try allocator.dupe(u8, latest_version),
-            .download_url = try allocator.dupe(u8, download_url orelse ""),
-            .is_update_available = try version_unknown_or_dif(current_version, latest_version),
-        };
+        return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, download_url orelse "", current_version));
     }
 
     pub fn check_gitlab_update(self: UpdateManager, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
         const url = try gitlab_to_releases_api(self.allocator, owner, repo);
         defer self.allocator.free(url);
 
-        var client = http_client.HttpClient.init(self.allocator, self.io, "Shelly-AppImage-Manager");
-        defer client.deinit();
-
-        const response = client.get(url, &.{
-            .{ .name = "Accept", .value = "application/json" },
-        }) catch return null;
-        defer response.deinit(self.allocator);
-
-        if (response.status != .ok) return null;
-
-        return parse_gitlab_response(self.allocator, response.body, app_name, current_version, allow_prerelease);
+        const body = (try self.fetchJson(url, "application/json")) orelse return null;
+        defer self.allocator.free(body);
+        return parse_gitlab_response(self.allocator, body, app_name, current_version, allow_prerelease);
     }
 
     fn github_to_releases_api(allocator: std.mem.Allocator, owner: []const u8, repo: []const u8) ![]u8 {
@@ -573,22 +614,12 @@ pub const UpdateManager = struct {
         var download_url: ?[]const u8 = null;
 
         const assets_val = rel.object.get("assets") orelse {
-            return appimage.AppImageUpdate{
-                .name = try allocator.dupe(u8, app_name),
-                .version = try allocator.dupe(u8, latest_version),
-                .download_url = try allocator.dupe(u8, ""),
-                .is_update_available = try version_unknown_or_dif(current_version, latest_version),
-            };
+            return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, "", current_version));
         };
 
         const links_val = if (assets_val == .object) assets_val.object.get("links") else null;
         if (links_val == null) {
-            return appimage.AppImageUpdate{
-                .name = try allocator.dupe(u8, app_name),
-                .version = try allocator.dupe(u8, latest_version),
-                .download_url = try allocator.dupe(u8, ""),
-                .is_update_available = try version_unknown_or_dif(current_version, latest_version),
-            };
+            return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, "", current_version));
         }
 
         const links = links_val.?;
@@ -631,11 +662,75 @@ pub const UpdateManager = struct {
             },
         }
 
-        return appimage.AppImageUpdate{
-            .name = try allocator.dupe(u8, app_name),
-            .version = try allocator.dupe(u8, latest_version),
-            .download_url = try allocator.dupe(u8, download_url orelse ""),
-            .is_update_available = try version_unknown_or_dif(current_version, latest_version),
+        return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, download_url orelse "", current_version));
+    }
+
+    fn makeUpdate(
+        allocator: std.mem.Allocator,
+        app_name: []const u8,
+        version: []const u8,
+        download_url: []const u8,
+        current_version: []const u8,
+    ) !appimage.AppImageUpdate {
+        const is_available = try version_unknown_or_dif(current_version, version);
+        const owned_name = try allocator.dupe(u8, app_name);
+        errdefer allocator.free(owned_name);
+        const owned_version = try allocator.dupe(u8, version);
+        errdefer allocator.free(owned_version);
+        const owned_url = try allocator.dupe(u8, download_url);
+        return .{
+            .name = owned_name,
+            .version = owned_version,
+            .download_url = owned_url,
+            .is_update_available = is_available,
+        };
+    }
+
+    fn fetchJson(self: UpdateManager, url: []const u8, accept: []const u8) !?[]u8 {
+        const uri = std.Uri.parse(url) catch {
+            self.emitStatus(.err, "The AppImage update provider URL is invalid.");
+            return null;
+        };
+
+        var client: std.http.Client = .{ .allocator = self.allocator, .io = self.io };
+        defer client.deinit();
+        const headers = [_]std.http.Header{.{ .name = "accept", .value = accept }};
+        var request = client.request(.GET, uri, .{
+            .headers = .{
+                .user_agent = .{ .override = "Shelly-AppImage-Manager/3.0" },
+                .accept_encoding = .{ .override = "identity" },
+            },
+            .extra_headers = &headers,
+            .redirect_behavior = .init(10),
+        }) catch {
+            self.emitStatus(.err, "Could not connect to the AppImage update provider.");
+            return null;
+        };
+        defer request.deinit();
+        request.accept_encoding[@intFromEnum(std.http.ContentEncoding.gzip)] = false;
+        request.accept_encoding[@intFromEnum(std.http.ContentEncoding.deflate)] = false;
+        request.sendBodiless() catch {
+            self.emitStatus(.err, "Could not send the AppImage update request.");
+            return null;
+        };
+
+        var redirect_buffer: [8 * 1024]u8 = undefined;
+        var response = request.receiveHead(&redirect_buffer) catch {
+            self.emitStatus(.err, "Could not receive the AppImage update response.");
+            return null;
+        };
+        if (response.head.status.class() != .success) {
+            self.emitStatusFmt(.warning, "AppImage update provider returned HTTP {d}.", .{@intFromEnum(response.head.status)});
+            return null;
+        }
+
+        var transfer_buffer: [8 * 1024]u8 = undefined;
+        return response.reader(&transfer_buffer).allocRemaining(
+            self.allocator,
+            .limited(16 * 1024 * 1024),
+        ) catch {
+            self.emitStatus(.err, "Could not read the AppImage update response.");
+            return null;
         };
     }
 
@@ -645,9 +740,12 @@ pub const UpdateManager = struct {
         return std.ascii.eqlIgnoreCase(tail, needle);
     }
 
-    fn is_appimage(file_path: []const u8) !bool {
-        const ext = std.fs.path.extension(file_path);
-        return std.ascii.eqlIgnoreCase(ext, ".AppImage");
+    pub fn isAppImage(file_path: []const u8) bool {
+        return appimage_manager.AppImageManager.isAppImage(file_path);
+    }
+
+    pub fn is_appimage(file_path: []const u8) bool {
+        return isAppImage(file_path);
     }
 
     fn version_unknown_or_dif(current_version: []const u8, last_version: []const u8) !bool {
@@ -657,15 +755,78 @@ pub const UpdateManager = struct {
 
         return !std.ascii.eqlIgnoreCase(current_version, last_version);
     }
+
+    fn appImageManager(self: UpdateManager) appimage_manager.AppImageManager {
+        return .{
+            .allocator = self.allocator,
+            .io = self.io,
+            .environ = self.environ,
+            .install_directory = self.install_directory,
+            .local_db_path = self.local_db_path,
+            .dispatcher = self.dispatcher,
+        };
+    }
+
+    fn emitMissingRepository(self: UpdateManager, app_name: []const u8) void {
+        self.emitStatusFmt(.warning, "AppImage {s} has incomplete repository update configuration.", .{app_name});
+    }
+
+    fn emitStatus(self: UpdateManager, kind: events.StatusKind, message: []const u8) void {
+        if (self.dispatcher) |dispatcher| dispatcher.raiseStatus(.{ .kind = kind, .message = message });
+    }
+
+    fn emitStatusFmt(self: UpdateManager, kind: events.StatusKind, comptime format: []const u8, args: anytype) void {
+        const message = std.fmt.allocPrint(self.allocator, format, args) catch {
+            self.emitStatus(kind, "AppImage update status unavailable.");
+            return;
+        };
+        defer self.allocator.free(message);
+        self.emitStatus(kind, message);
+    }
+
+    fn emitDownloadProgress(self: UpdateManager, app_name: []const u8, progress: downloader.DownloadProgress) void {
+        const percentage: ?f64 = if (progress.bytes_total) |total|
+            if (total == 0)
+                100.0
+            else
+                @as(f64, @floatFromInt(progress.bytes_downloaded)) / @as(f64, @floatFromInt(total)) * 100.0
+        else
+            null;
+        if (self.dispatcher) |dispatcher| dispatcher.raiseDownloadProgress(.{
+            .app_name = app_name,
+            .total_bytes = progress.bytes_total,
+            .downloaded_bytes = progress.bytes_downloaded,
+            .percentage = percentage,
+        });
+    }
+
+    const DownloadContext = struct {
+        manager: UpdateManager,
+        app_name: []const u8,
+    };
+
+    fn onDownloadEvent(raw_context: ?*anyopaque, event: downloader.DownloadEvent) void {
+        const context: *DownloadContext = @ptrCast(@alignCast(raw_context orelse return));
+        switch (event.event_type) {
+            .Start, .Progress, .Complete => if (event.progress) |progress| {
+                context.manager.emitDownloadProgress(context.app_name, progress);
+            },
+            .Error => if (event.download_error) |download_error| {
+                context.manager.emitStatusFmt(.err, "AppImage download failed: {s}", .{@errorName(download_error)});
+            },
+            .Skipped => context.manager.emitStatus(.information, "AppImage download was skipped."),
+        }
+    }
 };
 
 test "test isAppImage" {
-    const result = try UpdateManager.is_appimage("xxx.appImage");
-    const result2 = try UpdateManager.is_appimage("xxx.appimage");
-    const result3 = try UpdateManager.is_appimage("xxx.ApPiMagE");
+    const result = UpdateManager.is_appimage("xxx.appImage");
+    const result2 = UpdateManager.is_appimage("xxx.appimage");
+    const result3 = UpdateManager.is_appimage("xxx.ApPiMagE");
     try std.testing.expect(result);
     try std.testing.expect(result2);
     try std.testing.expect(result3);
+    try std.testing.expect(!UpdateManager.isAppImage("xxx.AppImage.txt"));
 }
 
 test "test version unknown or diff" {
@@ -1155,6 +1316,89 @@ fn seedDb(allocator: std.mem.Allocator, io: std.Io, db_path: []const u8, apps: [
     var writer = file.writer(io, &write_buf);
     try writer.interface.writeAll(json_bytes);
     try writer.interface.flush();
+}
+
+test "get_update returns optional owned results for configured providers" {
+    const Capture = struct {
+        last_status: ?events.StatusKind = null,
+
+        fn status(data: ?*anyopaque, args: events.StatusArgs) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.last_status = args.kind;
+        }
+    };
+
+    var dispatcher = events.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    var capture: Capture = .{};
+    _ = try dispatcher.addStatusHandler(.{ .function = Capture.status, .data = &capture });
+
+    var manager = makeUpdateManager(std.testing.allocator, "unused", "unused");
+    manager.setEventDispatcher(&dispatcher);
+
+    const disabled = appimage.AppImage{ .name = "Disabled", .update_type = .none };
+    try std.testing.expect((try manager.get_update(&disabled)) == null);
+
+    const incomplete = appimage.AppImage{ .name = "Incomplete", .update_type = .github };
+    try std.testing.expect((try manager.get_update(&incomplete)) == null);
+    try std.testing.expectEqual(events.StatusKind.warning, capture.last_status.?);
+}
+
+test "get_updates returns an owned update list" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const dir_path = path_buf[0..len];
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "apps.db" });
+    defer std.testing.allocator.free(db_path);
+
+    try seedDb(std.testing.allocator, std.testing.io, db_path, &.{
+        .{ .name = "NoUpdatesConfigured", .update_type = .none },
+    });
+
+    const manager = makeUpdateManager(std.testing.allocator, dir_path, db_path);
+    var updates = try manager.get_updates();
+    defer updates.deinit();
+    try std.testing.expectEqual(@as(usize, 0), updates.items.len);
+}
+
+test "AppImage update manager forwards downloader progress" {
+    const Capture = struct {
+        total: ?u64 = null,
+        downloaded: u64 = 0,
+        percentage: ?f64 = null,
+
+        fn progress(data: ?*anyopaque, args: events.DownloadProgressArgs) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.total = args.total_bytes;
+            self.downloaded = args.downloaded_bytes;
+            self.percentage = args.percentage;
+        }
+    };
+
+    var dispatcher = events.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    var capture: Capture = .{};
+    _ = try dispatcher.addDownloadProgressHandler(.{ .function = Capture.progress, .data = &capture });
+
+    var manager = makeUpdateManager(std.testing.allocator, "unused", "unused");
+    manager.setEventDispatcher(&dispatcher);
+    var context = UpdateManager.DownloadContext{ .manager = manager, .app_name = "Example" };
+    UpdateManager.onDownloadEvent(&context, .{
+        .event_type = .Progress,
+        .progress = .{
+            .bytes_downloaded = 25,
+            .bytes_total = 200,
+            .percent = 12,
+            .speed_bytes_per_sec = null,
+        },
+    });
+
+    try std.testing.expectEqual(@as(?u64, 200), capture.total);
+    try std.testing.expectEqual(@as(u64, 25), capture.downloaded);
+    try std.testing.expectEqual(@as(?f64, 12.5), capture.percentage);
 }
 
 test "update: returns false when app not found in db" {

@@ -2,7 +2,6 @@ const bindings = @import("bindings.zig");
 const std = @import("std");
 const remotes = @import("remote_manager.zig");
 const events = @import("events.zig");
-const flathub = @import("flathub_client.zig");
 const appstreams = @import("appstream_manager.zig");
 
 const flatpak = bindings.libflatpak;
@@ -431,31 +430,6 @@ pub const Manager = struct {
         try list.appendSlice(self.allocator, user_result);
 
         return list.toOwnedSlice(self.allocator);
-    }
-
-    /// Strict-parity typed Flathub search used by UI output mode.
-    pub fn search_flathub(
-        self: Manager,
-        query: []const u8,
-        options: flathub.SearchOptions,
-    ) !flathub.SearchResponse {
-        var client = flathub.Client.init(self.allocator, self.io);
-        client.setEventDispatcher(self.dispatcher);
-        client.setCancellation(self.cancellation);
-        return client.search(query, options);
-    }
-
-    /// Strict-parity raw Flathub response used by JSON output mode. The caller
-    /// owns the returned slice.
-    pub fn search_flathub_json(
-        self: Manager,
-        query: []const u8,
-        options: flathub.SearchOptions,
-    ) ![]u8 {
-        var client = flathub.Client.init(self.allocator, self.io);
-        client.setEventDispatcher(self.dispatcher);
-        client.setCancellation(self.cancellation);
-        return client.searchJson(query, options);
     }
 
     pub fn get_remote_appstream(
@@ -1305,8 +1279,6 @@ test "Flatpak manager exposes strict-parity operations" {
     _ = Manager.update_installed_flatpak;
     _ = Manager.uninstall_installed_flatpak;
     _ = Manager.remove_unused_dependencies;
-    _ = Manager.search_flathub;
-    _ = Manager.search_flathub_json;
     _ = Manager.get_remote_appstream;
     _ = Manager.get_all_remote_appstreams;
     _ = Manager.install_flatpak;

@@ -264,10 +264,6 @@ pub fn build(b: *std.Build) void {
             "Flatpak dispatcher forwards typed status and progress",
             "parseFile reads gzip-compressed AppStream catalogs",
             "AppStream manager returns an owned typed catalog",
-            "Flathub request payload preserves strict page limit and filters",
-            "Flathub response parser returns typed hits and exact JSON",
-            "Flathub client exposes typed and exact JSON search",
-            "Flathub search honors cancellation before network access",
             "installed Flatpak resolution matches IDs and friendly names",
             "Flatpak manager exposes strict-parity operations",
             "AppStream manager exposes one and all remote catalog retrieval",
@@ -276,6 +272,23 @@ pub fn build(b: *std.Build) void {
     const run_flatpak_tests = b.addRunArtifact(flatpak_tests);
     const flatpak_test_step = b.step("flatpak-test", "Run safe Flatpak parity tests");
     flatpak_test_step.dependOn(&run_flatpak_tests.step);
+
+    const appimage_tests = b.addTest(.{
+        .name = "appimage-test",
+        .root_module = mod,
+        .filters = &.{
+            "AppImage dispatcher forwards typed status and download progress",
+            "AppImage classification is case insensitive and extension based",
+            "test isAppImage",
+            "get_update returns optional owned results for configured providers",
+            "get_updates returns an owned update list",
+            "AppImage update manager forwards downloader progress",
+            "update: returns false when app not found in db",
+        },
+    });
+    const run_appimage_tests = b.addRunArtifact(appimage_tests);
+    const appimage_test_step = b.step("appimage-test", "Run safe AppImage parity tests");
+    appimage_test_step.dependOn(&run_appimage_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
