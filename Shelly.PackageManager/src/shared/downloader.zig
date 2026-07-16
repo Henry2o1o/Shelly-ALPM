@@ -204,11 +204,11 @@ pub const CoreDownloader = struct {
             .{ .override = agent }
         else
             .default;
-        var req = self.http_client.request(.GET, uri, .{
-            .headers = .{ .user_agent = user_agent, .accept_encoding = .{ .override = "identity" } },
-            .extra_headers = extra_headers,
-            .redirect_behavior = .init(10),
-        }) catch |err| {
+        var req = self.http_client.request(
+            .GET,
+            uri,
+            downloadRequestOptions(user_agent, extra_headers),
+        ) catch |err| {
             self.logErr("HTTP request setup failed for {s}: {}", .{ url, err });
             return mapRequestError(err);
         };
@@ -378,6 +378,22 @@ pub const CoreDownloader = struct {
     }
 };
 
+fn downloadRequestOptions(
+    user_agent: std.http.Client.Request.Headers.Value,
+    extra_headers: []const std.http.Header,
+) std.http.Client.RequestOptions {
+    return .{
+        .headers = .{ .user_agent = user_agent, .accept_encoding = .{ .override = "identity" } },
+        .extra_headers = extra_headers,
+        .redirect_behavior = .init(10),
+        // A 304 response may legally advertise the selected representation's
+        // Content-Length while carrying no body. Closing the request instead
+        // of pooling it prevents cleanup from waiting for those nonexistent
+        // bytes.
+        .keep_alive = false,
+    };
+}
+
 fn makeProgress(downloaded: u64, total: ?u64, speed: ?u64) DownloadProgress {
     const percent: u8 = if (total) |t|
         (if (t == 0) 100 else @intCast(@min(@as(u64, 100), downloaded * 100 / t)))
@@ -461,6 +477,11 @@ test "DownloadConfiguration.default() returns correct default values" {
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     try std.testing.expectEqual(true, config.verify_ssl);
     try std.testing.expectEqual(@as(u8, 10), config.parallel_downloads);
+}
+
+test "download requests disable connection reuse for bodyless conditional responses" {
+    const options = downloadRequestOptions(.default, &.{});
+    try std.testing.expect(!options.keep_alive);
 }
 
 test "makeProgress calculates progress correctly with total size" {
