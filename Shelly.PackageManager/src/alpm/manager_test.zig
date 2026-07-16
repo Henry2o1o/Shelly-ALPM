@@ -1275,6 +1275,8 @@ test "previously uncovered Manager APIs reject a null handle" {
     try testing.expectError(error.NoHandle, mgr.get_package_from_provides("virtual-feature"));
     try testing.expectError(error.NoHandle, mgr.is_dependency_satisfied_by_installed_packages("dependency"));
     try testing.expectError(error.NoHandle, mgr.find_remote_satisfier_for_dependency("dependency"));
+    try testing.expectError(error.NoHandle, mgr.find_remote_satisfier_for_dependency_details("dependency"));
+    try testing.expectError(error.NoHandle, mgr.get_configured_cache_directories());
     try testing.expectError(error.NoHandle, mgr.install_dependencies_only("package", false, .{}));
 
     var no_packages = [_][:0]const u8{};
@@ -1315,8 +1317,16 @@ test "dependency query APIs resolve exact, versioned, and virtual remote package
         "remote-provider",
         try mgr.find_remote_satisfier_for_dependency("virtual-feature>=2"),
     );
+    const direct_satisfier = try mgr.find_remote_satisfier_for_dependency_details("remote-provider>=2.0");
+    try testing.expectEqualStrings("remote-provider", direct_satisfier.real_name);
+    try testing.expect(!direct_satisfier.via_provides);
+
+    const provided_satisfier = try mgr.find_remote_satisfier_for_dependency_details("virtual-feature>=2");
+    try testing.expectEqualStrings("remote-provider", provided_satisfier.real_name);
+    try testing.expect(provided_satisfier.via_provides);
     try testing.expectError(error.PkgNotFound, mgr.get_package_from_provides("missing-feature"));
     try testing.expectError(error.PkgNotFound, mgr.find_remote_satisfier_for_dependency("missing-feature"));
+    try testing.expectError(error.PkgNotFound, mgr.find_remote_satisfier_for_dependency_details("missing-feature"));
 }
 
 test "installed dependency query distinguishes satisfied and missing dependencies" {
@@ -1933,6 +1943,22 @@ test "Manager.init applies configured libalpm options and callback contexts" {
 
     const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
     defer mgr.deinit();
+
+    var repository_names = try mgr.get_repository_names();
+    defer repository_names.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), repository_names.items.len);
+    try testing.expectEqualStrings("configured-repository", repository_names.items[0]);
+    const configured_repository = mgr.find_configured_repository("configured-repository") orelse
+        return error.TestFailed;
+    try testing.expectEqualStrings("configured-repository", configured_repository.name);
+
+    var configured_cache_directories = try mgr.get_configured_cache_directories();
+    defer configured_cache_directories.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), configured_cache_directories.items.len);
+    try testing.expectEqualStrings(
+        normalizedDirectory(cache_path),
+        normalizedDirectory(configured_cache_directories.items[0]),
+    );
 
     try testing.expect(rawDirectoryListContains(rawLibalpm.alpm_option_get_cachedirs(mgr.handle), cache_path));
     try testing.expect(rawDirectoryListContains(rawLibalpm.alpm_option_get_hookdirs(mgr.handle), hook_path));

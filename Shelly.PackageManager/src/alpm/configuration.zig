@@ -193,6 +193,31 @@ pub const Configuration = struct {
         return result;
     }
 
+    /// Returns repository names borrowed from `config` in declaration order.
+    /// The caller must deinitialize the returned list, but must not free its items.
+    pub fn get_repository_names(
+        config: *const Config,
+        allocator: Allocator,
+    ) Allocator.Error!std.ArrayList([]const u8) {
+        var result: std.ArrayList([]const u8) = .empty;
+        errdefer result.deinit(allocator);
+
+        try result.ensureTotalCapacity(allocator, config.repositories.items.len);
+        for (config.repositories.items) |repository| {
+            result.appendAssumeCapacity(repository.name);
+        }
+        return result;
+    }
+
+    /// Finds a configured repository by its exact ALPM database name.
+    /// The returned pointer and all of its strings are borrowed from `config`.
+    pub fn find_repository(config: *const Config, name: []const u8) ?*const Repository {
+        for (config.repositories.items) |*repository| {
+            if (std.mem.eql(u8, repository.name, name)) return repository;
+        }
+        return null;
+    }
+
     fn rewrite_ignore_packages(
         config: *const Config,
         io: Io,
@@ -679,6 +704,17 @@ test "parses repositories, servers, siglevel and usage" {
     const extra = conf.repositories.items[1];
     try testing.expectEqualStrings("extra", extra.name);
     try testing.expectEqual(@as(usize, 2), extra.servers.items.len);
+
+    var names = try Configuration.get_repository_names(&conf, testing.allocator);
+    defer names.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), names.items.len);
+    try testing.expectEqualStrings("core", names.items[0]);
+    try testing.expectEqualStrings("extra", names.items[1]);
+
+    const found = Configuration.find_repository(&conf, "extra") orelse return error.TestFailed;
+    try testing.expectEqualStrings("extra", found.name);
+    try testing.expectEqual(@as(usize, 2), found.servers.items.len);
+    try testing.expect(Configuration.find_repository(&conf, "missing") == null);
 }
 
 test "HoldPkg is replaced and shelly is injected" {

@@ -7,12 +7,42 @@ pub const alpm = struct {
     pub const bindings = @import("alpm/bindings.zig");
     pub const events = @import("alpm/events.zig");
     pub const configuration = @import("alpm/configuration.zig");
+    pub const cache_manager = @import("alpm/cache_manager.zig");
+    pub const archive_manager = @import("alpm/archive_manager.zig");
 
     pub const Manager = manager.Manager;
     pub const TransFlag = bindings.libalpm.TransFlag;
     pub const SigLevel = bindings.libalpm.SigLevel;
     pub const OwnedPackage = bindings.libalpm.OwnedPackage;
     pub const OwnedPackageWithUpdate = bindings.libalpm.OwnedPackageWithUpdate;
+    pub const DependencySatisfier = manager.DependencySatisfier;
+    pub const RestartReport = manager.RestartReport;
+    pub const AffectedProcess = manager.AffectedProcess;
+    pub const ServiceRestartFailure = manager.ServiceRestartFailure;
+    pub const ServiceRestartFailureKind = manager.ServiceRestartFailureKind;
+    pub const Repository = configuration.Configuration.Repository;
+    pub const compare_package_versions = manager.Manager.compare_package_versions;
+    pub const version_compare = manager.Manager.version_compare;
+    pub const ArchiveManager = archive_manager.ArchiveManager;
+    pub const ArchiveManagerOptions = archive_manager.Options;
+    pub const ArchiveError = archive_manager.Error;
+    pub const ArchiveDiscoveryError = archive_manager.DiscoveryError;
+    pub const ArchiveInstallError = archive_manager.InstallError;
+    pub const ArchiveSource = archive_manager.Source;
+    pub const ArchiveEndpoint = archive_manager.ArchiveEndpoint;
+    pub const DowngradeCandidate = archive_manager.DowngradeCandidate;
+    pub const PreparedDowngradePackage = archive_manager.PreparedPackage;
+    pub const parse_archive_listing = archive_manager.parseArchiveListing;
+    pub const CacheManager = cache_manager.CacheManager;
+    pub const CacheManagerOptions = cache_manager.Options;
+    pub const CacheCleanOptions = cache_manager.CleanOptions;
+    pub const CacheInstalledFilter = cache_manager.InstalledFilter;
+    pub const CacheEntry = cache_manager.Entry;
+    pub const CacheRemovalItem = cache_manager.RemovalItem;
+    pub const CacheRemovalPlan = cache_manager.RemovalPlan;
+    pub const CacheExecutionResult = cache_manager.ExecutionResult;
+    pub const CacheError = cache_manager.Error;
+    pub const parse_cache_package_filename = cache_manager.parsePackageFilename;
 };
 
 pub const aur = @import("aur/manager.zig");
@@ -22,11 +52,32 @@ pub const flatpak = struct {
     pub const remote_manager = @import("flatpak/remote_manager.zig");
     pub const appstream_manager = @import("flatpak/appstream_manager.zig");
     pub const appstream_parser = @import("flatpak/appstream_parser.zig");
+    pub const flathub_client = @import("flatpak/flathub_client.zig");
+    pub const events = @import("flatpak/events.zig");
     pub const bindings = @import("flatpak/bindings.zig");
 
     pub const Manager = manager.Manager;
+    pub const InstalledApplication = manager.InstalledApplication;
     pub const RemoteManager = remote_manager.RemoteManager;
     pub const AppstreamManager = appstream_manager.AppstreamManager;
+    pub const AppstreamCatalog = appstream_manager.AppstreamCatalog;
+    pub const AppstreamError = appstream_manager.Error;
+    pub const AppstreamParser = appstream_parser.AppstreamParser;
+    pub const AppstreamApp = appstream_parser.AppstreamApp;
+    pub const FlathubClient = flathub_client.Client;
+    pub const FlathubSearchOptions = flathub_client.SearchOptions;
+    pub const FlathubSearchFilter = flathub_client.SearchFilter;
+    pub const FlathubSearchResponse = flathub_client.SearchResponse;
+    pub const FlathubSearchHit = flathub_client.SearchHit;
+    pub const FlathubError = flathub_client.Error;
+    pub const parse_flathub_search_response = flathub_client.parseSearchResponse;
+    pub const FlatpakEventDispatcher = events.Dispatcher;
+    pub const FlatpakEventType = events.EventType;
+    pub const FlatpakStatusArgs = events.StatusArgs;
+    pub const FlatpakProgressArgs = events.ProgressArgs;
+    pub const FlatpakStatusHandler = events.StatusHandler;
+    pub const FlatpakProgressHandler = events.ProgressHandler;
+    pub const FlatpakCancellation = events.Cancellation;
 };
 
 pub const appimage = struct {
@@ -49,6 +100,21 @@ pub const pkgbuild = struct {
     pub const PostInstallValidator = post_install_validator.PostInstallValidator;
 };
 
+pub const local = struct {
+    pub const manager = @import("local/manager.zig");
+    pub const file_inspector = @import("local/file_inspector.zig");
+    pub const xdg_integration = @import("local/xdg_integration.zig");
+    pub const events = @import("local/events.zig");
+
+    pub const Manager = manager.Manager;
+    pub const Options = manager.Options;
+    pub const Error = manager.Error;
+    pub const Package = manager.Package;
+    pub const Inspector = file_inspector.Inspector;
+    pub const XdgIntegration = xdg_integration.Integration;
+    pub const MessageLevel = events.Level;
+};
+
 pub const shared = struct {
     pub const downloader = @import("shared/downloader.zig");
     pub const list_dictionary = @import("shared/list_dictionary.zig");
@@ -58,9 +124,12 @@ pub const shared = struct {
 };
 
 pub const AlpmManager = alpm.Manager;
+pub const CacheManager = alpm.CacheManager;
+pub const AlpmArchiveManager = alpm.ArchiveManager;
 pub const AurManager = aur.Manager;
 pub const FlatpakManager = flatpak.Manager;
 pub const AppImageManager = appimage.Manager;
+pub const LocalManager = local.Manager;
 
 /// This is a documentation comment to explain the `printAnotherMessage` function below.
 ///
@@ -84,19 +153,67 @@ test "public AUR module exposes the package manager" {
 
 test "public library surface exposes package manager APIs" {
     _ = AlpmManager;
+    _ = CacheManager;
+    _ = AlpmArchiveManager;
     _ = AurManager;
     _ = FlatpakManager;
     _ = AppImageManager;
+    _ = LocalManager;
     _ = alpm.TransFlag;
     _ = alpm.SigLevel;
+    _ = alpm.DependencySatisfier;
+    _ = alpm.RestartReport;
+    _ = alpm.AffectedProcess;
+    _ = alpm.ServiceRestartFailure;
+    _ = alpm.ServiceRestartFailureKind;
+    _ = alpm.Repository;
+    _ = alpm.compare_package_versions;
+    _ = alpm.version_compare;
+    _ = alpm.ArchiveManagerOptions;
+    _ = alpm.ArchiveError;
+    _ = alpm.ArchiveDiscoveryError;
+    _ = alpm.ArchiveInstallError;
+    _ = alpm.ArchiveSource;
+    _ = alpm.ArchiveEndpoint;
+    _ = alpm.DowngradeCandidate;
+    _ = alpm.PreparedDowngradePackage;
+    _ = alpm.parse_archive_listing;
     _ = alpm.events.Dispatcher;
     _ = alpm.configuration.Configuration;
+    _ = alpm.CacheCleanOptions;
+    _ = alpm.CacheManagerOptions;
+    _ = alpm.CacheInstalledFilter;
+    _ = alpm.CacheEntry;
+    _ = alpm.CacheRemovalItem;
+    _ = alpm.CacheRemovalPlan;
+    _ = alpm.CacheExecutionResult;
+    _ = alpm.CacheError;
+    _ = alpm.parse_cache_package_filename;
     _ = flatpak.RemoteManager;
     _ = flatpak.AppstreamManager;
+    _ = flatpak.InstalledApplication;
+    _ = flatpak.AppstreamCatalog;
+    _ = flatpak.AppstreamParser;
+    _ = flatpak.AppstreamApp;
+    _ = flatpak.FlathubClient;
+    _ = flatpak.FlathubSearchResponse;
+    _ = flatpak.FlathubError;
+    _ = flatpak.parse_flathub_search_response;
+    _ = flatpak.FlatpakEventDispatcher;
+    _ = flatpak.FlatpakStatusHandler;
+    _ = flatpak.FlatpakProgressHandler;
+    _ = flatpak.FlatpakCancellation;
     _ = appimage.UpdateManager;
     _ = pkgbuild.Parser;
     _ = pkgbuild.HomographValidator;
     _ = pkgbuild.PostInstallValidator;
+    _ = local.Package;
+    _ = local.Options;
+    _ = local.Error;
+    _ = local.Inspector;
+    _ = local.XdgIntegration;
+    _ = local.MessageLevel;
+    _ = local.events.Dispatcher;
     _ = shared.Downloader;
 }
 
@@ -106,6 +223,8 @@ test {
     _ = @import("alpm/manager_test.zig");
     _ = @import("alpm/events.zig");
     _ = @import("alpm/configuration.zig");
+    _ = @import("alpm/cache_manager.zig");
+    _ = @import("alpm/archive_manager.zig");
     _ = @import("alpm/distribution-hooks/CachyOS/update_notice.zig");
     _ = @import("alpm/distribution-hooks/os_utilities.zig");
     _ = @import("flatpak/bindings.zig");
@@ -113,6 +232,8 @@ test {
     _ = @import("flatpak/manager.zig");
     _ = @import("flatpak/appstream_manager.zig");
     _ = @import("flatpak/appstream_parser.zig");
+    _ = @import("flatpak/flathub_client.zig");
+    _ = @import("flatpak/events.zig");
     _ = @import("appimage/manager.zig");
     _ = @import("shared/downloader.zig");
     _ = @import("appimage/update_manager.zig");
@@ -120,4 +241,8 @@ test {
     _ = @import("pkgbuild/post_install_validator.zig");
     _ = @import("pkgbuild/homograph_validator.zig");
     _ = @import("aur/manager.zig");
+    _ = @import("local/manager.zig");
+    _ = @import("local/file_inspector.zig");
+    _ = @import("local/xdg_integration.zig");
+    _ = @import("local/events.zig");
 }

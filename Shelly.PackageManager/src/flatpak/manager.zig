@@ -1,27 +1,68 @@
 const bindings = @import("bindings.zig");
 const std = @import("std");
 const remotes = @import("remote_manager.zig");
+const events = @import("events.zig");
+const flathub = @import("flathub_client.zig");
+const appstreams = @import("appstream_manager.zig");
 
 const flatpak = bindings.libflatpak;
 const rawflatpak = bindings.libflatpak.flatpak;
 
+/// Fully owned installed application metadata returned by name/ID resolution.
+pub const InstalledApplication = struct {
+    id: [:0]u8,
+    name: [:0]u8,
+    arch: [:0]u8,
+    branch: [:0]u8,
+    summary: [:0]u8,
+    version: [:0]u8,
+    origin: [:0]u8,
+    kind: i32,
+    installed_size: u64,
+    scope: flatpak.Scope,
+
+    pub fn deinit(self: *InstalledApplication, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.name);
+        allocator.free(self.arch);
+        allocator.free(self.branch);
+        allocator.free(self.summary);
+        allocator.free(self.version);
+        allocator.free(self.origin);
+        self.* = undefined;
+    }
+};
+
 pub const Manager = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
+    dispatcher: ?*events.Dispatcher = null,
+    cancellation: ?events.Cancellation = null,
+
+    pub fn setEventDispatcher(self: *Manager, dispatcher: ?*events.Dispatcher) void {
+        self.dispatcher = dispatcher;
+    }
+
+    pub fn setCancellation(self: *Manager, cancellation: ?events.Cancellation) void {
+        self.cancellation = cancellation;
+    }
 
     pub fn install_flatpak(self: Manager, flatpak_id: [:0]const u8, remote_name: [:0]const u8, scope: flatpak.Scope, branch: [:0]const u8, runtime: bool) !bool {
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
-        var installation: ?*rawflatpak.FlatpakInstallation = null;
-
-        if (scope == flatpak.Scope.SYSTEM) {
-            installation = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
-        } else {
-            installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        const installation = if (scope == flatpak.Scope.SYSTEM)
+            rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
+        else
+            rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the Flatpak installation");
+            return error.InstallationCreateFailed;
         }
+        defer rawflatpak.g_object_unref(installation);
 
         const arch = std.mem.span(rawflatpak.flatpak_get_default_arch());
         const ref_str = try std.fmt.allocPrint(
@@ -35,24 +76,27 @@ pub const Manager = struct {
         defer self.allocator.free(ref_string);
 
         const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
+        if (trans_ptr == null or g_error != null) {
+            self.emitGError(g_error, "Failed to create the Flatpak transaction");
+            return error.TransactionCreateFailed;
+        }
+        defer rawflatpak.g_object_unref(trans_ptr);
 
-        _ = rawflatpak.flatpak_installation_update_remote_sync(installation, remote_name, cancellable, &g_error);
-
-        _ = rawflatpak.flatpak_transaction_add_install(trans_ptr, remote_name, ref_string, null, &g_error);
-
-        //hook up callback
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "new-operation", @ptrCast(&onNewOperation), null, null, 0);
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "ready", @ptrCast(&onReady), null, null, 0);
-
-        const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
-
-        if (g_error) |err| {
-            const msg = std.mem.span(err.message);
-            std.log.err("flatpak error: {s}", .{msg});
-            return error.FlatpakError;
+        if (rawflatpak.flatpak_installation_update_remote_sync(installation, remote_name, cancellable, &g_error) == 0) {
+            self.emitGError(g_error, "Failed to update the Flatpak remote");
+            return error.RemoteUpdateFailed;
         }
 
-        return result != 0;
+        if (rawflatpak.flatpak_transaction_add_install(trans_ptr, remote_name, ref_string, null, &g_error) == 0) {
+            self.emitGError(g_error, "Failed to add the Flatpak installation operation");
+            return error.AddInstallFailed;
+        }
+
+        var callback_context = self.transactionCallbackContext(cancellable);
+        connectTransactionCallbacks(trans_ptr, &callback_context);
+
+        const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
+        return self.finishTransaction(result, g_error, "Flatpak installation completed");
     }
 
     pub fn list_installed_flatpak(self: Manager) ![]flatpak.Flatpak {
@@ -84,72 +128,133 @@ pub const Manager = struct {
         return list.toOwnedSlice(self.allocator);
     }
 
+    /// Resolve a system or user installation by exact/partial ID or friendly
+    /// application name, following the original manager's system-first order.
+    pub fn find_installed_flatpak(self: Manager, name_or_id: []const u8) !?InstalledApplication {
+        try self.checkCancelled();
+        if (try self.findInSystemInstallations(name_or_id)) |application| return application;
+        return self.findInUserInstallation(name_or_id);
+    }
+
+    /// Update an installed application without requiring callers to know its
+    /// canonical ID or installation scope.
+    pub fn update_installed_flatpak(
+        self: Manager,
+        name_or_id: []const u8,
+        commit: ?[]const u8,
+    ) !bool {
+        var application = (try self.find_installed_flatpak(name_or_id)) orelse return error.FlatpakNotFound;
+        defer application.deinit(self.allocator);
+        const commit_z: ?[:0]u8 = if (commit) |value| try self.allocator.dupeSentinel(u8, value, 0) else null;
+        defer if (commit_z) |value| self.allocator.free(value);
+        return self.update_flatpak(application.id, application.scope, commit_z);
+    }
+
+    /// Uninstall an installed application without requiring callers to know
+    /// its canonical ID or installation scope.
+    pub fn uninstall_installed_flatpak(
+        self: Manager,
+        name_or_id: []const u8,
+        remove_unused: bool,
+    ) !bool {
+        var application = (try self.find_installed_flatpak(name_or_id)) orelse return error.FlatpakNotFound;
+        defer application.deinit(self.allocator);
+        return self.uninstall_flatpak(application.id, application.scope, remove_unused);
+    }
+
     pub fn upgrade_flatpaks(self: Manager) !bool {
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
         const installation_system = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
+        if (installation_system == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the system Flatpak installation");
+            return error.InstallationCreateFailed;
+        }
+        defer rawflatpak.g_object_unref(installation_system);
         const sys_result = try upgrade_installation(self, installation_system);
 
         const installation_user = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation_user == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the user Flatpak installation");
+            return error.InstallationCreateFailed;
+        }
+        defer rawflatpak.g_object_unref(installation_user);
         const user_result = try upgrade_installation(self, installation_user);
 
         return sys_result and user_result;
     }
 
     pub fn uninstall_flatpak(self: Manager, flatpak_id: [:0]const u8, scope: flatpak.Scope, remove_unused: bool) !bool {
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
-        var installation: ?*rawflatpak.FlatpakInstallation = null;
-
-        if (scope == flatpak.Scope.SYSTEM) {
-            installation = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
-        } else {
-            installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        const installation = if (scope == flatpak.Scope.SYSTEM)
+            rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
+        else
+            rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the Flatpak installation");
+            return error.InstallationCreateFailed;
         }
-
-        const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
+        defer rawflatpak.g_object_unref(installation);
 
         const flatpak_struct = try get_ref_id_and_installation(self, flatpak_id, installation);
+        defer rawflatpak.g_object_unref(flatpak_struct.ptr);
 
         const ref_string = try flatpak.refToString(self.allocator, flatpak_struct.ptr);
         defer self.allocator.free(ref_string);
 
-        _ = rawflatpak.flatpak_transaction_add_uninstall(trans_ptr, ref_string, &g_error);
+        const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
+        if (trans_ptr == null or g_error != null) {
+            self.emitGError(g_error, "Failed to create the Flatpak transaction");
+            return error.TransactionCreateFailed;
+        }
+        defer rawflatpak.g_object_unref(trans_ptr);
 
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "new-operation", @ptrCast(&onNewOperation), null, null, 0);
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "ready", @ptrCast(&onReady), null, null, 0);
+        if (rawflatpak.flatpak_transaction_add_uninstall(trans_ptr, ref_string, &g_error) == 0) {
+            self.emitGError(g_error, "Failed to add the Flatpak removal operation");
+            return error.AddUninstallFailed;
+        }
+
+        var callback_context = self.transactionCallbackContext(cancellable);
+        connectTransactionCallbacks(trans_ptr, &callback_context);
 
         const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
+        const succeeded = try self.finishTransaction(result, g_error, "Flatpak removal completed");
 
-        if (remove_unused) {
+        if (succeeded and remove_unused) {
             _ = try removed_unused(self, installation);
         }
 
-        return result != 0;
+        return succeeded;
     }
 
     pub fn update_flatpak(self: Manager, flatpak_id: [:0]const u8, scope: flatpak.Scope, commit: ?[:0]const u8) !bool {
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
-        var installation: ?*rawflatpak.FlatpakInstallation = null;
-
-        if (scope == flatpak.Scope.SYSTEM) {
-            installation = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
-        } else {
-            installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        const installation = if (scope == flatpak.Scope.SYSTEM)
+            rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
+        else
+            rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the Flatpak installation");
+            return error.InstallationCreateFailed;
         }
+        defer rawflatpak.g_object_unref(installation);
 
-        const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
         const flatpak_struct = try get_ref_id_and_installation(self, flatpak_id, installation);
+        defer rawflatpak.g_object_unref(flatpak_struct.ptr);
         const ref_string = try flatpak.refToString(self.allocator, flatpak_struct.ptr);
         defer self.allocator.free(ref_string);
 
@@ -161,43 +266,62 @@ pub const Manager = struct {
 
         const commit_ptr: [*c]const u8 = if (commit_c_safe) |c| c.ptr else null;
 
-        _ = rawflatpak.flatpak_transaction_add_update(trans_ptr, ref_string, null, commit_ptr, &g_error);
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "new-operation", @ptrCast(&onNewOperation), null, null, 0);
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "ready", @ptrCast(&onReady), null, null, 0);
+        const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
+        if (trans_ptr == null or g_error != null) {
+            self.emitGError(g_error, "Failed to create the Flatpak transaction");
+            return error.TransactionCreateFailed;
+        }
+        defer rawflatpak.g_object_unref(trans_ptr);
+
+        if (rawflatpak.flatpak_transaction_add_update(trans_ptr, ref_string, null, commit_ptr, &g_error) == 0) {
+            self.emitGError(g_error, "Failed to add the Flatpak update operation");
+            return error.AddUpdateFailed;
+        }
+        var callback_context = self.transactionCallbackContext(cancellable);
+        connectTransactionCallbacks(trans_ptr, &callback_context);
 
         const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
-
-        return result != 0;
+        return self.finishTransaction(result, g_error, "Flatpak update completed");
     }
 
     pub fn launch_flatpak(self: Manager, flatpak_id: [:0]const u8) !bool {
+        var application = (try self.find_installed_flatpak(flatpak_id)) orelse return false;
+        defer application.deinit(self.allocator);
+
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
-        const installation_system = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
-        const sys_flatpak: ?flatpak.Flatpak = get_ref_id_and_installation(self, flatpak_id, installation_system) catch null;
-        if (sys_flatpak) |sf| {
-            const result = rawflatpak.flatpak_installation_launch(installation_system, cStr(sf.id()), cStr(sf.arch()), cStr(sf.branch()), null, cancellable, &g_error);
-            if (result != 0) {
-                return true;
-            }
+        const installation = if (application.scope == .SYSTEM)
+            rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
+        else
+            rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the Flatpak installation");
+            return false;
         }
+        defer rawflatpak.g_object_unref(installation);
 
-        const installation_user = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
-        const user_flatpak: ?flatpak.Flatpak = get_ref_id_and_installation(self, flatpak_id, installation_user) catch null;
-        if (user_flatpak) |uf| {
-            const result = rawflatpak.flatpak_installation_launch(installation_user, cStr(uf.id()), cStr(uf.arch()), cStr(uf.branch()), null, cancellable, &g_error);
-            if (result != 0) {
-                return true;
-            }
+        const result = rawflatpak.flatpak_installation_launch(
+            installation,
+            application.id,
+            application.arch,
+            application.branch,
+            null,
+            cancellable,
+            &g_error,
+        );
+        if (result != 0) {
+            self.emitStatus(.success, "Flatpak application launched");
+        } else {
+            self.emitGError(g_error, "Failed to launch the Flatpak application");
         }
-
-        return false;
+        return result != 0;
     }
 
     pub fn install_from_ref_flatpak(self: Manager, flatpak_location: [:0]const u8, scope: flatpak.Scope) !bool {
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -210,9 +334,10 @@ pub const Manager = struct {
             installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
         }
         if (installation == null) {
-            if (g_error) |e| std.debug.print("failed to create installation: {s}\n", .{e.*.message});
+            self.emitGError(g_error, "Failed to open the Flatpak installation");
             return error.InstallationCreateFailed;
         }
+        defer rawflatpak.g_object_unref(installation);
 
         const ref_data = try self.readRefBytes(flatpak_location);
         defer self.allocator.free(ref_data);
@@ -222,29 +347,26 @@ pub const Manager = struct {
 
         const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
         if (trans_ptr == null) {
-            if (g_error) |e| std.debug.print("failed to create transaction: {s}\n", .{e.*.message});
+            self.emitGError(g_error, "Failed to create the Flatpak transaction");
             return error.TransactionCreateFailed;
         }
+        defer rawflatpak.g_object_unref(trans_ptr);
 
         const added = rawflatpak.flatpak_transaction_add_install_flatpakref(trans_ptr, g_bytes_ptr, &g_error);
         if (added == 0) {
-            if (g_error) |e| std.debug.print("failed to add flatpakref to transaction: {s}\n", .{e.*.message});
+            self.emitGError(g_error, "Failed to add the Flatpak ref installation operation");
             return error.AddInstallFailed;
         }
 
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "new-operation", @ptrCast(&onNewOperation), null, null, 0);
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "ready", @ptrCast(&onReady), null, null, 0);
+        var callback_context = self.transactionCallbackContext(cancellable);
+        connectTransactionCallbacks(trans_ptr, &callback_context);
 
         const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
-        if (result == 0) {
-            if (g_error) |e| std.debug.print("transaction run failed: {s}\n", .{e.*.message});
-            return false;
-        }
-
-        return true;
+        return self.finishTransaction(result, g_error, "Flatpak ref installation completed");
     }
 
-    pub fn install_from_bundle_flatpak(_: Manager, flatpak_location: [:0]const u8, scope: flatpak.Scope) !bool {
+    pub fn install_from_bundle_flatpak(self: Manager, flatpak_location: [:0]const u8, scope: flatpak.Scope) !bool {
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -257,34 +379,36 @@ pub const Manager = struct {
             installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
         }
         if (installation == null) {
-            if (g_error) |e| std.debug.print("failed to create installation: {s}\n", .{e.*.message});
+            self.emitGError(g_error, "Failed to open the Flatpak installation");
             return error.InstallationCreateFailed;
         }
+        defer rawflatpak.g_object_unref(installation);
 
         const file_ptr = rawflatpak.g_file_new_for_path(flatpak_location);
+        if (file_ptr == null) {
+            self.emitStatus(.err, "Failed to open the Flatpak bundle");
+            return error.BundleOpenFailed;
+        }
+        defer rawflatpak.g_object_unref(file_ptr);
 
         const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
         if (trans_ptr == null) {
-            if (g_error) |e| std.debug.print("failed to create transaction: {s}\n", .{e.*.message});
+            self.emitGError(g_error, "Failed to create the Flatpak transaction");
             return error.TransactionCreateFailed;
         }
+        defer rawflatpak.g_object_unref(trans_ptr);
 
         const added = rawflatpak.flatpak_transaction_add_install_bundle(trans_ptr, file_ptr, null, &g_error);
         if (added == 0) {
-            if (g_error) |e| std.debug.print("failed to add flatpakref to transaction: {s}\n", .{e.*.message});
+            self.emitGError(g_error, "Failed to add the Flatpak bundle installation operation");
             return error.AddInstallFailed;
         }
 
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "new-operation", @ptrCast(&onNewOperation), null, null, 0);
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "ready", @ptrCast(&onReady), null, null, 0);
+        var callback_context = self.transactionCallbackContext(cancellable);
+        connectTransactionCallbacks(trans_ptr, &callback_context);
 
         const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
-        if (result == 0) {
-            if (g_error) |e| std.debug.print("transaction run failed: {s}\n", .{e.*.message});
-            return false;
-        }
-
-        return true;
+        return self.finishTransaction(result, g_error, "Flatpak bundle installation completed");
     }
 
     pub fn search_remote_refs_flatpak(self: Manager, query: [:0]const u8) ![]flatpak.Flatpak {
@@ -309,6 +433,48 @@ pub const Manager = struct {
         return list.toOwnedSlice(self.allocator);
     }
 
+    /// Strict-parity typed Flathub search used by UI output mode.
+    pub fn search_flathub(
+        self: Manager,
+        query: []const u8,
+        options: flathub.SearchOptions,
+    ) !flathub.SearchResponse {
+        var client = flathub.Client.init(self.allocator, self.io);
+        client.setEventDispatcher(self.dispatcher);
+        client.setCancellation(self.cancellation);
+        return client.search(query, options);
+    }
+
+    /// Strict-parity raw Flathub response used by JSON output mode. The caller
+    /// owns the returned slice.
+    pub fn search_flathub_json(
+        self: Manager,
+        query: []const u8,
+        options: flathub.SearchOptions,
+    ) ![]u8 {
+        var client = flathub.Client.init(self.allocator, self.io);
+        client.setEventDispatcher(self.dispatcher);
+        client.setCancellation(self.cancellation);
+        return client.searchJson(query, options);
+    }
+
+    pub fn get_remote_appstream(
+        self: Manager,
+        remote_name: []const u8,
+        arch: ?[]const u8,
+    ) !appstreams.AppstreamCatalog {
+        const appstream_manager = appstreams.AppstreamManager.init(self.allocator, self.io);
+        return appstream_manager.getRemoteCatalog(remote_name, arch);
+    }
+
+    pub fn get_all_remote_appstreams(
+        self: Manager,
+        arch: ?[]const u8,
+    ) ![]appstreams.AppstreamCatalog {
+        const appstream_manager = appstreams.AppstreamManager.init(self.allocator, self.io);
+        return appstream_manager.getAllRemoteCatalogs(arch);
+    }
+
     pub fn get_flatpaks_from_remote(self: Manager, remote_name: [:0]const u8) ![]flatpak.Flatpak {
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
@@ -328,7 +494,7 @@ pub const Manager = struct {
                 if (std.mem.eql(u8, name, remote_name) and !remote.disabled() and remote.get_scope() == flatpak.Scope.SYSTEM) {
                     //collect sys
                     const installation_system = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
-                    const sys_result = try get_all_flatpaks_by_remote(self, remote_name, flatpak.Scope.USER, installation_system);
+                    const sys_result = try get_all_flatpaks_by_remote(self, remote_name, flatpak.Scope.SYSTEM, installation_system);
                     defer self.allocator.free(sys_result);
                     try list.appendSlice(self.allocator, sys_result);
                 }
@@ -414,7 +580,8 @@ pub const Manager = struct {
         return list.toOwnedSlice(self.allocator);
     }
 
-    pub fn kill_flatpak(_: Manager, flatpak_id: [:0]const u8) !bool {
+    pub fn kill_flatpak(self: Manager, flatpak_id: [:0]const u8) !bool {
+        try self.checkCancelled();
         const instances_ptr = rawflatpak.flatpak_instance_get_all();
         var pid: ?i32 = null;
         var j: usize = 0;
@@ -431,19 +598,23 @@ pub const Manager = struct {
 
         const found_pid = pid orelse {
             std.log.err("Failed to find PID for running instance of {s}.", .{flatpak_id});
+            self.emitStatus(.err, "Failed to find a running Flatpak instance");
             return error.InvalidPid;
         };
 
         if (found_pid <= 0) {
             std.log.err("Invalid PID for running instance of {s}.", .{flatpak_id});
+            self.emitStatus(.err, "Flatpak instance has an invalid PID");
             return error.InvalidPid;
         }
 
         std.posix.kill(found_pid, std.posix.SIG.KILL) catch |err| {
             std.log.err("Failed to kill instance of {s} with PID {d}: {s}", .{ flatpak_id, found_pid, @errorName(err) });
+            self.emitStatus(.err, "Failed to kill Flatpak instance");
             return err;
         };
 
+        self.emitStatus(.success, "Flatpak instance killed");
         return true;
     }
 
@@ -707,6 +878,104 @@ pub const Manager = struct {
         return ref_data;
     }
 
+    fn findInSystemInstallations(self: Manager, name_or_id: []const u8) !?InstalledApplication {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+
+        const installations = rawflatpak.flatpak_get_system_installations(cancellable, &g_error);
+        if (installations == null or g_error != null) return null;
+        defer rawflatpak.g_ptr_array_unref(installations);
+
+        var index: usize = 0;
+        while (index < installations.*.len) : (index += 1) {
+            try self.checkCancelled();
+            const installation: *rawflatpak.FlatpakInstallation = @ptrCast(@alignCast(installations.*.pdata[index]));
+            if (try self.findInInstallation(installation, name_or_id, .SYSTEM)) |application| return application;
+        }
+        return null;
+    }
+
+    fn findInUserInstallation(self: Manager, name_or_id: []const u8) !?InstalledApplication {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+
+        const installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation == null or g_error != null) return null;
+        defer rawflatpak.g_object_unref(installation);
+        return self.findInInstallation(installation, name_or_id, .USER);
+    }
+
+    fn findInInstallation(
+        self: Manager,
+        installation: *rawflatpak.FlatpakInstallation,
+        name_or_id: []const u8,
+        scope: flatpak.Scope,
+    ) !?InstalledApplication {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+
+        const refs = rawflatpak.flatpak_installation_list_installed_refs(installation, cancellable, &g_error);
+        if (refs == null or g_error != null) return null;
+        defer rawflatpak.g_ptr_array_unref(refs);
+
+        var index: usize = 0;
+        while (index < refs.*.len) : (index += 1) {
+            try self.checkCancelled();
+            const installed: *rawflatpak.FlatpakInstalledRef = @ptrCast(@alignCast(refs.*.pdata[index]));
+            const ref: *rawflatpak.FlatpakRef = @ptrCast(installed);
+            const id = spanOrEmpty(rawflatpak.flatpak_ref_get_name(ref));
+            const appdata_name = spanOrEmpty(rawflatpak.flatpak_installed_ref_get_appdata_name(installed));
+            const display_name = if (appdata_name.len == 0) id else appdata_name;
+            if (!matchesInstalled(id, display_name, name_or_id)) continue;
+            return @as(?InstalledApplication, try self.copyInstalledApplication(installed, scope));
+        }
+        return null;
+    }
+
+    fn copyInstalledApplication(
+        self: Manager,
+        installed: *rawflatpak.FlatpakInstalledRef,
+        scope: flatpak.Scope,
+    ) !InstalledApplication {
+        const ref: *rawflatpak.FlatpakRef = @ptrCast(installed);
+        const id = spanOrEmpty(rawflatpak.flatpak_ref_get_name(ref));
+        const appdata_name = spanOrEmpty(rawflatpak.flatpak_installed_ref_get_appdata_name(installed));
+        const branch = spanOrEmpty(rawflatpak.flatpak_ref_get_branch(ref));
+        const appdata_version = spanOrEmpty(rawflatpak.flatpak_installed_ref_get_appdata_version(installed));
+
+        var result: InstalledApplication = .{
+            .id = try self.allocator.dupeSentinel(u8, id, 0),
+            .name = undefined,
+            .arch = undefined,
+            .branch = undefined,
+            .summary = undefined,
+            .version = undefined,
+            .origin = undefined,
+            .kind = @intCast(rawflatpak.flatpak_ref_get_kind(ref)),
+            .installed_size = rawflatpak.flatpak_installed_ref_get_installed_size(installed),
+            .scope = scope,
+        };
+        errdefer self.allocator.free(result.id);
+        result.name = try self.allocator.dupeSentinel(u8, if (appdata_name.len == 0) id else appdata_name, 0);
+        errdefer self.allocator.free(result.name);
+        result.arch = try self.allocator.dupeSentinel(u8, spanOrEmpty(rawflatpak.flatpak_ref_get_arch(ref)), 0);
+        errdefer self.allocator.free(result.arch);
+        result.branch = try self.allocator.dupeSentinel(u8, branch, 0);
+        errdefer self.allocator.free(result.branch);
+        result.summary = try self.allocator.dupeSentinel(u8, spanOrEmpty(rawflatpak.flatpak_installed_ref_get_appdata_summary(installed)), 0);
+        errdefer self.allocator.free(result.summary);
+        result.version = try self.allocator.dupeSentinel(u8, if (appdata_version.len == 0) branch else appdata_version, 0);
+        errdefer self.allocator.free(result.version);
+        result.origin = try self.allocator.dupeSentinel(u8, spanOrEmpty(rawflatpak.flatpak_installed_ref_get_origin(installed)), 0);
+        return result;
+    }
+
     fn get_ref_id_and_installation(_: Manager, flatpak_id: [:0]const u8, installation: [*c]rawflatpak.FlatpakInstallation) !flatpak.Flatpak {
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
@@ -714,12 +983,15 @@ pub const Manager = struct {
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
         const ref_ptrs = rawflatpak.flatpak_installation_list_installed_refs(installation, cancellable, &g_error);
+        if (ref_ptrs == null or g_error != null) return error.FlatpakError;
+        defer rawflatpak.g_ptr_array_unref(ref_ptrs);
         var j: usize = 0;
         while (j < ref_ptrs.*.len) : (j += 1) {
             const raw: *rawflatpak.FlatpakRef = @ptrCast(@alignCast(ref_ptrs.*.pdata[j]));
             const flatpak_struct = flatpak.Flatpak.new(raw, flatpak.Scope.SYSTEM);
             const id = flatpak_struct.id() orelse return error.FlatpakError;
             if (std.mem.eql(u8, id, flatpak_id)) {
+                _ = rawflatpak.g_object_ref(raw);
                 return flatpak_struct;
             }
         }
@@ -734,7 +1006,22 @@ pub const Manager = struct {
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
         const update_refs_ptr = rawflatpak.flatpak_installation_list_installed_refs_for_update(installation, cancellable, &g_error);
+        if (update_refs_ptr == null or g_error != null) {
+            self.emitGError(g_error, "Failed to list Flatpak updates");
+            return error.ListUpdatesFailed;
+        }
+        defer rawflatpak.g_ptr_array_unref(update_refs_ptr);
+        if (update_refs_ptr.*.len == 0) {
+            self.emitStatus(.information, "No Flatpak updates available");
+            return true;
+        }
+
         const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
+        if (trans_ptr == null or g_error != null) {
+            self.emitGError(g_error, "Failed to create the Flatpak transaction");
+            return error.TransactionCreateFailed;
+        }
+        defer rawflatpak.g_object_unref(trans_ptr);
 
         var j: usize = 0;
         while (j < update_refs_ptr.*.len) : (j += 1) {
@@ -742,29 +1029,60 @@ pub const Manager = struct {
             const ref_string = try flatpak.refToString(self.allocator, raw);
             defer self.allocator.free(ref_string);
 
-            _ = rawflatpak.flatpak_transaction_add_update(trans_ptr, ref_string, null, null, &g_error);
+            if (rawflatpak.flatpak_transaction_add_update(trans_ptr, ref_string, null, null, &g_error) == 0) {
+                self.emitGError(g_error, "Failed to add a Flatpak update operation");
+                return error.AddUpdateFailed;
+            }
         }
 
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "new-operation", @ptrCast(&onNewOperation), null, null, 0);
-        _ = rawflatpak.g_signal_connect_data(trans_ptr, "ready", @ptrCast(&onReady), null, null, 0);
+        var callback_context = self.transactionCallbackContext(cancellable);
+        connectTransactionCallbacks(trans_ptr, &callback_context);
 
         const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
-        return result != 0;
+        return self.finishTransaction(result, g_error, "Flatpak upgrade completed");
     }
 
-    fn removed_unused_deps(self: Manager) !bool {
+    /// Remove unused dependencies from every system installation and the user
+    /// installation. This is the public backend for `flatpak purify`.
+    pub fn remove_unused_dependencies(self: Manager) !bool {
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
 
-        const installation_system = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
-        const sys_result = try removed_unused(self, installation_system);
+        var succeeded = true;
+        const system_installations = rawflatpak.flatpak_get_system_installations(cancellable, &g_error);
+        if (system_installations != null and g_error == null) {
+            defer rawflatpak.g_ptr_array_unref(system_installations);
+            var index: usize = 0;
+            while (index < system_installations.*.len) : (index += 1) {
+                const installation: *rawflatpak.FlatpakInstallation = @ptrCast(@alignCast(system_installations.*.pdata[index]));
+                succeeded = (try self.removed_unused(installation)) and succeeded;
+            }
+        } else {
+            self.emitGError(g_error, "Failed to open system Flatpak installations");
+            succeeded = false;
+        }
 
+        if (g_error) |value| {
+            rawflatpak.g_error_free(value);
+            g_error = null;
+        }
         const installation_user = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
-        const user_result = try removed_unused(self, installation_user);
+        if (installation_user != null and g_error == null) {
+            defer rawflatpak.g_object_unref(installation_user);
+            succeeded = (try self.removed_unused(installation_user)) and succeeded;
+        } else {
+            self.emitGError(g_error, "Failed to open the user Flatpak installation");
+            succeeded = false;
+        }
 
-        return sys_result and user_result;
+        self.emitStatus(if (succeeded) .success else .err, if (succeeded)
+            "Unused Flatpak dependency cleanup completed"
+        else
+            "Unused Flatpak dependency cleanup completed with errors");
+        return succeeded;
     }
 
     fn removed_unused(self: Manager, installation: [*c]rawflatpak.FlatpakInstallation) !bool {
@@ -775,42 +1093,151 @@ pub const Manager = struct {
 
         const arch = std.mem.span(rawflatpak.flatpak_get_default_arch());
         const unused_ref_ptrs = rawflatpak.flatpak_installation_list_unused_refs(installation, arch, cancellable, &g_error);
+        if (unused_ref_ptrs == null or g_error != null) {
+            self.emitGError(g_error, "Failed to list unused Flatpak dependencies");
+            return false;
+        }
+        defer rawflatpak.g_ptr_array_unref(unused_ref_ptrs);
+        if (unused_ref_ptrs.*.len == 0) {
+            self.emitStatus(.information, "No unused Flatpak dependencies found");
+            return true;
+        }
+
         const trans_ptr = rawflatpak.flatpak_transaction_new_for_installation(installation, cancellable, &g_error);
+        if (trans_ptr == null or g_error != null) {
+            self.emitGError(g_error, "Failed to create the Flatpak cleanup transaction");
+            return false;
+        }
+        defer rawflatpak.g_object_unref(trans_ptr);
 
         var j: usize = 0;
         while (j < unused_ref_ptrs.*.len) : (j += 1) {
+            try self.checkCancelled();
             const raw: *rawflatpak.FlatpakRef = @ptrCast(@alignCast(unused_ref_ptrs.*.pdata[j]));
             const ref_string = try flatpak.refToString(self.allocator, raw);
             defer self.allocator.free(ref_string);
-            _ = rawflatpak.flatpak_transaction_add_uninstall(trans_ptr, ref_string, &g_error);
+            if (rawflatpak.flatpak_transaction_add_uninstall(trans_ptr, ref_string, &g_error) == 0) {
+                self.emitGError(g_error, "Failed to add an unused Flatpak dependency to the removal transaction");
+                return false;
+            }
         }
 
+        var callback_context = self.transactionCallbackContext(cancellable);
+        connectTransactionCallbacks(trans_ptr, &callback_context);
         const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
-        return result != 0;
+        return self.finishTransaction(result, g_error, "Unused Flatpak dependencies removed");
+    }
+
+    const TransactionCallbackContext = struct {
+        dispatcher: ?*events.Dispatcher,
+        cancellation: ?events.Cancellation,
+        cancellable: *rawflatpak.GCancellable,
+        current_name: []const u8 = "",
+    };
+
+    fn transactionCallbackContext(self: Manager, cancellable: *rawflatpak.GCancellable) TransactionCallbackContext {
+        return .{
+            .dispatcher = self.dispatcher,
+            .cancellation = self.cancellation,
+            .cancellable = cancellable,
+        };
+    }
+
+    fn connectTransactionCallbacks(
+        transaction: *rawflatpak.FlatpakTransaction,
+        context: *TransactionCallbackContext,
+    ) void {
+        _ = rawflatpak.g_signal_connect_data(transaction, "new-operation", @ptrCast(&onNewOperation), context, null, 0);
+        _ = rawflatpak.g_signal_connect_data(transaction, "ready", @ptrCast(&onReady), context, null, 0);
     }
 
     fn onProgressChanged(
         progress: *rawflatpak.FlatpakTransactionProgress,
-        _: ?*anyopaque,
+        user_data: ?*anyopaque,
     ) callconv(.c) void {
-        const percent = rawflatpak.flatpak_transaction_progress_get_progress(progress);
-        std.log.info("progress: {d}%", .{percent});
+        const context: *TransactionCallbackContext = @ptrCast(@alignCast(user_data orelse return));
+        if (context.cancellation) |cancellation| {
+            if (cancellation.isCancelled()) {
+                rawflatpak.g_cancellable_cancel(context.cancellable);
+                return;
+            }
+        }
+
+        const raw_percent = rawflatpak.flatpak_transaction_progress_get_progress(progress);
+        const percent: u8 = @intCast(std.math.clamp(raw_percent, 0, 100));
+        const status_ptr = rawflatpak.flatpak_transaction_progress_get_status(progress);
+        const status = if (status_ptr == null) "" else std.mem.span(status_ptr);
+        if (context.dispatcher) |dispatcher| dispatcher.raiseProgress(.{
+            .name = context.current_name,
+            .status = status,
+            .percentage = percent,
+        });
     }
 
     fn onNewOperation(
         _: *rawflatpak.FlatpakTransaction,
-        _: *rawflatpak.FlatpakTransactionOperation,
+        operation: *rawflatpak.FlatpakTransactionOperation,
         progress: *rawflatpak.FlatpakTransactionProgress,
-        _: ?*anyopaque,
+        user_data: ?*anyopaque,
     ) callconv(.c) void {
-        _ = rawflatpak.g_signal_connect_data(progress, "changed", @ptrCast(&onProgressChanged), null, null, 0);
+        const context: *TransactionCallbackContext = @ptrCast(@alignCast(user_data orelse return));
+        const ref_ptr = rawflatpak.flatpak_transaction_operation_get_ref(operation);
+        context.current_name = if (ref_ptr == null) "" else std.mem.span(ref_ptr);
+        _ = rawflatpak.g_signal_connect_data(progress, "changed", @ptrCast(&onProgressChanged), context, null, 0);
+        onProgressChanged(progress, context);
     }
 
     fn onReady(
         _: *rawflatpak.FlatpakTransaction,
-        _: ?*anyopaque,
+        user_data: ?*anyopaque,
     ) callconv(.c) rawflatpak.gboolean {
+        const context: *TransactionCallbackContext = @ptrCast(@alignCast(user_data orelse return 1));
+        if (context.dispatcher) |dispatcher| dispatcher.raiseStatus(.{
+            .event_type = .information,
+            .message = "Flatpak transaction is ready",
+        });
         return 1;
+    }
+
+    fn checkCancelled(self: Manager) !void {
+        if (self.cancellation) |cancellation| {
+            if (cancellation.isCancelled()) return error.Cancelled;
+        }
+    }
+
+    fn emitStatus(self: Manager, event_type: events.EventType, message: []const u8) void {
+        if (self.dispatcher) |dispatcher| dispatcher.raiseStatus(.{
+            .event_type = event_type,
+            .message = message,
+        });
+    }
+
+    fn emitGError(self: Manager, g_error: ?*rawflatpak.GError, fallback: []const u8) void {
+        if (g_error) |value| {
+            self.emitStatus(.err, std.mem.span(value.message));
+        } else {
+            self.emitStatus(.err, fallback);
+        }
+    }
+
+    fn finishTransaction(
+        self: Manager,
+        result: rawflatpak.gboolean,
+        g_error: ?*rawflatpak.GError,
+        success_message: []const u8,
+    ) !bool {
+        try self.checkCancelled();
+        if (g_error) |value| {
+            const message = std.mem.span(value.message);
+            self.emitStatus(.err, message);
+            return error.FlatpakError;
+        }
+        if (result == 0) {
+            self.emitStatus(.err, "Flatpak transaction failed");
+            return false;
+        }
+        self.emitStatus(.success, success_message);
+        return true;
     }
 
     fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
@@ -842,6 +1269,67 @@ pub const Manager = struct {
         list: *std.ArrayList(flatpak.InstalledFlatpak),
     };
 };
+
+fn spanOrEmpty(pointer: [*c]const u8) []const u8 {
+    return if (pointer == null) "" else std.mem.span(pointer);
+}
+
+fn matchesInstalled(id: []const u8, name: []const u8, query: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(id, query) or
+        containsIgnoreCaseValue(id, query) or
+        std.ascii.eqlIgnoreCase(name, query) or
+        containsIgnoreCaseValue(name, query);
+}
+
+fn containsIgnoreCaseValue(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (needle.len > haystack.len) return false;
+    var index: usize = 0;
+    while (index <= haystack.len - needle.len) : (index += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[index .. index + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+test "installed Flatpak resolution matches IDs and friendly names" {
+    try std.testing.expect(matchesInstalled("org.mozilla.firefox", "Firefox", "org.mozilla.firefox"));
+    try std.testing.expect(matchesInstalled("org.mozilla.firefox", "Firefox", "mozilla"));
+    try std.testing.expect(matchesInstalled("org.mozilla.firefox", "Firefox", "fire"));
+    try std.testing.expect(!matchesInstalled("org.mozilla.firefox", "Firefox", "chromium"));
+}
+
+test "Flatpak manager exposes strict-parity operations" {
+    _ = Manager.setEventDispatcher;
+    _ = Manager.setCancellation;
+    _ = Manager.find_installed_flatpak;
+    _ = Manager.update_installed_flatpak;
+    _ = Manager.uninstall_installed_flatpak;
+    _ = Manager.remove_unused_dependencies;
+    _ = Manager.search_flathub;
+    _ = Manager.search_flathub_json;
+    _ = Manager.get_remote_appstream;
+    _ = Manager.get_all_remote_appstreams;
+    _ = Manager.install_flatpak;
+    _ = Manager.upgrade_flatpaks;
+    _ = Manager.install_from_ref_flatpak;
+    _ = Manager.install_from_bundle_flatpak;
+
+    // Taking a function pointer does not analyze the function body in Zig.
+    // Keep these calls behind a runtime-false guard so this test compiles the
+    // public workflows without accessing or mutating live Flatpak state.
+    var analyze_bodies = false;
+    std.mem.doNotOptimizeAway(&analyze_bodies);
+    if (analyze_bodies) {
+        const manager = Manager{ .allocator = std.testing.allocator, .io = std.testing.io };
+
+        if (try manager.find_installed_flatpak("org.example.Application")) |application| {
+            var owned = application;
+            owned.deinit(std.testing.allocator);
+        }
+        _ = try manager.update_installed_flatpak("org.example.Application", null);
+        _ = try manager.uninstall_installed_flatpak("org.example.Application", false);
+    }
+}
 
 //disabled until uninstall is added.
 test "test installFlatpak" {

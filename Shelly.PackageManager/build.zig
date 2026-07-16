@@ -72,6 +72,7 @@ pub fn build(b: *std.Build) void {
     mod.linkSystemLibrary("alpm", .{});
     mod.addImport("flatpak", flatpak_mod);
     mod.linkSystemLibrary("flatpak", .{});
+    mod.linkSystemLibrary("archive", .{});
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -183,6 +184,98 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // Local package tests are isolated from the package manager's live-system
+    // integration tests and use only temporary configured roots.
+    const local_test_module = b.createModule(.{
+        .root_source_file = b.path("src/local/manager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    local_test_module.linkSystemLibrary("archive", .{});
+    const local_tests = b.addTest(.{ .root_module = local_test_module });
+    const run_local_tests = b.addRunArtifact(local_tests);
+    const local_test_step = b.step("local-test", "Run safe local package tests");
+    local_test_step.dependOn(&run_local_tests.step);
+
+    const cache_test_module = b.createModule(.{
+        .root_source_file = b.path("src/alpm/cache_manager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    cache_test_module.addImport("alpm_c", alpm_c);
+    cache_test_module.linkSystemLibrary("alpm", .{});
+    const cache_tests = b.addTest(.{ .name = "cache-test", .root_module = cache_test_module });
+    const run_cache_tests = b.addRunArtifact(cache_tests);
+    const cache_test_step = b.step("cache-test", "Run safe package-cache tests");
+    cache_test_step.dependOn(&run_cache_tests.step);
+
+    const archive_tests = b.addTest(.{
+        .name = "archive-test",
+        .root_module = mod,
+        .filters = &.{
+            "archive endpoints include Arch and selected CachyOS variants",
+            "archive listing parses package filenames",
+            "local cache lookup returns owned matching candidates",
+            "target resolution accepts exact version-release or filename",
+            "prepare_candidate retains local cache files",
+            "archive installation API delegates through the ALPM manager",
+        },
+    });
+    const run_archive_tests = b.addRunArtifact(archive_tests);
+    const archive_test_step = b.step("archive-test", "Run safe ALPM downgrade archive tests");
+    archive_test_step.dependOn(&run_archive_tests.step);
+
+    const alpm_query_tests = b.addTest(.{
+        .name = "alpm-query-test",
+        .root_module = mod,
+        .filters = &.{
+            "public ALPM query helpers expose typed results",
+            "compare_package_versions uses libalpm ordering",
+            "dependencyName strips constraints",
+            "is_cachyos exposes the detected manager state",
+            "parses repositories, servers, siglevel and usage",
+            "dependency query APIs resolve exact, versioned, and virtual remote packages",
+            "Manager.init applies configured libalpm options and callback contexts",
+        },
+    });
+    const run_alpm_query_tests = b.addRunArtifact(alpm_query_tests);
+    const alpm_query_test_step = b.step("alpm-query-test", "Run safe ALPM configuration and query API tests");
+    alpm_query_test_step.dependOn(&run_alpm_query_tests.step);
+
+    const restart_tests = b.addTest(.{
+        .name = "restart-test",
+        .root_module = mod,
+        .filters = &.{
+            "restart parsing identifies deleted shared libraries and system services",
+            "restart report detects kernels and records structured service results",
+        },
+    });
+    const run_restart_tests = b.addRunArtifact(restart_tests);
+    const restart_test_step = b.step("restart-test", "Run safe post-upgrade restart detection tests");
+    restart_test_step.dependOn(&run_restart_tests.step);
+
+    const flatpak_tests = b.addTest(.{
+        .name = "flatpak-test",
+        .root_module = mod,
+        .filters = &.{
+            "Flatpak dispatcher forwards typed status and progress",
+            "parseFile reads gzip-compressed AppStream catalogs",
+            "AppStream manager returns an owned typed catalog",
+            "Flathub request payload preserves strict page limit and filters",
+            "Flathub response parser returns typed hits and exact JSON",
+            "Flathub client exposes typed and exact JSON search",
+            "Flathub search honors cancellation before network access",
+            "installed Flatpak resolution matches IDs and friendly names",
+            "Flatpak manager exposes strict-parity operations",
+            "AppStream manager exposes one and all remote catalog retrieval",
+        },
+    });
+    const run_flatpak_tests = b.addRunArtifact(flatpak_tests);
+    const flatpak_test_step = b.step("flatpak-test", "Run safe Flatpak parity tests");
+    flatpak_test_step.dependOn(&run_flatpak_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
