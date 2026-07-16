@@ -7,6 +7,7 @@ const pkgbuild_parser = @import("../pkgbuild/pkgbuild_parser.zig");
 const homograph_validator = @import("../pkgbuild/homograph_validator.zig");
 const post_install_validator = @import("../pkgbuild/post_install_validator.zig");
 const validation = @import("../pkgbuild/shared_validtor.zig");
+const operation_api = @import("operation_context");
 
 pub const models = @import("models.zig");
 pub const rpc = @import("rpc_client.zig");
@@ -162,6 +163,7 @@ pub const Manager = struct {
     no_check: bool,
     skip_optional_dependency_prompt: bool = false,
     pkgbuild_approval_handler: ?PkgbuildApprovalHandler = null,
+    operation_context: ?*operation_api.OperationContext = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -239,6 +241,13 @@ pub const Manager = struct {
 
     pub fn io(self: *Self) std.Io {
         return self.alpm.io();
+    }
+
+    /// Borrows a shared context and forwards it to nested ALPM and HTTP work.
+    pub fn setOperationContext(self: *Self, context: ?*operation_api.OperationContext) void {
+        self.operation_context = context;
+        self.alpm.setOperationContext(context);
+        self.aur_client.setOperationContext(context);
     }
 
     pub fn alpmDispatcher(self: *Self) *alpm_events.Dispatcher {
@@ -326,6 +335,11 @@ pub const Manager = struct {
     }
 
     pub fn getInstalledPackages(self: *Self) ![]models.Package {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const foreign = try self.alpm.get_foreign_packages();
         defer alpm_bindings.libalpm.OwnedPackage.deinitSlice(self.allocator, foreign);
         var names: std.ArrayList([]const u8) = .empty;
@@ -351,6 +365,11 @@ pub const Manager = struct {
     }
 
     pub fn searchPackages(self: *Self, query: []const u8) ![]models.Package {
+        var operation_scope = OperationScope.init(self, .search, query);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         var search_response = try self.aur_client.search(query);
         defer search_response.deinit(self.allocator);
         std.mem.sort(models.Package, search_response.results, {}, struct {
@@ -370,6 +389,11 @@ pub const Manager = struct {
     }
 
     pub fn getPackagesNeedingUpdate(self: *Self, check_devel: bool) ![]models.Update {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const foreign = try self.alpm.get_foreign_packages();
         defer alpm_bindings.libalpm.OwnedPackage.deinitSlice(self.allocator, foreign);
         var names: std.ArrayList([]const u8) = .empty;
@@ -473,6 +497,11 @@ pub const Manager = struct {
     }
 
     pub fn updatePackages(self: *Self, package_names: []const []const u8) !void {
+        var operation_scope = OperationScope.init(self, .update, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const message = try std.mem.join(self.allocator, ", ", package_names);
         defer self.allocator.free(message);
         const text = try std.fmt.allocPrint(self.allocator, "Updating {d} packages: {s}", .{ package_names.len, message });
@@ -482,6 +511,11 @@ pub const Manager = struct {
     }
 
     pub fn fetchPkgbuild(self: *Self, package_name: []const u8) ![]u8 {
+        var operation_scope = OperationScope.init(self, .download, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const package_base = try self.resolvePkgbase(package_name);
         const message = try std.fmt.allocPrint(self.allocator, "Fetching PKGBUILD for {s} ({s})", .{ package_name, package_base });
         defer self.allocator.free(message);
@@ -490,6 +524,11 @@ pub const Manager = struct {
     }
 
     pub fn installDependenciesOnly(self: *Self, package_name: []const u8, include_make_dependencies: bool) !void {
+        var operation_scope = OperationScope.init(self, .install, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         try self.alpm.sync(false);
         self.raisePackageProgress(.aur_download_start, package_name, 1, 1, "Downloading PKGBUILD to analyze dependencies");
         if (!try self.downloadPackage(package_name)) {
@@ -527,6 +566,11 @@ pub const Manager = struct {
     }
 
     pub fn installPackages(self: *Self, package_names: []const []const u8) !void {
+        var operation_scope = OperationScope.init(self, .install, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         try self.alpm.refresh();
         for (package_names, 0..) |package_name, index| {
             const current = index + 1;
@@ -575,7 +619,8 @@ pub const Manager = struct {
                 continue;
             }
             self.raisePackageProgress(.aur_install_start, package_name, current, package_names.len, "");
-            try self.alpm.install_local_packages(package_files, .{});
+            const install_paths: []const []const u8 = @ptrCast(package_files);
+            try self.alpm.install_local_packages(install_paths, .{});
             self.updateVcsStoreForPackage(package_name, pkgbuild_path) catch |err|
                 self.raiseBestEffortFailure(package_name, "Failed to update VCS metadata", err);
             self.installSelectedOptionalDependencies(package_name, selected_optional) catch |err|
@@ -596,6 +641,11 @@ pub const Manager = struct {
         flags: TransFlag,
         remove_optional_dependencies: bool,
     ) !void {
+        var operation_scope = OperationScope.init(self, .remove, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         try self.removeRepoPackages(package_names, flags, !remove_optional_dependencies);
         for (package_names) |package_name| {
             self.vcs_store.remove(package_name);
@@ -608,6 +658,11 @@ pub const Manager = struct {
     }
 
     pub fn installPackageVersion(self: *Self, package_name: []const u8, commit: []const u8) !void {
+        var operation_scope = OperationScope.init(self, .install, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         self.raisePackageProgress(.aur_download_start, package_name, 1, 1, "");
         if (!(try self.downloadPackageAtCommit(package_name, commit))) {
             self.raisePackageProgress(.aur_package_failed, package_name, 1, 1, "Failed to download package at the requested commit");
@@ -645,7 +700,8 @@ pub const Manager = struct {
             return error.NoBuiltPackages;
         }
         self.raisePackageProgress(.aur_install_start, package_name, 1, 1, "");
-        try self.alpm.install_local_packages(package_files, .{});
+        const install_paths: []const []const u8 = @ptrCast(package_files);
+        try self.alpm.install_local_packages(install_paths, .{});
         if (build_only.len > 0) {
             self.raisePackageProgress(.aur_cleanup_start, package_name, 1, 1, "Removing build-only dependencies");
             const build_names: []const []const u8 = @ptrCast(build_only);
@@ -737,7 +793,8 @@ pub const Manager = struct {
         const files = try builder.selectBuiltPackageFiles(self.allocator, self.io(), cache_path, dependency.name);
         defer builder.deinitPaths(self.allocator, files);
         if (files.len == 0) return error.NoBuiltPackages;
-        try self.alpm.install_local_packages(files, .{ .alldeps = true });
+        const install_paths: []const []const u8 = @ptrCast(files);
+        try self.alpm.install_local_packages(install_paths, .{ .alldeps = true });
     }
 
     fn installRepoPackages(self: *Self, names: []const []u8, flags: TransFlag) !void {
@@ -796,7 +853,7 @@ pub const Manager = struct {
         return selected.toOwnedSlice(self.allocator);
     }
 
-    fn installSelectedOptionalDependencies(self: *Self, parent: []const u8, selected: []const []const u8) !void {
+    fn installSelectedOptionalDependencies(self: *Self, parent: []const u8, selected: []const []const u8) anyerror!void {
         var repo_names: std.ArrayList([]const u8) = .empty;
         defer repo_names.deinit(self.allocator);
         var aur_names: std.ArrayList([]const u8) = .empty;
@@ -885,13 +942,13 @@ pub const Manager = struct {
         new_pkgbuild: []const u8,
         base_directory: ?[]const u8,
     ) !bool {
-        const handler = self.pkgbuild_approval_handler orelse return true;
+        const handler = self.pkgbuild_approval_handler;
         const parser = pkgbuild_parser.PkgbuildParser{ .allocator = self.allocator, .io = self.io() };
         var info = parser.parser_content(new_pkgbuild, base_directory) catch |err| {
             self.raiseBestEffortFailure(package_name, "Failed to validate PKGBUILD", err);
             var empty_sources = std.StringHashMap([]const u8).init(self.allocator);
             defer empty_sources.deinit();
-            return handler.function(handler.data, .{
+            return self.resolvePkgbuildApproval(handler, .{
                 .package_name = package_name,
                 .old_pkgbuild = old_pkgbuild,
                 .new_pkgbuild = new_pkgbuild,
@@ -902,7 +959,7 @@ pub const Manager = struct {
         defer info.deinit(self.allocator);
         var results = validatePkgbuild(self.allocator, self.io(), new_pkgbuild, base_directory) catch |err| {
             self.raiseBestEffortFailure(package_name, "Failed to validate PKGBUILD", err);
-            return handler.function(handler.data, .{
+            return self.resolvePkgbuildApproval(handler, .{
                 .package_name = package_name,
                 .old_pkgbuild = old_pkgbuild,
                 .new_pkgbuild = new_pkgbuild,
@@ -913,13 +970,62 @@ pub const Manager = struct {
         defer results.deinit(self.allocator);
         const findings = try results.flatten(self.allocator);
         defer self.allocator.free(findings);
-        return handler.function(handler.data, .{
+        return self.resolvePkgbuildApproval(handler, .{
             .package_name = package_name,
             .old_pkgbuild = old_pkgbuild,
             .new_pkgbuild = new_pkgbuild,
             .warnings = findings,
             .source_files = &info.local_source_contents,
         });
+    }
+
+    fn resolvePkgbuildApproval(
+        self: *Self,
+        legacy_handler: ?PkgbuildApprovalHandler,
+        request: PkgbuildDiffRequest,
+    ) !bool {
+        if (self.dispatcher.operation) |operation| {
+            var attachments: std.ArrayList(operation_api.QuestionAttachment) = .empty;
+            defer attachments.deinit(self.allocator);
+            try attachments.append(self.allocator, .{ .name = "PKGBUILD.old", .content = request.old_pkgbuild });
+            try attachments.append(self.allocator, .{ .name = "PKGBUILD.new", .content = request.new_pkgbuild });
+
+            var warnings: std.ArrayList(u8) = .empty;
+            defer warnings.deinit(self.allocator);
+            for (request.warnings) |finding| {
+                try warnings.print(self.allocator, "[{s}] {s}: {s}\n{s}\n", .{
+                    @tagName(finding.severity),
+                    finding.tool,
+                    finding.message,
+                    finding.matched_line,
+                });
+            }
+            if (warnings.items.len != 0) try attachments.append(self.allocator, .{
+                .name = "validation-findings.txt",
+                .content = warnings.items,
+            });
+
+            var source_iterator = request.source_files.iterator();
+            while (source_iterator.next()) |entry| try attachments.append(self.allocator, .{
+                .name = entry.key_ptr.*,
+                .content = entry.value_ptr.*,
+            });
+
+            var answer = try operation.ask(.{
+                .kind = .review_changes,
+                .prompt = "Review and approve PKGBUILD changes",
+                .attachments = attachments.items,
+                .default_response = .default,
+            });
+            defer answer.deinit(self.allocator);
+            switch (answer.response) {
+                .accepted => return true,
+                .declined => return false,
+                else => {},
+            }
+        }
+        if (legacy_handler) |handler| return handler.function(handler.data, request);
+        return true;
     }
 
     fn fetchLocalSourceFiles(self: *Self, content: []const u8, package_base: []const u8, base_directory: []const u8) !void {
@@ -988,7 +1094,7 @@ pub const Manager = struct {
             var info = info_value;
             defer info.deinit(self.allocator);
             if (info.contains(package_name) and info.package_base != null)
-                return self.allocator.dupe(u8, info.package_base.?);
+                return @as(?[]u8, try self.allocator.dupe(u8, info.package_base.?));
         } else |_| {}
 
         var root = std.Io.Dir.cwd().openDir(self.io(), self.cache_root, .{ .iterate = true }) catch return null;
@@ -1001,7 +1107,7 @@ pub const Manager = struct {
             var info = srcinfo.parseFile(self.allocator, self.io(), path) catch continue;
             defer info.deinit(self.allocator);
             if (info.contains(package_name) and info.package_base != null)
-                return self.allocator.dupe(u8, info.package_base.?);
+                return @as(?[]u8, try self.allocator.dupe(u8, info.package_base.?));
         }
         return null;
     }
@@ -1153,7 +1259,7 @@ pub const Manager = struct {
             try builder.makepkgCommand(self.allocator, self.io(), self.environ, self.use_chroot, self.chroot_path, self.no_check);
         defer command.deinit(self.allocator);
         var stream_context = BuildStreamContext{ .manager = self, .package_name = package_name };
-        const exit_code = try builder.runStreamingWithEnvironment(
+        const exit_code = try builder.runStreamingWithEnvironmentOperation(
             self.allocator,
             self.io(),
             self.environ,
@@ -1161,6 +1267,7 @@ pub const Manager = struct {
             cache_path,
             null,
             .{ .function = forwardBuildLine, .data = &stream_context },
+            self.dispatcher.operation,
         );
         return exit_code == 0;
     }
@@ -1241,7 +1348,7 @@ pub const Manager = struct {
 
     fn getRemoteCommitSha(self: *Self, url: []const u8, branch: []const u8) !?[]u8 {
         const remote = try fetchRemoteSha(null, self.io(), self.environ, url, branch) orelse return null;
-        return self.allocator.dupe(u8, remote.slice());
+        return @as(?[]u8, try self.allocator.dupe(u8, remote.slice()));
     }
 
     fn updateVcsStoreForPackage(self: *Self, package_name: []const u8, _: []const u8) !void {
@@ -1388,6 +1495,71 @@ pub const Manager = struct {
             .current = current,
             .total = total,
         });
+    }
+
+    fn checkCancelled(self: *Self) error{Cancelled}!void {
+        if (self.dispatcher.operation) |operation| try operation.checkCancelled();
+        if (self.operation_context) |context| {
+            if (context.isCancelled()) return error.Cancelled;
+        }
+    }
+};
+
+const OperationScope = struct {
+    manager: *Manager,
+    operation: ?operation_api.Operation = null,
+    previous: ?*operation_api.Operation = null,
+    previous_alpm: ?*operation_api.Operation = null,
+    previous_rpc: ?*const operation_api.Operation = null,
+    attached: bool = false,
+
+    fn init(manager: *Manager, kind: operation_api.OperationKind, subject: ?[]const u8) OperationScope {
+        var scope: OperationScope = .{
+            .manager = manager,
+            .previous = manager.dispatcher.operation,
+            .previous_alpm = manager.alpm.dispatcher.operation,
+            .previous_rpc = manager.aur_client.parent_operation,
+        };
+        if (scope.previous) |parent| {
+            scope.operation = parent.child(.{ .backend = .aur, .kind = kind, .subject = subject });
+        } else if (manager.operation_context) |context| {
+            scope.operation = context.begin(.{ .backend = .aur, .kind = kind, .subject = subject });
+        }
+        return scope;
+    }
+
+    fn attach(self: *OperationScope) void {
+        if (self.operation) |*operation| {
+            self.manager.dispatcher.setOperation(operation);
+            self.manager.alpm.dispatcher.setOperation(operation);
+            self.manager.aur_client.setParentOperation(operation);
+        }
+        self.attached = true;
+    }
+
+    fn fail(self: *OperationScope) void {
+        if (self.operation) |*operation| operation.reportError(
+            if (operation.isCancelled()) error.Cancelled else error.AurOperationFailed,
+            if (operation.isCancelled()) "AUR operation cancelled" else "AUR operation failed",
+            "aur",
+            null,
+            false,
+        );
+        const status: operation_api.CompletionStatus = if (self.operation) |*operation|
+            if (operation.isCancelled()) .cancelled else .failed
+        else
+            .failed;
+        self.finish(status);
+    }
+
+    fn finish(self: *OperationScope, status: operation_api.CompletionStatus) void {
+        if (self.operation) |*operation| operation.finish(status);
+        if (self.attached) {
+            self.manager.dispatcher.setOperation(self.previous);
+            self.manager.alpm.dispatcher.setOperation(self.previous_alpm);
+            self.manager.aur_client.setParentOperation(self.previous_rpc);
+            self.attached = false;
+        }
     }
 };
 
@@ -1722,6 +1894,23 @@ test "helper cache identity recognizes installed split-package members" {
     try std.testing.expect(cloneIdentityMatches("demo-suite", &package_names, "demo-ui"));
     try std.testing.expect(cloneIdentityMatches("demo-suite", &package_names, "demo-suite"));
     try std.testing.expect(!cloneIdentityMatches("demo-suite", &package_names, "unrelated"));
+}
+
+test "AUR operation-hooked public APIs compile" {
+    var run = false;
+    std.mem.doNotOptimizeAway(&run);
+    if (!run) return;
+
+    const manager: *Manager = undefined;
+    _ = try manager.getInstalledPackages();
+    _ = try manager.searchPackages("demo");
+    _ = try manager.getPackagesNeedingUpdate(false);
+    try manager.updatePackages(&.{"demo"});
+    _ = try manager.fetchPkgbuild("demo");
+    try manager.installDependenciesOnly("demo", true);
+    try manager.installPackages(&.{"demo"});
+    try manager.removePackages(&.{"demo"}, .{}, false);
+    try manager.installPackageVersion("demo", "deadbeef");
 }
 
 test "VCS package checks execute concurrently and retain per-package results" {

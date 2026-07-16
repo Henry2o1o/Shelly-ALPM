@@ -2,6 +2,7 @@ const std = @import("std");
 const appimage = @import("bindings.zig").appimage;
 const events = @import("events.zig");
 const xdg_paths = @import("../shared/xdg_paths.zig").xdg_paths;
+const operation_api = @import("operation_context");
 
 pub const AppImageManager = struct {
     allocator: std.mem.Allocator,
@@ -10,9 +11,33 @@ pub const AppImageManager = struct {
     install_directory: []const u8,
     local_db_path: []const u8,
     dispatcher: ?*events.Dispatcher = null,
+    operation_context: ?*operation_api.OperationContext = null,
+    owned_dispatcher: ?*events.Dispatcher = null,
 
     pub fn setEventDispatcher(self: *AppImageManager, dispatcher: ?*events.Dispatcher) void {
-        self.dispatcher = dispatcher;
+        self.dispatcher = dispatcher orelse self.owned_dispatcher;
+    }
+
+    /// Borrows a shared context and creates an internal legacy adapter when
+    /// needed. The context must outlive this manager and all active calls.
+    pub fn setOperationContext(self: *AppImageManager, context: ?*operation_api.OperationContext) !void {
+        self.operation_context = context;
+        if (context != null and self.dispatcher == null) {
+            const dispatcher = try self.allocator.create(events.Dispatcher);
+            dispatcher.* = events.Dispatcher.init(self.allocator);
+            self.owned_dispatcher = dispatcher;
+            self.dispatcher = dispatcher;
+        }
+    }
+
+    pub fn deinit(self: *AppImageManager) void {
+        if (self.owned_dispatcher) |dispatcher| {
+            if (self.dispatcher == dispatcher) self.dispatcher = null;
+            dispatcher.deinit();
+            self.allocator.destroy(dispatcher);
+            self.owned_dispatcher = null;
+        }
+        self.operation_context = null;
     }
 
     /// Classifies paths by the AppImage extension, matching the established
@@ -26,6 +51,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn installAppImage(self: AppImageManager, location: []const u8) !bool {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .install, location);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const app_name = std.fs.path.stem(location);
         self.emitStatusFmt(.information, "Installing AppImage {s}...", .{app_name});
         const dest_name = try std.fmt.allocPrint(self.allocator, "{s}.AppImage", .{app_name});
@@ -70,6 +100,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn copyFile(self: AppImageManager, src_path: []const u8, dest_path: []const u8) !void {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .install, src_path);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         var src = try std.Io.Dir.cwd().openFile(self.io, src_path, .{});
         defer src.close(self.io);
         var dst = try std.Io.Dir.cwd().createFile(self.io, dest_path, .{});
@@ -81,6 +116,7 @@ pub const AppImageManager = struct {
         var writer = dst.writer(self.io, &write_buf);
 
         while (true) {
+            try self.checkCancelled();
             const n = try reader.interface.readSliceShort(&read_buf);
             if (n == 0) break;
             try writer.interface.writeAll(read_buf[0..n]);
@@ -89,6 +125,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn setExecutable(self: AppImageManager, path: []const u8) !void {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .configure, path);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         var proc = try std.process.spawn(self.io, .{
             .argv = &.{ "chmod", "a+x", path },
             .stdin = .ignore,
@@ -99,6 +140,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn extractMetadata(self: AppImageManager, path: []const u8) !?appimage.AppImage {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .inspect, path);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const is_rep = path.len >= 4 and std.ascii.eqlIgnoreCase(path[path.len - 4 ..], ".rep");
         const app_name = if (is_rep)
             std.fs.path.stem(std.fs.path.stem(path))
@@ -398,6 +444,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn getAppImageUpdateInfo(self: AppImageManager, appimage_path: []const u8) ![]const u8 {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .inspect, appimage_path);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         var proc = std.process.spawn(self.io, .{
             .argv = &.{ appimage_path, "--appimage-updateinfo" },
             .stdin = .ignore,
@@ -421,6 +472,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn getAppImagesFromLocalDb(self: AppImageManager) ![]appimage.AppImage {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, self.local_db_path);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         var file = std.Io.Dir.cwd().openFile(self.io, self.local_db_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return &.{},
             else => return err,
@@ -461,6 +517,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn addAppImageToLocalDb(self: AppImageManager, appimage_struct: appimage.AppImage) !void {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .configure, appimage_struct.name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const existing = try self.getAppImagesFromLocalDb();
         defer self.freeAppImages(existing);
 
@@ -489,6 +550,11 @@ pub const AppImageManager = struct {
     }
 
     pub fn removeAppImage(self: AppImageManager, appimage_path: []const u8, remove_config_files: bool) !bool {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .remove, appimage_path);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const app_name = std.fs.path.stem(appimage_path);
         self.emitStatusFmt(.information, "Removing AppImage {s}...", .{app_name});
         const clean_name = try self.cleanInvalidNames(app_name);
@@ -525,6 +591,7 @@ pub const AppImageManager = struct {
             defer d.close(self.io);
             var it = d.iterate();
             while (it.next(self.io) catch null) |entry| {
+                try self.checkCancelled();
                 if (entry.kind != .file) continue;
                 if (!std.ascii.eqlIgnoreCase(std.fs.path.stem(entry.name), clean_name)) continue;
                 const icon_path = std.fs.path.join(self.allocator, &.{ icon_dir, entry.name }) catch continue;
@@ -542,12 +609,27 @@ pub const AppImageManager = struct {
     }
 
     pub fn syncAppImageMeta(self: AppImageManager, app_image_names: []const []const u8) !bool {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .sync, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         self.emitStatus(.information, "Synchronizing AppImage metadata...");
         const db_images = try self.getAppImagesFromLocalDb();
         defer self.freeAppImages(db_images);
         var success = true;
 
-        for (app_image_names) |app_name| {
+        for (app_image_names, 0..) |app_name, app_index| {
+            try self.checkCancelled();
+            if (self.dispatcher) |dispatcher| {
+                if (dispatcher.operation) |operation| operation.progress(.{
+                    .stage = "metadata",
+                    .completed = app_index,
+                    .total = app_image_names.len,
+                    .percentage = if (app_image_names.len == 0) 100 else @as(f64, @floatFromInt(app_index)) * 100.0 / @as(f64, @floatFromInt(app_image_names.len)),
+                    .message = app_name,
+                });
+            }
             const existing: ?appimage.AppImage = blk: {
                 for (db_images) |img| {
                     if (std.ascii.eqlIgnoreCase(img.name, app_name)) break :blk img;
@@ -835,6 +917,15 @@ pub const AppImageManager = struct {
 
     fn emitStatus(self: AppImageManager, kind: events.StatusKind, message: []const u8) void {
         if (self.dispatcher) |dispatcher| dispatcher.raiseStatus(.{ .kind = kind, .message = message });
+    }
+
+    fn checkCancelled(self: AppImageManager) error{Cancelled}!void {
+        if (self.dispatcher) |dispatcher| {
+            if (dispatcher.operation) |operation| try operation.checkCancelled();
+        }
+        if (self.operation_context) |context| {
+            if (context.isCancelled()) return error.Cancelled;
+        }
     }
 
     fn emitStatusFmt(self: AppImageManager, kind: events.StatusKind, comptime format: []const u8, args: anytype) void {

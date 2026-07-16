@@ -1,6 +1,7 @@
 const std = @import("std");
 const bindings = @import("bindings.zig");
 const c = bindings.libalpm;
+const operation_api = @import("operation_context");
 
 pub const ProgressArgs = struct {
     progress_type: c_int,
@@ -94,6 +95,8 @@ pub const Dispatcher = struct {
     question_mutex: std.Io.Mutex,
     question_cv: std.Io.Condition,
     question_response: QuestionResponse,
+    operation: ?*operation_api.Operation,
+    common_question_response: ?operation_api.OwnedQuestionResponse,
 
     allocator: std.mem.Allocator,
 
@@ -112,10 +115,13 @@ pub const Dispatcher = struct {
             .question_mutex = .init,
             .question_cv = .init,
             .question_response = .{},
+            .operation = null,
+            .common_question_response = null,
         };
     }
 
     pub fn deinit(self: *Dispatcher) void {
+        if (self.common_question_response) |*response| response.deinit(self.allocator);
         self.progress.deinit(self.allocator);
         self.question.deinit(self.allocator);
         self.errorEvents.deinit(self.allocator);
@@ -125,6 +131,10 @@ pub const Dispatcher = struct {
         self.pacnew.deinit(self.allocator);
         self.pacsave.deinit(self.allocator);
         self.replaces.deinit(self.allocator);
+    }
+
+    pub fn setOperation(self: *Dispatcher, operation: ?*operation_api.Operation) void {
+        self.operation = operation;
     }
 
     pub fn addProgressHandler(self: *Dispatcher, handler: Handler(ProgressArgs).T) !usize {
@@ -263,10 +273,74 @@ pub const Dispatcher = struct {
     }
 
     pub fn raiseProgress(self: *Dispatcher, args: ProgressArgs) void {
+        if (self.operation) |operation| operation.progress(.{
+            .stage = "transaction",
+            .completed = @intCast(args.current),
+            .total = @intCast(args.howmany),
+            .percentage = @floatFromInt(std.math.clamp(args.percent, 0, 100)),
+            .message = args.pkg_name,
+            .native_code = args.progress_type,
+        });
         self.dispatch(ProgressArgs, &self.progress, args);
     }
 
     pub fn raiseQuestion(self: *Dispatcher, io: std.Io, args: QuestionArgs) QuestionResponse {
+        if (self.common_question_response) |*response| {
+            response.deinit(self.allocator);
+            self.common_question_response = null;
+        }
+
+        if (self.operation) |operation| {
+            const option_count = if (args.provider_options) |options| options.len else args.options.len;
+            const common_options_optional = self.allocator.alloc(operation_api.QuestionOption, option_count) catch null;
+            if (common_options_optional) |common_options| {
+                defer self.allocator.free(common_options);
+                if (args.provider_options) |options| {
+                    for (options, common_options) |option, *target| target.* = .{
+                        .id = option.name,
+                        .label = option.name,
+                        .description = option.description,
+                        .is_installed = option.is_installed,
+                    };
+                } else {
+                    for (args.options, common_options) |option, *target| target.* = .{
+                        .id = option,
+                        .label = option,
+                    };
+                }
+
+                var answer = operation.ask(.{
+                    .kind = if (args.provider_options != null)
+                        .select_provider
+                    else if (args.options.len != 0)
+                        .select_one
+                    else
+                        .confirmation,
+                    .prompt = args.question orelse "Continue?",
+                    .options = common_options,
+                    .dependency_name = args.dependency_name,
+                }) catch |err| {
+                    if (err == error.Cancelled) return .{ .answer = 0 };
+                    operation.reportError(err, "Failed to obtain an ALPM question response", "alpm", args.question_type, false);
+                    return .{};
+                };
+
+                const mapped: ?QuestionResponse = switch (answer.response) {
+                    .accepted => .{ .answer = 1 },
+                    .declined => .{ .answer = 0 },
+                    .choice => |choice| .{ .choice = std.math.cast(c_int, choice) orelse std.math.maxInt(c_int) },
+                    .choices => |choices| if (choices.len == 0) .{} else .{ .choice = std.math.cast(c_int, choices[0]) orelse std.math.maxInt(c_int) },
+                    .package => |pkg| .{ .pkg = pkg },
+                    .default, .deferred => null,
+                };
+                if (mapped) |response| {
+                    self.common_question_response = answer;
+                    return response;
+                }
+                answer.deinit(self.allocator);
+            }
+        }
+
         if (self.question.items.len == 0) return .{};
 
         const snap = self.allocator.dupe(Handler(QuestionArgs).T, self.question.items) catch self.question.items;
@@ -301,30 +375,43 @@ pub const Dispatcher = struct {
     }
 
     pub fn raiseError(self: *Dispatcher, args: ErrorArgs) void {
+        if (self.operation) |operation| operation.reportError(error.AlpmOperationFailed, args.message, "alpm", null, false);
         self.dispatch(ErrorArgs, &self.errorEvents, args);
     }
 
     pub fn raiseInformational(self: *Dispatcher, args: InformationalArgs) void {
+        if (self.operation) |operation| operation.status(.information, args.message, "alpm.information", @intFromEnum(args.event_type));
         self.dispatch(InformationalArgs, &self.informational, args);
     }
 
     pub fn raiseScriptlet(self: *Dispatcher, args: ScriptletArgs) void {
+        if (self.operation) |operation| operation.status(.information, args.line, "alpm.scriptlet", null);
         self.dispatch(ScriptletArgs, &self.scriptlet, args);
     }
 
     pub fn raiseHook(self: *Dispatcher, args: HookArgs) void {
+        if (self.operation) |operation| operation.progress(.{
+            .stage = "hook",
+            .completed = @intCast(args.position),
+            .total = @intCast(args.total),
+            .percentage = if (args.total == 0) 100 else @as(f64, @floatFromInt(args.position)) * 100.0 / @as(f64, @floatFromInt(args.total)),
+            .message = args.description,
+        });
         self.dispatch(HookArgs, &self.hook, args);
     }
 
     pub fn raisePacnew(self: *Dispatcher, args: PacnewArgs) void {
+        if (self.operation) |operation| operation.status(.warning, args.file orelse "A pacnew file was created", "alpm.pacnew", null);
         self.dispatch(PacnewArgs, &self.pacnew, args);
     }
 
     pub fn raisePacsave(self: *Dispatcher, args: PacsaveArgs) void {
+        if (self.operation) |operation| operation.status(.warning, args.file orelse "A pacsave file was created", "alpm.pacsave", null);
         self.dispatch(PacsaveArgs, &self.pacsave, args);
     }
 
     pub fn raiseReplaces(self: *Dispatcher, args: ReplacesArgs) void {
+        if (self.operation) |operation| operation.status(.information, args.pkg_name, "alpm.replaces", null);
         self.dispatch(ReplacesArgs, &self.replaces, args);
     }
 };

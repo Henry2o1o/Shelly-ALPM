@@ -1,5 +1,6 @@
 const std = @import("std");
 const models = @import("models.zig");
+const operation_api = @import("operation_context");
 
 pub const default_rpc_url = "https://aur.archlinux.org/rpc/";
 pub const default_cgit_url = "https://aur.archlinux.org/cgit/aur.git/plain";
@@ -11,6 +12,8 @@ pub const Client = struct {
     http: std.http.Client,
     rpc_url: []const u8 = default_rpc_url,
     cgit_url: []const u8 = default_cgit_url,
+    operation_context: ?*operation_api.OperationContext = null,
+    parent_operation: ?*const operation_api.Operation = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Client {
         return .{
@@ -23,6 +26,15 @@ pub const Client = struct {
     pub fn deinit(self: *Client) void {
         self.http.deinit();
         self.* = undefined;
+    }
+
+    pub fn setOperationContext(self: *Client, context: ?*operation_api.OperationContext) void {
+        self.operation_context = context;
+    }
+
+    pub fn setParentOperation(self: *Client, operation: ?*const operation_api.Operation) void {
+        self.parent_operation = operation;
+        if (operation) |parent| self.operation_context = parent.context;
     }
 
     pub fn search(self: *Client, query: []const u8) !models.Response {
@@ -186,6 +198,10 @@ pub const Client = struct {
     }
 
     fn get(self: *Client, url: []const u8) ![]u8 {
+        var operation_scope = HttpOperationScope.init(self, url);
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try operation_scope.checkCancelled();
         const uri = try std.Uri.parse(url);
         var request = try self.http.request(.GET, uri, .{
             .headers = .{
@@ -200,12 +216,18 @@ pub const Client = struct {
         try request.sendBodiless();
         var redirect_buffer: [8 * 1024]u8 = undefined;
         var response = try request.receiveHead(&redirect_buffer);
-        if (response.head.status.class() != .success) return error.AurHttpStatus;
+        if (response.head.status.class() != .success) {
+            return error.AurHttpStatus;
+        }
         var transfer_buffer: [8 * 1024]u8 = undefined;
-        return response.reader(&transfer_buffer).allocRemaining(self.allocator, .limited(max_response_size));
+        return self.readResponse(response.reader(&transfer_buffer), response.head.content_length, &operation_scope);
     }
 
     fn postForm(self: *Client, url: []const u8, body: []u8) ![]u8 {
+        var operation_scope = HttpOperationScope.init(self, url);
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try operation_scope.checkCancelled();
         const uri = try std.Uri.parse(url);
         const headers = [_]std.http.Header{.{
             .name = "content-type",
@@ -225,9 +247,83 @@ pub const Client = struct {
         try request.sendBodyComplete(body);
         var redirect_buffer: [8 * 1024]u8 = undefined;
         var response = try request.receiveHead(&redirect_buffer);
-        if (response.head.status.class() != .success) return error.AurHttpStatus;
+        if (response.head.status.class() != .success) {
+            return error.AurHttpStatus;
+        }
         var transfer_buffer: [8 * 1024]u8 = undefined;
-        return response.reader(&transfer_buffer).allocRemaining(self.allocator, .limited(max_response_size));
+        return self.readResponse(response.reader(&transfer_buffer), response.head.content_length, &operation_scope);
+    }
+
+    fn readResponse(
+        self: *Client,
+        reader: *std.Io.Reader,
+        total: ?u64,
+        operation_scope: *HttpOperationScope,
+    ) ![]u8 {
+        var result: std.ArrayList(u8) = .empty;
+        errdefer result.deinit(self.allocator);
+        var buffer: [16 * 1024]u8 = undefined;
+        while (true) {
+            try operation_scope.checkCancelled();
+            const amount = try reader.readSliceShort(&buffer);
+            if (amount == 0) break;
+            if (result.items.len + amount > max_response_size) return error.StreamTooLong;
+            try result.appendSlice(self.allocator, buffer[0..amount]);
+            operation_scope.progress(result.items.len, total);
+        }
+        return result.toOwnedSlice(self.allocator);
+    }
+};
+
+const HttpOperationScope = struct {
+    operation: ?operation_api.Operation = null,
+
+    fn init(client: *Client, subject: []const u8) HttpOperationScope {
+        if (client.parent_operation) |parent| return .{ .operation = parent.child(.{
+            .backend = .download,
+            .kind = .download,
+            .subject = subject,
+        }) };
+        if (client.operation_context) |context| return .{ .operation = context.begin(.{
+            .backend = .download,
+            .kind = .download,
+            .subject = subject,
+        }) };
+        return .{};
+    }
+
+    fn checkCancelled(self: *const HttpOperationScope) error{Cancelled}!void {
+        if (self.operation) |*operation| try operation.checkCancelled();
+    }
+
+    fn progress(self: *const HttpOperationScope, completed: usize, total: ?u64) void {
+        if (self.operation) |*operation| operation.progress(.{
+            .stage = "aur-http",
+            .completed = @intCast(completed),
+            .total = total,
+            .percentage = if (total) |value| if (value == 0) 100 else @as(f64, @floatFromInt(completed)) * 100.0 / @as(f64, @floatFromInt(value)) else null,
+            .bytes_completed = @intCast(completed),
+            .bytes_total = total,
+        });
+    }
+
+    fn fail(self: *HttpOperationScope) void {
+        if (self.operation) |*operation| operation.reportError(
+            if (operation.isCancelled()) error.Cancelled else error.AurHttpOperationFailed,
+            if (operation.isCancelled()) "AUR HTTP operation cancelled" else "AUR HTTP operation failed",
+            "aur-http",
+            null,
+            false,
+        );
+        const status: operation_api.CompletionStatus = if (self.operation) |*operation|
+            if (operation.isCancelled()) .cancelled else .failed
+        else
+            .failed;
+        self.finish(status);
+    }
+
+    fn finish(self: *HttpOperationScope, status: operation_api.CompletionStatus) void {
+        if (self.operation) |*operation| operation.finish(status);
     }
 };
 

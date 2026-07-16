@@ -118,12 +118,18 @@ pub const local = struct {
     pub const MessageLevel = events.Level;
 };
 
+/// Backend-neutral lifecycle, event, question, and cancellation API.
+pub const operation = @import("operation_context");
+
 pub const shared = struct {
     pub const downloader = @import("shared/downloader.zig");
     pub const list_dictionary = @import("shared/list_dictionary.zig");
     pub const xdg_paths = @import("shared/xdg_paths.zig");
+    pub const operation_context = operation;
 
     pub const Downloader = downloader.CoreDownloader;
+    pub const OperationContext = operation.OperationContext;
+    pub const Operation = operation.Operation;
 };
 
 pub const AlpmManager = alpm.Manager;
@@ -133,6 +139,22 @@ pub const AurManager = aur.Manager;
 pub const FlatpakManager = flatpak.Manager;
 pub const AppImageManager = appimage.Manager;
 pub const LocalManager = local.Manager;
+pub const OperationContext = operation.OperationContext;
+pub const Operation = operation.Operation;
+pub const OperationEvent = operation.Event;
+pub const OperationBackend = operation.Backend;
+pub const OperationKind = operation.OperationKind;
+pub const OperationStatusLevel = operation.StatusLevel;
+pub const OperationCompletionStatus = operation.CompletionStatus;
+pub const OperationQuestion = operation.Question;
+pub const OperationQuestionRequest = operation.QuestionRequest;
+pub const OperationQuestionResponse = operation.QuestionResponse;
+pub const OperationQuestionKind = operation.QuestionKind;
+pub const OperationQuestionOption = operation.QuestionOption;
+pub const OperationQuestionAttachment = operation.QuestionAttachment;
+pub const OperationEventHandler = operation.EventHandler;
+pub const OperationQuestionHandler = operation.QuestionHandler;
+pub const OperationCancellationHandler = operation.CancellationHandler;
 
 /// This is a documentation comment to explain the `printAnotherMessage` function below.
 ///
@@ -221,6 +243,145 @@ test "public library surface exposes package manager APIs" {
     _ = local.MessageLevel;
     _ = local.events.Dispatcher;
     _ = shared.Downloader;
+    _ = OperationContext;
+    _ = Operation;
+    _ = OperationEvent;
+    _ = OperationBackend;
+    _ = OperationKind;
+    _ = OperationStatusLevel;
+    _ = OperationCompletionStatus;
+    _ = OperationQuestion;
+    _ = OperationQuestionRequest;
+    _ = OperationQuestionResponse;
+    _ = OperationQuestionKind;
+    _ = OperationQuestionOption;
+    _ = OperationQuestionAttachment;
+    _ = OperationEventHandler;
+    _ = OperationQuestionHandler;
+    _ = OperationCancellationHandler;
+}
+
+test "backend dispatchers share one operation event stream" {
+    const Capture = struct {
+        seen: [6]bool = .{false} ** 6,
+        failures: usize = 0,
+
+        fn receive(data: ?*anyopaque, event: operation.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (event) {
+                .failure => |failure| {
+                    self.seen[@intFromEnum(failure.envelope.backend)] = true;
+                    self.failures += 1;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation.OperationContext.init(std.testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    _ = try context.subscribe(.{ .function = Capture.receive, .data = &capture });
+
+    var alpm_operation = context.begin(.{ .backend = .alpm, .kind = .install });
+    var alpm_dispatcher = alpm.events.Dispatcher.init(std.testing.allocator);
+    defer alpm_dispatcher.deinit();
+    alpm_dispatcher.setOperation(&alpm_operation);
+    alpm_dispatcher.raiseError(.{ .message = "alpm failure" });
+    alpm_dispatcher.setOperation(null);
+    alpm_operation.finish(.failed);
+
+    var aur_operation = context.begin(.{ .backend = .aur, .kind = .build });
+    var aur_dispatcher = aur.events.Dispatcher.init(std.testing.allocator);
+    defer aur_dispatcher.deinit();
+    aur_dispatcher.setOperation(&aur_operation);
+    aur_dispatcher.raiseError(.{ .message = "aur failure" });
+    aur_dispatcher.setOperation(null);
+    aur_operation.finish(.failed);
+
+    var flatpak_operation = context.begin(.{ .backend = .flatpak, .kind = .update });
+    var flatpak_dispatcher = flatpak.events.Dispatcher.init(std.testing.allocator);
+    defer flatpak_dispatcher.deinit();
+    flatpak_dispatcher.setOperation(&flatpak_operation);
+    flatpak_dispatcher.raiseStatus(.{ .event_type = .err, .message = "flatpak failure" });
+    flatpak_dispatcher.setOperation(null);
+    flatpak_operation.finish(.failed);
+
+    var appimage_operation = context.begin(.{ .backend = .appimage, .kind = .update });
+    var appimage_dispatcher = appimage.events.Dispatcher.init(std.testing.allocator);
+    defer appimage_dispatcher.deinit();
+    appimage_dispatcher.setOperation(&appimage_operation);
+    appimage_dispatcher.raiseStatus(.{ .kind = .err, .message = "appimage failure" });
+    appimage_dispatcher.setOperation(null);
+    appimage_operation.finish(.failed);
+
+    var local_operation = context.begin(.{ .backend = .local_package, .kind = .inspect });
+    var local_dispatcher = local.events.Dispatcher.init(std.testing.allocator);
+    defer local_dispatcher.deinit();
+    local_dispatcher.setOperation(&local_operation);
+    local_dispatcher.raise(.{ .level = .err, .text = "local failure" });
+    local_dispatcher.setOperation(null);
+    local_operation.finish(.failed);
+
+    try std.testing.expectEqual(@as(usize, 5), capture.failures);
+    try std.testing.expect(capture.seen[@intFromEnum(operation.Backend.alpm)]);
+    try std.testing.expect(capture.seen[@intFromEnum(operation.Backend.aur)]);
+    try std.testing.expect(capture.seen[@intFromEnum(operation.Backend.flatpak)]);
+    try std.testing.expect(capture.seen[@intFromEnum(operation.Backend.appimage)]);
+    try std.testing.expect(capture.seen[@intFromEnum(operation.Backend.local_package)]);
+}
+
+test "ALPM and AUR questions use the shared response hook" {
+    const Responder = struct {
+        questions: usize = 0,
+
+        fn answer(data: ?*anyopaque, question: operation.Question) operation.QuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.questions += 1;
+            std.testing.expect(question.options.len == 2) catch unreachable;
+            return .{ .choice = 1 };
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation.OperationContext.init(std.testing.allocator, threaded.io());
+    defer context.deinit();
+    var responder: Responder = .{};
+    context.setQuestionHandler(.{ .function = Responder.answer, .data = &responder });
+
+    var alpm_operation = context.begin(.{ .backend = .alpm, .kind = .install });
+    var alpm_dispatcher = alpm.events.Dispatcher.init(std.testing.allocator);
+    defer alpm_dispatcher.deinit();
+    alpm_dispatcher.setOperation(&alpm_operation);
+    const alpm_response = alpm_dispatcher.raiseQuestion(threaded.io(), .{
+        .question = "Select an ALPM provider",
+        .question_type = 0,
+        .options = &.{ "provider-a", "provider-b" },
+    });
+    try std.testing.expectEqual(@as(?c_int, 1), alpm_response.choice);
+    alpm_dispatcher.setOperation(null);
+    alpm_operation.finish(.success);
+
+    var aur_operation = context.begin(.{ .backend = .aur, .kind = .install });
+    var aur_dispatcher = aur.events.Dispatcher.init(std.testing.allocator);
+    defer aur_dispatcher.deinit();
+    aur_dispatcher.setOperation(&aur_operation);
+    const aur_response = aur_dispatcher.ask(.{
+        .question_type = .select_provider,
+        .question = "Select an AUR provider",
+        .options = &.{
+            .{ .name = "provider-a", .description = "first" },
+            .{ .name = "provider-b", .description = "second" },
+        },
+    });
+    try std.testing.expectEqualSlices(usize, &.{1}, aur_response.selected_indices);
+    aur_dispatcher.setOperation(null);
+    aur_operation.finish(.success);
+
+    try std.testing.expectEqual(@as(usize, 2), responder.questions);
 }
 
 test {
@@ -250,4 +411,5 @@ test {
     _ = @import("local/file_inspector.zig");
     _ = @import("local/xdg_integration.zig");
     _ = @import("local/events.zig");
+    _ = @import("operation_context");
 }

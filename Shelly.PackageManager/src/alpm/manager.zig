@@ -8,6 +8,7 @@ const listDictionary = @import("../shared/list_dictionary.zig");
 const os_tool = @import("distribution-hooks/os_utilities.zig");
 const TransFlag = bindings.libalpm.TransFlag;
 const cachyos = @import("distribution-hooks/CachyOS/update_notice.zig");
+const operation_api = @import("operation_context");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
@@ -43,9 +44,10 @@ pub const TransactionError = error{
     PackageAddFailed,
     OrphanShootFailed,
     DirectoryReadFailed,
+    Cancelled,
 };
 
-pub const QueryError = error{ DbNotFound, PkgNotFound, NoHandle, OutOfMemory };
+pub const QueryError = error{ DbNotFound, PkgNotFound, NoHandle, OutOfMemory, Cancelled };
 
 pub const IgnorePackageError = configuration.IgnorePackageError;
 
@@ -161,6 +163,7 @@ pub const Manager = struct {
     is_root: bool = false,
     temp_root_path: []const u8,
     show_hidden_packages: bool = false,
+    operation_context: ?*operation_api.OperationContext = null,
 
     /// If null is passed for config it will use the default /etc/pacman.conf.
     /// The caller owns the returned manager and must call deinit when finished.
@@ -259,11 +262,22 @@ pub const Manager = struct {
         return self.show_hidden_packages;
     }
 
+    /// Borrows a shared operation context; it must outlive this manager and all
+    /// synchronous calls made through it.
+    pub fn setOperationContext(self: *Manager, context: ?*operation_api.OperationContext) void {
+        self.operation_context = context;
+    }
+
     pub fn sync(self: *Manager, force: bool) TransactionError!void {
+        if (self.handle == null) return TransactionError.SyncDbFailed;
+        var operation_scope = OperationScope.init(self, .sync, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         var databaseMap = std.StringHashMap(std.ArrayList([]const u8)).init(self.allocator);
         defer databaseMap.deinit();
         self.package_download = false;
-        if (self.handle == null) return TransactionError.SyncDbFailed;
         var databases: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
         if (databases == null) return TransactionError.SyncDbFailed;
         var dict = listDictionary.ListDictionary.init(self.allocator);
@@ -336,6 +350,11 @@ pub const Manager = struct {
 
     pub fn get_installed_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         const database = rawLibalpm.alpm_get_localdb(self.handle);
         const packages: libalpm.DatabaseList = rawLibalpm.alpm_db_get_pkgcache(database);
         var package_list: std.ArrayList(libalpm.OwnedPackage) = .empty;
@@ -358,6 +377,11 @@ pub const Manager = struct {
 
     pub fn get_single_installed_package(self: *Manager, package_name: [:0]const u8) TransactionError!?libalpm.Package {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         const database = rawLibalpm.alpm_get_localdb(self.handle);
         const package = rawLibalpm.alpm_db_get_pkg(database, package_name.ptr);
         if (package == null) {
@@ -370,6 +394,11 @@ pub const Manager = struct {
 
     pub fn get_foreign_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
 
         // Foreign packages are installed packages that are not provided by any
         // registered sync database (e.g. AUR or locally built packages).
@@ -420,6 +449,11 @@ pub const Manager = struct {
 
     pub fn get_available_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         var packages: std.ArrayList(libalpm.OwnedPackage) = .empty;
         errdefer {
             libalpm.OwnedPackage.deinitItems(self.allocator, packages.items);
@@ -444,6 +478,11 @@ pub const Manager = struct {
 
     pub fn get_updates_available(self: *Manager) TransactionError![]libalpm.OwnedPackageWithUpdate {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         var package_updates: std.ArrayList(libalpm.OwnedPackageWithUpdate) = .empty;
         errdefer {
             for (package_updates.items) |*update| update.deinit(self.allocator);
@@ -475,6 +514,11 @@ pub const Manager = struct {
         trans_flags_arg: TransFlag,
     ) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .install, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
         var packages: std.ArrayList(*rawLibalpm.alpm_pkg_t) = .empty;
         defer packages.deinit(self.allocator);
@@ -605,6 +649,11 @@ pub const Manager = struct {
 
     pub fn remove_packages(self: *Manager, packages_names: [][:0]const u8, flags: TransFlag, keep_optional_dependencis: bool) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .remove, if (packages_names.len == 0) null else packages_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         if (packages_names.len == 0) return TransactionError.NoPackageFound;
 
         for (self.config.hold_packages.items) |hold_pkg| {
@@ -758,6 +807,11 @@ pub const Manager = struct {
     /// report is owned by the caller and must be deinitialized.
     pub fn sync_system_update(self: *Manager, flags: TransFlag) TransactionError!RestartReport {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .update, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
 
         // This is first before updating so it can bail before database is downloaded
         if (self.detected_cachyos) {
@@ -1139,13 +1193,23 @@ pub const Manager = struct {
 
     pub fn update_package_reason(self: *Manager, pkg_name: [:0]const u8, reason: libalpm.PackageReason) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .configure, pkg_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         const local_database = rawLibalpm.alpm_get_localdb(self.handle) orelse return TransactionError.DatabaseReadFailed;
         const pkg = rawLibalpm.alpm_db_get_pkg(local_database, pkg_name) orelse return TransactionError.PackageFetchFailed;
         if (rawLibalpm.alpm_pkg_set_reason(pkg, @intCast(@intFromEnum(reason))) != 0) return TransactionError.SetReasonFailed;
     }
 
-    pub fn install_local_packages(self: *Manager, paths: [][]const u8, flags: TransFlag) TransactionError!void {
+    pub fn install_local_packages(self: *Manager, paths: []const []const u8, flags: TransFlag) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .install, if (paths.len == 0) null else paths[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         if (paths.len == 0) return TransactionError.NoPackageFound;
 
         var package_ptrs: std.ArrayList(libalpm.Package) = .empty;
@@ -1213,6 +1277,11 @@ pub const Manager = struct {
 
     pub fn get_package_from_provides(self: *Manager, provides: [:0]const u8) QueryError![:0]const u8 {
         if (self.handle == null) return QueryError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, provides);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_ptr = sync_dbs.*.data orelse continue;
@@ -1227,6 +1296,11 @@ pub const Manager = struct {
 
     pub fn is_dependency_satisfied_by_installed_packages(self: *Manager, dependency: [:0]const u8) QueryError!bool {
         if (self.handle == null) return QueryError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, dependency);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
         const db = libalpm.Database.from(local_db.?) orelse return QueryError.DbNotFound;
         _ = rawLibalpm.alpm_find_satisfier(db.package_cache(), dependency) orelse return false;
@@ -1234,6 +1308,12 @@ pub const Manager = struct {
     }
 
     pub fn find_remote_satisfier_for_dependency(self: *Manager, dependency: [:0]const u8) QueryError![:0]const u8 {
+        if (self.handle == null) return QueryError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, dependency);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         return (try self.find_remote_satisfier_for_dependency_details(dependency)).real_name;
     }
 
@@ -1244,6 +1324,11 @@ pub const Manager = struct {
         dependency: [:0]const u8,
     ) QueryError!DependencySatisfier {
         if (self.handle == null) return QueryError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, dependency);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         const requested_name = dependencyName(dependency);
         var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
@@ -1263,6 +1348,11 @@ pub const Manager = struct {
 
     pub fn install_dependencies_only(self: *Manager, package_name: [:0]const u8, include_make_deps: bool, flags: TransFlag) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .install, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
         var deps_to_install: std.ArrayList(libalpm.Dependency) = .empty;
         defer deps_to_install.deinit(self.allocator);
@@ -1307,6 +1397,11 @@ pub const Manager = struct {
 
     pub fn update_packages(self: *Manager, package_list: [][:0]const u8, flags: libalpm.TransFlag) TransactionError!void {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .update, if (package_list.len == 0) null else package_list[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         self.sync(false) catch |err| return err;
         const sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
@@ -1346,6 +1441,11 @@ pub const Manager = struct {
 
     pub fn purify(self: *Manager, dry_run: bool, shoot_orphans: bool, purge_corruption: bool) TransactionError![][:0]const u8 {
         if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .cleanup, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         var target_names: std.ArrayList([:0]const u8) = .empty;
         errdefer {
             for (target_names.items) |target_name| self.allocator.free(target_name);
@@ -1408,12 +1508,25 @@ pub const Manager = struct {
 
     pub fn is_package_installed(self: *Manager, package_name: [:0]const u8) bool {
         if (self.handle == null) return false;
+        var operation_scope = OperationScope.init(self, .search, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        if (self.operation_context) |context| {
+            if (context.isCancelled()) {
+                operation_scope.finish(.cancelled);
+                return false;
+            }
+        }
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
         const pkg = rawLibalpm.alpm_db_get_pkg(local_db, package_name);
         return pkg != null;
     }
 
     pub fn ignore_package(self: *Manager, package_name: []const u8) IgnorePackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try configuration.Configuration.add_ignore_package(
             &self.config,
             self.io(),
@@ -1424,6 +1537,10 @@ pub const Manager = struct {
     }
 
     pub fn ignore_packages(self: *Manager, package_names: []const []const u8) IgnorePackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try configuration.Configuration.add_ignore_packages(
             &self.config,
             self.io(),
@@ -1434,6 +1551,10 @@ pub const Manager = struct {
     }
 
     pub fn unignore_package(self: *Manager, package_name: []const u8) IgnorePackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try configuration.Configuration.remove_ignore_package(
             &self.config,
             self.io(),
@@ -1444,6 +1565,10 @@ pub const Manager = struct {
     }
 
     pub fn unignore_packages(self: *Manager, package_names: []const []const u8) IgnorePackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try configuration.Configuration.remove_ignore_packages(
             &self.config,
             self.io(),
@@ -1456,12 +1581,21 @@ pub const Manager = struct {
     /// Returns a normalized list whose strings are borrowed from `self.config`.
     /// The caller must deinitialize the returned list, but must not free its items.
     pub fn get_ignored_packages(self: *Manager) IgnorePackageError!std.ArrayList([:0]const u8) {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         return configuration.Configuration.get_ignored_packages(&self.config, self.allocator);
     }
 
     /// Returns repository names borrowed from the parsed configuration in
     /// declaration order. Deinitialize the list, but do not free its items.
     pub fn get_repository_names(self: *Manager) QueryError!std.ArrayList([]const u8) {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         return configuration.Configuration.get_repository_names(&self.config, self.allocator);
     }
 
@@ -1477,6 +1611,11 @@ pub const Manager = struct {
     /// Strings are borrowed from libalpm; deinitialize only the returned list.
     pub fn get_configured_cache_directories(self: *Manager) QueryError!std.ArrayList([:0]const u8) {
         if (self.handle == null) return QueryError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
 
         var result: std.ArrayList([:0]const u8) = .empty;
         errdefer result.deinit(self.allocator);
@@ -1491,6 +1630,12 @@ pub const Manager = struct {
     }
 
     pub fn get_cache_directories(self: *Manager) QueryError!std.ArrayList([:0]const u8) {
+        if (self.handle == null) return QueryError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         return self.get_configured_cache_directories();
     }
 
@@ -1511,6 +1656,11 @@ pub const Manager = struct {
 
     pub fn get_allowed_architecture(self: *Manager) QueryError![][:0]const u8 {
         if (self.handle == null) return QueryError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         var arches = rawLibalpm.alpm_option_get_architectures(self.handle);
         var arch_list: std.ArrayList([:0]const u8) = .empty;
         errdefer {
@@ -1579,6 +1729,11 @@ pub const Manager = struct {
     }
 
     pub fn refresh(self: *Manager) TransactionError!void {
+        var operation_scope = OperationScope.init(self, .sync, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
         if (self.handle != null) {
             const refresh_result = rawLibalpm.alpm_release(self.handle);
             if (refresh_result != 0) {
@@ -1602,6 +1757,7 @@ pub const Manager = struct {
         const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
+        if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
         downloader_instance.setEventCallback(onDownloadEvent, self);
         const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ sync_directory, database_name }) catch return;
         defer self.allocator.free(dest);
@@ -1676,6 +1832,7 @@ pub const Manager = struct {
         const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
+        if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
         downloader_instance.setEventCallback(onDownloadEvent, self);
         const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.config.cache_directory, package.file_name() }) catch return;
         defer self.allocator.free(dest);
@@ -1703,6 +1860,13 @@ pub const Manager = struct {
 
     pub fn io(self: *Manager) std.Io {
         return self.threaded.io();
+    }
+
+    fn checkOperationCancelled(self: *Manager) error{Cancelled}!void {
+        if (self.dispatcher.operation) |operation| try operation.checkCancelled();
+        if (self.operation_context) |context| {
+            if (context.isCancelled()) return error.Cancelled;
+        }
     }
 
     pub fn deinit(self: *Manager) void {
@@ -1911,6 +2075,7 @@ pub const Manager = struct {
         const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
+        if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
 
         downloader_instance.setEventCallback(onDownloadEvent, self);
         switch (downloader_instance.downloadToFile(url_slice, local_slice, force != 0)) {
@@ -2307,6 +2472,69 @@ pub const Manager = struct {
     fn spanC(ptr: [*c]const u8) ?[]const u8 {
         if (ptr == null) return null;
         return std.mem.span(ptr);
+    }
+};
+
+const OperationScope = struct {
+    manager: *Manager,
+    operation: ?operation_api.Operation = null,
+    previous: ?*operation_api.Operation = null,
+    cancellation_subscription: ?operation_api.SubscriptionId = null,
+    attached: bool = false,
+
+    fn init(manager: *Manager, kind: operation_api.OperationKind, subject: ?[]const u8) OperationScope {
+        var scope: OperationScope = .{ .manager = manager, .previous = manager.dispatcher.operation };
+        if (scope.previous) |parent| {
+            scope.operation = parent.child(.{ .backend = .alpm, .kind = kind, .subject = subject });
+        } else if (manager.operation_context) |context| {
+            scope.operation = context.begin(.{ .backend = .alpm, .kind = kind, .subject = subject });
+        }
+        return scope;
+    }
+
+    fn attach(self: *OperationScope) void {
+        if (self.operation) |*operation| {
+            self.manager.dispatcher.setOperation(operation);
+            self.cancellation_subscription = operation.context.subscribeCancellation(.{
+                .function = interruptTransaction,
+                .data = self.manager,
+            }) catch null;
+        }
+        self.attached = true;
+    }
+
+    fn fail(self: *OperationScope) void {
+        if (self.operation) |*operation| operation.reportError(
+            if (operation.isCancelled()) error.Cancelled else error.AlpmOperationFailed,
+            if (operation.isCancelled()) "ALPM operation cancelled" else "ALPM operation failed",
+            "alpm",
+            null,
+            false,
+        );
+        const status: operation_api.CompletionStatus = if (self.operation) |*operation|
+            if (operation.isCancelled()) .cancelled else .failed
+        else
+            .failed;
+        self.finish(status);
+    }
+
+    fn finish(self: *OperationScope, status: operation_api.CompletionStatus) void {
+        if (self.operation) |*operation| {
+            if (self.cancellation_subscription) |subscription| {
+                _ = operation.context.unsubscribeCancellation(subscription);
+                self.cancellation_subscription = null;
+            }
+            operation.finish(status);
+        }
+        if (self.attached) {
+            self.manager.dispatcher.setOperation(self.previous);
+            self.attached = false;
+        }
+    }
+
+    fn interruptTransaction(data: ?*anyopaque) void {
+        const manager: *Manager = @ptrCast(@alignCast(data orelse return));
+        if (manager.handle) |handle| _ = rawLibalpm.alpm_trans_interrupt(handle);
     }
 };
 

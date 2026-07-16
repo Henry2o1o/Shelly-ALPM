@@ -1,4 +1,5 @@
 const std = @import("std");
+const operation_api = @import("operation_context");
 
 /// Values mirror PackageManager.Alpm.Enums.AlpmEventType for API parity.
 pub const EventType = enum(u32) {
@@ -94,16 +95,24 @@ pub const Dispatcher = struct {
     progress: std.ArrayList(ProgressHandler) = .empty,
     errors: std.ArrayList(ErrorHandler) = .empty,
     question: ?QuestionHandler = null,
+    operation: ?*operation_api.Operation = null,
+    common_question_response: ?operation_api.OwnedQuestionResponse = null,
+    common_choice: [1]usize = .{0},
 
     pub fn init(allocator: std.mem.Allocator) Dispatcher {
         return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *Dispatcher) void {
+        if (self.common_question_response) |*response| response.deinit(self.allocator);
         self.informational.deinit(self.allocator);
         self.progress.deinit(self.allocator);
         self.errors.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    pub fn setOperation(self: *Dispatcher, operation: ?*operation_api.Operation) void {
+        self.operation = operation;
     }
 
     pub fn addInformationalHandler(self: *Dispatcher, handler: InformationalHandler) !usize {
@@ -138,18 +147,99 @@ pub const Dispatcher = struct {
     }
 
     pub fn raiseInformational(self: *Dispatcher, args: InformationalArgs) void {
+        if (self.operation) |operation| {
+            const level: operation_api.StatusLevel = switch (args.event_type) {
+                .debug_output, .trace_output => .debug,
+                .aur_package_failed, .aur_build_error, .transaction_failed => .warning,
+                .aur_download_done, .aur_build_done, .aur_install_done, .aur_cleanup_done, .aur_package_completed => .success,
+                else => .information,
+            };
+            operation.status(level, args.message, @tagName(args.event_type), @intFromEnum(args.event_type));
+            if (args.current != null or args.total != null) operation.progress(.{
+                .stage = @tagName(args.event_type),
+                .completed = if (args.current) |value| @intCast(value) else null,
+                .total = if (args.total) |value| @intCast(value) else null,
+                .message = args.package_name orelse args.message,
+                .native_code = @intFromEnum(args.event_type),
+            });
+        }
         dispatch(self, InformationalArgs, InformationalHandler, self.informational.items, args);
     }
 
     pub fn raiseProgress(self: *Dispatcher, args: ProgressArgs) void {
+        if (self.operation) |operation| operation.progress(.{
+            .stage = @tagName(args.progress_type),
+            .percentage = @floatFromInt(args.percent),
+            .message = args.message orelse args.package_name,
+            .native_code = @intFromEnum(args.progress_type),
+        });
         dispatch(self, ProgressArgs, ProgressHandler, self.progress.items, args);
     }
 
     pub fn raiseError(self: *Dispatcher, args: ErrorArgs) void {
+        if (self.operation) |operation| operation.reportError(error.AurOperationFailed, args.message, "aur", null, false);
         dispatch(self, ErrorArgs, ErrorHandler, self.errors.items, args);
     }
 
     pub fn ask(self: *Dispatcher, args: QuestionArgs) QuestionResponse {
+        if (self.common_question_response) |*response| {
+            response.deinit(self.allocator);
+            self.common_question_response = null;
+        }
+        if (self.operation) |operation| {
+            const common_options = self.allocator.alloc(operation_api.QuestionOption, args.options.len) catch null;
+            if (common_options) |options| {
+                defer self.allocator.free(options);
+                for (args.options, options) |option, *target| target.* = .{
+                    .id = option.name,
+                    .label = option.name,
+                    .description = option.description,
+                    .is_installed = option.is_installed,
+                };
+                var answer = operation.ask(.{
+                    .kind = switch (args.question_type) {
+                        .select_optional_dependencies => .select_optional_dependencies,
+                        .select_provider => .select_provider,
+                    },
+                    .prompt = args.question,
+                    .options = options,
+                    .dependency_name = args.dependency_name,
+                }) catch |err| {
+                    if (err != error.Cancelled) operation.reportError(err, "Failed to obtain an AUR question response", "aur", null, false);
+                    return .{};
+                };
+                switch (answer.response) {
+                    .choice => |choice| {
+                        self.common_choice[0] = choice;
+                        answer.deinit(self.allocator);
+                        return .{ .selected_indices = &self.common_choice };
+                    },
+                    .choices => |choices| {
+                        self.common_question_response = answer;
+                        return .{ .selected_indices = choices };
+                    },
+                    .declined => {
+                        answer.deinit(self.allocator);
+                        return .{};
+                    },
+                    .accepted => {
+                        const indices = self.allocator.alloc(usize, args.options.len) catch {
+                            answer.deinit(self.allocator);
+                            return .{};
+                        };
+                        for (indices, 0..) |*index, value| index.* = value;
+                        answer.deinit(self.allocator);
+                        self.common_question_response = operation_api.OwnedQuestionResponse.init(self.allocator, .{ .choices = indices }) catch {
+                            self.allocator.free(indices);
+                            return .{};
+                        };
+                        self.allocator.free(indices);
+                        return .{ .selected_indices = self.common_question_response.?.response.choices };
+                    },
+                    .default, .package, .deferred => answer.deinit(self.allocator),
+                }
+            }
+        }
         const handler = self.question orelse return .{};
         return handler.function(handler.data, args);
     }
