@@ -57,6 +57,94 @@ pub const DependencySatisfier = struct {
     via_provides: bool,
 };
 
+/// Why restarting a systemd service failed after a system upgrade.
+pub const ServiceRestartFailureKind = enum {
+    spawn,
+    exit_status,
+    terminated,
+};
+
+/// A process which still has a deleted shared library mapped into its address
+/// space. All strings are owned by the containing `RestartReport`.
+pub const AffectedProcess = struct {
+    pid: u32,
+    command: ?[]u8,
+    service: ?[]u8,
+
+    fn deinit(self: *AffectedProcess, allocator: std.mem.Allocator) void {
+        if (self.command) |command| allocator.free(command);
+        if (self.service) |service| allocator.free(service);
+        self.* = undefined;
+    }
+};
+
+/// A structured failure returned when `systemctl restart` could not restart a
+/// service. `exit_code` is populated only when systemctl exited normally.
+pub const ServiceRestartFailure = struct {
+    service: []u8,
+    kind: ServiceRestartFailureKind,
+    exit_code: ?u8,
+    message: []u8,
+
+    fn deinit(self: *ServiceRestartFailure, allocator: std.mem.Allocator) void {
+        allocator.free(self.service);
+        allocator.free(self.message);
+        self.* = undefined;
+    }
+};
+
+/// Owned restart information collected immediately after a successful system
+/// upgrade. Call `deinit` when the report is no longer needed.
+pub const RestartReport = struct {
+    allocator: std.mem.Allocator,
+    /// Null when `/proc/sys/kernel/osrelease` could not be read.
+    running_kernel: ?[]u8,
+    /// Null when the running kernel or module directory could not be inspected.
+    running_kernel_modules_present: ?bool,
+    needs_reboot: bool,
+    process_scan_complete: bool,
+    skipped_processes: usize,
+    affected_processes: []AffectedProcess,
+    affected_services: [][]u8,
+    restarted_services: [][]u8,
+    failures: []ServiceRestartFailure,
+
+    pub fn empty(allocator: std.mem.Allocator) RestartReport {
+        return .{
+            .allocator = allocator,
+            .running_kernel = null,
+            .running_kernel_modules_present = null,
+            .needs_reboot = false,
+            .process_scan_complete = false,
+            .skipped_processes = 0,
+            .affected_processes = &.{},
+            .affected_services = &.{},
+            .restarted_services = &.{},
+            .failures = &.{},
+        };
+    }
+
+    pub fn deinit(self: *RestartReport) void {
+        if (self.running_kernel) |running_kernel| self.allocator.free(running_kernel);
+        for (self.affected_processes) |*process| process.deinit(self.allocator);
+        if (self.affected_processes.len != 0) self.allocator.free(self.affected_processes);
+        for (self.affected_services) |service| self.allocator.free(service);
+        if (self.affected_services.len != 0) self.allocator.free(self.affected_services);
+        for (self.restarted_services) |service| self.allocator.free(service);
+        if (self.restarted_services.len != 0) self.allocator.free(self.restarted_services);
+        for (self.failures) |*failure| failure.deinit(self.allocator);
+        if (self.failures.len != 0) self.allocator.free(self.failures);
+        self.* = undefined;
+    }
+};
+
+const RestartCheckOptions = struct {
+    proc_root: []const u8 = "/proc",
+    modules_root: []const u8 = "/usr/lib/modules",
+    systemctl_path: []const u8 = "systemctl",
+    restart_services: bool = true,
+};
+
 pub const Manager = struct {
     handle: libalpm.Handle = null,
     is_initialized: bool = false,
@@ -665,13 +753,16 @@ pub const Manager = struct {
         }
     }
 
-    pub fn sync_system_update(self: *Manager, flags: TransFlag) TransactionError!void {
+    /// Performs a full system upgrade and then checks the running system for
+    /// processes and services which still use replaced libraries. The returned
+    /// report is owned by the caller and must be deinitialized.
+    pub fn sync_system_update(self: *Manager, flags: TransFlag) TransactionError!RestartReport {
         if (self.handle == null) return TransactionError.NoHandle;
 
         // This is first before updating so it can bail before database is downloaded
         if (self.detected_cachyos) {
             const update_notice = cachyos.UpdateNotice.init(self.allocator, self.io());
-            if (!update_notice.check(self.environ, &self.dispatcher)) return;
+            if (!update_notice.check(self.environ, &self.dispatcher)) return RestartReport.empty(self.allocator);
         }
         self.sync(true) catch return TransactionError.SyncDbFailed;
 
@@ -683,7 +774,10 @@ pub const Manager = struct {
         if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
             return TransactionError.TransInitFailed;
         }
-        defer _ = rawLibalpm.alpm_trans_release(self.handle);
+        var transaction_active = true;
+        defer {
+            if (transaction_active) _ = rawLibalpm.alpm_trans_release(self.handle);
+        }
 
         // Potentially could allow downgrade here
         if (rawLibalpm.alpm_sync_sysupgrade(self.handle, @intFromBool(false)) != 0) {
@@ -715,6 +809,332 @@ pub const Manager = struct {
             };
             return TransactionError.CommitFailed;
         }
+
+        // Do not hold the pacman database lock while inspecting processes or
+        // invoking systemctl.
+        _ = rawLibalpm.alpm_trans_release(self.handle);
+        transaction_active = false;
+
+        if (trans_flags.dbonly) return RestartReport.empty(self.allocator);
+        return self.checkForRequiredRestarts(.{}) catch TransactionError.OutOfMemory;
+    }
+
+    /// Detects stale runtime state and restarts mapped systemd services. File
+    /// access races and permission failures under procfs are non-fatal and are
+    /// reflected by `process_scan_complete`/`skipped_processes`. Allocation is
+    /// the only error because restart command failures belong in the report.
+    fn checkForRequiredRestarts(self: *Manager, options: RestartCheckOptions) error{OutOfMemory}!RestartReport {
+        if (builtin.os.tag != .linux) return RestartReport.empty(self.allocator);
+
+        var running_kernel: ?[]u8 = null;
+        errdefer if (running_kernel) |kernel| self.allocator.free(kernel);
+        var running_kernel_modules_present: ?bool = null;
+        var needs_reboot = false;
+        var process_scan_complete = true;
+        var skipped_processes: usize = 0;
+
+        var affected_processes: std.ArrayList(AffectedProcess) = .empty;
+        errdefer {
+            for (affected_processes.items) |*process| process.deinit(self.allocator);
+            affected_processes.deinit(self.allocator);
+        }
+        var affected_services: std.ArrayList([]u8) = .empty;
+        errdefer {
+            for (affected_services.items) |service| self.allocator.free(service);
+            affected_services.deinit(self.allocator);
+        }
+        var restarted_services: std.ArrayList([]u8) = .empty;
+        errdefer {
+            for (restarted_services.items) |service| self.allocator.free(service);
+            restarted_services.deinit(self.allocator);
+        }
+        var failures: std.ArrayList(ServiceRestartFailure) = .empty;
+        errdefer {
+            for (failures.items) |*failure| failure.deinit(self.allocator);
+            failures.deinit(self.allocator);
+        }
+
+        const osrelease_path = std.fs.path.join(
+            self.allocator,
+            &.{ options.proc_root, "sys", "kernel", "osrelease" },
+        ) catch return error.OutOfMemory;
+        defer self.allocator.free(osrelease_path);
+
+        if (std.Io.Dir.cwd().readFileAlloc(
+            self.io(),
+            osrelease_path,
+            self.allocator,
+            .limited(4096),
+        )) |contents| {
+            defer self.allocator.free(contents);
+            const trimmed = std.mem.trim(u8, contents, " \t\r\n");
+            if (trimmed.len != 0) {
+                running_kernel = self.allocator.dupe(u8, trimmed) catch return error.OutOfMemory;
+                const modules_path = std.fs.path.join(
+                    self.allocator,
+                    &.{ options.modules_root, trimmed },
+                ) catch return error.OutOfMemory;
+                defer self.allocator.free(modules_path);
+
+                if (std.Io.Dir.cwd().statFile(self.io(), modules_path, .{})) |stat| {
+                    running_kernel_modules_present = stat.kind == .directory;
+                    needs_reboot = !running_kernel_modules_present.?;
+                } else |err| switch (err) {
+                    error.FileNotFound, error.NotDir => {
+                        running_kernel_modules_present = false;
+                        needs_reboot = true;
+                    },
+                    else => running_kernel_modules_present = null,
+                }
+            }
+        } else |_| {}
+
+        var proc_dir = std.Io.Dir.cwd().openDir(
+            self.io(),
+            options.proc_root,
+            .{ .iterate = true },
+        ) catch {
+            process_scan_complete = false;
+            return .{
+                .allocator = self.allocator,
+                .running_kernel = running_kernel,
+                .running_kernel_modules_present = running_kernel_modules_present,
+                .needs_reboot = needs_reboot,
+                .process_scan_complete = process_scan_complete,
+                .skipped_processes = skipped_processes,
+                .affected_processes = &.{},
+                .affected_services = &.{},
+                .restarted_services = &.{},
+                .failures = &.{},
+            };
+        };
+        defer proc_dir.close(self.io());
+
+        var iterator = proc_dir.iterateAssumeFirstIteration();
+        while (true) {
+            const next_entry = iterator.next(self.io()) catch {
+                process_scan_complete = false;
+                break;
+            };
+            const entry = next_entry orelse break;
+            if (entry.kind != .directory and entry.kind != .sym_link) continue;
+            const pid = std.fmt.parseInt(u32, entry.name, 10) catch continue;
+
+            const maps_path = std.fs.path.join(
+                self.allocator,
+                &.{ options.proc_root, entry.name, "maps" },
+            ) catch return error.OutOfMemory;
+            defer self.allocator.free(maps_path);
+            const maps = std.Io.Dir.cwd().readFileAlloc(
+                self.io(),
+                maps_path,
+                self.allocator,
+                .limited(16 * 1024 * 1024),
+            ) catch {
+                skipped_processes += 1;
+                continue;
+            };
+            defer self.allocator.free(maps);
+            if (!hasDeletedSharedLibrary(maps)) continue;
+
+            var command: ?[]u8 = null;
+            const comm_path = std.fs.path.join(
+                self.allocator,
+                &.{ options.proc_root, entry.name, "comm" },
+            ) catch return error.OutOfMemory;
+            defer self.allocator.free(comm_path);
+            if (std.Io.Dir.cwd().readFileAlloc(
+                self.io(),
+                comm_path,
+                self.allocator,
+                .limited(4096),
+            )) |comm_contents| {
+                defer self.allocator.free(comm_contents);
+                const comm = std.mem.trim(u8, comm_contents, " \t\r\n");
+                if (comm.len != 0) {
+                    command = self.allocator.dupe(u8, comm) catch return error.OutOfMemory;
+                    if (isCriticalRestartProcess(comm)) needs_reboot = true;
+                }
+            } else |_| {}
+
+            var service: ?[]u8 = null;
+            const cgroup_path = std.fs.path.join(
+                self.allocator,
+                &.{ options.proc_root, entry.name, "cgroup" },
+            ) catch {
+                if (command) |owned| self.allocator.free(owned);
+                return error.OutOfMemory;
+            };
+            defer self.allocator.free(cgroup_path);
+            if (std.Io.Dir.cwd().readFileAlloc(
+                self.io(),
+                cgroup_path,
+                self.allocator,
+                .limited(1024 * 1024),
+            )) |cgroup| {
+                defer self.allocator.free(cgroup);
+                if (serviceFromCgroup(cgroup)) |service_name| {
+                    service = self.allocator.dupe(u8, service_name) catch {
+                        if (command) |owned| self.allocator.free(owned);
+                        return error.OutOfMemory;
+                    };
+
+                    var seen = false;
+                    for (affected_services.items) |known| {
+                        if (std.mem.eql(u8, known, service_name)) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen) {
+                        const owned_service = self.allocator.dupe(u8, service_name) catch {
+                            if (command) |owned| self.allocator.free(owned);
+                            if (service) |owned| self.allocator.free(owned);
+                            return error.OutOfMemory;
+                        };
+                        affected_services.append(self.allocator, owned_service) catch {
+                            self.allocator.free(owned_service);
+                            if (command) |owned| self.allocator.free(owned);
+                            if (service) |owned| self.allocator.free(owned);
+                            return error.OutOfMemory;
+                        };
+                    }
+                }
+            } else |_| {}
+
+            affected_processes.append(self.allocator, .{
+                .pid = pid,
+                .command = command,
+                .service = service,
+            }) catch {
+                if (command) |owned| self.allocator.free(owned);
+                if (service) |owned| self.allocator.free(owned);
+                return error.OutOfMemory;
+            };
+        }
+
+        std.mem.sort([]u8, affected_services.items, {}, stringBefore);
+
+        if (options.restart_services and !needs_reboot) {
+            for (affected_services.items) |service| {
+                const result = std.process.run(self.allocator, self.io(), .{
+                    .argv = &.{ options.systemctl_path, "restart", service },
+                    .stdout_limit = .limited(4096),
+                    .stderr_limit = .limited(64 * 1024),
+                }) catch |err| {
+                    const failure_service = self.allocator.dupe(u8, service) catch return error.OutOfMemory;
+                    const failure_message = self.allocator.dupe(u8, @errorName(err)) catch {
+                        self.allocator.free(failure_service);
+                        return error.OutOfMemory;
+                    };
+                    failures.append(self.allocator, .{
+                        .service = failure_service,
+                        .kind = .spawn,
+                        .exit_code = null,
+                        .message = failure_message,
+                    }) catch {
+                        self.allocator.free(failure_service);
+                        self.allocator.free(failure_message);
+                        return error.OutOfMemory;
+                    };
+                    continue;
+                };
+                defer self.allocator.free(result.stdout);
+                defer self.allocator.free(result.stderr);
+
+                const succeeded = switch (result.term) {
+                    .exited => |code| code == 0,
+                    else => false,
+                };
+                if (succeeded) {
+                    const restarted = self.allocator.dupe(u8, service) catch return error.OutOfMemory;
+                    restarted_services.append(self.allocator, restarted) catch {
+                        self.allocator.free(restarted);
+                        return error.OutOfMemory;
+                    };
+                    continue;
+                }
+
+                const failure_kind: ServiceRestartFailureKind = switch (result.term) {
+                    .exited => .exit_status,
+                    else => .terminated,
+                };
+                const exit_code: ?u8 = switch (result.term) {
+                    .exited => |code| code,
+                    else => null,
+                };
+                const stderr = std.mem.trim(u8, result.stderr, " \t\r\n");
+                const failure_message = if (stderr.len != 0)
+                    self.allocator.dupe(u8, stderr) catch return error.OutOfMemory
+                else if (exit_code) |code|
+                    std.fmt.allocPrint(self.allocator, "systemctl exited with status {d}", .{code}) catch return error.OutOfMemory
+                else
+                    self.allocator.dupe(
+                        u8,
+                        "systemctl was terminated before it exited",
+                    ) catch return error.OutOfMemory;
+                const failure_service = self.allocator.dupe(u8, service) catch {
+                    self.allocator.free(failure_message);
+                    return error.OutOfMemory;
+                };
+                failures.append(self.allocator, .{
+                    .service = failure_service,
+                    .kind = failure_kind,
+                    .exit_code = exit_code,
+                    .message = failure_message,
+                }) catch {
+                    self.allocator.free(failure_service);
+                    self.allocator.free(failure_message);
+                    return error.OutOfMemory;
+                };
+            }
+        }
+
+        const process_slice: []AffectedProcess = if (affected_processes.items.len == 0)
+            &.{}
+        else
+            affected_processes.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
+        errdefer {
+            for (process_slice) |*process| process.deinit(self.allocator);
+            if (process_slice.len != 0) self.allocator.free(process_slice);
+        }
+        const affected_service_slice: [][]u8 = if (affected_services.items.len == 0)
+            &.{}
+        else
+            affected_services.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
+        errdefer {
+            for (affected_service_slice) |service| self.allocator.free(service);
+            if (affected_service_slice.len != 0) self.allocator.free(affected_service_slice);
+        }
+        const restarted_service_slice: [][]u8 = if (restarted_services.items.len == 0)
+            &.{}
+        else
+            restarted_services.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
+        errdefer {
+            for (restarted_service_slice) |service| self.allocator.free(service);
+            if (restarted_service_slice.len != 0) self.allocator.free(restarted_service_slice);
+        }
+        const failure_slice: []ServiceRestartFailure = if (failures.items.len == 0)
+            &.{}
+        else
+            failures.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
+        errdefer {
+            for (failure_slice) |*failure| failure.deinit(self.allocator);
+            if (failure_slice.len != 0) self.allocator.free(failure_slice);
+        }
+
+        return .{
+            .allocator = self.allocator,
+            .running_kernel = running_kernel,
+            .running_kernel_modules_present = running_kernel_modules_present,
+            .needs_reboot = needs_reboot,
+            .process_scan_complete = process_scan_complete,
+            .skipped_processes = skipped_processes,
+            .affected_processes = process_slice,
+            .affected_services = affected_service_slice,
+            .restarted_services = restarted_service_slice,
+            .failures = failure_slice,
+        };
     }
 
     pub fn update_package_reason(self: *Manager, pkg_name: [:0]const u8, reason: libalpm.PackageReason) TransactionError!void {
@@ -1890,6 +2310,44 @@ pub const Manager = struct {
     }
 };
 
+fn hasDeletedSharedLibrary(maps: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, maps, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "(deleted)") != null and
+            std.mem.indexOf(u8, line, ".so") != null)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn serviceFromCgroup(cgroup: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, cgroup, '\n');
+    while (lines.next()) |line| {
+        const marker = "/system.slice/";
+        const marker_index = std.mem.indexOf(u8, line, marker) orelse continue;
+        var components = std.mem.splitScalar(u8, line[marker_index + marker.len ..], '/');
+        while (components.next()) |component| {
+            const trimmed = std.mem.trim(u8, component, " \t\r");
+            if (trimmed.len > ".service".len and std.mem.endsWith(u8, trimmed, ".service")) {
+                return trimmed;
+            }
+        }
+    }
+    return null;
+}
+
+fn isCriticalRestartProcess(command: []const u8) bool {
+    return std.mem.eql(u8, command, "systemd") or
+        std.mem.eql(u8, command, "dbus-daemon") or
+        std.mem.eql(u8, command, "dbus-broker");
+}
+
+fn stringBefore(_: void, lhs: []u8, rhs: []u8) bool {
+    return std.mem.order(u8, lhs, rhs) == .lt;
+}
+
 fn dependencyName(dependency: []const u8) []const u8 {
     const end = std.mem.indexOfAny(u8, dependency, "<>=") orelse dependency.len;
     return std.mem.trim(u8, dependency[0..end], " \t\r\n");
@@ -1925,6 +2383,124 @@ test "is_cachyos exposes the detected manager state" {
     try testing.expect(!manager.is_cachyos());
     manager.detected_cachyos = true;
     try testing.expect(manager.is_cachyos());
+}
+
+test "restart parsing identifies deleted shared libraries and system services" {
+    try testing.expect(hasDeletedSharedLibrary(
+        "7f00-7f01 r-xp /usr/lib/libdemo.so.1 (deleted)\n",
+    ));
+    try testing.expect(!hasDeletedSharedLibrary(
+        "7f00-7f01 r-xp /usr/lib/libdemo.so.1\n" ++
+            "7f02-7f03 r-xp /usr/bin/demo (deleted)\n",
+    ));
+    try testing.expectEqualStrings(
+        "demo.service",
+        serviceFromCgroup("0::/system.slice/system-demo.slice/demo.service/tasks\n").?,
+    );
+    try testing.expect(serviceFromCgroup("0::/user.slice/session-1.scope\n") == null);
+    try testing.expect(isCriticalRestartProcess("systemd"));
+    try testing.expect(isCriticalRestartProcess("dbus-broker"));
+    try testing.expect(!isCriticalRestartProcess("demo"));
+}
+
+test "restart report detects kernels and records structured service results" {
+    const anchor: u8 = 0;
+    const root = try std.fmt.allocPrint(testing.allocator, "/tmp/shelly-restart-test-{x}", .{@intFromPtr(&anchor)});
+    defer testing.allocator.free(root);
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+
+    const proc_root = try std.fs.path.join(testing.allocator, &.{ root, "proc" });
+    defer testing.allocator.free(proc_root);
+    const modules_root = try std.fs.path.join(testing.allocator, &.{ root, "modules" });
+    defer testing.allocator.free(modules_root);
+    const kernel_dir = try std.fs.path.join(testing.allocator, &.{ modules_root, "6.12.1-test" });
+    defer testing.allocator.free(kernel_dir);
+    const kernel_parent = try std.fs.path.join(testing.allocator, &.{ proc_root, "sys", "kernel" });
+    defer testing.allocator.free(kernel_parent);
+    const process_dir = try std.fs.path.join(testing.allocator, &.{ proc_root, "123" });
+    defer testing.allocator.free(process_dir);
+    const kernel_file = try std.fs.path.join(testing.allocator, &.{ kernel_parent, "osrelease" });
+    defer testing.allocator.free(kernel_file);
+    const maps_file = try std.fs.path.join(testing.allocator, &.{ process_dir, "maps" });
+    defer testing.allocator.free(maps_file);
+    const comm_file = try std.fs.path.join(testing.allocator, &.{ process_dir, "comm" });
+    defer testing.allocator.free(comm_file);
+    const cgroup_file = try std.fs.path.join(testing.allocator, &.{ process_dir, "cgroup" });
+    defer testing.allocator.free(cgroup_file);
+
+    try std.Io.Dir.cwd().createDirPath(testing.io, kernel_parent);
+    try std.Io.Dir.cwd().createDirPath(testing.io, process_dir);
+    try std.Io.Dir.cwd().createDirPath(testing.io, modules_root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = kernel_file, .data = "6.12.1-test\n" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = maps_file,
+        .data = "7f00-7f01 r-xp 00000000 00:00 0 /usr/lib/libdemo.so.1 (deleted)\n",
+    });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = comm_file, .data = "demo\n" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = cgroup_file,
+        .data = "0::/system.slice/system-demo.slice/demo.service\n",
+    });
+
+    var manager: Manager = undefined;
+    manager.allocator = testing.allocator;
+    manager.threaded = .init(testing.allocator, .{});
+    defer manager.threaded.deinit();
+
+    var reboot_report = try manager.checkForRequiredRestarts(.{
+        .proc_root = proc_root,
+        .modules_root = modules_root,
+        .systemctl_path = "/bin/false",
+    });
+    defer reboot_report.deinit();
+    try testing.expectEqualStrings("6.12.1-test", reboot_report.running_kernel.?);
+    try testing.expectEqual(false, reboot_report.running_kernel_modules_present.?);
+    try testing.expect(reboot_report.needs_reboot);
+    try testing.expect(reboot_report.process_scan_complete);
+    try testing.expectEqual(@as(usize, 1), reboot_report.affected_processes.len);
+    try testing.expectEqual(@as(u32, 123), reboot_report.affected_processes[0].pid);
+    try testing.expectEqualStrings("demo", reboot_report.affected_processes[0].command.?);
+    try testing.expectEqualStrings("demo.service", reboot_report.affected_processes[0].service.?);
+    try testing.expectEqual(@as(usize, 1), reboot_report.affected_services.len);
+    try testing.expectEqualStrings("demo.service", reboot_report.affected_services[0]);
+    try testing.expectEqual(@as(usize, 0), reboot_report.failures.len);
+
+    try std.Io.Dir.cwd().createDirPath(testing.io, kernel_dir);
+    var failure_report = try manager.checkForRequiredRestarts(.{
+        .proc_root = proc_root,
+        .modules_root = modules_root,
+        .systemctl_path = "/bin/false",
+    });
+    defer failure_report.deinit();
+    try testing.expect(!failure_report.needs_reboot);
+    try testing.expectEqual(true, failure_report.running_kernel_modules_present.?);
+    try testing.expectEqual(@as(usize, 0), failure_report.restarted_services.len);
+    try testing.expectEqual(@as(usize, 1), failure_report.failures.len);
+    try testing.expectEqualStrings("demo.service", failure_report.failures[0].service);
+    try testing.expectEqual(ServiceRestartFailureKind.exit_status, failure_report.failures[0].kind);
+    try testing.expectEqual(@as(?u8, 1), failure_report.failures[0].exit_code);
+
+    var spawn_failure_report = try manager.checkForRequiredRestarts(.{
+        .proc_root = proc_root,
+        .modules_root = modules_root,
+        .systemctl_path = "/definitely/missing/systemctl",
+    });
+    defer spawn_failure_report.deinit();
+    try testing.expectEqual(@as(usize, 1), spawn_failure_report.failures.len);
+    try testing.expectEqual(ServiceRestartFailureKind.spawn, spawn_failure_report.failures[0].kind);
+    try testing.expect(spawn_failure_report.failures[0].exit_code == null);
+
+    var success_report = try manager.checkForRequiredRestarts(.{
+        .proc_root = proc_root,
+        .modules_root = modules_root,
+        .systemctl_path = "/bin/true",
+    });
+    defer success_report.deinit();
+    try testing.expect(!success_report.needs_reboot);
+    try testing.expectEqual(@as(usize, 1), success_report.restarted_services.len);
+    try testing.expectEqualStrings("demo.service", success_report.restarted_services[0]);
+    try testing.expectEqual(@as(usize, 0), success_report.failures.len);
 }
 
 // ---------------------------------------------------------------------------

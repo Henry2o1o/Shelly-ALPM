@@ -245,6 +245,18 @@ pub fn build(b: *std.Build) void {
     const alpm_query_test_step = b.step("alpm-query-test", "Run safe ALPM configuration and query API tests");
     alpm_query_test_step.dependOn(&run_alpm_query_tests.step);
 
+    const restart_tests = b.addTest(.{
+        .name = "restart-test",
+        .root_module = mod,
+        .filters = &.{
+            "restart parsing identifies deleted shared libraries and system services",
+            "restart report detects kernels and records structured service results",
+        },
+    });
+    const run_restart_tests = b.addRunArtifact(restart_tests);
+    const restart_test_step = b.step("restart-test", "Run safe post-upgrade restart detection tests");
+    restart_test_step.dependOn(&run_restart_tests.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means
