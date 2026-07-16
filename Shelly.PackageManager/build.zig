@@ -257,6 +257,26 @@ pub fn build(b: *std.Build) void {
     const restart_test_step = b.step("restart-test", "Run safe post-upgrade restart detection tests");
     restart_test_step.dependOn(&run_restart_tests.step);
 
+    const flatpak_tests = b.addTest(.{
+        .name = "flatpak-test",
+        .root_module = mod,
+        .filters = &.{
+            "Flatpak dispatcher forwards typed status and progress",
+            "parseFile reads gzip-compressed AppStream catalogs",
+            "AppStream manager returns an owned typed catalog",
+            "Flathub request payload preserves strict page limit and filters",
+            "Flathub response parser returns typed hits and exact JSON",
+            "Flathub client exposes typed and exact JSON search",
+            "Flathub search honors cancellation before network access",
+            "installed Flatpak resolution matches IDs and friendly names",
+            "Flatpak manager exposes strict-parity operations",
+            "AppStream manager exposes one and all remote catalog retrieval",
+        },
+    });
+    const run_flatpak_tests = b.addRunArtifact(flatpak_tests);
+    const flatpak_test_step = b.step("flatpak-test", "Run safe Flatpak parity tests");
+    flatpak_test_step.dependOn(&run_flatpak_tests.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means

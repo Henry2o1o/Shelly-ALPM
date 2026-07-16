@@ -116,13 +116,20 @@ pub const AppstreamParser = struct {
         var file = try std.Io.Dir.cwd().openFile(self.io, path, .{});
         defer file.close(self.io);
 
-        if (std.mem.endsWith(u8, path, ".gz")) {
-            // TODO: gzip decompression not yet wired up.
-            return error.GzipNotYetSupported;
-        }
-
         var buf: [4096]u8 = undefined;
         var file_reader = file.reader(self.io, &buf);
+        if (std.ascii.endsWithIgnoreCase(path, ".gz")) {
+            var decompression_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+            var decompressor: std.compress.flate.Decompress = .init(
+                &file_reader.interface,
+                .gzip,
+                &decompression_buffer,
+            );
+            var streaming_reader: xml.Reader.Streaming = .init(self.arena, &decompressor.reader, .{});
+            defer streaming_reader.deinit();
+            return self.parseStream(&streaming_reader.interface);
+        }
+
         var streaming_reader: xml.Reader.Streaming = .init(self.arena, &file_reader.interface, .{});
         defer streaming_reader.deinit();
 
@@ -593,6 +600,42 @@ test "parseComponent falls back to <developer><name> when developer_name is abse
 
     try std.testing.expectEqual(@as(usize, 1), apps.len);
     try std.testing.expectEqualStrings("Nested Dev", apps[0].developer_name);
+}
+
+test "parseFile reads gzip-compressed AppStream catalogs" {
+    const compressed = [_]u8{
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x4d, 0x8c,
+        0x31, 0x0e, 0x80, 0x20, 0x0c, 0x00, 0xbf, 0x42, 0xd8, 0x85, 0x0f, 0xd4,
+        0x26, 0x4e, 0xbe, 0x83, 0x40, 0x63, 0x88, 0x40, 0x1b, 0x61, 0x50, 0x5f,
+        0x2f, 0x3a, 0x10, 0xb7, 0xbb, 0x1b, 0x0e, 0x3c, 0x67, 0xe1, 0x42, 0xa5,
+        0x55, 0x84, 0xc1, 0xaa, 0x5d, 0x42, 0xb3, 0x0e, 0x54, 0xf7, 0xc6, 0x32,
+        0x39, 0x91, 0x14, 0xbd, 0x6b, 0x91, 0x8b, 0x46, 0x88, 0x01, 0xf9, 0xd8,
+        0x0c, 0x9d, 0x2e, 0x4b, 0x22, 0xb3, 0xde, 0x51, 0xc0, 0xf6, 0x08, 0xc5,
+        0x65, 0xc2, 0x57, 0xd5, 0x22, 0x3d, 0x7d, 0x0a, 0x76, 0x4c, 0xff, 0x5c,
+        0xf1, 0x01, 0xf7, 0x03, 0x93, 0xaa, 0x79, 0x00, 0x00, 0x00,
+    };
+
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/appstream.xml.gz",
+        .{temporary.sub_path},
+    );
+    defer std.testing.allocator.free(path);
+
+    var file = try std.Io.Dir.cwd().createFile(std.testing.io, path, .{});
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, &compressed);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const parser = AppstreamParser{ .arena = arena_state.allocator(), .io = std.testing.io };
+    const apps = try parser.parseFile(path);
+
+    try std.testing.expectEqual(@as(usize, 1), apps.len);
+    try std.testing.expectEqualStrings("org.example.Gzip", apps[0].id);
+    try std.testing.expectEqualStrings("Gzip App", apps[0].name);
 }
 
 // test "parseFile smoke test against a real Flathub appstream file (skipped if unavailable)" {
