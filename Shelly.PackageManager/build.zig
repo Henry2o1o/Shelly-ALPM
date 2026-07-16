@@ -291,6 +291,18 @@ pub fn build(b: *std.Build) void {
     const alpm_query_test_step = b.step("alpm-query-test", "Run safe ALPM configuration and query API tests");
     alpm_query_test_step.dependOn(&run_alpm_query_tests.step);
 
+    const alpm_sync_tests = b.addTest(.{
+        .name = "alpm-sync-test",
+        .root_module = mod,
+        .filters = &.{
+            "database signature downloads are reserved for required signatures",
+            "Manager.sync downloads the configured database into DBPath/sync",
+        },
+    });
+    const run_alpm_sync_tests = b.addRunArtifact(alpm_sync_tests);
+    const alpm_sync_test_step = b.step("alpm-sync-test", "Run the isolated ALPM database sync test");
+    alpm_sync_test_step.dependOn(&run_alpm_sync_tests.step);
+
     const restart_tests = b.addTest(.{
         .name = "restart-test",
         .root_module = mod,

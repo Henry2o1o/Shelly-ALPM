@@ -27,6 +27,7 @@ pub fn main(init: std.process.Init) !void {
         .stdout = stdout_writer,
         .stderr = stderr_writer,
         .environment = init.environ_map,
+        .environ = init.minimal.environ,
         .stdin_is_tty = Io.File.stdin().isTty(io) catch false,
         .stdout_is_tty = Io.File.stdout().isTty(io) catch false,
         .dispatcher = .{ .call = Shelly_Cli_Zig.commands.dispatch },
@@ -39,5 +40,5 @@ pub fn main(init: std.process.Init) !void {
 
     try stdout_writer.flush();
     try stderr_writer.flush();
-    if (exit_code != 0) std.process.exit(exit_code);
+    std.process.exit(exit_code);
 }

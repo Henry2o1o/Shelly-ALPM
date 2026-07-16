@@ -58,6 +58,14 @@ pub fn writeConfigFrame(context: *runtime.RuntimeContext, config: *const model.C
 }
 
 pub fn writeInfoFrame(context: *runtime.RuntimeContext, message: []const u8) !void {
+    try writeAlpmInfoFrame(context, "InformationalOutput", message);
+}
+
+pub fn writeAlpmInfoFrame(
+    context: *runtime.RuntimeContext,
+    event_type: []const u8,
+    message: []const u8,
+) !void {
     var payload = std.Io.Writer.Allocating.init(context.allocator);
     defer payload.deinit();
     var json: std.json.Stringify = .{ .writer = &payload.writer };
@@ -65,7 +73,7 @@ pub fn writeInfoFrame(context: *runtime.RuntimeContext, message: []const u8) !vo
     try json.objectField("$kind");
     try json.write("alpm.info");
     try json.objectField("EventType");
-    try json.write("InformationalOutput");
+    try json.write(event_type);
     try json.objectField("Message");
     try json.write(message);
     try json.objectField("PackageName");

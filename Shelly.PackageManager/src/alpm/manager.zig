@@ -275,8 +275,8 @@ pub const Manager = struct {
         defer operation_scope.finish(.success);
         errdefer operation_scope.fail();
         try self.checkOperationCancelled();
-        var databaseMap = std.StringHashMap(std.ArrayList([]const u8)).init(self.allocator);
-        defer databaseMap.deinit();
+        var required_signatures = std.StringHashMap(bool).init(self.allocator);
+        defer required_signatures.deinit();
         self.package_download = false;
         var databases: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
         if (databases == null) return TransactionError.SyncDbFailed;
@@ -286,6 +286,9 @@ pub const Manager = struct {
             const db = databases.?.data orelse continue;
             var db_struct: libalpm.Database = .{ .ptr = @ptrCast(@alignCast(db)) };
             const db_name: []const u8 = db_struct.name() orelse continue;
+            required_signatures.put(db_name, databaseSignatureRequired(db_struct.sigLevel())) catch {
+                return TransactionError.SyncDbFailed;
+            };
             var servers = db_struct.servers();
             while (servers.next()) |server| {
                 dict.add(db_name, server) catch {
@@ -293,7 +296,7 @@ pub const Manager = struct {
                 };
             }
         }
-        const syncDirectory = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.config.database_path, "/sync" }) catch {
+        const syncDirectory = std.fs.path.join(self.allocator, &.{ self.config.database_path, "sync" }) catch {
             return TransactionError.SyncDbFailed;
         };
         defer self.allocator.free(syncDirectory);
@@ -311,8 +314,9 @@ pub const Manager = struct {
         while (dict_iterator.next()) |entry| {
             const database_name = entry.key_ptr.*;
             const urls = entry.value_ptr.*;
-            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory, force }) catch {
-                self.download_database(database_name, urls, syncDirectory, force) catch {
+            const signature_required = required_signatures.get(database_name) orelse false;
+            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory, force, signature_required }) catch {
+                self.download_database(database_name, urls, syncDirectory, force, signature_required) catch {
                     failed = true;
                 };
                 continue;
@@ -1754,7 +1758,14 @@ pub const Manager = struct {
         self.setupCallbacks();
     }
 
-    fn download_database(self: *Manager, database_name: []const u8, urls: std.ArrayList([]const u8), sync_directory: []const u8, force_download: bool) downloader.DownloadError!void {
+    fn download_database(
+        self: *Manager,
+        database_name: []const u8,
+        urls: std.ArrayList([]const u8),
+        sync_directory: []const u8,
+        force_download: bool,
+        signature_required: bool,
+    ) downloader.DownloadError!void {
         const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
@@ -1770,14 +1781,29 @@ pub const Manager = struct {
             defer self.allocator.free(db_url);
 
             switch (downloader_instance.downloadToFile(db_url, dest, force_download)) {
-                .succes, .skipped => {
+                .succes => {
+                    if (!signature_required) {
+                        // An optional signature must not keep a completed database
+                        // sync alive. Remove any signature belonging to an older
+                        // database so libalpm cannot validate mismatched files.
+                        std.Io.Dir.cwd().deleteFile(self.io(), sig_dest) catch {};
+                        return;
+                    }
                     const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
                     defer self.allocator.free(sig_url);
-                    // The database signature is best-effort and optional: many
-                    // repositories (e.g. Arch's) do not sign databases, so a
-                    // missing signature must not be surfaced as an error.
+                    // Required database signatures are fetched here and
+                    // validated by the sync verification pass below.
                     downloader_instance.quiet = true;
                     _ = downloader_instance.downloadToFile(sig_url, sig_dest, force_download);
+                    downloader_instance.quiet = false;
+                    return;
+                },
+                .skipped => {
+                    if (!signature_required) return;
+                    const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
+                    defer self.allocator.free(sig_url);
+                    downloader_instance.quiet = true;
+                    _ = downloader_instance.downloadToFile(sig_url, sig_dest, false);
                     downloader_instance.quiet = false;
                     return;
                 },
@@ -1785,6 +1811,11 @@ pub const Manager = struct {
             }
         }
         return downloader.DownloadError.FailedDownload;
+    }
+
+    fn databaseSignatureRequired(level: i32) bool {
+        return level & rawLibalpm.ALPM_SIG_DATABASE != 0 and
+            level & rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL == 0;
     }
 
     fn download_prepared_packages(self: *Manager) TransactionError!void {
@@ -3384,6 +3415,14 @@ test "onDownloadEvent handles missing paths and missing progress payloads" {
 
     Manager.onDownloadEvent(@ptrCast(&mgr), .{ .event_type = .Progress });
     try testing.expect(progress_cap.args == null);
+}
+
+test "database signature downloads are reserved for required signatures" {
+    try testing.expect(!Manager.databaseSignatureRequired(0));
+    try testing.expect(Manager.databaseSignatureRequired(rawLibalpm.ALPM_SIG_DATABASE));
+    try testing.expect(!Manager.databaseSignatureRequired(
+        rawLibalpm.ALPM_SIG_DATABASE | rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL,
+    ));
 }
 
 // ---------------------------------------------------------------------------

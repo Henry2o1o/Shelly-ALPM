@@ -24,6 +24,7 @@ pub const Variant = struct {
     action_code: ?u8,
     type_code: ?u8,
     keyring_action: ?[]const u8 = null,
+    default_for_action: bool = false,
 };
 
 // This is the authoritative action/type routing table. The source paths identify
@@ -46,7 +47,7 @@ pub const variants = [_]Variant{
     .{ .source_path = "shelly pacfile", .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'U' },
     .{ .source_path = "shelly purify", .action = "purify", .type_name = "standard", .action_code = 'Z', .type_code = 'S' },
     .{ .source_path = "shelly remove", .action = "remove", .type_name = "standard", .action_code = 'R', .type_code = 'S' },
-    .{ .source_path = "shelly sync", .action = "sync", .type_name = "standard", .action_code = 'Y', .type_code = 'S' },
+    .{ .source_path = "shelly sync", .action = "sync", .type_name = "standard", .action_code = 'Y', .type_code = 'S', .default_for_action = true },
     .{ .source_path = "shelly update", .action = "update", .type_name = "standard", .action_code = 'T', .type_code = 'S' },
     .{ .source_path = "shelly docs", .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'U' },
     .{ .source_path = "shelly completions", .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'U' },
@@ -251,5 +252,16 @@ test "every shared modifier is actually shared" {
     for (shared_modifiers) |modifier| {
         try std.testing.expect(modifier.type_names.len >= 2);
         try std.testing.expect(modifier.source_names.len >= 1);
+    }
+}
+
+test "an action has at most one default type" {
+    for (variants, 0..) |variant, index| {
+        if (!variant.default_for_action) continue;
+        for (variants[index + 1 ..]) |other| {
+            try std.testing.expect(
+                !other.default_for_action or !std.mem.eql(u8, variant.action, other.action),
+            );
+        }
     }
 }

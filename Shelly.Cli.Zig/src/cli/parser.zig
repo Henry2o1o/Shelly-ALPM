@@ -110,6 +110,10 @@ pub fn parse(
     if (help_requested) return .{ .help = command };
     if (version_requested) return .version;
 
+    if (command.isBranch and positionals.items.len == 0) {
+        if (manifest.findDefaultChild(command)) |default_child| command = default_child;
+    }
+
     for (command.options) |option| {
         if (!option.required) continue;
         var present = false;
@@ -310,6 +314,16 @@ test "maps an empty invocation to upgrade all" {
     const outcome = try parse(arena.allocator(), &manifest, &.{});
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqualStrings("shelly upgrade all", outcome.dispatch.command.path);
+}
+
+test "maps bare sync to its catalog-defined standard type" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parse(arena.allocator(), &manifest, &.{ "sync", "--force" });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings("shelly sync standard", outcome.dispatch.command.path);
+    try std.testing.expectEqualStrings("--force", outcome.dispatch.options[0].name);
 }
 
 test "hard cut rejects old type-first and implicit-standard paths" {

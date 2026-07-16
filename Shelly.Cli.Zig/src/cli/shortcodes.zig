@@ -129,6 +129,12 @@ test "translates action-type shortcodes from the command manifest" {
         &.{ "-VK", "ABCD" },
         &.{ "recv", "keyring", "ABCD" },
     );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{"-YSf"},
+        &.{ "sync", "standard", "-f" },
+    );
 }
 
 test "uses centralized effective modifiers and rejects type-first shortcodes" {

@@ -18,6 +18,7 @@ pub const RuntimeContext = struct {
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
     environment: ?*const std.process.Environ.Map = null,
+    environ: std.process.Environ = .empty,
     stdin_is_tty: bool = false,
     stdout_is_tty: bool = false,
     dispatcher: Dispatcher = .{},

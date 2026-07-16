@@ -53,6 +53,7 @@ pub const Command = struct {
     notes: ?[]const u8,
     actionCode: ?u8 = null,
     typeCode: ?u8 = null,
+    defaultForAction: bool = false,
 
     pub fn matches(self: Command, token: []const u8) bool {
         if (std.mem.eql(u8, self.name, token)) return true;
@@ -103,9 +104,22 @@ pub const Manifest = struct {
         return null;
     }
 
+    pub fn findDefaultChild(self: *const Manifest, parent: *const Command) ?*const Command {
+        for (self.commands) |*command| {
+            const parent_path = command.parentPath orelse continue;
+            if (command.defaultForAction and std.mem.eql(u8, parent_path, parent.path)) return command;
+        }
+        return null;
+    }
+
     pub fn findOption(self: *const Manifest, command: *const Command, token: []const u8) ?*const Option {
         for (command.options) |*option| {
             if (option.matches(token)) return option;
+        }
+        if (self.findDefaultChild(command)) |default_child| {
+            for (default_child.options) |*option| {
+                if (option.matches(token)) return option;
+            }
         }
         if (command != self.root()) {
             for (self.root().options) |*option| {
@@ -197,6 +211,7 @@ fn projectActionFirst(allocator: std.mem.Allocator, frozen: Manifest) !Manifest 
                 .notes = source.notes,
                 .actionCode = candidate.action_code,
                 .typeCode = candidate.type_code,
+                .defaultForAction = candidate.default_for_action,
             });
         }
     }
@@ -246,6 +261,10 @@ test "projects the frozen metadata into the action-first command catalog" {
     try std.testing.expect(manifest.findByPath("shelly search standard") != null);
     try std.testing.expect(manifest.findByPath("shelly flatpak search") == null);
     try std.testing.expect(manifest.findByPath("shelly query") == null);
+    try std.testing.expectEqualStrings(
+        "shelly sync standard",
+        manifest.findDefaultChild(manifest.findByPath("shelly sync").?).?.path,
+    );
 }
 
 test "centralizes shared modifiers while retaining type additions" {
