@@ -9,6 +9,8 @@ pub fn main(init: std.process.Init) !void {
     const process_arguments = try init.minimal.args.toSlice(arena);
     const arguments = if (process_arguments.len > 0) process_arguments[1..] else process_arguments;
 
+    var stdin_buffer: [4096]u8 = undefined;
+    var stdin_file_reader: Io.File.Reader = .initStreaming(.stdin(), io, &stdin_buffer);
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout_writer = &stdout_file_writer.interface;
@@ -24,6 +26,7 @@ pub fn main(init: std.process.Init) !void {
     var context: Shelly_Cli_Zig.runtime.RuntimeContext = .{
         .allocator = arena,
         .io = io,
+        .stdin = &stdin_file_reader.interface,
         .stdout = stdout_writer,
         .stderr = stderr_writer,
         .environment = init.environ_map,

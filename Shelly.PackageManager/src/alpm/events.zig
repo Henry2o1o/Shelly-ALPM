@@ -400,10 +400,25 @@ pub const Dispatcher = struct {
     }
 
     pub fn raiseReplaces(self: *Dispatcher, args: ReplacesArgs) void {
-        if (self.operation) |operation| operation.status(.information, args.pkg_name, "alpm.replaces", null);
+        if (self.operation) |operation| {
+            const message = replacementMessage(self.allocator, args) catch null;
+            defer if (message) |value| self.allocator.free(value);
+            operation.status(.information, message orelse args.pkg_name, "alpm.replaces", null);
+        }
         self.dispatch(ReplacesArgs, &self.replaces, args);
     }
 };
+
+fn replacementMessage(allocator: std.mem.Allocator, args: ReplacesArgs) ![]u8 {
+    var output = std.Io.Writer.Allocating.init(allocator);
+    errdefer output.deinit();
+    try output.writer.print("{s}/{s} replaces ", .{ args.repository, args.pkg_name });
+    for (args.replaces, 0..) |replacement, index| {
+        if (index > 0) try output.writer.writeByte(',');
+        try output.writer.writeAll(replacement);
+    }
+    return output.toOwnedSlice();
+}
 
 fn commonQuestionKind(args: QuestionArgs) operation_api.QuestionKind {
     const question_type = if (args.question_type < 0)
@@ -981,6 +996,19 @@ test "pacnew, pacsave and replaces handlers dispatch" {
     if (!pacnew_called) return error.TestFailed;
     if (!pacsave_called) return error.TestFailed;
     if (!replaces_called) return error.TestFailed;
+}
+
+test "replacement operation status matches the standard CLI message" {
+    const message = try replacementMessage(std.testing.allocator, .{
+        .pkg_name = "new-package",
+        .repository = "extra",
+        .replaces = &.{ "old-package", "older-package" },
+    });
+    defer std.testing.allocator.free(message);
+    try std.testing.expectEqualStrings(
+        "extra/new-package replaces old-package,older-package",
+        message,
+    );
 }
 
 test "handlers isolated per event type" {

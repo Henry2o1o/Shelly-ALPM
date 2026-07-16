@@ -134,7 +134,7 @@ fn writeFrame(context: *runtime.RuntimeContext, payload: []const u8) !void {
     try context.stdout.print("[JSON]{s}[/JSON]\n", .{result});
 }
 
-fn supportsAnsi(context: *const runtime.RuntimeContext) bool {
+pub fn supportsAnsi(context: *const runtime.RuntimeContext) bool {
     if (!context.stdin_is_tty or !context.stdout_is_tty) return false;
     if (xdg.getEnv(context, "NO_COLOR") != null) return false;
     if (xdg.getEnv(context, "TERM")) |term| {

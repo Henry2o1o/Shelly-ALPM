@@ -1,6 +1,7 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const output = @import("../output/config.zig");
+const standard_single_pane = @import("../output/standard_single_pane.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
@@ -13,10 +14,23 @@ const Runner = struct {
     call: *const fn (
         data: ?*anyopaque,
         context: *runtime.RuntimeContext,
+        operation_context: *Zigalpm.OperationContext,
         force: bool,
-        no_confirm: bool,
-        ui_mode: bool,
     ) anyerror!void,
+};
+
+const StandardRunnerAdapter = struct {
+    runner: Runner,
+    force: bool,
+
+    fn call(
+        data: ?*anyopaque,
+        context: *runtime.RuntimeContext,
+        operation_context: *Zigalpm.OperationContext,
+    ) !void {
+        const self: *StandardRunnerAdapter = @ptrCast(@alignCast(data.?));
+        try self.runner.call(self.runner.data, context, operation_context, self.force);
+    }
 };
 
 const real_runner: Runner = .{ .call = runRealSync };
@@ -45,45 +59,66 @@ fn executeWithRunner(
 ) !u8 {
     const force = optionEnabled(invocation, "--force");
 
-    if (invocation.globals.ui_mode) {
-        try output.writeAlpmInfoFrame(context, "TransactionStart", "Synchronizing package databases...");
-    } else {
-        try context.stdout.writeAll("Initializing ALPM...\n");
-        try context.stdout.writeAll("Synchronizing package databases...\n");
+    return if (invocation.globals.ui_mode)
+        executeUi(context, invocation, runner, force)
+    else
+        executeStandard(context, invocation, runner, force);
+}
+
+fn executeStandard(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    runner: Runner,
+    force: bool,
+) !u8 {
+    var adapter: StandardRunnerAdapter = .{ .runner = runner, .force = force };
+    const succeeded = try standard_single_pane.output(
+        context,
+        "Synchronizing package databases...",
+        invocation.globals.no_confirm,
+        .{ .data = &adapter, .call = StandardRunnerAdapter.call },
+    );
+    return if (succeeded) 0 else 1;
+}
+
+fn executeUi(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    runner: Runner,
+    force: bool,
+) !u8 {
+    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    defer operation_context.deinit();
+    if (invocation.globals.no_confirm) {
+        operation_context.setQuestionHandler(.{ .function = acceptQuestionDefaults });
+        defer operation_context.setQuestionHandler(null);
     }
+    var reporter: UiReporter = .{ .context = context };
+    const event_subscription = try operation_context.subscribe(.{
+        .function = UiReporter.handle,
+        .data = &reporter,
+    });
+    defer _ = operation_context.unsubscribe(event_subscription);
+
+    try output.writeAlpmInfoFrame(context, "TransactionStart", "Synchronizing package databases...");
     try flushOutput(context);
 
-    runner.call(
-        runner.data,
-        context,
-        force,
-        invocation.globals.no_confirm,
-        invocation.globals.ui_mode,
-    ) catch |err| {
-        if (invocation.globals.ui_mode) {
-            const message = try std.fmt.allocPrint(context.allocator, "Sync failed: {t}", .{err});
-            defer context.allocator.free(message);
-            try output.writeErrorFrame(context, message);
-            try output.writeAlpmInfoFrame(context, "TransactionFailed", "Sync failed.");
-        } else {
-            try context.stderr.print("error: {t}\n", .{err});
-            try output.writeFailure(context, "Sync failed. See errors above.");
-        }
+    runner.call(runner.data, context, &operation_context, force) catch |err| {
+        const message = try std.fmt.allocPrint(context.allocator, "Sync failed: {t}", .{err});
+        defer context.allocator.free(message);
+        try output.writeErrorFrame(context, message);
+        try output.writeAlpmInfoFrame(context, "TransactionFailed", "Sync failed.");
         try flushOutput(context);
         return 1;
     };
 
-    if (invocation.globals.ui_mode) {
-        try output.writeAlpmInfoFrame(
-            context,
-            "TransactionDone",
-            "Package databases synchronized successfully!",
-        );
-    } else {
-        try output.writeSuccess(context, "Package databases synchronized successfully!");
-    }
+    try output.writeAlpmInfoFrame(
+        context,
+        "TransactionDone",
+        "Package databases synchronized successfully!",
+    );
     try flushOutput(context);
-    return 0;
+    return if (reporter.write_failed.load(.acquire)) 1 else 0;
 }
 
 fn flushOutput(context: *runtime.RuntimeContext) !void {
@@ -94,22 +129,9 @@ fn flushOutput(context: *runtime.RuntimeContext) !void {
 fn runRealSync(
     _: ?*anyopaque,
     context: *runtime.RuntimeContext,
+    operation_context: *Zigalpm.OperationContext,
     force: bool,
-    no_confirm: bool,
-    ui_mode: bool,
 ) !void {
-    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
-    defer operation_context.deinit();
-    if (no_confirm) {
-        operation_context.setQuestionHandler(.{ .function = acceptQuestionDefaults });
-    }
-    var reporter: Reporter = .{ .context = context, .ui_mode = ui_mode };
-    const event_subscription = try operation_context.subscribe(.{
-        .function = Reporter.handle,
-        .data = &reporter,
-    });
-    defer _ = operation_context.unsubscribe(event_subscription);
-
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
@@ -118,51 +140,35 @@ fn runRealSync(
         null,
     );
     defer manager.deinit();
-    manager.setOperationContext(&operation_context);
+    manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
 
     try manager.sync(force);
-    if (reporter.write_failed.load(.acquire)) return error.OutputFailed;
 }
 
-const Reporter = struct {
+const UiReporter = struct {
     context: *runtime.RuntimeContext,
-    ui_mode: bool,
     mutex: std.Io.Mutex = .init,
     write_failed: std.atomic.Value(bool) = .init(false),
 
     fn handle(data: ?*anyopaque, event: Zigalpm.OperationEvent) void {
-        const self: *Reporter = @ptrCast(@alignCast(data.?));
+        const self: *UiReporter = @ptrCast(@alignCast(data.?));
         self.mutex.lockUncancelable(self.context.io);
         defer self.mutex.unlock(self.context.io);
         self.write(event) catch self.write_failed.store(true, .release);
     }
 
-    fn write(self: *Reporter, event: Zigalpm.OperationEvent) !void {
+    fn write(self: *UiReporter, event: Zigalpm.OperationEvent) !void {
         switch (event) {
             .status => |status| {
-                if (self.ui_mode) {
-                    try output.writeAlpmInfoFrame(self.context, "InformationalOutput", status.message);
-                } else {
-                    try self.context.stdout.print(":: {s}\n", .{status.message});
-                }
+                try output.writeAlpmInfoFrame(self.context, "InformationalOutput", status.message);
             },
             .progress => |progress| {
                 const message = progress.update.message orelse progress.update.stage orelse return;
-                if (self.ui_mode) {
-                    try output.writeAlpmInfoFrame(self.context, "InformationalOutput", message);
-                } else if (progress.update.percentage) |percentage| {
-                    try self.context.stdout.print(":: {s}: {d:.0}%\n", .{ message, percentage });
-                } else {
-                    try self.context.stdout.print(":: {s}\n", .{message});
-                }
+                try output.writeAlpmInfoFrame(self.context, "InformationalOutput", message);
             },
             .failure => |failure| {
-                if (self.ui_mode) {
-                    try output.writeErrorFrame(self.context, failure.message);
-                } else {
-                    try self.context.stderr.print("error: {s}\n", .{failure.message});
-                }
+                try output.writeErrorFrame(self.context, failure.message);
             },
             .started, .completed => {},
         }
@@ -190,7 +196,7 @@ fn optionEnabled(invocation: *const parser.Invocation, name: []const u8) bool {
     return false;
 }
 
-test "sync forwards force and no-confirm to the backend" {
+test "sync forwards force and applies no-confirm through the shared operation context" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
@@ -216,10 +222,19 @@ test "sync forwards force and no-confirm to the backend" {
     const runner: Runner = .{
         .data = &capture,
         .call = struct {
-            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, force: bool, no_confirm: bool, _: bool) !void {
+            fn run(
+                data: ?*anyopaque,
+                runtime_context: *runtime.RuntimeContext,
+                operation_context: *Zigalpm.OperationContext,
+                force: bool,
+            ) !void {
                 const observed: *Capture = @ptrCast(@alignCast(data.?));
                 observed.force = force;
-                observed.no_confirm = no_confirm;
+                var operation = operation_context.begin(.{ .backend = .alpm, .kind = .sync });
+                defer operation.finish(.success);
+                var response = try operation.ask(.{ .kind = .confirmation, .prompt = "Continue?" });
+                defer response.deinit(runtime_context.allocator);
+                observed.no_confirm = response.response == .accepted;
             }
         }.run,
     };
@@ -227,11 +242,8 @@ test "sync forwards force and no-confirm to the backend" {
     try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
     try std.testing.expect(capture.force);
     try std.testing.expect(capture.no_confirm);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        stdout.writer.buffered(),
-        "Package databases synchronized successfully!",
-    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Synchronizing package databases...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
 }
 
@@ -280,7 +292,7 @@ test "sync flushes its initial status before starting the backend" {
     const runner: Runner = .{
         .data = &capture,
         .call = struct {
-            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: bool, _: bool, _: bool) !void {
+            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: bool) !void {
                 const observed: *Capture = @ptrCast(@alignCast(data.?));
                 observed.initial_status_was_flushed = observed.writer.flush_count > 0;
             }
@@ -309,14 +321,15 @@ test "sync reports backend failures and returns a failure exit code" {
         .stderr = &stderr.writer,
     };
     const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: bool, _: bool, _: bool) !void {
+        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: bool) !void {
             return error.TestSyncFailure;
         }
     }.run };
 
     try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "TestSyncFailure") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Sync failed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "error: TestSyncFailure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
+    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
 }
 
 test "sync UI mode emits transaction frames" {
@@ -337,7 +350,7 @@ test "sync UI mode emits transaction frames" {
         .stderr = &stderr.writer,
     };
     const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: bool, _: bool, _: bool) !void {}
+        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: bool) !void {}
     }.run };
 
     try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));

@@ -13,6 +13,7 @@ pub const sync_command = @import("commands/sync.zig");
 pub const config = @import("config/manager.zig");
 pub const config_model = @import("config/model.zig");
 pub const config_output = @import("output/config.zig");
+pub const standard_single_pane = @import("output/standard_single_pane.zig");
 
 test {
     _ = app;
@@ -30,4 +31,5 @@ test {
     _ = config;
     _ = config_model;
     _ = config_output;
+    _ = standard_single_pane;
 }
