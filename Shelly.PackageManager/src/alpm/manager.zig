@@ -49,10 +49,18 @@ pub const QueryError = error{ DbNotFound, PkgNotFound, NoHandle, OutOfMemory };
 
 pub const IgnorePackageError = configuration.IgnorePackageError;
 
+/// A package that satisfies a dependency in a configured sync database.
+/// `real_name` is borrowed from libalpm and remains valid while the manager's
+/// databases remain loaded.
+pub const DependencySatisfier = struct {
+    real_name: [:0]const u8,
+    via_provides: bool,
+};
+
 pub const Manager = struct {
     handle: libalpm.Handle = null,
     is_initialized: bool = false,
-    is_cachyos: bool = false,
+    detected_cachyos: bool = false,
     allocator: std.mem.Allocator,
     environ: std.process.Environ,
     config_path: []const u8,
@@ -101,7 +109,7 @@ pub const Manager = struct {
         errdefer self.sync_dbs.deinit(self.allocator);
         if (os_tool.prettyName(self.allocator, self.io())) |pretty_name| {
             defer self.allocator.free(pretty_name);
-            if (std.ascii.eqlIgnoreCase("cachyos", pretty_name)) self.is_cachyos = true;
+            if (std.ascii.eqlIgnoreCase("cachyos", pretty_name)) self.detected_cachyos = true;
         }
 
         // Checks to see if the temp path is being used to run in non-root mode
@@ -661,7 +669,7 @@ pub const Manager = struct {
         if (self.handle == null) return TransactionError.NoHandle;
 
         // This is first before updating so it can bail before database is downloaded
-        if (self.is_cachyos) {
+        if (self.detected_cachyos) {
             const update_notice = cachyos.UpdateNotice.init(self.allocator, self.io());
             if (!update_notice.check(self.environ, &self.dispatcher)) return;
         }
@@ -806,7 +814,17 @@ pub const Manager = struct {
     }
 
     pub fn find_remote_satisfier_for_dependency(self: *Manager, dependency: [:0]const u8) QueryError![:0]const u8 {
+        return (try self.find_remote_satisfier_for_dependency_details(dependency)).real_name;
+    }
+
+    /// Finds a remote dependency satisfier and reports whether the match was
+    /// made through a `provides` entry instead of the package's real name.
+    pub fn find_remote_satisfier_for_dependency_details(
+        self: *Manager,
+        dependency: [:0]const u8,
+    ) QueryError!DependencySatisfier {
         if (self.handle == null) return QueryError.NoHandle;
+        const requested_name = dependencyName(dependency);
         var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_ptr = sync_dbs.*.data orelse continue;
@@ -814,7 +832,11 @@ pub const Manager = struct {
             const pkg_cache = db.package_cache();
             const satisfier = rawLibalpm.alpm_find_satisfier(pkg_cache, dependency) orelse continue;
             const pkg = libalpm.Package.from(satisfier) orelse continue;
-            return pkg.name() orelse continue;
+            const real_name = pkg.name() orelse continue;
+            return .{
+                .real_name = real_name,
+                .via_provides = !std.mem.eql(u8, real_name, requested_name),
+            };
         }
         return QueryError.PkgNotFound;
     }
@@ -1015,6 +1037,56 @@ pub const Manager = struct {
     /// The caller must deinitialize the returned list, but must not free its items.
     pub fn get_ignored_packages(self: *Manager) IgnorePackageError!std.ArrayList([:0]const u8) {
         return configuration.Configuration.get_ignored_packages(&self.config, self.allocator);
+    }
+
+    /// Returns repository names borrowed from the parsed configuration in
+    /// declaration order. Deinitialize the list, but do not free its items.
+    pub fn get_repository_names(self: *Manager) QueryError!std.ArrayList([]const u8) {
+        return configuration.Configuration.get_repository_names(&self.config, self.allocator);
+    }
+
+    /// Finds a parsed repository by its exact ALPM database name.
+    pub fn find_configured_repository(
+        self: *const Manager,
+        name: []const u8,
+    ) ?*const configuration.Configuration.Repository {
+        return configuration.Configuration.find_repository(&self.config, name);
+    }
+
+    /// Returns cache directories currently configured on the libalpm handle.
+    /// Strings are borrowed from libalpm; deinitialize only the returned list.
+    pub fn get_configured_cache_directories(self: *Manager) QueryError!std.ArrayList([:0]const u8) {
+        if (self.handle == null) return QueryError.NoHandle;
+
+        var result: std.ArrayList([:0]const u8) = .empty;
+        errdefer result.deinit(self.allocator);
+
+        var directories = rawLibalpm.alpm_option_get_cachedirs(self.handle);
+        while (directories != null) : (directories = directories.*.next) {
+            const data = directories.*.data orelse continue;
+            const directory = libalpm.str(@as([*c]const u8, @ptrCast(data))) orelse continue;
+            result.append(self.allocator, directory) catch return QueryError.OutOfMemory;
+        }
+        return result;
+    }
+
+    pub fn get_cache_directories(self: *Manager) QueryError!std.ArrayList([:0]const u8) {
+        return self.get_configured_cache_directories();
+    }
+
+    /// Compares package versions using libalpm semantics. Returns a negative
+    /// value when `a < b`, zero when equal, and a positive value when `a > b`.
+    pub fn compare_package_versions(a: [:0]const u8, b: [:0]const u8) c_int {
+        return rawLibalpm.alpm_pkg_vercmp(a.ptr, b.ptr);
+    }
+
+    pub fn version_compare(a: [:0]const u8, b: [:0]const u8) c_int {
+        return compare_package_versions(a, b);
+    }
+
+    /// Reports whether the initialized host was detected as CachyOS.
+    pub fn is_cachyos(self: *const Manager) bool {
+        return self.detected_cachyos;
     }
 
     pub fn get_allowed_architecture(self: *Manager) QueryError![][:0]const u8 {
@@ -1818,7 +1890,42 @@ pub const Manager = struct {
     }
 };
 
+fn dependencyName(dependency: []const u8) []const u8 {
+    const end = std.mem.indexOfAny(u8, dependency, "<>=") orelse dependency.len;
+    return std.mem.trim(u8, dependency[0..end], " \t\r\n");
+}
+
 const testing = std.testing;
+
+test "public ALPM query helpers expose typed results" {
+    _ = Manager.get_repository_names;
+    _ = Manager.find_configured_repository;
+    _ = Manager.get_configured_cache_directories;
+    _ = Manager.get_cache_directories;
+    _ = Manager.find_remote_satisfier_for_dependency_details;
+    _ = DependencySatisfier;
+}
+
+test "compare_package_versions uses libalpm ordering" {
+    try testing.expect(Manager.compare_package_versions("1.0-1", "2.0-1") < 0);
+    try testing.expectEqual(@as(c_int, 0), Manager.compare_package_versions("2.0-1", "2.0-1"));
+    try testing.expect(Manager.compare_package_versions("2.0-2", "2.0-1") > 0);
+    try testing.expect(Manager.compare_package_versions("10.0-1", "2.0-1") > 0);
+}
+
+test "dependencyName strips constraints used to detect provides matches" {
+    try testing.expectEqualStrings("python", dependencyName("python>=3.10"));
+    try testing.expectEqualStrings("libgl", dependencyName("libgl"));
+    try testing.expectEqualStrings("virtual-feature", dependencyName("  virtual-feature = 2  "));
+}
+
+test "is_cachyos exposes the detected manager state" {
+    var manager: Manager = undefined;
+    manager.detected_cachyos = false;
+    try testing.expect(!manager.is_cachyos());
+    manager.detected_cachyos = true;
+    try testing.expect(manager.is_cachyos());
+}
 
 // ---------------------------------------------------------------------------
 // spanC

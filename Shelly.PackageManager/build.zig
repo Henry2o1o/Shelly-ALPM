@@ -212,6 +212,23 @@ pub fn build(b: *std.Build) void {
     const cache_test_step = b.step("cache-test", "Run safe package-cache tests");
     cache_test_step.dependOn(&run_cache_tests.step);
 
+    const alpm_query_tests = b.addTest(.{
+        .name = "alpm-query-test",
+        .root_module = mod,
+        .filters = &.{
+            "public ALPM query helpers expose typed results",
+            "compare_package_versions uses libalpm ordering",
+            "dependencyName strips constraints",
+            "is_cachyos exposes the detected manager state",
+            "parses repositories, servers, siglevel and usage",
+            "dependency query APIs resolve exact, versioned, and virtual remote packages",
+            "Manager.init applies configured libalpm options and callback contexts",
+        },
+    });
+    const run_alpm_query_tests = b.addRunArtifact(alpm_query_tests);
+    const alpm_query_test_step = b.step("alpm-query-test", "Run safe ALPM configuration and query API tests");
+    alpm_query_test_step.dependOn(&run_alpm_query_tests.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means
