@@ -594,7 +594,8 @@ pub const Manager = struct {
                     .is_installed = rawLibalpm.alpm_find_satisfier(local_cache, name.ptr) != null,
                 });
             }
-            if (options.items.len == 0 or self.dispatcher.question.items.len == 0) continue;
+            if (options.items.len == 0 or
+                (self.dispatcher.operation == null and self.dispatcher.question.items.len == 0)) continue;
             const pkg_name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse "package";
             const prompt = try std.fmt.allocPrint(self.allocator, "Select an optional dependency for {s}", .{pkg_name});
             defer self.allocator.free(prompt);
@@ -3423,6 +3424,38 @@ test "askYesNo returns false for a zero answer" {
     }) catch unreachable;
 
     try testing.expect(!mgr.askYesNo(tio, 0, "proceed?"));
+}
+
+test "askYesNo maps shared confirmation responses" {
+    const CommonResponder = struct {
+        response: operation_api.QuestionResponse,
+
+        fn answer(data: ?*anyopaque, question: operation_api.Question) operation_api.QuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            testing.expect(question.kind == .confirmation) catch unreachable;
+            return self.response;
+        }
+    };
+
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const tio = threaded.io();
+    var context = operation_api.OperationContext.init(testing.allocator, tio);
+    defer context.deinit();
+    var responder: CommonResponder = .{ .response = .accepted };
+    context.setQuestionHandler(.{ .function = CommonResponder.answer, .data = &responder });
+    var operation = context.begin(.{ .backend = .alpm, .kind = .install });
+    defer operation.finish(.success);
+    mgr.dispatcher.setOperation(&operation);
+
+    const question_type = @intFromEnum(libalpm.QuestionType.install_ignore);
+    try testing.expect(mgr.askYesNo(tio, question_type, "proceed?"));
+    responder.response = .declined;
+    try testing.expect(!mgr.askYesNo(tio, question_type, "proceed?"));
 }
 
 test "questionCallback applies affirmative answers to simple libalpm questions" {

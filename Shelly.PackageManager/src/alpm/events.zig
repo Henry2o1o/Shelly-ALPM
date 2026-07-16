@@ -16,7 +16,7 @@ pub const QuestionArgs = struct {
     question_type: c_int,
     options: []const []const u8,
     response: ?c_int = null,
-    provider_options: ?[]ProviderOption = null,
+    provider_options: ?[]const ProviderOption = null,
     dependency_name: ?[]const u8 = null,
 };
 
@@ -309,13 +309,9 @@ pub const Dispatcher = struct {
                     };
                 }
 
+                const common_kind = commonQuestionKind(args);
                 var answer = operation.ask(.{
-                    .kind = if (args.provider_options != null)
-                        .select_provider
-                    else if (args.options.len != 0)
-                        .select_one
-                    else
-                        .confirmation,
+                    .kind = common_kind,
                     .prompt = args.question orelse "Continue?",
                     .options = common_options,
                     .dependency_name = args.dependency_name,
@@ -325,14 +321,7 @@ pub const Dispatcher = struct {
                     return .{};
                 };
 
-                const mapped: ?QuestionResponse = switch (answer.response) {
-                    .accepted => .{ .answer = 1 },
-                    .declined => .{ .answer = 0 },
-                    .choice => |choice| .{ .choice = std.math.cast(c_int, choice) orelse std.math.maxInt(c_int) },
-                    .choices => |choices| if (choices.len == 0) .{} else .{ .choice = std.math.cast(c_int, choices[0]) orelse std.math.maxInt(c_int) },
-                    .package => |pkg| .{ .pkg = pkg },
-                    .default, .deferred => null,
-                };
+                const mapped = mapCommonQuestionResponse(common_kind, answer.response, common_options);
                 if (mapped) |response| {
                     self.common_question_response = answer;
                     return response;
@@ -415,6 +404,73 @@ pub const Dispatcher = struct {
         self.dispatch(ReplacesArgs, &self.replaces, args);
     }
 };
+
+fn commonQuestionKind(args: QuestionArgs) operation_api.QuestionKind {
+    const question_type = if (args.question_type < 0)
+        bindings.libalpm.QuestionType.unknown
+    else
+        bindings.libalpm.QuestionType.fromQuestionType(@intCast(args.question_type));
+
+    return switch (question_type) {
+        .select_provider => .select_provider,
+        .select_optional_dependencies => .select_optional_dependencies,
+        .unknown => if (args.provider_options != null)
+            .select_provider
+        else if (args.options.len != 0)
+            .select_one
+        else
+            .confirmation,
+        else => .confirmation,
+    };
+}
+
+fn mapCommonQuestionResponse(
+    kind: operation_api.QuestionKind,
+    response: operation_api.QuestionResponse,
+    options: []const operation_api.QuestionOption,
+) ?QuestionResponse {
+    return switch (kind) {
+        .confirmation => switch (response) {
+            .accepted => .{ .answer = 1 },
+            .declined => .{ .answer = 0 },
+            .choice => |choice| mapConfirmationChoice(choice, options),
+            .choices => |choices| if (choices.len == 0) .{} else mapConfirmationChoice(choices[0], options),
+            .default, .deferred => null,
+            .package => |pkg| .{ .pkg = pkg },
+        },
+        .select_optional_dependencies => switch (response) {
+            .choice => |choice| mapPackageChoice(choice, options),
+            .choices => |choices| if (choices.len == 0) .{} else mapPackageChoice(choices[0], options),
+            .package => |pkg| .{ .pkg = pkg },
+            .declined => .{},
+            .accepted => if (options.len == 0) .{} else .{ .pkg = options[0].id },
+            .default, .deferred => null,
+        },
+        else => switch (response) {
+            .accepted => .{ .answer = 1 },
+            .declined => .{ .answer = 0 },
+            .choice => |choice| mapIndexChoice(choice, options),
+            .choices => |choices| if (choices.len == 0) .{} else mapIndexChoice(choices[0], options),
+            .package => |pkg| .{ .pkg = pkg },
+            .default, .deferred => null,
+        },
+    };
+}
+
+fn mapConfirmationChoice(choice: usize, options: []const operation_api.QuestionOption) ?QuestionResponse {
+    if (choice >= options.len) return null;
+    return .{ .answer = @intFromBool(choice == 0) };
+}
+
+fn mapPackageChoice(choice: usize, options: []const operation_api.QuestionOption) ?QuestionResponse {
+    if (choice >= options.len) return null;
+    return .{ .pkg = options[choice].id };
+}
+
+fn mapIndexChoice(choice: usize, options: []const operation_api.QuestionOption) ?QuestionResponse {
+    if (choice >= options.len) return null;
+    return .{ .choice = std.math.cast(c_int, choice) orelse return null };
+}
 
 test {
     @import("std").testing.refAllDecls(@This());
@@ -757,6 +813,93 @@ test "question accepts choice-only and package-only responses" {
     if (response.choice != null) return error.TestFailed;
     const pkg = response.pkg orelse return error.TestFailed;
     if (!std.mem.eql(u8, pkg, "selected-package")) return error.TestFailed;
+}
+
+test "common ALPM confirmation maps accepted and declined answers" {
+    const Responder = struct {
+        response: operation_api.QuestionResponse,
+        calls: usize = 0,
+
+        fn answer(data: ?*anyopaque, question: operation_api.Question) operation_api.QuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            std.testing.expect(question.kind == .confirmation) catch unreachable;
+            std.testing.expectEqualStrings("Continue?", question.prompt) catch unreachable;
+            self.calls += 1;
+            return self.response;
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(std.testing.allocator, threaded.io());
+    defer context.deinit();
+    var responder: Responder = .{ .response = .accepted };
+    context.setQuestionHandler(.{ .function = Responder.answer, .data = &responder });
+    var operation = context.begin(.{ .backend = .alpm, .kind = .install });
+    defer operation.finish(.success);
+    var dispatcher = Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    dispatcher.setOperation(&operation);
+
+    const options = [_][]const u8{ "yes", "no" };
+    var response = dispatcher.raiseQuestion(threaded.io(), .{
+        .question = "Continue?",
+        .question_type = @intFromEnum(bindings.libalpm.QuestionType.install_ignore),
+        .options = &options,
+    });
+    try std.testing.expectEqual(@as(?c_int, 1), response.answer);
+
+    responder.response = .declined;
+    response = dispatcher.raiseQuestion(threaded.io(), .{
+        .question = "Continue?",
+        .question_type = @intFromEnum(bindings.libalpm.QuestionType.install_ignore),
+        .options = &options,
+    });
+    try std.testing.expectEqual(@as(?c_int, 0), response.answer);
+    try std.testing.expectEqual(@as(usize, 2), responder.calls);
+}
+
+test "common ALPM optional dependency choices map to package names" {
+    const Responder = struct {
+        saw_provider_metadata: bool = false,
+
+        fn answer(data: ?*anyopaque, question: operation_api.Question) operation_api.QuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            std.testing.expect(question.kind == .select_optional_dependencies) catch unreachable;
+            std.testing.expectEqual(@as(usize, 2), question.options.len) catch unreachable;
+            std.testing.expectEqualStrings("second description", question.options[1].description) catch unreachable;
+            std.testing.expect(question.options[1].is_installed) catch unreachable;
+            self.saw_provider_metadata = true;
+            return .{ .choice = 1 };
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(std.testing.allocator, threaded.io());
+    defer context.deinit();
+    var responder: Responder = .{};
+    context.setQuestionHandler(.{ .function = Responder.answer, .data = &responder });
+    var operation = context.begin(.{ .backend = .alpm, .kind = .install });
+    defer operation.finish(.success);
+    var dispatcher = Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    dispatcher.setOperation(&operation);
+
+    const names = [_][]const u8{ "first-package", "second-package" };
+    const providers = [_]ProviderOption{
+        .{ .name = "first-package", .description = "first description", .is_installed = false },
+        .{ .name = "second-package", .description = "second description", .is_installed = true },
+    };
+    const response = dispatcher.raiseQuestion(threaded.io(), .{
+        .question = "Select an optional dependency",
+        .question_type = @intFromEnum(bindings.libalpm.QuestionType.select_optional_dependencies),
+        .options = &names,
+        .provider_options = &providers,
+    });
+
+    try std.testing.expectEqualStrings("second-package", response.pkg.?);
+    try std.testing.expect(responder.saw_provider_metadata);
 }
 
 test "question blocks until answered from another task" {

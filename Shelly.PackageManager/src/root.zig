@@ -336,11 +336,18 @@ test "backend dispatchers share one operation event stream" {
 test "ALPM and AUR questions use the shared response hook" {
     const Responder = struct {
         questions: usize = 0,
+        saw_alpm_provider: bool = false,
 
         fn answer(data: ?*anyopaque, question: operation.Question) operation.QuestionResponse {
             const self: *@This() = @ptrCast(@alignCast(data.?));
             self.questions += 1;
             std.testing.expect(question.options.len == 2) catch unreachable;
+            if (question.envelope.backend == .alpm) {
+                std.testing.expect(question.kind == .select_provider) catch unreachable;
+                std.testing.expectEqualStrings("second", question.options[1].description) catch unreachable;
+                std.testing.expect(question.options[1].is_installed) catch unreachable;
+                self.saw_alpm_provider = true;
+            }
             return .{ .choice = 1 };
         }
     };
@@ -358,8 +365,12 @@ test "ALPM and AUR questions use the shared response hook" {
     alpm_dispatcher.setOperation(&alpm_operation);
     const alpm_response = alpm_dispatcher.raiseQuestion(threaded.io(), .{
         .question = "Select an ALPM provider",
-        .question_type = 0,
+        .question_type = @intFromEnum(alpm.bindings.libalpm.QuestionType.select_provider),
         .options = &.{ "provider-a", "provider-b" },
+        .provider_options = &.{
+            .{ .name = "provider-a", .description = "first", .is_installed = false },
+            .{ .name = "provider-b", .description = "second", .is_installed = true },
+        },
     });
     try std.testing.expectEqual(@as(?c_int, 1), alpm_response.choice);
     alpm_dispatcher.setOperation(null);
@@ -382,6 +393,7 @@ test "ALPM and AUR questions use the shared response hook" {
     aur_operation.finish(.success);
 
     try std.testing.expectEqual(@as(usize, 2), responder.questions);
+    try std.testing.expect(responder.saw_alpm_provider);
 }
 
 test {
