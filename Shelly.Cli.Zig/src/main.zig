@@ -4,68 +4,40 @@ const Io = std.Io;
 const Shelly_Cli_Zig = @import("Shelly_Cli_Zig");
 
 pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // This is appropriate for anything that lives as long as the process.
     const arena: std.mem.Allocator = init.arena.allocator();
-
-    // Accessing command line arguments:
-    const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
-    }
-
-    // In order to do I/O operations need an `Io` instance.
     const io = init.io;
+    const process_arguments = try init.minimal.args.toSlice(arena);
+    const arguments = if (process_arguments.len > 0) process_arguments[1..] else process_arguments;
 
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_buffer: [4096]u8 = undefined;
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout_writer = &stdout_file_writer.interface;
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+    const stderr_writer = &stderr_file_writer.interface;
 
-    try Shelly_Cli_Zig.printAnotherMessage(stdout_writer);
+    Shelly_Cli_Zig.signals.installInterruptHandler();
+    var session_log = Shelly_Cli_Zig.log.SessionLog.tryOpen(io);
+    defer if (session_log) |*log| log.close();
+    if (session_log) |*log| log.writeSessionHeader(arena, arguments);
 
-    try stdout_writer.flush(); // Don't forget to flush!
-}
-
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
-}
-
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
-        },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
-        },
+    var context: Shelly_Cli_Zig.runtime.RuntimeContext = .{
+        .allocator = arena,
+        .io = io,
+        .stdout = stdout_writer,
+        .stderr = stderr_writer,
+        .environment = init.environ_map,
+        .stdin_is_tty = Io.File.stdin().isTty(io) catch false,
+        .stdout_is_tty = Io.File.stdout().isTty(io) catch false,
+        .dispatcher = .{ .call = Shelly_Cli_Zig.commands.dispatch },
     };
+    const exit_code = Shelly_Cli_Zig.app.run(&context, arguments) catch |err| code: {
+        stderr_writer.print("shelly: {t}\n", .{err}) catch {};
+        break :code 1;
+    };
+    if (session_log) |*log| log.writeSessionFooter(arena, exit_code);
+
+    try stdout_writer.flush();
+    try stderr_writer.flush();
+    if (exit_code != 0) std.process.exit(exit_code);
 }
