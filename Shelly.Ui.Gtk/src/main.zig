@@ -1,27 +1,25 @@
-const ui = @import("Shelly_Ui_Gtk");
-const gio = ui.gio;
-const gtk = ui.gtk;
+const std = @import("std");
+const bindings = @import("Shelly_Ui_Gtk");
+const gtk = bindings.gtk;
+const gio = bindings.gio;
+const gobject = bindings.gobject;
+const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
+const runtime = @import("shellpers/runtime.zig");
 
-pub fn main() void {
-    const application = gtk.Application.new("io.github.shelly", .{});
-    defer application.unref();
+pub fn main(init: std.process.Init) void {
+    runtime.io = init.io;
+    runtime.environ_map = init.environ_map;
 
-    _ = gio.Application.signals.activate.connect(
-        application,
-        ?*anyopaque,
-        &activate,
-        null,
-        .{},
-    );
+    const app = gtk.Application.new("com.shellyorzig.shelly", .{}); //RENAME THIS PLEASE FOR THE LOVE OF GOD LATER BUT LIKE THIS FOR DEVVING
+    defer app.unref();
 
-    _ = gio.Application.run(application.as(gio.Application), 0, null);
+    _ = gio.Application.signals.activate.connect(app, ?*anyopaque, &activate, null, .{});
+
+    const status = gio.Application.run(gobject.ext.as(gio.Application, app), 0, null);
+    std.process.exit(@intCast(status));
 }
 
-fn activate(application: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
-    const application_window = gtk.ApplicationWindow.new(application);
-    const window = application_window.as(gtk.Window);
-
-    gtk.Window.setTitle(window, "Shelly");
-    gtk.Window.setDefaultSize(window, 960, 640);
-    gtk.Window.present(window);
+fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
+    const window = ShellyWindow.new(app);
+    gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }

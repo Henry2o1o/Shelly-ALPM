@@ -5,8 +5,6 @@
         <property name="orientation">vertical</property>
         <property name="hexpand">true</property>
         <property name="vexpand">true</property>
-
-        <!-- LIST (with migration overlay wrapping it) -->
         <child>
             <object class="GtkOverlay" id="AppImageOverlay">
                 <property name="hexpand">true</property>
@@ -250,8 +248,6 @@
                 </child>
             </object>
         </child>
-
-        <!-- DETAIL (sibling of the list overlay; hidden until a row is clicked) -->
         <child>
             <object class="GtkScrolledWindow" id="AppImageDetailView">
                 <property name="visible">false</property>
@@ -390,6 +386,7 @@
                                                         <child>
                                                             <object class="GtkDropDown" id="UpdateTypeDropDown">
                                                                 <property name="valign">center</property>
+
                                                             </object>
                                                         </child>
                                                     </object>
