@@ -212,6 +212,22 @@ pub fn build(b: *std.Build) void {
     const cache_test_step = b.step("cache-test", "Run safe package-cache tests");
     cache_test_step.dependOn(&run_cache_tests.step);
 
+    const archive_tests = b.addTest(.{
+        .name = "archive-test",
+        .root_module = mod,
+        .filters = &.{
+            "archive endpoints include Arch and selected CachyOS variants",
+            "archive listing parses package filenames",
+            "local cache lookup returns owned matching candidates",
+            "target resolution accepts exact version-release or filename",
+            "prepare_candidate retains local cache files",
+            "archive installation API delegates through the ALPM manager",
+        },
+    });
+    const run_archive_tests = b.addRunArtifact(archive_tests);
+    const archive_test_step = b.step("archive-test", "Run safe ALPM downgrade archive tests");
+    archive_test_step.dependOn(&run_archive_tests.step);
+
     const alpm_query_tests = b.addTest(.{
         .name = "alpm-query-test",
         .root_module = mod,

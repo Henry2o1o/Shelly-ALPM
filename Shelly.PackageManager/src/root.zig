@@ -8,6 +8,7 @@ pub const alpm = struct {
     pub const events = @import("alpm/events.zig");
     pub const configuration = @import("alpm/configuration.zig");
     pub const cache_manager = @import("alpm/cache_manager.zig");
+    pub const archive_manager = @import("alpm/archive_manager.zig");
 
     pub const Manager = manager.Manager;
     pub const TransFlag = bindings.libalpm.TransFlag;
@@ -18,6 +19,16 @@ pub const alpm = struct {
     pub const Repository = configuration.Configuration.Repository;
     pub const compare_package_versions = manager.Manager.compare_package_versions;
     pub const version_compare = manager.Manager.version_compare;
+    pub const ArchiveManager = archive_manager.ArchiveManager;
+    pub const ArchiveManagerOptions = archive_manager.Options;
+    pub const ArchiveError = archive_manager.Error;
+    pub const ArchiveDiscoveryError = archive_manager.DiscoveryError;
+    pub const ArchiveInstallError = archive_manager.InstallError;
+    pub const ArchiveSource = archive_manager.Source;
+    pub const ArchiveEndpoint = archive_manager.ArchiveEndpoint;
+    pub const DowngradeCandidate = archive_manager.DowngradeCandidate;
+    pub const PreparedDowngradePackage = archive_manager.PreparedPackage;
+    pub const parse_archive_listing = archive_manager.parseArchiveListing;
     pub const CacheManager = cache_manager.CacheManager;
     pub const CacheManagerOptions = cache_manager.Options;
     pub const CacheCleanOptions = cache_manager.CleanOptions;
@@ -89,6 +100,7 @@ pub const shared = struct {
 
 pub const AlpmManager = alpm.Manager;
 pub const CacheManager = alpm.CacheManager;
+pub const AlpmArchiveManager = alpm.ArchiveManager;
 pub const AurManager = aur.Manager;
 pub const FlatpakManager = flatpak.Manager;
 pub const AppImageManager = appimage.Manager;
@@ -117,6 +129,7 @@ test "public AUR module exposes the package manager" {
 test "public library surface exposes package manager APIs" {
     _ = AlpmManager;
     _ = CacheManager;
+    _ = AlpmArchiveManager;
     _ = AurManager;
     _ = FlatpakManager;
     _ = AppImageManager;
@@ -127,6 +140,15 @@ test "public library surface exposes package manager APIs" {
     _ = alpm.Repository;
     _ = alpm.compare_package_versions;
     _ = alpm.version_compare;
+    _ = alpm.ArchiveManagerOptions;
+    _ = alpm.ArchiveError;
+    _ = alpm.ArchiveDiscoveryError;
+    _ = alpm.ArchiveInstallError;
+    _ = alpm.ArchiveSource;
+    _ = alpm.ArchiveEndpoint;
+    _ = alpm.DowngradeCandidate;
+    _ = alpm.PreparedDowngradePackage;
+    _ = alpm.parse_archive_listing;
     _ = alpm.events.Dispatcher;
     _ = alpm.configuration.Configuration;
     _ = alpm.CacheCleanOptions;
@@ -161,6 +183,7 @@ test {
     _ = @import("alpm/events.zig");
     _ = @import("alpm/configuration.zig");
     _ = @import("alpm/cache_manager.zig");
+    _ = @import("alpm/archive_manager.zig");
     _ = @import("alpm/distribution-hooks/CachyOS/update_notice.zig");
     _ = @import("alpm/distribution-hooks/os_utilities.zig");
     _ = @import("flatpak/bindings.zig");
