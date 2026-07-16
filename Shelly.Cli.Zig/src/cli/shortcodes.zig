@@ -135,6 +135,12 @@ test "translates action-type shortcodes from the command manifest" {
         &.{"-YSf"},
         &.{ "sync", "standard", "-f" },
     );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{"-YF"},
+        &.{ "sync", "flatpak" },
+    );
 }
 
 test "uses centralized effective modifiers and rejects type-first shortcodes" {

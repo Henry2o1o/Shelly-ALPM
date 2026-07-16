@@ -354,6 +354,22 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -IA]") != null);
 }
 
+test "sync action help lists standard and Flatpak variants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const command = manifest.findByPath("shelly sync").?;
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, command, &output.writer);
+    const rendered = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "standard") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "flatpak") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YS]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YF]") != null);
+}
+
 test "help documents only the action-type shortcode grammar" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

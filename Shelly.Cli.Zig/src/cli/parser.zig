@@ -326,6 +326,15 @@ test "maps bare sync to its catalog-defined standard type" {
     try std.testing.expectEqualStrings("--force", outcome.dispatch.options[0].name);
 }
 
+test "parses Flatpak AppStream sync as an action-type command" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parse(arena.allocator(), &manifest, &.{ "sync", "flatpak" });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings("shelly sync flatpak", outcome.dispatch.command.path);
+}
+
 test "hard cut rejects old type-first and implicit-standard paths" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -336,6 +345,13 @@ test "hard cut rejects old type-first and implicit-standard paths" {
     try std.testing.expectEqualStrings(
         "Unrecognized command or argument 'flatpak'.",
         type_first.failure.message,
+    );
+
+    const old_flatpak_sync = try parse(arena.allocator(), &manifest, &.{ "sync-remote-appstream", "flatpak" });
+    try std.testing.expect(old_flatpak_sync == .failure);
+    try std.testing.expectEqualStrings(
+        "Unrecognized command or argument 'sync-remote-appstream'.",
+        old_flatpak_sync.failure.message,
     );
 
     const implicit_standard = try parse(arena.allocator(), &manifest, &.{ "install", "firefox" });

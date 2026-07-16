@@ -94,7 +94,7 @@ pub const variants = [_]Variant{
     .{ .source_path = "shelly flatpak run", .action = "run", .type_name = "flatpak", .action_code = 'X', .type_code = 'F' },
     .{ .source_path = "shelly flatpak kill", .action = "kill", .type_name = "flatpak", .action_code = 'K', .type_code = 'F' },
     .{ .source_path = "shelly flatpak search", .action = "search", .type_name = "flatpak", .action_code = 'S', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak sync-remote-appstream", .action = "sync-remote-appstream", .type_name = "flatpak", .action_code = 'Y', .type_code = 'F' },
+    .{ .source_path = "shelly flatpak sync-remote-appstream", .action = "sync", .type_name = "flatpak", .action_code = 'Y', .type_code = 'F' },
     .{ .source_path = "shelly flatpak get-remote-appstream", .action = "get-remote-appstream", .type_name = "flatpak", .action_code = 'G', .type_code = 'F' },
     .{ .source_path = "shelly flatpak upgrade", .action = "upgrade", .type_name = "flatpak", .action_code = 'U', .type_code = 'F' },
     .{ .source_path = "shelly flatpak list-remotes", .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'F' },

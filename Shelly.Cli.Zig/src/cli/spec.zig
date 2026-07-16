@@ -259,7 +259,9 @@ test "projects the frozen metadata into the action-first command catalog" {
     try std.testing.expectEqualStrings("2.4.1.4", manifest.version);
     try std.testing.expect(manifest.findByPath("shelly search flatpak") != null);
     try std.testing.expect(manifest.findByPath("shelly search standard") != null);
+    try std.testing.expect(manifest.findByPath("shelly sync flatpak") != null);
     try std.testing.expect(manifest.findByPath("shelly flatpak search") == null);
+    try std.testing.expect(manifest.findByPath("shelly sync-remote-appstream flatpak") == null);
     try std.testing.expect(manifest.findByPath("shelly query") == null);
     try std.testing.expectEqualStrings(
         "shelly sync standard",

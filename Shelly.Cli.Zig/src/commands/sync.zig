@@ -7,7 +7,8 @@ const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
 const spec = @import("../cli/spec.zig");
 
-const command_path = "shelly sync standard";
+const standard_command_path = "shelly sync standard";
+const flatpak_command_path = "shelly sync flatpak";
 
 const Runner = struct {
     data: ?*anyopaque = null,
@@ -33,15 +34,18 @@ const StandardRunnerAdapter = struct {
     }
 };
 
-const real_runner: Runner = .{ .call = runRealSync };
+const real_standard_runner: Runner = .{ .call = runRealStandardSync };
+const real_flatpak_runner: Runner = .{ .call = runRealFlatpakSync };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !?u8 {
-    if (!std.mem.eql(u8, invocation.command.path, command_path)) return null;
+    const is_standard = std.mem.eql(u8, invocation.command.path, standard_command_path);
+    const is_flatpak = std.mem.eql(u8, invocation.command.path, flatpak_command_path);
+    if (!is_standard and !is_flatpak) return null;
 
-    if (!invocation.globals.ui_mode) {
+    if (is_standard and !invocation.globals.ui_mode) {
         const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
             try context.stderr.print("Unable to elevate sync: {t}\n", .{err});
             return 1;
@@ -49,7 +53,11 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(
+        context,
+        invocation,
+        if (is_standard) real_standard_runner else real_flatpak_runner,
+    );
 }
 
 fn executeWithRunner(
@@ -74,7 +82,7 @@ fn executeStandard(
     var adapter: StandardRunnerAdapter = .{ .runner = runner, .force = force };
     const succeeded = try standard_single_pane.output(
         context,
-        "Synchronizing package databases...",
+        openingMessage(invocation),
         invocation.globals.no_confirm,
         .{ .data = &adapter, .call = StandardRunnerAdapter.call },
     );
@@ -100,7 +108,7 @@ fn executeUi(
     });
     defer _ = operation_context.unsubscribe(event_subscription);
 
-    try output.writeAlpmInfoFrame(context, "TransactionStart", "Synchronizing package databases...");
+    try output.writeAlpmInfoFrame(context, "TransactionStart", openingMessage(invocation));
     try flushOutput(context);
 
     runner.call(runner.data, context, &operation_context, force) catch |err| {
@@ -115,7 +123,7 @@ fn executeUi(
     try output.writeAlpmInfoFrame(
         context,
         "TransactionDone",
-        "Package databases synchronized successfully!",
+        successMessage(invocation),
     );
     try flushOutput(context);
     return if (reporter.write_failed.load(.acquire)) 1 else 0;
@@ -126,7 +134,7 @@ fn flushOutput(context: *runtime.RuntimeContext) !void {
     try context.stderr.flush();
 }
 
-fn runRealSync(
+fn runRealStandardSync(
     _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
@@ -144,6 +152,33 @@ fn runRealSync(
     defer manager.setOperationContext(null);
 
     try manager.sync(force);
+}
+
+fn runRealFlatpakSync(
+    _: ?*anyopaque,
+    context: *runtime.RuntimeContext,
+    operation_context: *Zigalpm.OperationContext,
+    _: bool,
+) !void {
+    var manager = Zigalpm.flatpak.AppstreamManager.init(context.allocator, context.io);
+    manager.setOperationContext(operation_context);
+    defer manager.setOperationContext(null);
+
+    try manager.updateAllAppstreams();
+}
+
+fn openingMessage(invocation: *const parser.Invocation) []const u8 {
+    return if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+        "Synchronizing Flatpak AppStream metadata..."
+    else
+        "Synchronizing package databases...";
+}
+
+fn successMessage(invocation: *const parser.Invocation) []const u8 {
+    return if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+        "Flatpak AppStream metadata synchronized successfully!"
+    else
+        "Package databases synchronized successfully!";
 }
 
 const UiReporter = struct {
@@ -243,6 +278,53 @@ test "sync forwards force and applies no-confirm through the shared operation co
     try std.testing.expect(capture.force);
     try std.testing.expect(capture.no_confirm);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Synchronizing package databases...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
+    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+}
+
+test "Flatpak sync uses the AppStream path and standard non-UI lifecycle" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "sync", "flatpak" });
+    try std.testing.expect(outcome == .dispatch);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const Capture = struct { called: bool = false, force: bool = true };
+    var capture: Capture = .{};
+    const runner: Runner = .{
+        .data = &capture,
+        .call = struct {
+            fn run(
+                data: ?*anyopaque,
+                _: *runtime.RuntimeContext,
+                operation_context: *Zigalpm.OperationContext,
+                force: bool,
+            ) !void {
+                const observed: *Capture = @ptrCast(@alignCast(data.?));
+                observed.called = true;
+                observed.force = force;
+                var operation = operation_context.begin(.{ .backend = .flatpak, .kind = .update });
+                defer operation.finish(.success);
+                operation.status(.success, "Flatpak AppStream catalog updated", "flatpak.appstream.updated", null);
+            }
+        }.run,
+    };
+
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expect(capture.called);
+    try std.testing.expect(!capture.force);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Synchronizing Flatpak AppStream metadata...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Flatpak AppStream catalog updated") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
 }
