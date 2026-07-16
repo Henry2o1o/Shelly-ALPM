@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 
-const Zigalpm = @import("Zigalpm");
+const Shelly_Cli_Zig = @import("Shelly_Cli_Zig");
 
 pub fn main(init: std.process.Init) !void {
     // Prints to stderr, unbuffered, ignoring potential errors.
@@ -26,7 +26,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout_writer = &stdout_file_writer.interface;
 
-    try Zigalpm.printAnotherMessage(stdout_writer);
+    try Shelly_Cli_Zig.printAnotherMessage(stdout_writer);
 
     try stdout_writer.flush(); // Don't forget to flush!
 }
@@ -37,19 +37,6 @@ test "simple test" {
     defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
     try list.append(gpa, 42);
     try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "consumer can access the public Zigalpm API" {
-    _ = Zigalpm.AlpmManager;
-    _ = Zigalpm.AurManager;
-    _ = Zigalpm.FlatpakManager;
-    _ = Zigalpm.AppImageManager;
-    _ = Zigalpm.alpm.TransFlag;
-    _ = Zigalpm.aur.models.Package;
-    _ = Zigalpm.flatpak.RemoteManager;
-    _ = Zigalpm.appimage.UpdateManager;
-    _ = Zigalpm.pkgbuild.Parser;
-    _ = Zigalpm.shared.Downloader;
 }
 
 test "fuzz example" {

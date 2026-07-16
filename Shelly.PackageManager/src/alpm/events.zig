@@ -282,7 +282,10 @@ pub const Dispatcher = struct {
         for (snap) |h| h.call(args);
 
         self.question_mutex.lockUncancelable(io);
-        while (self.question_response.answer == null) {
+        while (self.question_response.answer == null and
+            self.question_response.choice == null and
+            self.question_response.pkg == null)
+        {
             self.question_cv.waitUncancelable(io, &self.question_mutex);
         }
         const response = self.question_response;
@@ -626,6 +629,49 @@ test "question propagates full response" {
     if (!std.mem.eql(u8, pkg, "pkgname")) return error.TestFailed;
 }
 
+test "question accepts choice-only and package-only responses" {
+    var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const allocator = gpa.allocator();
+    defer gpa.deinit();
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var disp = Dispatcher.init(allocator);
+    defer disp.deinit();
+
+    var ctx = QuestionResponseContext{
+        .disp = &disp,
+        .io = io,
+        .response = .{ .choice = 3 },
+    };
+    _ = disp.addQuestionHandler(.{
+        .function = questionResponseCallback,
+        .data = @ptrCast(&ctx),
+    }) catch unreachable;
+
+    var response = disp.raiseQuestion(io, .{
+        .question = "choose?",
+        .question_type = 1,
+        .options = &[_][]const u8{ "a", "b" },
+    });
+    if (response.answer != null) return error.TestFailed;
+    if (response.choice != 3) return error.TestFailed;
+    if (response.pkg != null) return error.TestFailed;
+
+    ctx.response = .{ .pkg = "selected-package" };
+    response = disp.raiseQuestion(io, .{
+        .question = "package?",
+        .question_type = 1,
+        .options = &[_][]const u8{"selected-package"},
+    });
+    if (response.answer != null) return error.TestFailed;
+    if (response.choice != null) return error.TestFailed;
+    const pkg = response.pkg orelse return error.TestFailed;
+    if (!std.mem.eql(u8, pkg, "selected-package")) return error.TestFailed;
+}
+
 test "question blocks until answered from another task" {
     var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
     const allocator = gpa.allocator();
@@ -779,6 +825,18 @@ fn questionFullCallback(data: ?*anyopaque, args: QuestionArgs) void {
     _ = args;
     const ctx: *QuestionContext = @ptrCast(@alignCast(data));
     ctx.disp.respond(ctx.io, .{ .answer = 1, .pkg = "pkgname", .choice = 3 });
+}
+
+const QuestionResponseContext = struct {
+    disp: *Dispatcher,
+    io: std.Io,
+    response: QuestionResponse,
+};
+
+fn questionResponseCallback(data: ?*anyopaque, args: QuestionArgs) void {
+    _ = args;
+    const ctx: *QuestionResponseContext = @ptrCast(@alignCast(data));
+    ctx.disp.respond(ctx.io, ctx.response);
 }
 
 const AsyncQuestionContext = struct {
