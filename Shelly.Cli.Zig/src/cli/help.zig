@@ -255,6 +255,9 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -LI            ->  list appimage
         \\    -LA            ->  list aur
         \\    -LF            ->  list flatpak
+        \\    -Ts linux      ->  update standard linux
+        \\    -Ta demo-git   ->  update aur demo-git
+        \\    -Tf org.app.Id ->  update flatpak org.app.Id
         \\    -Isu firefox   ->  install standard -u firefox
         \\    -Sa query      ->  search aur query
         \\    -Ssa query     ->  search standard and aur for query
@@ -423,6 +426,25 @@ test "upgrade action help documents every backend and its actual modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.getPackagesNeedingUpdate") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.upgrade_flatpaks") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "appimage.UpdateManager.get_updates") != null);
+}
+
+test "update action help documents targeted native backends and shortcodes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const command = manifest.findByPath("shelly update").?;
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, command, &output.writer);
+    const rendered = output.writer.buffered();
+    for ([_][]const u8{ "[shortcode: -Ts]", "[shortcode: -Ta]", "[shortcode: -Tf]" }) |needle|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.update_packages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.updatePackages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.update_installed_flatpak") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "partial-upgrade warning and confirmation") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "--check") != null);
 }
 
 test "search help names the native method used by the selected type" {

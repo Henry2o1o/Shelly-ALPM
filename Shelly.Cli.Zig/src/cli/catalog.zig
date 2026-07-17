@@ -211,7 +211,20 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .action = "update", .type_name = "standard", .action_code = 'T', .type_code = 's' },
+    .{
+        .action = "update",
+        .type_name = "standard",
+        .action_code = 'T',
+        .type_code = 's',
+        .help = .{
+            .description = "Update only the named installed ALPM packages after an explicit partial-upgrade warning and confirmation.",
+            .implementation = "Zigalpm.AlpmManager.update_packages",
+            .arguments = &.{.{
+                .name = "packages",
+                .description = "One or more installed repository package names to update; partial upgrades are unsupported by Arch Linux and require confirmation",
+            }},
+        },
+    },
     .{ .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'u' },
     .{ .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'u' },
 
@@ -332,7 +345,24 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.AurManager.removePackages",
         },
     },
-    .{ .action = "update", .type_name = "aur", .action_code = 'T', .type_code = 'a' },
+    .{
+        .action = "update",
+        .type_name = "aur",
+        .action_code = 'T',
+        .type_code = 'a',
+        .help = .{
+            .description = "Fetch, review, rebuild, and reinstall only the named AUR packages.",
+            .implementation = "Zigalpm.AurManager.updatePackages",
+            .arguments = &.{.{
+                .name = "packages",
+                .description = "One or more AUR package names to rebuild and reinstall",
+            }},
+            .options = &.{.{
+                .name = "--check",
+                .description = "Run each PKGBUILD check() function during the rebuild",
+            }},
+        },
+    },
     .{
         .action = "upgrade",
         .type_name = "aur",
@@ -444,7 +474,20 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .action = "update", .type_name = "flatpak", .action_code = 'T', .type_code = 'f' },
+    .{
+        .action = "update",
+        .type_name = "flatpak",
+        .action_code = 'T',
+        .type_code = 'f',
+        .help = .{
+            .description = "Update one installed Flatpak application or runtime in its existing user or system installation.",
+            .implementation = "Zigalpm.FlatpakManager.update_installed_flatpak",
+            .arguments = &.{.{
+                .name = "package",
+                .description = "Installed Flatpak application/runtime ID or unambiguous friendly name",
+            }},
+        },
+    },
     .{
         .action = "list",
         .type_name = "flatpak",
