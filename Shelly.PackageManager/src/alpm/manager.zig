@@ -1498,8 +1498,6 @@ pub const Manager = struct {
         }
 
         if (purge_corruption) {
-            var corruption: std.ArrayList([:0]const u8) = .empty;
-            defer corruption.deinit(self.allocator);
             var dir = std.Io.Dir.cwd().openDir(self.io(), self.config.cache_directory, .{ .iterate = true }) catch return TransactionError.DirectoryReadFailed;
             defer dir.close(self.io());
             var file_walker = dir.walk(self.allocator) catch return TransactionError.DirectoryReadFailed;
@@ -1513,20 +1511,22 @@ pub const Manager = struct {
                     &.{ self.config.cache_directory, entry.path },
                 ) catch return TransactionError.OutOfMemory;
                 defer self.allocator.free(full_path_z);
+                var pkg_ptr: ?*rawLibalpm.alpm_pkg_t = null;
+                const sig_level = (libalpm.SigLevel{ .package_optional = true, .database_optional = true }).to_sig_level();
+                const pkg_load = rawLibalpm.alpm_pkg_load(self.handle, full_path_z, @intFromBool(false), sig_level, &pkg_ptr);
+                _ = rawLibalpm.alpm_pkg_free(pkg_ptr);
+                if (pkg_load != -1) continue;
+
                 const name = self.allocator.dupeZ(u8, entry.basename) catch return TransactionError.OutOfMemory;
-                errdefer self.allocator.free(name);
-                target_names.append(self.allocator, name) catch return TransactionError.OutOfMemory;
+                target_names.append(self.allocator, name) catch {
+                    self.allocator.free(name);
+                    return TransactionError.OutOfMemory;
+                };
                 if (!dry_run) {
-                    var pkg_ptr: ?*rawLibalpm.alpm_pkg_t = null;
-                    const sig_level = (libalpm.SigLevel{ .package_optional = true, .database_optional = true }).to_sig_level();
-                    const pkg_load = rawLibalpm.alpm_pkg_load(self.handle, full_path_z, @intFromBool(false), sig_level, &pkg_ptr);
-                    _ = rawLibalpm.alpm_pkg_free(pkg_ptr);
-                    if (pkg_load == -1) {
-                        std.Io.Dir.cwd().deleteFile(self.io(), full_path_z) catch |err| switch (err) {
-                            error.FileNotFound => {}, // Already deleted
-                            else => return TransactionError.RemovalFailed,
-                        };
-                    }
+                    std.Io.Dir.cwd().deleteFile(self.io(), full_path_z) catch |err| switch (err) {
+                        error.FileNotFound => {}, // Already deleted
+                        else => return TransactionError.RemovalFailed,
+                    };
                 }
             }
         }

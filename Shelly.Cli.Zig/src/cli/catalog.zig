@@ -185,7 +185,16 @@ pub const variants = [_]Variant{
     .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'u' },
     .{ .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 's' },
     .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'u' },
-    .{ .action = "purify", .type_name = "standard", .action_code = 'Z', .type_code = 's' },
+    .{
+        .action = "purify",
+        .type_name = "standard",
+        .action_code = 'Z',
+        .type_code = 's',
+        .help = .{
+            .description = "Plan corrupted archive and optional orphan cleanup, show the targets, then confirm before changing ALPM state.",
+            .implementation = "Zigalpm.AlpmManager.purify",
+        },
+    },
     .{
         .action = "remove",
         .type_name = "standard",
@@ -557,7 +566,16 @@ pub const variants = [_]Variant{
     .{ .action = "install-ref-file", .type_name = "flatpak", .action_code = 'E', .type_code = 'f' },
     .{ .action = "install-bundle", .type_name = "flatpak", .action_code = 'B', .type_code = 'f' },
     .{ .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'f' },
-    .{ .action = "purify", .type_name = "flatpak", .action_code = 'Z', .type_code = 'f' },
+    .{
+        .action = "purify",
+        .type_name = "flatpak",
+        .action_code = 'Z',
+        .type_code = 'f',
+        .help = .{
+            .description = "Plan unused dependency cleanup across system and user Flatpak installations, then show and confirm the targets.",
+            .implementation = "Zigalpm.FlatpakManager.remove_unused_dependencies",
+        },
+    },
 };
 
 pub fn argumentsFor(comptime action: []const u8, comptime type_name: []const u8) []const Argument {

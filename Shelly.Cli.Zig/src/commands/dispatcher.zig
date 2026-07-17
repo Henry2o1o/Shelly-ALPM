@@ -2,6 +2,7 @@ const config = @import("config.zig");
 const install = @import("install.zig");
 const list = @import("list.zig");
 const list_updates = @import("list_updates.zig");
+const purify = @import("purify.zig");
 const remove = @import("remove.zig");
 const search = @import("search.zig");
 const sync = @import("sync.zig");
@@ -23,6 +24,7 @@ pub fn dispatch(
     if (try list_updates.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try search.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try config.dispatch(context, invocation)) |exit_code| return exit_code;
+    if (try purify.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try remove.dispatch(context, invocation)) |exit_code| return exit_code;
     return runtime.unimplemented(null, context, invocation);
 }

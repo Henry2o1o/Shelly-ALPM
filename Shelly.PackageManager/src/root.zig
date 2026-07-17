@@ -57,6 +57,7 @@ pub const flatpak = struct {
 
     pub const Manager = manager.Manager;
     pub const InstalledApplication = manager.InstalledApplication;
+    pub const UnusedDependency = manager.UnusedDependency;
     pub const RemoteManager = remote_manager.RemoteManager;
     pub const AppstreamManager = appstream_manager.AppstreamManager;
     pub const AppstreamCatalog = appstream_manager.AppstreamCatalog;

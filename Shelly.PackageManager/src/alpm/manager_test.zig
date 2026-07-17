@@ -1769,7 +1769,7 @@ test "Manager.init registers and deduplicates repository microarchitectures" {
     }
 }
 
-test "purify corruption dry run includes package archives and filters other cache entries" {
+test "purify corruption dry run reports only invalid package archives" {
     const allocator = testing.allocator;
 
     var threaded: std.Io.Threaded = .init(allocator, .{});
@@ -1791,6 +1791,16 @@ test "purify corruption dry run includes package archives and filters other cach
     defer allocator.free(cache_path);
     try std.Io.Dir.cwd().createDirPath(io, cache_path);
     mgr.config.cache_directory = cache_path;
+
+    const valid_source = try workspace.createPackageArchive(allocator, "valid-cache", "1.0-1");
+    defer allocator.free(valid_source);
+    const valid_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/valid-cache-1.0-1-any.pkg.tar",
+        .{cache_path},
+    );
+    defer allocator.free(valid_path);
+    try std.Io.Dir.rename(.cwd(), valid_source, .cwd(), valid_path, io);
 
     const archive_path = try std.fmt.allocPrint(
         allocator,
@@ -1824,6 +1834,8 @@ test "purify corruption dry run includes package archives and filters other cach
 
     try testing.expectEqual(@as(usize, 1), targets.len);
     try testing.expectEqualStrings("candidate.pkg.tar.zst", targets[0]);
+    _ = try std.Io.Dir.cwd().statFile(io, valid_path, .{});
+    _ = try std.Io.Dir.cwd().statFile(io, archive_path, .{});
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,6 +1909,16 @@ test "purify removes an invalid package archive outside dry-run mode" {
     try std.Io.Dir.cwd().createDirPath(io, cache_path);
     mgr.config.cache_directory = cache_path;
 
+    const valid_source = try workspace.createPackageArchive(allocator, "valid-cache", "1.0-1");
+    defer allocator.free(valid_source);
+    const valid_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/valid-cache-1.0-1-any.pkg.tar",
+        .{cache_path},
+    );
+    defer allocator.free(valid_path);
+    try std.Io.Dir.rename(.cwd(), valid_source, .cwd(), valid_path, io);
+
     const corrupt_path = try std.fmt.allocPrint(
         allocator,
         "{s}/corrupt.pkg.tar.zst",
@@ -1917,6 +1939,7 @@ test "purify removes an invalid package archive outside dry-run mode" {
 
     try testing.expectEqual(@as(usize, 1), targets.len);
     try testing.expectEqualStrings("corrupt.pkg.tar.zst", targets[0]);
+    _ = try std.Io.Dir.cwd().statFile(io, valid_path, .{});
     try testing.expectError(
         error.FileNotFound,
         std.Io.Dir.cwd().statFile(io, corrupt_path, .{}),

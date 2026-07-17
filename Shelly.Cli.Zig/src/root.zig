@@ -16,6 +16,7 @@ pub const search_command = @import("commands/search.zig");
 pub const upgrade_command = @import("commands/upgrade.zig");
 pub const list_command = @import("commands/list.zig");
 pub const list_updates_command = @import("commands/list_updates.zig");
+pub const purify_command = @import("commands/purify.zig");
 pub const remove_command = @import("commands/remove.zig");
 pub const config = @import("config/manager.zig");
 pub const config_model = @import("config/model.zig");
@@ -43,6 +44,7 @@ test {
     _ = upgrade_command;
     _ = list_command;
     _ = list_updates_command;
+    _ = purify_command;
     _ = remove_command;
     _ = config;
     _ = config_model;

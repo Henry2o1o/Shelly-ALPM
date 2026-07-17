@@ -336,6 +336,8 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(allocator, &manifest, &.{"-Ux"}, &.{ "upgrade", "all" });
     try expectTranslation(allocator, &manifest, &.{"-Ui"}, &.{ "upgrade", "appimage" });
     try expectTranslation(allocator, &manifest, &.{"-Uf"}, &.{ "upgrade", "flatpak" });
+    try expectTranslation(allocator, &manifest, &.{"-Zs"}, &.{ "purify", "standard" });
+    try expectTranslation(allocator, &manifest, &.{"-Zf"}, &.{ "purify", "flatpak" });
     try expectTranslation(
         allocator,
         &manifest,

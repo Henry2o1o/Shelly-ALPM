@@ -258,6 +258,8 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Ts linux      ->  update standard linux
         \\    -Ta demo-git   ->  update aur demo-git
         \\    -Tf org.app.Id ->  update flatpak org.app.Id
+        \\    -Zs             ->  purify standard
+        \\    -Zf             ->  purify flatpak
         \\    -Isu firefox   ->  install standard -u firefox
         \\    -Sa query      ->  search aur query
         \\    -Ssa query     ->  search standard and aur for query
@@ -445,6 +447,22 @@ test "update action help documents targeted native backends and shortcodes" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.update_installed_flatpak") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "partial-upgrade warning and confirmation") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "--check") != null);
+}
+
+test "purify action help documents native standard and Flatpak backends" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const command = manifest.findByPath("shelly purify").?;
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, command, &output.writer);
+    const rendered = output.writer.buffered();
+    for ([_][]const u8{ "[shortcode: -Zs]", "[shortcode: -Zf]", "--dry-run", "--orphans" }) |needle|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.purify") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.remove_unused_dependencies") != null);
 }
 
 test "search help names the native method used by the selected type" {
