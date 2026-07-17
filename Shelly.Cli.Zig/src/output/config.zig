@@ -127,7 +127,7 @@ pub fn writeFailure(context: *runtime.RuntimeContext, message: []const u8) !void
     }
 }
 
-fn writeFrame(context: *runtime.RuntimeContext, payload: []const u8) !void {
+pub fn writeFrame(context: *runtime.RuntimeContext, payload: []const u8) !void {
     const size = std.base64.standard.Encoder.calcSize(payload.len);
     const encoded = try context.allocator.alloc(u8, size);
     const result = std.base64.standard.Encoder.encode(encoded, payload);
