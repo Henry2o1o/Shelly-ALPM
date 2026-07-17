@@ -15,22 +15,28 @@ pub const Backend = enum { standard, flatpak };
 
 const PurifyError = error{
     BackendFailed,
+    CachePlanMissing,
 };
 
 const Options = struct {
     dry_run: bool = false,
     orphans: bool = false,
+    cache_versions: ?usize = null,
+    plan_only: bool = false,
+    cache_plan: ?*const Zigalpm.alpm.CacheRemovalPlan = null,
 };
 
 const Result = struct {
     targets: []const [:0]const u8 = &.{},
     owns_targets: bool = false,
+    cache_plan: ?Zigalpm.alpm.CacheRemovalPlan = null,
 
     fn deinit(self: *Result, allocator: std.mem.Allocator) void {
         if (self.owns_targets) {
             for (self.targets) |target| allocator.free(target);
             allocator.free(self.targets);
         }
+        if (self.cache_plan) |*cache_plan| cache_plan.deinit(allocator);
         self.* = undefined;
     }
 };
@@ -108,7 +114,9 @@ fn dispatchWithRunner(
             try confirmPurify(context);
         if (!confirmed) return 0;
     }
-    return try executeWithRunner(context, invocation, backend, options, runner);
+    var execution_options = options;
+    if (plan.cache_plan) |*cache_plan| execution_options.cache_plan = cache_plan;
+    return try executeWithRunner(context, invocation, backend, execution_options, runner);
 }
 
 fn buildPlan(
@@ -119,12 +127,14 @@ fn buildPlan(
 ) !Result {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     defer operation_context.deinit();
+    var plan_options = options;
+    plan_options.plan_only = true;
     return runner.call(
         runner.data,
         context,
         &operation_context,
         backend,
-        .{ .dry_run = true, .orphans = options.orphans },
+        plan_options,
     );
 }
 
@@ -316,17 +326,56 @@ fn runReal(
             defer manager.deinit();
             manager.setOperationContext(operation_context);
             defer manager.setOperationContext(null);
-            return .{
-                .targets = try manager.purify(options.dry_run, options.orphans, true),
+            const planning = options.plan_only or options.dry_run;
+
+            if (!planning and options.cache_versions != null) {
+                const cache_plan = options.cache_plan orelse return PurifyError.CachePlanMissing;
+                var cache_manager = Zigalpm.alpm.CacheManager.init(
+                    context.allocator,
+                    context.io,
+                    .{
+                        .cache_directory = cache_plan.cache_directory,
+                        .handle = manager.handle,
+                    },
+                );
+                cache_manager.setOperationContext(operation_context);
+                _ = try cache_manager.execute_cache_removal_plan(cache_plan);
+            }
+
+            var result: Result = .{
+                .targets = try manager.purify(planning, options.orphans, true),
                 .owns_targets = true,
             };
+            errdefer result.deinit(context.allocator);
+
+            if (planning) {
+                if (options.cache_versions) |keep| {
+                    var cache_manager = Zigalpm.alpm.CacheManager.init(
+                        context.allocator,
+                        context.io,
+                        .{
+                            .cache_directory = manager.config.cache_directory,
+                            .handle = manager.handle,
+                        },
+                    );
+                    cache_manager.setOperationContext(operation_context);
+                    var cache_plan = try cache_manager.plan_cache_cleanup(.{
+                        .keep = keep,
+                        .dry_run = options.dry_run,
+                    });
+                    errdefer cache_plan.deinit(context.allocator);
+                    try appendCacheTargets(context.allocator, &result, &cache_plan);
+                    result.cache_plan = cache_plan;
+                }
+            }
+            return result;
         },
         .flatpak => {
             var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
             defer manager.deinit();
             try manager.setOperationContext(operation_context);
             defer manager.setOperationContext(null) catch {};
-            if (options.dry_run) {
+            if (options.plan_only or options.dry_run) {
                 const dependencies = try manager.list_unused_dependencies();
                 defer Zigalpm.flatpak.UnusedDependency.deinitSlice(context.allocator, dependencies);
                 const targets = try context.allocator.alloc([:0]const u8, dependencies.len);
@@ -350,6 +399,56 @@ fn runReal(
             return .{};
         },
     }
+}
+
+fn appendCacheTargets(
+    allocator: std.mem.Allocator,
+    result: *Result,
+    cache_plan: *const Zigalpm.alpm.CacheRemovalPlan,
+) !void {
+    std.debug.assert(result.owns_targets);
+    var additional: usize = 0;
+    for (cache_plan.items) |item| {
+        if (!cacheTargetAlreadyPresent(result.targets, item.package.full_path)) additional += 1;
+    }
+    if (additional == 0) return;
+
+    const combined = try allocator.alloc([:0]const u8, result.targets.len + additional);
+    @memcpy(combined[0..result.targets.len], result.targets);
+    var initialized = result.targets.len;
+    errdefer {
+        for (combined[result.targets.len..initialized]) |target| allocator.free(target);
+        allocator.free(combined);
+    }
+    for (cache_plan.items) |item| {
+        if (cacheTargetAlreadyPresent(result.targets, item.package.full_path)) continue;
+        combined[initialized] = try std.fmt.allocPrintSentinel(
+            allocator,
+            "[cache] {s} {s} ({d} B)",
+            .{
+                item.package.name,
+                item.package.version_release,
+                item.package.file_size +| item.signature_size,
+            },
+            0,
+        );
+        initialized += 1;
+    }
+
+    if (result.owns_targets) allocator.free(result.targets);
+    result.targets = combined;
+    result.owns_targets = true;
+}
+
+fn cacheTargetAlreadyPresent(
+    targets: []const [:0]const u8,
+    cache_path: []const u8,
+) bool {
+    const basename = std.fs.path.basename(cache_path);
+    for (targets) |target| {
+        if (std.mem.eql(u8, target, cache_path) or std.mem.eql(u8, target, basename)) return true;
+    }
+    return false;
 }
 
 fn scopeName(scope: anytype) []const u8 {
@@ -452,7 +551,21 @@ fn optionsFor(invocation: *const parser.Invocation) Options {
     return .{
         .dry_run = optionEnabled(invocation, "--dry-run"),
         .orphans = optionEnabled(invocation, "--orphans"),
+        .cache_versions = optionalUnsigned(invocation, "--cache", 3),
     };
+}
+
+fn optionalUnsigned(
+    invocation: *const parser.Invocation,
+    name: []const u8,
+    default_value: usize,
+) ?usize {
+    for (invocation.options) |option| {
+        if (!std.mem.eql(u8, option.name, name)) continue;
+        const value = option.value orelse return default_value;
+        return std.fmt.parseInt(usize, value, 10) catch unreachable;
+    }
+    return null;
 }
 
 fn optionEnabled(invocation: *const parser.Invocation, name: []const u8) bool {
@@ -507,19 +620,50 @@ test "purify long forms and shortcodes route with standard modifiers" {
     var outcome = try parser.parse(
         arena.allocator(),
         &manifest,
-        &.{ "purify", "standard", "--dry-run", "--orphans" },
+        &.{ "purify", "standard", "--dry-run", "--cache", "--orphans" },
     );
     try std.testing.expectEqualStrings(standard_command_path, outcome.dispatch.command.path);
     const options = optionsFor(&outcome.dispatch);
     try std.testing.expect(options.dry_run);
     try std.testing.expect(options.orphans);
+    try std.testing.expectEqual(@as(?usize, 3), options.cache_versions);
+
+    outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "purify", "standard", "--cache=5" },
+    );
+    try std.testing.expectEqual(@as(?usize, 5), optionsFor(&outcome.dispatch).cache_versions);
+
+    outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "purify", "standard", "-c", "0", "--orphans" },
+    );
+    try std.testing.expectEqual(@as(?usize, 0), optionsFor(&outcome.dispatch).cache_versions);
+
+    const invalid_cache = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "purify", "standard", "--cache=-1" },
+    );
+    try std.testing.expect(invalid_cache == .failure);
+
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "purify", "standard" });
+    try std.testing.expect(optionsFor(&outcome.dispatch).cache_versions == null);
 
     outcome = try parser.parse(arena.allocator(), &manifest, &.{ "purify", "flatpak" });
     try std.testing.expectEqualStrings(flatpak_command_path, outcome.dispatch.command.path);
+    const flatpak_cache = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "purify", "flatpak", "--cache" },
+    );
+    try std.testing.expect(flatpak_cache == .failure);
 
-    const standard = try shortcodes.translate(arena.allocator(), &manifest, &.{"-Zsdo"});
-    try std.testing.expectEqual(@as(usize, 4), standard.translated.len);
-    const expected_standard = [_][]const u8{ "purify", "standard", "-d", "-o" };
+    const standard = try shortcodes.translate(arena.allocator(), &manifest, &.{"-Zsdoc"});
+    try std.testing.expectEqual(@as(usize, 5), standard.translated.len);
+    const expected_standard = [_][]const u8{ "purify", "standard", "-d", "-o", "-c" };
     for (standard.translated, &expected_standard) |actual, expected|
         try std.testing.expectEqualStrings(expected, actual);
     const flatpak = try shortcodes.translate(arena.allocator(), &manifest, &.{"-Zf"});
@@ -561,7 +705,7 @@ test "destructive purify shows its plan before confirmation and mutates only aft
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
     const outcome = try parser.parse(arena.allocator(), &manifest, &.{
-        "purify", "standard", "--orphans",
+        "purify", "standard", "--orphans", "--cache",
     });
     var stdin = std.Io.Reader.fixed("n\n");
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -581,18 +725,33 @@ test "destructive purify shows its plan before confirmation and mutates only aft
 
         fn run(
             data: ?*anyopaque,
-            _: *runtime.RuntimeContext,
+            runtime_context: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: Backend,
             options: Options,
         ) !Result {
             const self: *@This() = @ptrCast(@alignCast(data.?));
-            if (options.dry_run) {
+            if (options.plan_only) {
                 self.plan_calls += 1;
                 try std.testing.expect(options.orphans);
-                return .{ .targets = &.{ "orphan-one", "bad-cache.pkg.tar.zst" } };
+                try std.testing.expectEqual(@as(?usize, 3), options.cache_versions);
+                const cache_directory = try runtime_context.allocator.dupe(u8, "/tmp/cache");
+                errdefer runtime_context.allocator.free(cache_directory);
+                const cache_items = try runtime_context.allocator.alloc(Zigalpm.alpm.CacheRemovalItem, 0);
+                return .{
+                    .targets = &.{ "orphan-one", "[cache] cached-one 1.0-1 (12 B)" },
+                    .cache_plan = .{
+                        .cache_directory = cache_directory,
+                        .items = cache_items,
+                        .package_bytes = 12,
+                        .signature_bytes = 0,
+                        .dry_run = false,
+                    },
+                };
             }
             self.mutation_calls += 1;
+            try std.testing.expectEqual(@as(?usize, 3), options.cache_versions);
+            try std.testing.expect(options.cache_plan != null);
             return .{};
         }
     };
@@ -606,7 +765,7 @@ test "destructive purify shows its plan before confirmation and mutates only aft
     try std.testing.expectEqual(@as(usize, 1), capture.plan_calls);
     try std.testing.expectEqual(@as(usize, 0), capture.mutation_calls);
     const declined_output = stdout.writer.buffered();
-    const plan_index = std.mem.indexOf(u8, declined_output, "orphan-one").?;
+    const plan_index = std.mem.indexOf(u8, declined_output, "cached-one").?;
     const prompt_index = std.mem.indexOf(u8, declined_output, "Proceed with purify?").?;
     try std.testing.expect(plan_index < prompt_index);
 
@@ -651,7 +810,7 @@ test "empty purify plans skip confirmation and backend mutation" {
         ) !Result {
             const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
-            try std.testing.expect(options.dry_run);
+            try std.testing.expect(options.plan_only);
             return .{};
         }
     };
@@ -696,7 +855,7 @@ test "no-confirm JSON emits one plan before quiet execution" {
         ) !Result {
             const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
-            return if (options.dry_run)
+            return if (options.plan_only)
                 .{ .targets = &.{"bad-cache.pkg.tar.zst"} }
             else
                 .{};
@@ -739,7 +898,7 @@ test "routes purify backends and preserves standard result formats" {
         ) !Result {
             const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
-            if (options.dry_run) {
+            if (options.plan_only) {
                 if (backend == .standard) {
                     try std.testing.expect(options.orphans);
                     return .{ .targets = &.{ "orphan-one", "bad-cache.pkg.tar.zst" } };
@@ -866,7 +1025,7 @@ test "purify UI presents the plan before a compatible confirmation frame" {
             options: Options,
         ) !Result {
             const self: *@This() = @ptrCast(@alignCast(data.?));
-            if (options.dry_run)
+            if (options.plan_only)
                 return .{ .targets = &.{"[user] runtime/org.example.Platform/x86_64/stable"} };
             self.mutation_calls += 1;
             return .{};

@@ -73,7 +73,10 @@ pub fn parse(
                 if (value == null) value = "true";
             } else {
                 if (value == null) {
-                    if (index + 1 >= arguments.len)
+                    const optional_value = option.minimumArity == 0;
+                    const next_is_option = index + 1 < arguments.len and
+                        isOptionToken(arguments[index + 1]);
+                    if (!optional_value and index + 1 >= arguments.len)
                         return .{ .failure = .{
                             .message = try std.fmt.allocPrint(
                                 allocator,
@@ -82,13 +85,17 @@ pub fn parse(
                             ),
                             .help_command = command,
                         } };
-                    index += 1;
-                    value = arguments[index];
+                    if (!optional_value or (index + 1 < arguments.len and !next_is_option)) {
+                        index += 1;
+                        value = arguments[index];
+                    }
                 }
-                if (!validTypedValue(option.type, value.?))
-                    return invalidValue(allocator, command, option.name, value.?);
-                if (!inChoices(option.choices, value.?))
-                    return invalidValue(allocator, command, option.name, value.?);
+                if (value) |provided| {
+                    if (!validTypedValue(option.type, provided))
+                        return invalidValue(allocator, command, option.name, provided);
+                    if (!inChoices(option.choices, provided))
+                        return invalidValue(allocator, command, option.name, provided);
+                }
             }
 
             if (std.mem.eql(u8, option.name, "--help")) help_requested = true;
@@ -249,6 +256,8 @@ fn isBoolean(value: []const u8) bool {
 fn validTypedValue(value_type: []const u8, value: []const u8) bool {
     if (std.mem.eql(u8, value_type, "int")) {
         _ = std.fmt.parseInt(i64, value, 10) catch return false;
+    } else if (std.mem.eql(u8, value_type, "uint")) {
+        _ = std.fmt.parseInt(usize, value, 10) catch return false;
     } else if (std.mem.eql(u8, value_type, "bool")) {
         return isBoolean(value);
     }

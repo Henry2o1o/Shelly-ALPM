@@ -259,6 +259,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Ta demo-git   ->  update aur demo-git
         \\    -Tf org.app.Id ->  update flatpak org.app.Id
         \\    -Zs             ->  purify standard
+        \\    -Zsc            ->  purify standard --cache
         \\    -Zf             ->  purify flatpak
         \\    -Isu firefox   ->  install standard -u firefox
         \\    -Sa query      ->  search aur query
@@ -345,9 +346,11 @@ fn optionLabel(allocator: std.mem.Allocator, option: spec.Option) ![]const u8 {
     }
     if (!std.mem.eql(u8, option.type, "void") and !std.mem.eql(u8, option.type, "bool")) {
         try label.append(allocator, ' ');
+        if (option.minimumArity == 0) try label.append(allocator, '[');
         try label.append(allocator, '<');
         try label.appendSlice(allocator, std.mem.trimStart(u8, option.name, "-"));
         try label.append(allocator, '>');
+        if (option.minimumArity == 0) try label.append(allocator, ']');
     }
     if (option.required) try label.appendSlice(allocator, " (REQUIRED)");
     return label.toOwnedSlice(allocator);
@@ -459,9 +462,11 @@ test "purify action help documents native standard and Flatpak backends" {
 
     try render(arena.allocator(), &manifest, command, &output.writer);
     const rendered = output.writer.buffered();
-    for ([_][]const u8{ "[shortcode: -Zs]", "[shortcode: -Zf]", "--dry-run", "--orphans" }) |needle|
+    for ([_][]const u8{ "[shortcode: -Zs]", "[shortcode: -Zf]", "--dry-run", "--orphans", "--cache" }) |needle|
         try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.purify") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "CacheManager") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[default: 3]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.remove_unused_dependencies") != null);
 }
 

@@ -191,8 +191,8 @@ pub const variants = [_]Variant{
         .action_code = 'Z',
         .type_code = 's',
         .help = .{
-            .description = "Plan corrupted archive and optional orphan cleanup, show the targets, then confirm before changing ALPM state.",
-            .implementation = "Zigalpm.AlpmManager.purify",
+            .description = "Plan corrupted archives, optional orphan cleanup, and optional cache retention cleanup; show the targets, then confirm before changing ALPM or cache state.",
+            .implementation = "Zigalpm.AlpmManager.purify / Zigalpm.alpm.CacheManager",
         },
     },
     .{
@@ -846,6 +846,12 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
     if (pathIs(action, type_name, "purify", "standard")) return &.{
         flag("--dry-run", &.{"-d"}, "Show the cleanup plan without changing packages"),
         flag("--orphans", &.{"-o"}, "Include orphaned packages"),
+        optionalIntegerOptionWithDefault(
+            "--cache",
+            &.{"-c"},
+            "Remove older cached package versions while retaining this many versions",
+            3,
+        ),
     };
     if (pathIs(action, type_name, "remove", "standard")) return &.{
         booleanOptionWithDefault("--cascade", &.{"-c"}, "Remove dependencies no longer needed", true),
@@ -1022,6 +1028,24 @@ fn integerOption(name: []const u8, aliases: []const []const u8, description: []c
     };
 }
 
+fn optionalIntegerOptionWithDefault(
+    name: []const u8,
+    aliases: []const []const u8,
+    description: []const u8,
+    default_value: i64,
+) Option {
+    return .{
+        .name = name,
+        .aliases = aliases,
+        .type = "uint",
+        .minimumArity = 0,
+        .maximumArity = 1,
+        .description = description,
+        .hasExplicitDefault = true,
+        .defaultValue = .{ .integer = default_value },
+    };
+}
+
 fn stringOption(
     name: []const u8,
     aliases: []const []const u8,
@@ -1157,7 +1181,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "list-updates"))
         return "List available updates for standard, AUR, AppImage, or Flatpak packages.";
     if (std.mem.eql(u8, action, "purify"))
-        return "Remove corrupted or orphaned ALPM packages, or unused Flatpak dependencies.";
+        return "Remove corrupted or orphaned ALPM packages, optionally clean the package cache, or remove unused Flatpak dependencies.";
     if (std.mem.eql(u8, action, "remove"))
         return "Remove standard or local packages, AUR packages, AppImages, or Flatpak applications.";
     if (std.mem.eql(u8, action, "sync"))
@@ -1260,7 +1284,7 @@ pub fn descriptionFor(variant: Variant) []const u8 {
     if (pathIs(variant.action, variant.type_name, "list-updates", "flatpak"))
         return "List Flatpak applications and runtimes with available updates.";
     if (pathIs(variant.action, variant.type_name, "purify", "standard"))
-        return "Remove corrupted or orphaned standard packages.";
+        return "Remove corrupted or orphaned standard packages and optionally clean older cached package versions.";
     if (pathIs(variant.action, variant.type_name, "purify", "flatpak"))
         return "Remove unused Flatpak dependencies.";
     if (pathIs(variant.action, variant.type_name, "remove", "standard"))
