@@ -16,6 +16,7 @@ pub const InstalledApplication = struct {
     branch: [:0]u8,
     summary: [:0]u8,
     version: [:0]u8,
+    latest_commit: [:0]u8,
     origin: [:0]u8,
     kind: i32,
     installed_size: u64,
@@ -28,8 +29,14 @@ pub const InstalledApplication = struct {
         allocator.free(self.branch);
         allocator.free(self.summary);
         allocator.free(self.version);
+        allocator.free(self.latest_commit);
         allocator.free(self.origin);
         self.* = undefined;
+    }
+
+    pub fn deinitSlice(allocator: std.mem.Allocator, applications: []InstalledApplication) void {
+        for (applications) |*application| application.deinit(allocator);
+        allocator.free(applications);
     }
 };
 
@@ -163,6 +170,28 @@ pub const Manager = struct {
         }
 
         return list.toOwnedSlice(self.allocator);
+    }
+
+    /// Return owned metadata for every installed system and user Flatpak.
+    /// Unlike `list_installed_flatpak`, the returned values do not borrow
+    /// `FlatpakInstalledRef` objects and remain valid after the native arrays
+    /// and installations have been released.
+    pub fn list_installed_applications(self: Manager) ![]InstalledApplication {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
+
+        var applications: std.ArrayList(InstalledApplication) = .empty;
+        errdefer {
+            for (applications.items) |*application| application.deinit(self.allocator);
+            applications.deinit(self.allocator);
+        }
+
+        try self.appendSystemInstalledApplications(&applications);
+        try self.appendUserInstalledApplications(&applications);
+        return applications.toOwnedSlice(self.allocator);
     }
 
     /// Resolve a system or user installation by exact/partial ID or friendly
@@ -1008,6 +1037,75 @@ pub const Manager = struct {
         return null;
     }
 
+    fn appendSystemInstalledApplications(
+        self: Manager,
+        applications: *std.ArrayList(InstalledApplication),
+    ) !void {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
+
+        const installations = rawflatpak.flatpak_get_system_installations(cancellable, &g_error);
+        if (installations == null or g_error != null) return;
+        defer rawflatpak.g_ptr_array_unref(installations);
+
+        var index: usize = 0;
+        while (index < installations.*.len) : (index += 1) {
+            try self.checkCancelled();
+            const installation: *rawflatpak.FlatpakInstallation = @ptrCast(@alignCast(installations.*.pdata[index]));
+            try self.appendInstalledApplications(installation, .SYSTEM, applications);
+        }
+    }
+
+    fn appendUserInstalledApplications(
+        self: Manager,
+        applications: *std.ArrayList(InstalledApplication),
+    ) !void {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
+
+        const installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation == null or g_error != null) return;
+        defer rawflatpak.g_object_unref(installation);
+        try self.appendInstalledApplications(installation, .USER, applications);
+    }
+
+    fn appendInstalledApplications(
+        self: Manager,
+        installation: *rawflatpak.FlatpakInstallation,
+        scope: flatpak.Scope,
+        applications: *std.ArrayList(InstalledApplication),
+    ) !void {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
+
+        const refs = rawflatpak.flatpak_installation_list_installed_refs(installation, cancellable, &g_error);
+        if (refs == null or g_error != null) return;
+        defer rawflatpak.g_ptr_array_unref(refs);
+
+        var index: usize = 0;
+        while (index < refs.*.len) : (index += 1) {
+            try self.checkCancelled();
+            const installed: *rawflatpak.FlatpakInstalledRef = @ptrCast(@alignCast(refs.*.pdata[index]));
+            var application = try self.copyInstalledApplication(installed, scope);
+            applications.append(self.allocator, application) catch |err| {
+                application.deinit(self.allocator);
+                return err;
+            };
+        }
+    }
+
     fn findInUserInstallation(self: Manager, name_or_id: []const u8) !?InstalledApplication {
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         defer rawflatpak.g_object_unref(cancellable);
@@ -1071,6 +1169,7 @@ pub const Manager = struct {
             .branch = undefined,
             .summary = undefined,
             .version = undefined,
+            .latest_commit = undefined,
             .origin = undefined,
             .kind = @intCast(rawflatpak.flatpak_ref_get_kind(ref)),
             .installed_size = rawflatpak.flatpak_installed_ref_get_installed_size(installed),
@@ -1087,6 +1186,12 @@ pub const Manager = struct {
         errdefer self.allocator.free(result.summary);
         result.version = try self.allocator.dupeSentinel(u8, if (appdata_version.len == 0) branch else appdata_version, 0);
         errdefer self.allocator.free(result.version);
+        result.latest_commit = try self.allocator.dupeSentinel(
+            u8,
+            spanOrEmpty(rawflatpak.flatpak_installed_ref_get_latest_commit(installed)),
+            0,
+        );
+        errdefer self.allocator.free(result.latest_commit);
         result.origin = try self.allocator.dupeSentinel(u8, spanOrEmpty(rawflatpak.flatpak_installed_ref_get_origin(installed)), 0);
         return result;
     }

@@ -233,6 +233,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\  modifiers are that action/type pair's short flags (case-sensitive).
         \\  Search may combine standard, AUR, and Flatpak types (s/a/f); modifiers apply
         \\  only to selected search types that support them.
+        \\  List also accepts the compatibility selectors I/A/F used in the examples.
         \\
         \\  Types:
         \\
@@ -250,6 +251,10 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Uf            ->  upgrade flatpak
         \\    -Ui            ->  upgrade appimage
         \\    -Ux            ->  upgrade all
+        \\    -Ls            ->  list standard
+        \\    -LI            ->  list appimage
+        \\    -LA            ->  list aur
+        \\    -LF            ->  list flatpak
         \\    -Isu firefox   ->  install standard -u firefox
         \\    -Sa query      ->  search aur query
         \\    -Ssa query     ->  search standard and aur for query

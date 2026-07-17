@@ -171,6 +171,16 @@ pub const variants = [_]Variant{
         .type_code = 's',
         .help = .{ .implementation = "Zigalpm.AlpmManager.sync_for_update_check / get_updates_available" },
     },
+    .{
+        .action = "list",
+        .type_name = "standard",
+        .action_code = 'L',
+        .type_code = 's',
+        .help = .{
+            .description = "List packages installed in the local ALPM database, with optional IgnorePkg and install-reason filters.",
+            .implementation = "Zigalpm.AlpmManager.get_installed_packages",
+        },
+    },
     .{ .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'u' },
     .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'u' },
     .{ .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 's' },
@@ -229,7 +239,13 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.AppImageManager.removeAppImage",
         },
     },
-    .{ .action = "list", .type_name = "appimage", .action_code = 'L', .type_code = 'i' },
+    .{
+        .action = "list",
+        .type_name = "appimage",
+        .action_code = 'L',
+        .type_code = 'i',
+        .help = .{ .implementation = "Zigalpm.AppImageManager.getAppImagesFromLocalDb" },
+    },
     .{
         .action = "upgrade",
         .type_name = "appimage",
@@ -331,7 +347,13 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .action = "list", .type_name = "aur", .action_code = 'L', .type_code = 'a' },
+    .{
+        .action = "list",
+        .type_name = "aur",
+        .action_code = 'L',
+        .type_code = 'a',
+        .help = .{ .implementation = "Zigalpm.AurManager.getInstalledPackages" },
+    },
     .{
         .action = "list-updates",
         .type_name = "aur",
@@ -423,7 +445,13 @@ pub const variants = [_]Variant{
         },
     },
     .{ .action = "update", .type_name = "flatpak", .action_code = 'T', .type_code = 'f' },
-    .{ .action = "list", .type_name = "flatpak", .action_code = 'L', .type_code = 'f' },
+    .{
+        .action = "list",
+        .type_name = "flatpak",
+        .action_code = 'L',
+        .type_code = 'f',
+        .help = .{ .implementation = "Zigalpm.FlatpakManager.list_installed_applications" },
+    },
     .{
         .action = "list-updates",
         .type_name = "flatpak",
@@ -797,6 +825,11 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         &.{},
         "Run the PKGBUILD check() function",
     )};
+    if (pathIs(action, type_name, "list", "standard")) return &.{
+        flag("--show-hidden", &.{"-w"}, "Include hidden packages"),
+        flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
+        flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
+    };
     if (pathIs(action, type_name, "list", "aur")) return &.{
         flag("--show-hidden", &.{}, "Include hidden packages"),
         flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
@@ -1046,7 +1079,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "upgrade"))
         return "Upgrade standard, AUR, AppImage, or Flatpak packages, including all supported backends together.";
     if (std.mem.eql(u8, action, "list"))
-        return "List installed AppImages, AUR packages, Flatpak applications, Shelly configuration values, or pacman keyring keys.";
+        return "List installed standard packages, AppImages, AUR packages, Flatpak applications, Shelly configuration values, or pacman keyring keys.";
     if (std.mem.eql(u8, action, "list-updates"))
         return "List available updates for standard, AUR, AppImage, or Flatpak packages.";
     if (std.mem.eql(u8, action, "purify"))
@@ -1134,6 +1167,8 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
 
 pub fn descriptionFor(variant: Variant) []const u8 {
     if (variant.help.description) |description| return description;
+    if (pathIs(variant.action, variant.type_name, "list", "standard"))
+        return "List packages installed in the local ALPM database.";
     if (pathIs(variant.action, variant.type_name, "list", "appimage"))
         return "List installed AppImages.";
     if (pathIs(variant.action, variant.type_name, "list", "aur"))

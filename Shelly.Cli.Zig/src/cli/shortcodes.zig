@@ -92,6 +92,12 @@ pub fn translate(
 }
 
 fn normalizeTypeCode(action_code: u8, type_code: u8) u8 {
+    if (action_code == 'L') return switch (type_code) {
+        'I' => 'i',
+        'A' => 'a',
+        'F' => 'f',
+        else => type_code,
+    };
     if (action_code != 'R') return type_code;
     return switch (type_code) {
         'S' => 's',
