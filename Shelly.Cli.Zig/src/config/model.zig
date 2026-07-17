@@ -1,5 +1,5 @@
 const std = @import("std");
-const config_defaults = @import("config_defaults");
+const native_defaults = @import("defaults.zig");
 
 pub const Config = struct {
     values: std.json.ObjectMap,
@@ -8,10 +8,10 @@ pub const Config = struct {
         const parsed = try std.json.parseFromSliceLeaky(
             std.json.Value,
             allocator,
-            config_defaults.json,
+            native_defaults.json,
             .{},
         );
-        if (parsed != .object) return error.InvalidConfigContract;
+        if (parsed != .object) return error.InvalidConfigDefaults;
         var values: std.json.ObjectMap = .empty;
         var iterator = parsed.object.iterator();
         while (iterator.next()) |entry|

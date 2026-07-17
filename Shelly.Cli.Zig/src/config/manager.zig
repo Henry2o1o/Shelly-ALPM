@@ -2,7 +2,7 @@ const std = @import("std");
 const model = @import("model.zig");
 const runtime = @import("../runtime/context.zig");
 const xdg = @import("../runtime/xdg.zig");
-const config_defaults = @import("config_defaults");
+const native_defaults = @import("defaults.zig");
 
 pub const Manager = struct {
     context: *runtime.RuntimeContext,
@@ -108,7 +108,7 @@ test "creates, updates, and reloads the XDG config file" {
     );
     defer std.testing.allocator.free(saved);
     try std.testing.expectEqualStrings(
-        std.mem.trimEnd(u8, config_defaults.json, "\n"),
+        std.mem.trimEnd(u8, native_defaults.json, "\n"),
         saved,
     );
 

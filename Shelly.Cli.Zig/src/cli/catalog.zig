@@ -1,5 +1,52 @@
 const std = @import("std");
 
+pub const binary = "shelly";
+pub const version = "2.4.1+4";
+pub const informational_version = version;
+pub const root_description = "Shelly — a native, unified package manager for Arch Linux repository packages, the AUR, Flatpaks, and AppImages.";
+
+pub const Argument = struct {
+    name: []const u8,
+    type: []const u8 = "string",
+    minimumArity: usize,
+    maximumArity: ?usize,
+    description: ?[]const u8 = null,
+    choices: []const []const u8 = &.{},
+};
+
+pub const Option = struct {
+    name: []const u8,
+    aliases: []const []const u8 = &.{},
+    type: []const u8 = "bool",
+    minimumArity: usize = 0,
+    maximumArity: ?usize = 1,
+    required: bool = false,
+    description: ?[]const u8 = null,
+    hidden: bool = false,
+    recursive: bool = false,
+    builtIn: bool = false,
+    hasExplicitDefault: bool = false,
+    defaultValue: ?std.json.Value = null,
+    choices: []const []const u8 = &.{},
+
+    pub fn matches(self: Option, token: []const u8) bool {
+        if (std.mem.eql(u8, self.name, token)) return true;
+        for (self.aliases) |alias| {
+            if (std.mem.eql(u8, alias, token)) return true;
+        }
+        return false;
+    }
+};
+
+pub const root_options = [_]Option{
+    voidOption("--help", &.{ "-?", "-h", "/?", "/h" }, "Show command-specific help and usage information", true, true),
+    voidOption("--version", &.{}, "Show version information", false, true),
+    globalFlag("--no-confirm", &.{"-n"}, "Use safe automatic answers instead of prompting"),
+    globalFlag("--ui-mode", &.{"-U"}, "Emit framed output for the Shelly UI"),
+    globalFlag("--json", &.{"-j"}, "Output structured JSON where the command supports it"),
+    globalFlag("--verbose", &.{"-v"}, "Enable verbose diagnostic output"),
+};
+
 pub const Type = struct {
     name: []const u8,
     code: ?u8,
@@ -18,21 +65,12 @@ pub const types = [_]Type{
 };
 
 pub const Variant = struct {
-    source_path: []const u8,
     action: []const u8,
     type_name: []const u8,
     action_code: ?u8,
     type_code: ?u8,
-    keyring_action: ?[]const u8 = null,
     default_for_action: bool = false,
-    additional_modifiers: []const Modifier = &.{},
     help: Help = .{},
-};
-
-pub const Modifier = struct {
-    name: []const u8,
-    aliases: []const []const u8 = &.{},
-    description: []const u8,
 };
 
 pub const HelpText = struct {
@@ -47,12 +85,10 @@ pub const Help = struct {
     options: []const HelpText = &.{},
 };
 
-// This is the authoritative action/type routing table. The source paths identify
-// metadata in the frozen C# snapshot; only the action-first paths are exposed by
-// the Zig manifest.
+// This is the authoritative native action/type routing table. Arguments,
+// modifiers, help, shortcodes, and defaults are all resolved in this module.
 pub const variants = [_]Variant{
     .{
-        .source_path = "shelly query",
         .action = "search",
         .type_name = "standard",
         .action_code = 'S',
@@ -76,7 +112,6 @@ pub const variants = [_]Variant{
         },
     },
     .{
-        .source_path = "shelly install",
         .action = "install",
         .type_name = "standard",
         .action_code = 'I',
@@ -95,23 +130,16 @@ pub const variants = [_]Variant{
         },
     },
     .{
-        .source_path = "shelly upgrade",
         .action = "upgrade",
         .type_name = "standard",
         .action_code = 'U',
         .type_code = 'S',
-        .additional_modifiers = &.{.{
-            .name = "--all",
-            .aliases = &.{"-a"},
-            .description = "Upgrade standard, AUR, Flatpak, and AppImage backends through the combined coordinator",
-        }},
         .help = .{
             .description = "Synchronize ALPM repositories, show the available repository package upgrades, perform a full system upgrade, and report required restarts.",
             .implementation = "Zigalpm.AlpmManager.sync / get_updates_available / sync_system_update",
         },
     },
     .{
-        .source_path = "shelly upgrade-all",
         .action = "upgrade",
         .type_name = "all",
         .action_code = 'U',
@@ -121,20 +149,19 @@ pub const variants = [_]Variant{
             .implementation = "Combined Zig coordinator over AlpmManager, AurManager, FlatpakManager, and appimage.UpdateManager",
         },
     },
-    .{ .source_path = "shelly downgrade", .action = "downgrade", .type_name = "standard", .action_code = 'D', .type_code = 'S' },
-    .{ .source_path = "shelly ignore", .action = "ignore", .type_name = "standard", .action_code = 'G', .type_code = 'S' },
-    .{ .source_path = "shelly news", .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 'S' },
-    .{ .source_path = "shelly cache-clean", .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'U' },
-    .{ .source_path = "shelly check-updates", .action = "check-updates", .type_name = "utility", .action_code = 'K', .type_code = 'U' },
-    .{ .source_path = "shelly list-updates", .action = "list-updates", .type_name = "standard", .action_code = 'P', .type_code = 'S' },
-    .{ .source_path = "shelly export", .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'U' },
-    .{ .source_path = "shelly fix-permissions", .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'U' },
-    .{ .source_path = "shelly mark", .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 'S' },
-    .{ .source_path = "shelly pacfile", .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'U' },
-    .{ .source_path = "shelly purify", .action = "purify", .type_name = "standard", .action_code = 'Z', .type_code = 'S' },
-    .{ .source_path = "shelly remove", .action = "remove", .type_name = "standard", .action_code = 'R', .type_code = 'S' },
+    .{ .action = "downgrade", .type_name = "standard", .action_code = 'D', .type_code = 'S' },
+    .{ .action = "ignore", .type_name = "standard", .action_code = 'G', .type_code = 'S' },
+    .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 'S' },
+    .{ .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'U' },
+    .{ .action = "check-updates", .type_name = "utility", .action_code = 'K', .type_code = 'U' },
+    .{ .action = "list-updates", .type_name = "standard", .action_code = 'P', .type_code = 'S' },
+    .{ .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'U' },
+    .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'U' },
+    .{ .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 'S' },
+    .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'U' },
+    .{ .action = "purify", .type_name = "standard", .action_code = 'Z', .type_code = 'S' },
+    .{ .action = "remove", .type_name = "standard", .action_code = 'R', .type_code = 'S' },
     .{
-        .source_path = "shelly sync",
         .action = "sync",
         .type_name = "standard",
         .action_code = 'Y',
@@ -149,12 +176,11 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .source_path = "shelly update", .action = "update", .type_name = "standard", .action_code = 'T', .type_code = 'S' },
-    .{ .source_path = "shelly docs", .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'U' },
-    .{ .source_path = "shelly completions", .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'U' },
+    .{ .action = "update", .type_name = "standard", .action_code = 'T', .type_code = 'S' },
+    .{ .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'U' },
+    .{ .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'U' },
 
     .{
-        .source_path = "shelly appimage install",
         .action = "install",
         .type_name = "appimage",
         .action_code = 'I',
@@ -168,10 +194,9 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .source_path = "shelly appimage remove", .action = "remove", .type_name = "appimage", .action_code = 'R', .type_code = 'I' },
-    .{ .source_path = "shelly appimage list", .action = "list", .type_name = "appimage", .action_code = 'L', .type_code = 'I' },
+    .{ .action = "remove", .type_name = "appimage", .action_code = 'R', .type_code = 'I' },
+    .{ .action = "list", .type_name = "appimage", .action_code = 'L', .type_code = 'I' },
     .{
-        .source_path = "shelly appimage upgrade",
         .action = "upgrade",
         .type_name = "appimage",
         .action_code = 'U',
@@ -181,13 +206,12 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.appimage.UpdateManager.get_updates / update",
         },
     },
-    .{ .source_path = "shelly appimage sync-meta", .action = "sync-meta", .type_name = "appimage", .action_code = 'Y', .type_code = 'I' },
-    .{ .source_path = "shelly appimage list-updates", .action = "list-updates", .type_name = "appimage", .action_code = 'P', .type_code = 'I' },
-    .{ .source_path = "shelly appimage configure-updates", .action = "configure-updates", .type_name = "appimage", .action_code = 'C', .type_code = 'I' },
-    .{ .source_path = "shelly appimage migrate-manager", .action = "migrate-manager", .type_name = "appimage", .action_code = 'M', .type_code = 'I' },
+    .{ .action = "sync-meta", .type_name = "appimage", .action_code = 'Y', .type_code = 'I' },
+    .{ .action = "list-updates", .type_name = "appimage", .action_code = 'P', .type_code = 'I' },
+    .{ .action = "configure-updates", .type_name = "appimage", .action_code = 'C', .type_code = 'I' },
+    .{ .action = "migrate-manager", .type_name = "appimage", .action_code = 'M', .type_code = 'I' },
 
     .{
-        .source_path = "shelly config get",
         .action = "get",
         .type_name = "config",
         .action_code = 'G',
@@ -195,7 +219,6 @@ pub const variants = [_]Variant{
         .help = .{ .implementation = "config_manager.Manager.get" },
     },
     .{
-        .source_path = "shelly config set",
         .action = "set",
         .type_name = "config",
         .action_code = 'S',
@@ -203,7 +226,6 @@ pub const variants = [_]Variant{
         .help = .{ .implementation = "config_manager.Manager.update" },
     },
     .{
-        .source_path = "shelly config list",
         .action = "list",
         .type_name = "config",
         .action_code = 'L',
@@ -211,7 +233,6 @@ pub const variants = [_]Variant{
         .help = .{ .implementation = "config_manager.Manager.read" },
     },
     .{
-        .source_path = "shelly config reset",
         .action = "reset",
         .type_name = "config",
         .action_code = 'R',
@@ -219,7 +240,6 @@ pub const variants = [_]Variant{
         .help = .{ .implementation = "config_manager.Manager.reset" },
     },
     .{
-        .source_path = "shelly config parallel",
         .action = "parallel",
         .type_name = "config",
         .action_code = 'P',
@@ -228,7 +248,6 @@ pub const variants = [_]Variant{
     },
 
     .{
-        .source_path = "shelly aur install",
         .action = "install",
         .type_name = "aur",
         .action_code = 'I',
@@ -246,11 +265,10 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .source_path = "shelly aur install-version", .action = "install-version", .type_name = "aur", .action_code = 'V', .type_code = 'A' },
-    .{ .source_path = "shelly aur remove", .action = "remove", .type_name = "aur", .action_code = 'R', .type_code = 'A' },
-    .{ .source_path = "shelly aur update", .action = "update", .type_name = "aur", .action_code = 'T', .type_code = 'A' },
+    .{ .action = "install-version", .type_name = "aur", .action_code = 'V', .type_code = 'A' },
+    .{ .action = "remove", .type_name = "aur", .action_code = 'R', .type_code = 'A' },
+    .{ .action = "update", .type_name = "aur", .action_code = 'T', .type_code = 'A' },
     .{
-        .source_path = "shelly aur upgrade",
         .action = "upgrade",
         .type_name = "aur",
         .action_code = 'U',
@@ -264,10 +282,9 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .source_path = "shelly aur list", .action = "list", .type_name = "aur", .action_code = 'L', .type_code = 'A' },
-    .{ .source_path = "shelly aur list-updates", .action = "list-updates", .type_name = "aur", .action_code = 'P', .type_code = 'A' },
+    .{ .action = "list", .type_name = "aur", .action_code = 'L', .type_code = 'A' },
+    .{ .action = "list-updates", .type_name = "aur", .action_code = 'P', .type_code = 'A' },
     .{
-        .source_path = "shelly aur search",
         .action = "search",
         .type_name = "aur",
         .action_code = 'S',
@@ -285,65 +302,52 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .source_path = "shelly aur search-pkgbuild", .action = "search-pkgbuild", .type_name = "aur", .action_code = 'B', .type_code = 'A' },
+    .{ .action = "search-pkgbuild", .type_name = "aur", .action_code = 'B', .type_code = 'A' },
 
     .{
-        .source_path = "shelly keyring",
         .action = "init",
         .type_name = "keyring",
         .action_code = 'I',
         .type_code = 'K',
-        .keyring_action = "init",
         .help = .{ .description = "Initialize the pacman keyring." },
     },
     .{
-        .source_path = "shelly keyring",
         .action = "list",
         .type_name = "keyring",
         .action_code = 'L',
         .type_code = 'K',
-        .keyring_action = "list",
         .help = .{ .description = "List keys in the pacman keyring." },
     },
     .{
-        .source_path = "shelly keyring",
         .action = "refresh",
         .type_name = "keyring",
         .action_code = 'R',
         .type_code = 'K',
-        .keyring_action = "refresh",
         .help = .{ .description = "Refresh pacman keyring keys from the configured keyserver." },
     },
     .{
-        .source_path = "shelly keyring",
         .action = "lsign",
         .type_name = "keyring",
         .action_code = 'S',
         .type_code = 'K',
-        .keyring_action = "lsign",
         .help = .{ .description = "Locally sign one or more keys in the pacman keyring." },
     },
     .{
-        .source_path = "shelly keyring",
         .action = "populate",
         .type_name = "keyring",
         .action_code = 'P',
         .type_code = 'K',
-        .keyring_action = "populate",
         .help = .{ .description = "Populate the pacman keyring with the default distribution keys." },
     },
     .{
-        .source_path = "shelly keyring",
         .action = "recv",
         .type_name = "keyring",
         .action_code = 'V',
         .type_code = 'K',
-        .keyring_action = "recv",
         .help = .{ .description = "Receive one or more keys from the configured keyserver." },
     },
 
     .{
-        .source_path = "shelly flatpak install",
         .action = "install",
         .type_name = "flatpak",
         .action_code = 'I',
@@ -363,16 +367,15 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .source_path = "shelly flatpak update", .action = "update", .type_name = "flatpak", .action_code = 'T', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak list", .action = "list", .type_name = "flatpak", .action_code = 'L', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak list-updates", .action = "list-updates", .type_name = "flatpak", .action_code = 'P', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak running", .action = "running", .type_name = "flatpak", .action_code = 'N', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak repair", .action = "repair", .type_name = "flatpak", .action_code = 'H', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak uninstall", .action = "remove", .type_name = "flatpak", .action_code = 'R', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak run", .action = "run", .type_name = "flatpak", .action_code = 'X', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak kill", .action = "kill", .type_name = "flatpak", .action_code = 'K', .type_code = 'F' },
+    .{ .action = "update", .type_name = "flatpak", .action_code = 'T', .type_code = 'F' },
+    .{ .action = "list", .type_name = "flatpak", .action_code = 'L', .type_code = 'F' },
+    .{ .action = "list-updates", .type_name = "flatpak", .action_code = 'P', .type_code = 'F' },
+    .{ .action = "running", .type_name = "flatpak", .action_code = 'N', .type_code = 'F' },
+    .{ .action = "repair", .type_name = "flatpak", .action_code = 'H', .type_code = 'F' },
+    .{ .action = "remove", .type_name = "flatpak", .action_code = 'R', .type_code = 'F' },
+    .{ .action = "run", .type_name = "flatpak", .action_code = 'X', .type_code = 'F' },
+    .{ .action = "kill", .type_name = "flatpak", .action_code = 'K', .type_code = 'F' },
     .{
-        .source_path = "shelly flatpak search",
         .action = "search",
         .type_name = "flatpak",
         .action_code = 'S',
@@ -387,7 +390,6 @@ pub const variants = [_]Variant{
         },
     },
     .{
-        .source_path = "shelly flatpak sync-remote-appstream",
         .action = "sync",
         .type_name = "flatpak",
         .action_code = 'Y',
@@ -397,9 +399,8 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.flatpak.AppstreamManager.updateAllAppstreams",
         },
     },
-    .{ .source_path = "shelly flatpak get-remote-appstream", .action = "get-remote-appstream", .type_name = "flatpak", .action_code = 'G', .type_code = 'F' },
+    .{ .action = "get-remote-appstream", .type_name = "flatpak", .action_code = 'G', .type_code = 'F' },
     .{
-        .source_path = "shelly flatpak upgrade",
         .action = "upgrade",
         .type_name = "flatpak",
         .action_code = 'U',
@@ -409,35 +410,469 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.FlatpakManager.upgrade_flatpaks",
         },
     },
-    .{ .source_path = "shelly flatpak list-remotes", .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak add-remotes", .action = "add-remotes", .type_name = "flatpak", .action_code = 'A', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak remove-remotes", .action = "remove-remotes", .type_name = "flatpak", .action_code = 'D', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak install-ref-file", .action = "install-ref-file", .type_name = "flatpak", .action_code = 'E', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak install-bundle", .action = "install-bundle", .type_name = "flatpak", .action_code = 'B', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak app-remote-info", .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'F' },
-    .{ .source_path = "shelly flatpak purify", .action = "purify", .type_name = "flatpak", .action_code = 'Z', .type_code = 'F' },
+    .{ .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'F' },
+    .{ .action = "add-remotes", .type_name = "flatpak", .action_code = 'A', .type_code = 'F' },
+    .{ .action = "remove-remotes", .type_name = "flatpak", .action_code = 'D', .type_code = 'F' },
+    .{ .action = "install-ref-file", .type_name = "flatpak", .action_code = 'E', .type_code = 'F' },
+    .{ .action = "install-bundle", .type_name = "flatpak", .action_code = 'B', .type_code = 'F' },
+    .{ .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'F' },
+    .{ .action = "purify", .type_name = "flatpak", .action_code = 'Z', .type_code = 'F' },
 };
+
+pub fn argumentsFor(comptime action: []const u8, comptime type_name: []const u8) []const Argument {
+    return staticSlice(Argument, argumentDefinitions(action, type_name));
+}
+
+fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Argument {
+    if (pathIs(action, type_name, "search", "standard")) return &.{optionalArgument(
+        "package",
+        "Package name or search term; an exact name without a source modifier opens package details",
+    )};
+    if (pathIs(action, type_name, "search", "aur")) return &.{repeatedArgument(
+        "query",
+        1,
+        "One or more words joined into the AUR search query",
+    )};
+    if (pathIs(action, type_name, "search", "flatpak")) return &.{requiredArgument(
+        "query",
+        "Application name or ID matched against cached AppStream catalogs",
+    )};
+
+    if (pathIs(action, type_name, "install", "standard")) return &.{repeatedArgument(
+        "packages",
+        0,
+        "Repository names, local package archives, or HTTP(S) package URLs",
+    )};
+    if (pathIs(action, type_name, "install", "aur")) return &.{repeatedArgument(
+        "packages",
+        0,
+        "AUR package names to fetch, review, build, and install",
+    )};
+    if (pathIs(action, type_name, "install", "appimage")) return &.{requiredArgument(
+        "location",
+        "Path to an existing .AppImage file",
+    )};
+    if (pathIs(action, type_name, "install", "flatpak")) return &.{requiredArgument(
+        "package",
+        "Flatpak application/runtime ID or friendly AppStream name",
+    )};
+
+    if (pathIs(action, type_name, "downgrade", "standard")) return &.{optionalArgument(
+        "package",
+        "Package to downgrade; omit only when listing selectable versions",
+    )};
+    if (pathIs(action, type_name, "ignore", "standard")) return &.{repeatedArgument(
+        "packages",
+        0,
+        "Package names to add to or remove from IgnorePkg",
+    )};
+    if (pathIs(action, type_name, "mark", "standard")) return &.{requiredArgument(
+        "package",
+        "Installed package whose reason should be changed",
+    )};
+    if (pathIs(action, type_name, "pacfile", "utility")) return &.{repeatedArgument(
+        "pacfiles",
+        0,
+        "Stored pacnew or pacsave records to display; omit to display all",
+    )};
+
+    if (pathIs(action, type_name, "remove", "standard") or
+        pathIs(action, type_name, "remove", "aur")) return &.{repeatedArgument(
+        "packages",
+        0,
+        "Packages to remove",
+    )};
+    if (pathIs(action, type_name, "remove", "appimage")) return &.{requiredArgument(
+        "appimage",
+        "Installed AppImage to remove",
+    )};
+    if (pathIs(action, type_name, "remove", "flatpak")) return &.{requiredArgument(
+        "package",
+        "Installed Flatpak application or runtime ID",
+    )};
+
+    if (pathIs(action, type_name, "update", "standard") or
+        pathIs(action, type_name, "update", "aur")) return &.{repeatedArgument(
+        "packages",
+        0,
+        "Named packages to update",
+    )};
+    if (pathIs(action, type_name, "update", "flatpak")) return &.{requiredArgument(
+        "package",
+        "Flatpak application or runtime to update",
+    )};
+
+    if (pathIs(action, type_name, "completions", "utility")) return &.{argumentWithChoices(
+        "shell",
+        "Shell completion format",
+        &.{ "bash", "zsh", "fish", "powershell" },
+    )};
+    if (pathIs(action, type_name, "sync-meta", "appimage")) return &.{optionalArgument(
+        "package",
+        "Installed AppImage to refresh; omit to refresh every AppImage",
+    )};
+    if (pathIs(action, type_name, "configure-updates", "appimage")) return &.{
+        requiredArgument("appimage", "Installed AppImage to configure"),
+        requiredArgument("url", "Update metadata URL"),
+        argumentWithChoices(
+            "type",
+            "Update source type",
+            &.{ "None", "StaticUrl", "GitHub", "GitLab", "Codeberg", "Forgejo" },
+        ),
+    };
+
+    if (pathIs(action, type_name, "get", "config")) return &.{requiredArgument(
+        "key",
+        "Configuration property name",
+    )};
+    if (pathIs(action, type_name, "set", "config")) return &.{
+        requiredArgument("key", "Configuration property name"),
+        requiredArgument("value", "New configuration value"),
+    };
+    if (pathIs(action, type_name, "parallel", "config")) return &.{integerArgument(
+        "downloadCount",
+        "Maximum number of parallel downloads",
+    )};
+
+    if (pathIs(action, type_name, "install-version", "aur")) return &.{
+        requiredArgument("package", "AUR package name"),
+        requiredArgument("commit", "AUR Git commit to review, build, and install"),
+    };
+    if (pathIs(action, type_name, "search-pkgbuild", "aur")) return &.{repeatedArgument(
+        "packages",
+        1,
+        "AUR package names whose PKGBUILDs should be displayed",
+    )};
+
+    if (pathIs(action, type_name, "lsign", "keyring") or
+        pathIs(action, type_name, "recv", "keyring")) return &.{repeatedArgument(
+        "keys",
+        1,
+        "One or more key identifiers",
+    )};
+    if (pathIs(action, type_name, "populate", "keyring")) return &.{repeatedArgument(
+        "keys",
+        0,
+        "Distribution keyring names; omit to populate the defaults",
+    )};
+
+    if (pathIs(action, type_name, "run", "flatpak") or
+        pathIs(action, type_name, "kill", "flatpak")) return &.{requiredArgument(
+        "package",
+        "Flatpak application ID",
+    )};
+    if (pathIs(action, type_name, "get-remote-appstream", "flatpak")) return &.{requiredArgument(
+        "query",
+        "Remote name, or all to return every cached remote catalog",
+    )};
+    if (pathIs(action, type_name, "add-remotes", "flatpak") or
+        pathIs(action, type_name, "remove-remotes", "flatpak")) return &.{requiredArgument(
+        "remote",
+        "Flatpak remote name",
+    )};
+    if (pathIs(action, type_name, "install-ref-file", "flatpak")) return &.{requiredArgument(
+        "path",
+        "Path to a .flatpakref file",
+    )};
+    if (pathIs(action, type_name, "install-bundle", "flatpak")) return &.{requiredArgument(
+        "path",
+        "Path to a .flatpak bundle",
+    )};
+    if (pathIs(action, type_name, "app-remote-info", "flatpak")) return &.{
+        requiredArgument("remote", "Flatpak remote name"),
+        requiredArgument("id", "Application or runtime ID"),
+        requiredArgument("branch", "Remote branch"),
+    };
+    return &.{};
+}
+
+pub fn optionsFor(comptime action: []const u8, comptime type_name: []const u8) []const Option {
+    return staticSlice(Option, optionDefinitions(action, type_name));
+}
+
+fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Option {
+    if (pathIs(action, type_name, "search", "standard")) return &.{
+        flag("--repos", &.{"-r"}, "List configured ALPM repositories"),
+        flag("--available", &.{"-a"}, "Search synchronized ALPM repositories"),
+        flag("--installed", &.{"-i"}, "Search the local ALPM database"),
+        flag("--local", &.{"-l"}, "Search Shelly-managed local binaries"),
+        integerOption("--limit", &.{}, "Maximum results per page"),
+        integerOption("--page", &.{}, "One-based result page"),
+        flag("--show-hidden", &.{"-w"}, "Include packages hidden through IgnorePkg"),
+        flag("--detail", &.{ "--info", "-d" }, "Show complete metadata for an exact package"),
+        flag("--group", &.{"-g"}, "List groups or search within a group"),
+    };
+    if (pathIs(action, type_name, "search", "aur")) return &.{flag(
+        "--standard",
+        &.{"-s"},
+        "Append high-confidence standard repository matches",
+    )};
+    if (pathIs(action, type_name, "search", "flatpak")) return &.{
+        integerOption("--limit", &.{}, "Maximum results per page"),
+        integerOption("--page", &.{}, "One-based result page"),
+    };
+
+    if (pathIs(action, type_name, "install", "standard")) return &.{
+        flag("--build-deps", &.{}, "Install build dependencies"),
+        flag("--make-deps", &.{}, "Include make dependencies"),
+        flag("--no-deps", &.{"-d"}, "Use the ALPM nodeps transaction flag"),
+        flag("--upgrade", &.{"-u"}, "Upgrade standard packages before installing"),
+    };
+    if (pathIs(action, type_name, "install", "aur")) return &.{
+        flag("--build-deps", &.{}, "Install build dependencies"),
+        flag("--make-deps", &.{}, "Include make dependencies"),
+        flag("--chroot", &.{"-c"}, "Build in a clean chroot"),
+        flag("--check", &.{}, "Run the PKGBUILD check() function"),
+    };
+    if (pathIs(action, type_name, "install", "flatpak")) return &.{
+        flag("--user", &.{}, "Install into the user Flatpak installation"),
+        stringOption("--remote", &.{"-r"}, "Remote to install from", false),
+        stringOption("--branch", &.{"-b"}, "Branch to install; defaults to stable", false),
+        flag("--runtime", &.{}, "Install a runtime instead of an application"),
+    };
+
+    if (pathIs(action, type_name, "upgrade", "standard")) return &.{flag(
+        "--all",
+        &.{"-a"},
+        "Upgrade standard, AUR, Flatpak, and AppImage backends",
+    )};
+    if (pathIs(action, type_name, "upgrade", "all")) return &.{
+        flag("--no-repo", &.{}, "Skip the standard ALPM backend"),
+        flag("--no-aur", &.{}, "Skip the AUR backend"),
+        flag("--no-flatpak", &.{}, "Skip the Flatpak backend"),
+        flag("--no-appimage", &.{}, "Skip the AppImage backend"),
+    };
+    if (pathIs(action, type_name, "upgrade", "aur")) return &.{
+        flag("--check", &.{}, "Run PKGBUILD check() functions"),
+        flag("--singlepane", &.{}, "Use linear single-pane output"),
+    };
+
+    if (pathIs(action, type_name, "downgrade", "standard")) return &.{
+        flag("--oldest", &.{"-o"}, "Choose the oldest available version"),
+        flag("--ignore", &.{"-i"}, "Add the downgraded package to IgnorePkg"),
+        flag("--list-options", &.{"-l"}, "List available downgrade versions"),
+        stringOption("--target", &.{"-t"}, "Install this exact version", false),
+    };
+    if (pathIs(action, type_name, "ignore", "standard")) return &.{
+        flag("--list", &.{"-l"}, "List ignored packages"),
+        flag("--add", &.{"-a"}, "Add packages to IgnorePkg"),
+        flag("--remove", &.{"-r"}, "Remove packages from IgnorePkg"),
+        flag("--clear", &.{"-c"}, "Clear IgnorePkg"),
+    };
+    if (pathIs(action, type_name, "news", "standard")) return &.{flag(
+        "--all",
+        &.{"-a"},
+        "Show previously viewed news as well as unread entries",
+    )};
+    if (pathIs(action, type_name, "cache-clean", "utility")) return &.{
+        integerOption("--keep", &.{"-k"}, "Versions to retain for each package"),
+        flag("--uninstalled", &.{"-i"}, "Include cached packages no longer installed"),
+        flag("--dry-run", &.{"-d"}, "Show the cleanup plan without deleting files"),
+        stringOption("--cache-dir", &.{"-c"}, "Package cache directory", false),
+        stringOption("--target", &.{"-t"}, "Restrict cleanup to a package target", false),
+    };
+    if (pathIs(action, type_name, "check-updates", "utility")) return &.{
+        flag("--aur", &.{"-a"}, "Include AUR updates"),
+        flag("--flatpak", &.{"-l"}, "Include Flatpak updates"),
+        flag("--count", &.{"-c"}, "Print only the update count"),
+    };
+    if (pathIs(action, type_name, "export", "utility")) return &.{
+        stringOption("--name", &.{"-a"}, "Export name", false),
+        stringOption("--output", &.{"-o"}, "Output file path", false),
+    };
+    if (pathIs(action, type_name, "mark", "standard")) return &.{
+        flag("--explicit", &.{"-e"}, "Mark the package explicitly installed"),
+        flag("--depends", &.{"-d"}, "Mark the package installed as a dependency"),
+    };
+    if (pathIs(action, type_name, "purify", "standard")) return &.{
+        flag("--dry-run", &.{"-d"}, "Show the cleanup plan without changing packages"),
+        flag("--orphans", &.{"-o"}, "Include orphaned packages"),
+    };
+    if (pathIs(action, type_name, "remove", "standard")) return &.{
+        flag("--cascade", &.{}, "Remove dependencies no longer needed"),
+        flag("--opt-deps", &.{}, "Remove unused optional dependencies"),
+        flag("--ripple", &.{}, "Remove packages depending on the targets"),
+        flag("--remove-config", &.{}, "Remove package configuration files"),
+        flag("--local", &.{"-l"}, "Remove Shelly-managed local binaries"),
+        flag("--force", &.{"-f"}, "Force local binary removal"),
+    };
+    if (pathIs(action, type_name, "remove", "aur")) return &.{
+        flag("--cascade", &.{}, "Remove dependencies no longer needed"),
+        flag("--opt-deps", &.{}, "Remove unused optional dependencies"),
+        flag("--ripple", &.{}, "Remove packages depending on the targets"),
+    };
+    if (pathIs(action, type_name, "remove", "appimage")) return &.{flag(
+        "--remove-config",
+        &.{},
+        "Remove associated AppImage configuration",
+    )};
+    if (pathIs(action, type_name, "remove", "flatpak")) return &.{
+        flag("--remove-unused", &.{"-r"}, "Remove newly unused Flatpak dependencies"),
+        flag("--remove-config", &.{}, "Remove associated Flatpak configuration"),
+    };
+    if (pathIs(action, type_name, "sync", "standard")) return &.{flag(
+        "--force",
+        &.{"-f"},
+        "Refresh databases even when they appear current",
+    )};
+
+    if (pathIs(action, type_name, "configure-updates", "appimage")) return &.{flag(
+        "--prerelease",
+        &.{"-p"},
+        "Allow prerelease AppImage updates",
+    )};
+    if (pathIs(action, type_name, "install-version", "aur") or
+        pathIs(action, type_name, "update", "aur")) return &.{flag(
+        "--check",
+        &.{},
+        "Run the PKGBUILD check() function",
+    )};
+    if (pathIs(action, type_name, "list", "aur")) return &.{
+        flag("--show-hidden", &.{}, "Include hidden packages"),
+        flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
+        flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
+    };
+    if (pathIs(action, type_name, "list-updates", "aur")) return &.{flag(
+        "--show-hidden",
+        &.{},
+        "Include hidden packages",
+    )};
+    if (pathIs(action, type_name, "recv", "keyring")) return &.{stringOption(
+        "--keyserver",
+        &.{},
+        "Keyserver from which to receive keys",
+        false,
+    )};
+
+    if (pathIs(action, type_name, "add-remotes", "flatpak")) return &.{
+        stringOption("--remote-url", &.{"-u"}, "URL for the new remote", true),
+        flag("--system", &.{"-s"}, "Add the remote to the system installation"),
+        flag("--gpg-verify", &.{"-g"}, "Require GPG verification for the remote"),
+    };
+    if (pathIs(action, type_name, "remove-remotes", "flatpak") or
+        pathIs(action, type_name, "install-ref-file", "flatpak") or
+        pathIs(action, type_name, "install-bundle", "flatpak")) return &.{flag(
+        "--system",
+        &.{"-s"},
+        "Operate on the system Flatpak installation",
+    )};
+    return &.{};
+}
+
+fn staticSlice(comptime T: type, comptime values: []const T) []const T {
+    return &struct {
+        const data: [values.len]T = values[0..values.len].*;
+    }.data;
+}
+
+fn pathIs(
+    action: []const u8,
+    type_name: []const u8,
+    expected_action: []const u8,
+    expected_type: []const u8,
+) bool {
+    return std.mem.eql(u8, action, expected_action) and
+        std.mem.eql(u8, type_name, expected_type);
+}
+
+fn requiredArgument(name: []const u8, description: []const u8) Argument {
+    return .{ .name = name, .minimumArity = 1, .maximumArity = 1, .description = description };
+}
+
+fn optionalArgument(name: []const u8, description: []const u8) Argument {
+    return .{ .name = name, .minimumArity = 0, .maximumArity = 1, .description = description };
+}
+
+fn repeatedArgument(name: []const u8, minimum: usize, description: []const u8) Argument {
+    return .{ .name = name, .type = "string[]", .minimumArity = minimum, .maximumArity = null, .description = description };
+}
+
+fn integerArgument(name: []const u8, description: []const u8) Argument {
+    return .{ .name = name, .type = "int", .minimumArity = 1, .maximumArity = 1, .description = description };
+}
+
+fn argumentWithChoices(
+    name: []const u8,
+    description: []const u8,
+    choices: []const []const u8,
+) Argument {
+    return .{
+        .name = name,
+        .minimumArity = 1,
+        .maximumArity = 1,
+        .description = description,
+        .choices = choices,
+    };
+}
+
+fn flag(name: []const u8, aliases: []const []const u8, description: []const u8) Option {
+    return .{ .name = name, .aliases = aliases, .description = description };
+}
+
+fn globalFlag(name: []const u8, aliases: []const []const u8, description: []const u8) Option {
+    var option = flag(name, aliases, description);
+    option.recursive = true;
+    return option;
+}
+
+fn voidOption(
+    name: []const u8,
+    aliases: []const []const u8,
+    description: []const u8,
+    recursive: bool,
+    built_in: bool,
+) Option {
+    return .{
+        .name = name,
+        .aliases = aliases,
+        .type = "void",
+        .maximumArity = 0,
+        .description = description,
+        .recursive = recursive,
+        .builtIn = built_in,
+    };
+}
+
+fn integerOption(name: []const u8, aliases: []const []const u8, description: []const u8) Option {
+    return .{
+        .name = name,
+        .aliases = aliases,
+        .type = "int",
+        .minimumArity = 1,
+        .maximumArity = 1,
+        .description = description,
+    };
+}
+
+fn stringOption(
+    name: []const u8,
+    aliases: []const []const u8,
+    description: []const u8,
+    required: bool,
+) Option {
+    return .{
+        .name = name,
+        .aliases = aliases,
+        .type = "string",
+        .minimumArity = 1,
+        .maximumArity = 1,
+        .required = required,
+        .description = description,
+    };
+}
 
 pub const SharedModifier = struct {
     action: []const u8,
     type_names: []const []const u8,
-    source_names: []const []const u8,
     name: []const u8,
     aliases: []const []const u8,
     description: []const u8,
 
-    pub fn appliesTo(self: SharedModifier, action: []const u8, type_name: []const u8, source_name: []const u8) bool {
+    pub fn appliesTo(self: SharedModifier, action: []const u8, type_name: []const u8, option_name: []const u8) bool {
         if (!std.mem.eql(u8, self.action, action)) return false;
-        var has_type = false;
         for (self.type_names) |candidate| {
-            if (std.mem.eql(u8, candidate, type_name)) {
-                has_type = true;
-                break;
-            }
-        }
-        if (!has_type) return false;
-        for (self.source_names) |candidate| {
-            if (std.mem.eql(u8, candidate, source_name)) return true;
+            if (std.mem.eql(u8, candidate, type_name))
+                return std.mem.eql(u8, self.name, option_name);
         }
         return false;
     }
@@ -449,7 +884,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "install",
         .type_names = &.{ "standard", "aur" },
-        .source_names = &.{"--build-deps"},
         .name = "--build-deps",
         .aliases = &.{"-b"},
         .description = "Install build dependencies for the requested packages",
@@ -457,7 +891,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "install",
         .type_names = &.{ "standard", "aur" },
-        .source_names = &.{"--make-deps"},
         .name = "--make-deps",
         .aliases = &.{"-m"},
         .description = "Install make dependencies for the requested packages",
@@ -465,7 +898,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "remove",
         .type_names = &.{ "standard", "aur" },
-        .source_names = &.{"--cascade"},
         .name = "--cascade",
         .aliases = &.{"-c"},
         .description = "Remove dependencies that are no longer needed",
@@ -473,7 +905,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "remove",
         .type_names = &.{ "standard", "aur" },
-        .source_names = &.{"--opt-deps"},
         .name = "--opt-deps",
         .aliases = &.{"-o"},
         .description = "Remove unused optional dependencies installed with the packages",
@@ -481,7 +912,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "remove",
         .type_names = &.{ "standard", "aur" },
-        .source_names = &.{"--ripple"},
         .name = "--ripple",
         .aliases = &.{"-i"},
         .description = "Remove packages that depend on the removed packages",
@@ -489,7 +919,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "remove",
         .type_names = &.{ "standard", "flatpak", "appimage" },
-        .source_names = &.{ "--remove-config", "--config" },
         .name = "--remove-config",
         .aliases = &.{},
         .description = "Remove configuration associated with the removed package",
@@ -497,7 +926,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "search",
         .type_names = &.{ "standard", "flatpak" },
-        .source_names = &.{ "--take", "--limit" },
         .name = "--limit",
         .aliases = &.{"-t"},
         .description = "Maximum number of search results to return per page",
@@ -505,7 +933,6 @@ pub const shared_modifiers = [_]SharedModifier{
     .{
         .action = "search",
         .type_names = &.{ "standard", "flatpak" },
-        .source_names = &.{"--page"},
         .name = "--page",
         .aliases = &.{"-p"},
         .description = "Page number for paginated results",
@@ -533,9 +960,9 @@ pub fn findTypeByName(name: []const u8) ?Type {
     return null;
 }
 
-pub fn findSharedModifier(action: []const u8, type_name: []const u8, source_name: []const u8) ?SharedModifier {
+pub fn findSharedModifier(action: []const u8, type_name: []const u8, option_name: []const u8) ?SharedModifier {
     for (shared_modifiers) |modifier| {
-        if (modifier.appliesTo(action, type_name, source_name)) return modifier;
+        if (modifier.appliesTo(action, type_name, option_name)) return modifier;
     }
     return null;
 }
@@ -559,7 +986,118 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Synchronize ALPM package databases or cached Flatpak AppStream metadata.";
     if (std.mem.eql(u8, action, "update"))
         return "Update selected standard, AUR, or Flatpak packages.";
+    if (std.mem.eql(u8, action, "downgrade"))
+        return "Select and install an older version of a standard package.";
+    if (std.mem.eql(u8, action, "ignore"))
+        return "List or modify packages ignored by ALPM upgrades.";
+    if (std.mem.eql(u8, action, "news"))
+        return "Read Arch Linux news and track viewed entries.";
+    if (std.mem.eql(u8, action, "cache-clean"))
+        return "Plan or remove package files from a package cache.";
+    if (std.mem.eql(u8, action, "check-updates"))
+        return "Check enabled package backends for available updates.";
+    if (std.mem.eql(u8, action, "export"))
+        return "Export installed package state as structured data.";
+    if (std.mem.eql(u8, action, "fix-permissions"))
+        return "Restore Shelly directory ownership to the invoking user.";
+    if (std.mem.eql(u8, action, "mark"))
+        return "Change whether an installed package is explicit or a dependency.";
+    if (std.mem.eql(u8, action, "pacfile"))
+        return "Read stored pacnew and pacsave records.";
+    if (std.mem.eql(u8, action, "docs"))
+        return "Generate Markdown documentation from the native Zig command catalog.";
+    if (std.mem.eql(u8, action, "completions"))
+        return "Generate completion definitions from the native Zig command catalog.";
+    if (std.mem.eql(u8, action, "sync-meta"))
+        return "Refresh metadata for installed AppImages.";
+    if (std.mem.eql(u8, action, "configure-updates"))
+        return "Configure how an installed AppImage discovers updates.";
+    if (std.mem.eql(u8, action, "migrate-manager"))
+        return "Migrate installed AppImages to the current manager format.";
+    if (std.mem.eql(u8, action, "get"))
+        return "Read a Shelly configuration value.";
+    if (std.mem.eql(u8, action, "set"))
+        return "Set a Shelly configuration value.";
+    if (std.mem.eql(u8, action, "reset"))
+        return "Reset Shelly configuration to native defaults.";
+    if (std.mem.eql(u8, action, "parallel"))
+        return "Set Shelly's parallel download count.";
+    if (std.mem.eql(u8, action, "install-version"))
+        return "Review, build, and install an AUR package at a specific Git commit.";
+    if (std.mem.eql(u8, action, "search-pkgbuild"))
+        return "Fetch and display PKGBUILDs for AUR packages.";
+    if (std.mem.eql(u8, action, "init"))
+        return "Initialize the pacman keyring.";
+    if (std.mem.eql(u8, action, "refresh"))
+        return "Refresh pacman keyring keys.";
+    if (std.mem.eql(u8, action, "lsign"))
+        return "Locally sign pacman keyring keys.";
+    if (std.mem.eql(u8, action, "populate"))
+        return "Populate distribution keys into the pacman keyring.";
+    if (std.mem.eql(u8, action, "recv"))
+        return "Receive keys into the pacman keyring.";
+    if (std.mem.eql(u8, action, "running"))
+        return "List running Flatpak applications and process identifiers.";
+    if (std.mem.eql(u8, action, "repair"))
+        return "Inspect and repair Flatpak installations.";
+    if (std.mem.eql(u8, action, "run"))
+        return "Launch a Flatpak application.";
+    if (std.mem.eql(u8, action, "kill"))
+        return "Stop a running Flatpak application.";
+    if (std.mem.eql(u8, action, "get-remote-appstream"))
+        return "Read cached Flatpak AppStream data.";
+    if (std.mem.eql(u8, action, "list-remotes"))
+        return "List configured user and system Flatpak remotes.";
+    if (std.mem.eql(u8, action, "add-remotes"))
+        return "Add a Flatpak remote.";
+    if (std.mem.eql(u8, action, "remove-remotes"))
+        return "Remove a Flatpak remote.";
+    if (std.mem.eql(u8, action, "install-ref-file"))
+        return "Install a Flatpak reference file.";
+    if (std.mem.eql(u8, action, "install-bundle"))
+        return "Install a Flatpak bundle file.";
+    if (std.mem.eql(u8, action, "app-remote-info"))
+        return "Show size and permission information for a remote Flatpak application.";
     return null;
+}
+
+pub fn descriptionFor(variant: Variant) []const u8 {
+    if (variant.help.description) |description| return description;
+    if (pathIs(variant.action, variant.type_name, "list", "appimage"))
+        return "List installed AppImages.";
+    if (pathIs(variant.action, variant.type_name, "list", "aur"))
+        return "List installed foreign packages tracked as AUR packages.";
+    if (pathIs(variant.action, variant.type_name, "list", "keyring"))
+        return "List keys in the pacman keyring.";
+    if (pathIs(variant.action, variant.type_name, "list", "flatpak"))
+        return "List installed Flatpak applications and runtimes.";
+    if (pathIs(variant.action, variant.type_name, "list-updates", "standard"))
+        return "List available standard repository package updates.";
+    if (pathIs(variant.action, variant.type_name, "list-updates", "appimage"))
+        return "List installed AppImages with available updates.";
+    if (pathIs(variant.action, variant.type_name, "list-updates", "aur"))
+        return "List installed AUR packages with available updates.";
+    if (pathIs(variant.action, variant.type_name, "list-updates", "flatpak"))
+        return "List Flatpak applications and runtimes with available updates.";
+    if (pathIs(variant.action, variant.type_name, "purify", "standard"))
+        return "Remove corrupted or orphaned standard packages.";
+    if (pathIs(variant.action, variant.type_name, "purify", "flatpak"))
+        return "Remove unused Flatpak dependencies.";
+    if (pathIs(variant.action, variant.type_name, "remove", "standard"))
+        return "Remove ALPM packages or Shelly-managed local binaries.";
+    if (pathIs(variant.action, variant.type_name, "remove", "aur"))
+        return "Remove installed AUR packages through ALPM.";
+    if (pathIs(variant.action, variant.type_name, "remove", "appimage"))
+        return "Remove an installed AppImage.";
+    if (pathIs(variant.action, variant.type_name, "remove", "flatpak"))
+        return "Remove an installed Flatpak application or runtime.";
+    if (pathIs(variant.action, variant.type_name, "update", "standard"))
+        return "Update named standard repository packages.";
+    if (pathIs(variant.action, variant.type_name, "update", "aur"))
+        return "Review, rebuild, and reinstall named AUR packages.";
+    if (pathIs(variant.action, variant.type_name, "update", "flatpak"))
+        return "Update one Flatpak application or runtime.";
+    return actionDescription(variant.action) orelse "Run the selected native Shelly operation.";
 }
 
 pub fn hasActionCode(code: u8) bool {
@@ -585,7 +1123,6 @@ test "shortcode action-type pairs are unique" {
 test "every shared modifier is actually shared" {
     for (shared_modifiers) |modifier| {
         try std.testing.expect(modifier.type_names.len >= 2);
-        try std.testing.expect(modifier.source_names.len >= 1);
     }
 }
 

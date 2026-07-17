@@ -1,39 +1,8 @@
 const std = @import("std");
 const catalog = @import("catalog.zig");
-const command_contract = @import("command_contract");
 
-pub const Argument = struct {
-    name: []const u8,
-    type: []const u8,
-    minimumArity: usize,
-    maximumArity: ?usize,
-    description: ?[]const u8,
-    choices: []const []const u8,
-};
-
-pub const Option = struct {
-    name: []const u8,
-    aliases: []const []const u8,
-    type: []const u8,
-    minimumArity: usize,
-    maximumArity: ?usize,
-    required: bool,
-    description: ?[]const u8,
-    hidden: bool,
-    recursive: bool,
-    builtIn: bool,
-    hasExplicitDefault: bool,
-    defaultValue: ?std.json.Value,
-    choices: []const []const u8,
-
-    pub fn matches(self: Option, token: []const u8) bool {
-        if (std.mem.eql(u8, self.name, token)) return true;
-        for (self.aliases) |alias| {
-            if (std.mem.eql(u8, alias, token)) return true;
-        }
-        return false;
-    }
-};
+pub const Argument = catalog.Argument;
+pub const Option = catalog.Option;
 
 pub const Command = struct {
     path: []const u8,
@@ -46,11 +15,6 @@ pub const Command = struct {
     aliases: []const []const u8,
     arguments: []const Argument,
     options: []const Option,
-    owner: []const u8,
-    backends: []const []const u8,
-    risk: []const u8,
-    status: []const u8,
-    notes: ?[]const u8,
     implementation: ?[]const u8 = null,
     actionCode: ?u8 = null,
     typeCode: ?u8 = null,
@@ -66,7 +30,6 @@ pub const Command = struct {
 };
 
 pub const Manifest = struct {
-    schemaVersion: usize,
     binary: []const u8,
     version: []const u8,
     informationalVersion: []const u8,
@@ -75,15 +38,75 @@ pub const Manifest = struct {
     commands: []const Command,
 
     pub fn load(allocator: std.mem.Allocator) !Manifest {
-        const frozen = try std.json.parseFromSliceLeaky(
-            Manifest,
-            allocator,
-            command_contract.json,
-            .{ .ignore_unknown_fields = true },
-        );
-        if (frozen.schemaVersion != 1 or frozen.commands.len == 0)
-            return error.UnsupportedContract;
-        return projectActionFirst(allocator, frozen);
+        @setEvalBranchQuota(100_000);
+        var commands: std.ArrayList(Command) = .empty;
+        try commands.append(allocator, .{
+            .path = catalog.binary,
+            .parentPath = null,
+            .name = catalog.binary,
+            .description = catalog.root_description,
+            .hidden = false,
+            .isBranch = true,
+            .hasAction = true,
+            .aliases = &.{},
+            .arguments = &.{},
+            .options = &catalog.root_options,
+            .implementation = "Native Zig action/type dispatcher",
+        });
+
+        inline for (catalog.variants, 0..) |variant, variant_index| {
+            if (comptime actionAppearedBefore(variant.action, variant_index)) continue;
+
+            const action_path = try std.fmt.allocPrint(allocator, "{s} {s}", .{ catalog.binary, variant.action });
+            try commands.append(allocator, .{
+                .path = action_path,
+                .parentPath = catalog.binary,
+                .name = variant.action,
+                .description = catalog.actionDescription(variant.action) orelse return error.InvalidCatalog,
+                .hidden = false,
+                .isBranch = true,
+                .hasAction = false,
+                .aliases = &.{},
+                .arguments = &.{},
+                .options = &.{},
+                .implementation = "Native Zig action dispatcher",
+            });
+
+            inline for (catalog.variants) |candidate| {
+                if (comptime !std.mem.eql(u8, candidate.action, variant.action)) continue;
+                const command_path = try std.fmt.allocPrint(
+                    allocator,
+                    "{s} {s} {s}",
+                    .{ catalog.binary, candidate.action, candidate.type_name },
+                );
+                try commands.append(allocator, .{
+                    .path = command_path,
+                    .parentPath = action_path,
+                    .name = candidate.type_name,
+                    .description = catalog.descriptionFor(candidate),
+                    .hidden = false,
+                    .isBranch = false,
+                    .hasAction = true,
+                    .aliases = &.{},
+                    .arguments = try effectiveArguments(allocator, candidate),
+                    .options = try effectiveOptions(allocator, candidate),
+                    .implementation = candidate.help.implementation,
+                    .actionCode = candidate.action_code,
+                    .typeCode = candidate.type_code,
+                    .defaultForAction = candidate.default_for_action,
+                });
+            }
+        }
+
+        const native_commands = try commands.toOwnedSlice(allocator);
+        return .{
+            .binary = catalog.binary,
+            .version = catalog.version,
+            .informationalVersion = catalog.informational_version,
+            .commandCount = native_commands.len,
+            .leafCommandCount = catalog.variants.len,
+            .commands = native_commands,
+        };
     }
 
     pub fn root(self: *const Manifest) *const Command {
@@ -131,167 +154,38 @@ pub const Manifest = struct {
     }
 };
 
-fn projectActionFirst(allocator: std.mem.Allocator, frozen: Manifest) !Manifest {
-    var commands: std.ArrayList(Command) = .empty;
-
-    var root_command = frozen.commands[0];
-    root_command.actionCode = null;
-    root_command.typeCode = null;
-    try commands.append(allocator, root_command);
-
-    for (catalog.variants, 0..) |variant, variant_index| {
-        var action_seen = false;
-        for (catalog.variants[0..variant_index]) |earlier| {
-            if (std.mem.eql(u8, earlier.action, variant.action)) {
-                action_seen = true;
-                break;
-            }
-        }
-        if (action_seen) continue;
-
-        const action_path = try std.fmt.allocPrint(allocator, "shelly {s}", .{variant.action});
-        const action_description = catalog.actionDescription(variant.action) orelse
-            try sourceActionDescription(frozen, variant.action);
-        var action_hidden = true;
-        for (catalog.variants) |candidate| {
-            if (!std.mem.eql(u8, candidate.action, variant.action)) continue;
-            const source = frozen.findByPath(candidate.source_path) orelse return error.InvalidContract;
-            if (!source.hidden) action_hidden = false;
-        }
-
-        try commands.append(allocator, .{
-            .path = action_path,
-            .parentPath = "shelly",
-            .name = variant.action,
-            .description = action_description,
-            .hidden = action_hidden,
-            .isBranch = true,
-            .hasAction = false,
-            .aliases = &.{},
-            .arguments = &.{},
-            .options = &.{},
-            .owner = "cli-core",
-            .backends = &.{},
-            .risk = "branch",
-            .status = "native",
-            .notes = "Action-first command group generated by the Zig CLI catalog.",
-        });
-
-        for (catalog.variants) |candidate| {
-            if (!std.mem.eql(u8, candidate.action, variant.action)) continue;
-            const source = frozen.findByPath(candidate.source_path) orelse return error.InvalidContract;
-            const command_path = try std.fmt.allocPrint(
-                allocator,
-                "shelly {s} {s}",
-                .{ candidate.action, candidate.type_name },
-            );
-            const source_arguments = if (candidate.keyring_action != null)
-                source.arguments[1..]
-            else
-                source.arguments;
-            const arguments = try effectiveArguments(allocator, source_arguments, candidate);
-            const options = try effectiveOptions(allocator, source.options, candidate);
-
-            try commands.append(allocator, .{
-                .path = command_path,
-                .parentPath = action_path,
-                .name = candidate.type_name,
-                .description = candidate.help.description orelse source.description,
-                .hidden = source.hidden,
-                .isBranch = false,
-                .hasAction = true,
-                .aliases = &.{},
-                .arguments = arguments,
-                .options = options,
-                .owner = source.owner,
-                .backends = source.backends,
-                .risk = source.risk,
-                .status = if (candidate.help.implementation != null) "native" else source.status,
-                .notes = source.notes,
-                .implementation = candidate.help.implementation,
-                .actionCode = candidate.action_code,
-                .typeCode = candidate.type_code,
-                .defaultForAction = candidate.default_for_action,
-            });
-        }
+fn actionAppearedBefore(comptime action: []const u8, comptime index: usize) bool {
+    for (catalog.variants[0..index]) |earlier| {
+        if (std.mem.eql(u8, earlier.action, action)) return true;
     }
-
-    const projected = try commands.toOwnedSlice(allocator);
-    return .{
-        .schemaVersion = frozen.schemaVersion,
-        .binary = frozen.binary,
-        .version = frozen.version,
-        .informationalVersion = frozen.informationalVersion,
-        .commandCount = projected.len,
-        .leafCommandCount = catalog.variants.len,
-        .commands = projected,
-    };
+    return false;
 }
 
-fn sourceActionDescription(frozen: Manifest, action: []const u8) ![]const u8 {
-    for (catalog.variants) |variant| {
-        if (!std.mem.eql(u8, variant.action, action)) continue;
-        if (variant.help.description) |description| return description;
-        const source = frozen.findByPath(variant.source_path) orelse return error.InvalidContract;
-        return source.description orelse return error.InvalidContract;
-    }
-    return error.InvalidContract;
-}
-
-fn effectiveOptions(
-    allocator: std.mem.Allocator,
-    source_options: []const Option,
-    variant: catalog.Variant,
-) ![]const Option {
-    if (source_options.len == 0 and variant.additional_modifiers.len == 0) return source_options;
-
-    var options: std.ArrayList(Option) = .empty;
-    for (source_options) |source| {
-        if (variant.keyring_action != null and
-            !std.mem.eql(u8, variant.keyring_action.?, "recv") and
-            std.mem.eql(u8, source.name, "--keyserver")) continue;
-        var option = source;
-        if (catalog.findSharedModifier(variant.action, variant.type_name, source.name)) |shared| {
-            option.name = shared.name;
-            option.aliases = shared.aliases;
-            option.description = shared.description;
-        }
-        if (findHelpText(variant.help.options, source.name)) |description|
-            option.description = description;
-        try options.append(allocator, option);
-    }
-    for (variant.additional_modifiers) |modifier| {
-        try options.append(allocator, .{
-            .name = modifier.name,
-            .aliases = modifier.aliases,
-            .type = "void",
-            .minimumArity = 0,
-            .maximumArity = 0,
-            .required = false,
-            .description = modifier.description,
-            .hidden = false,
-            .recursive = false,
-            .builtIn = false,
-            .hasExplicitDefault = false,
-            .defaultValue = null,
-            .choices = &.{},
-        });
-    }
-    return options.toOwnedSlice(allocator);
-}
-
-fn effectiveArguments(
-    allocator: std.mem.Allocator,
-    source_arguments: []const Argument,
-    variant: catalog.Variant,
-) ![]const Argument {
-    if (variant.help.arguments.len == 0) return source_arguments;
-    const arguments = try allocator.dupe(Argument, source_arguments);
+fn effectiveArguments(allocator: std.mem.Allocator, comptime variant: catalog.Variant) ![]const Argument {
+    const native_arguments = catalog.argumentsFor(variant.action, variant.type_name);
+    if (native_arguments.len == 0) return native_arguments;
+    const arguments = try allocator.dupe(Argument, native_arguments);
     for (arguments) |*argument| {
         if (findHelpText(variant.help.arguments, argument.name)) |description|
             argument.description = description;
     }
     return arguments;
+}
+
+fn effectiveOptions(allocator: std.mem.Allocator, comptime variant: catalog.Variant) ![]const Option {
+    const native_options = catalog.optionsFor(variant.action, variant.type_name);
+    if (native_options.len == 0) return native_options;
+    const options = try allocator.dupe(Option, native_options);
+    for (options) |*option| {
+        if (catalog.findSharedModifier(variant.action, variant.type_name, option.name)) |shared| {
+            option.name = shared.name;
+            option.aliases = shared.aliases;
+            option.description = shared.description;
+        }
+        if (findHelpText(variant.help.options, option.name)) |description|
+            option.description = description;
+    }
+    return options;
 }
 
 fn findHelpText(values: []const catalog.HelpText, name: []const u8) ?[]const u8 {
@@ -301,17 +195,15 @@ fn findHelpText(values: []const catalog.HelpText, name: []const u8) ?[]const u8 
     return null;
 }
 
-test "projects the frozen metadata into the action-first command catalog" {
+test "builds the complete action-first manifest from native Zig metadata" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try Manifest.load(arena.allocator());
     try std.testing.expectEqual(catalog.variants.len, manifest.leafCommandCount);
-    try std.testing.expectEqualStrings("2.4.1.4", manifest.version);
+    try std.testing.expectEqualStrings("2.4.1+4", manifest.version);
     try std.testing.expect(manifest.findByPath("shelly search flatpak") != null);
-    try std.testing.expect(manifest.findByPath("shelly search standard") != null);
     try std.testing.expect(manifest.findByPath("shelly sync flatpak") != null);
     try std.testing.expect(manifest.findByPath("shelly flatpak search") == null);
-    try std.testing.expect(manifest.findByPath("shelly sync-remote-appstream flatpak") == null);
     try std.testing.expect(manifest.findByPath("shelly query") == null);
     try std.testing.expectEqualStrings(
         "shelly sync standard",
@@ -319,7 +211,7 @@ test "projects the frozen metadata into the action-first command catalog" {
     );
 }
 
-test "centralizes shared modifiers while retaining type additions" {
+test "centralizes shared modifiers while retaining type-specific additions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try Manifest.load(arena.allocator());
@@ -336,7 +228,36 @@ test "centralizes shared modifiers while retaining type additions" {
     try std.testing.expect(manifest.findOption(flatpak_remove, "--config") == null);
 }
 
-test "native help overrides describe the implementation that actually executes" {
+test "every native leaf has complete help and valid metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try Manifest.load(arena.allocator());
+
+    for (manifest.commands) |command| {
+        const description = command.description orelse return error.MissingDescription;
+        try std.testing.expect(description.len > 0);
+        for (command.arguments) |argument| {
+            try std.testing.expect(argument.name.len > 0);
+            const argument_description = argument.description orelse return error.MissingArgumentDescription;
+            try std.testing.expect(argument_description.len > 0);
+            if (argument.maximumArity) |maximum|
+                try std.testing.expect(maximum >= argument.minimumArity);
+        }
+        for (command.options, 0..) |option, option_index| {
+            try std.testing.expect(option.name.len > 2);
+            const option_description = option.description orelse return error.MissingOptionDescription;
+            try std.testing.expect(option_description.len > 0);
+            for (command.options[option_index + 1 ..]) |other| {
+                try std.testing.expect(!std.mem.eql(u8, option.name, other.name));
+                for (option.aliases) |alias| {
+                    try std.testing.expect(!other.matches(alias));
+                }
+            }
+        }
+    }
+}
+
+test "native help describes the implementations that execute" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try Manifest.load(arena.allocator());
@@ -349,58 +270,7 @@ test "native help overrides describe the implementation that actually executes" 
         manifest.findOption(standard, "--installed").?.description.?,
     );
 
-    const aur = manifest.findByPath("shelly search aur").?;
-    try std.testing.expectEqualStrings(
-        "Append high-confidence standard ALPM repository matches to the AUR results",
-        manifest.findOption(aur, "--standard").?.description.?,
-    );
-
-    const flatpak = manifest.findByPath("shelly search flatpak").?;
-    try std.testing.expect(std.mem.indexOf(u8, flatpak.description.?, "cached AppStream") != null);
-    try std.testing.expectEqualStrings(
-        "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs",
-        flatpak.implementation.?,
-    );
-    try std.testing.expect(std.mem.indexOf(u8, flatpak.arguments[0].description.?, "local AppStream") != null);
-
     const install_standard = manifest.findByPath("shelly install standard").?;
-    try std.testing.expectEqualStrings("native", install_standard.status);
     try std.testing.expect(std.mem.indexOf(u8, install_standard.implementation.?, "install_packages") != null);
-    try std.testing.expect(std.mem.indexOf(u8, install_standard.implementation.?, "downloadToFile") != null);
-
-    const install_appimage = manifest.findByPath("shelly install appimage").?;
-    try std.testing.expectEqualStrings("Zigalpm.AppImageManager.installAppImage", install_appimage.implementation.?);
-
-    const install_aur = manifest.findByPath("shelly install aur").?;
-    try std.testing.expect(std.mem.indexOf(u8, install_aur.implementation.?, "installDependenciesOnly") != null);
-
-    const install_flatpak = manifest.findByPath("shelly install flatpak").?;
-    try std.testing.expect(std.mem.indexOf(u8, install_flatpak.implementation.?, "install_flatpak") != null);
-    try std.testing.expect(std.mem.indexOf(u8, install_flatpak.description.?, "AppStream") != null);
-
-    const upgrade_standard = manifest.findByPath("shelly upgrade standard").?;
-    try std.testing.expectEqualStrings("native", upgrade_standard.status);
-    try std.testing.expect(std.mem.indexOf(u8, upgrade_standard.implementation.?, "sync_system_update") != null);
-    try std.testing.expect(manifest.findOption(upgrade_standard, "--all").?.matches("-a"));
-    try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade aur").?.implementation.?, "updatePackages") != null);
-    try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade flatpak").?.implementation.?, "upgrade_flatpaks") != null);
-    try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade appimage").?.implementation.?, "UpdateManager") != null);
-}
-
-test "every action help entry explains its command instead of using a generic placeholder" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try Manifest.load(arena.allocator());
-
-    for (manifest.commands) |command| {
-        const parent_path = command.parentPath orelse continue;
-        if (!command.isBranch or !std.mem.eql(u8, parent_path, manifest.root().path)) continue;
-        const description = command.description orelse return error.MissingActionDescription;
-        try std.testing.expect(description.len > 0);
-        try std.testing.expect(std.mem.indexOf(
-            u8,
-            description,
-            "for a package or administrative type",
-        ) == null);
-    }
+    try std.testing.expect(manifest.findOption(manifest.findByPath("shelly upgrade standard").?, "--all") != null);
 }

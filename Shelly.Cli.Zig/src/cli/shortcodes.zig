@@ -56,7 +56,7 @@ pub fn translate(
         "shelly {s} {s}",
         .{ variant.action, variant.type_name },
     );
-    const command = manifest.findByPath(path) orelse return error.InvalidContract;
+    const command = manifest.findByPath(path) orelse return error.InvalidCatalog;
 
     var result: std.ArrayList([]const u8) = .empty;
     try result.appendSlice(allocator, &.{ variant.action, variant.type_name });
@@ -244,6 +244,35 @@ test "passes ordinary long form and unrelated options through unchanged" {
     );
     try expectTranslation(allocator, &manifest, &.{"-n"}, &.{"-n"});
     try expectTranslation(allocator, &manifest, &.{ "-WW", "x" }, &.{ "-WW", "x" });
+}
+
+test "every catalog leaf supports native long-form help and shortcode help" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const manifest = try spec.Manifest.load(allocator);
+
+    for (catalog.variants) |variant| {
+        const long_form = try @import("parser.zig").parse(
+            allocator,
+            &manifest,
+            &.{ variant.action, variant.type_name, "--help" },
+        );
+        try std.testing.expect(long_form == .help);
+        try std.testing.expectEqualStrings(variant.action, long_form.help.parentPath.?["shelly ".len..]);
+
+        if (variant.action_code == null or variant.type_code == null) continue;
+        const token = try std.fmt.allocPrint(
+            allocator,
+            "-{c}{c}h",
+            .{ variant.action_code.?, variant.type_code.? },
+        );
+        const translated = try translate(allocator, &manifest, &.{token});
+        const translated_arguments = translated.arguments() orelse return error.ShortcodeTranslationFailed;
+        const shortcode = try @import("parser.zig").parse(allocator, &manifest, translated_arguments);
+        try std.testing.expect(shortcode == .help);
+        try std.testing.expectEqualStrings(long_form.help.path, shortcode.help.path);
+    }
 }
 
 fn expectTranslation(

@@ -134,7 +134,7 @@ pub fn parse(
     }
 
     if (command == manifest.root() and positionals.items.len == 0) {
-        command = manifest.findByPath("shelly upgrade all") orelse return error.InvalidContract;
+        command = manifest.findByPath("shelly upgrade all") orelse return error.InvalidCatalog;
     } else if (command.isBranch and positionals.items.len > 0) {
         return unrecognized(allocator, command, positionals.items[0], false);
     } else if (command.isBranch and !command.hasAction) {
