@@ -2,6 +2,7 @@ const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
+const ui_operation = @import("../output/ui_operation.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
@@ -98,25 +99,25 @@ fn executeUi(
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     defer operation_context.deinit();
     if (invocation.globals.no_confirm) {
-        operation_context.setQuestionHandler(.{ .function = acceptQuestionDefaults });
+        operation_context.setQuestionHandler(.{ .function = ui_operation.acceptQuestionDefaults });
         defer operation_context.setQuestionHandler(null);
     }
-    var reporter: UiReporter = .{ .context = context };
+    var reporter: ui_operation.Reporter = .{ .context = context };
     const event_subscription = try operation_context.subscribe(.{
-        .function = UiReporter.handle,
+        .function = ui_operation.Reporter.handle,
         .data = &reporter,
     });
     defer _ = operation_context.unsubscribe(event_subscription);
 
     try output.writeAlpmInfoFrame(context, "TransactionStart", openingMessage(invocation));
-    try flushOutput(context);
+    try ui_operation.flush(context);
 
     runner.call(runner.data, context, &operation_context, force) catch |err| {
         const message = try std.fmt.allocPrint(context.allocator, "Sync failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
         try output.writeAlpmInfoFrame(context, "TransactionFailed", "Sync failed.");
-        try flushOutput(context);
+        try ui_operation.flush(context);
         return 1;
     };
 
@@ -125,13 +126,8 @@ fn executeUi(
         "TransactionDone",
         successMessage(invocation),
     );
-    try flushOutput(context);
-    return if (reporter.write_failed.load(.acquire)) 1 else 0;
-}
-
-fn flushOutput(context: *runtime.RuntimeContext) !void {
-    try context.stdout.flush();
-    try context.stderr.flush();
+    try ui_operation.flush(context);
+    return if (reporter.failed()) 1 else 0;
 }
 
 fn runRealStandardSync(
@@ -179,47 +175,6 @@ fn successMessage(invocation: *const parser.Invocation) []const u8 {
         "Flatpak AppStream metadata synchronized successfully!"
     else
         "Package databases synchronized successfully!";
-}
-
-const UiReporter = struct {
-    context: *runtime.RuntimeContext,
-    mutex: std.Io.Mutex = .init,
-    write_failed: std.atomic.Value(bool) = .init(false),
-
-    fn handle(data: ?*anyopaque, event: Zigalpm.OperationEvent) void {
-        const self: *UiReporter = @ptrCast(@alignCast(data.?));
-        self.mutex.lockUncancelable(self.context.io);
-        defer self.mutex.unlock(self.context.io);
-        self.write(event) catch self.write_failed.store(true, .release);
-    }
-
-    fn write(self: *UiReporter, event: Zigalpm.OperationEvent) !void {
-        switch (event) {
-            .status => |status| {
-                try output.writeAlpmInfoFrame(self.context, "InformationalOutput", status.message);
-            },
-            .progress => |progress| {
-                const message = progress.update.message orelse progress.update.stage orelse return;
-                try output.writeAlpmInfoFrame(self.context, "InformationalOutput", message);
-            },
-            .failure => |failure| {
-                try output.writeErrorFrame(self.context, failure.message);
-            },
-            .started, .completed => {},
-        }
-        try flushOutput(self.context);
-    }
-};
-
-fn acceptQuestionDefaults(
-    _: ?*anyopaque,
-    question: Zigalpm.OperationQuestion,
-) Zigalpm.OperationQuestionResponse {
-    return switch (question.kind) {
-        .confirmation, .review_changes => .accepted,
-        .select_one, .select_provider => .{ .choice = 0 },
-        .select_many, .select_optional_dependencies => .{ .choices = &.{} },
-    };
 }
 
 fn optionEnabled(invocation: *const parser.Invocation, name: []const u8) bool {
@@ -432,10 +387,18 @@ test "sync UI mode emits transaction frames" {
         .stderr = &stderr.writer,
     };
     const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: bool) !void {}
+        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, _: bool) !void {
+            var operation = operation_context.begin(.{
+                .backend = .download,
+                .kind = .download,
+                .subject = "extra.db",
+            });
+            defer operation.finish(.success);
+            operation.progress(.{ .bytes_completed = 50, .bytes_total = 100 });
+        }
     }.run };
 
     try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
 }

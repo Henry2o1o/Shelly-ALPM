@@ -1,4 +1,5 @@
 const std = @import("std");
+const Zigalpm = @import("Zigalpm");
 const model = @import("../config/model.zig");
 const runtime = @import("../runtime/context.zig");
 const xdg = @import("../runtime/xdg.zig");
@@ -87,9 +88,170 @@ pub fn writeAlpmInfoFrame(
     try json.objectField("Level");
     try json.write("Information");
     try json.objectField("TimeStamp");
-    try json.write(try timestamp(context));
+    const time = try timestamp(context);
+    defer context.allocator.free(time);
+    try json.write(time);
     try json.endObject();
     try writeFrame(context, payload.writer.buffered());
+}
+
+pub fn writeOperationProgressFrame(
+    context: *runtime.RuntimeContext,
+    progress: Zigalpm.operation.ProgressEvent,
+) !void {
+    switch (progress.envelope.backend) {
+        .flatpak => try writeSimpleProgressFrame(
+            context,
+            "flatpak.progress",
+            "Flatpak",
+            progress.update.stage orelse progress.update.message orelse progress.envelope.subject,
+            progressPercentage(progress.update),
+        ),
+        .appimage => try writeSimpleProgressFrame(
+            context,
+            "appimage.progress",
+            "AppImage",
+            progress.update.message orelse progress.envelope.subject orelse progress.update.stage,
+            progressPercentage(progress.update),
+        ),
+        .alpm, .aur, .local_package, .download => try writeAlpmProgressFrame(context, progress),
+    }
+}
+
+fn writeAlpmProgressFrame(
+    context: *runtime.RuntimeContext,
+    progress: Zigalpm.operation.ProgressEvent,
+) !void {
+    const percent = progressPercentage(progress.update);
+    const current = progress.update.bytes_completed orelse
+        progress.update.completed orelse
+        @as(u64, percent);
+    const total = progress.update.bytes_total orelse
+        progress.update.total orelse
+        if (progress.update.percentage != null) @as(u64, 100) else 0;
+    const package_name = progress.update.message orelse
+        progress.envelope.subject orelse
+        "Unknown Package";
+    const message = progressMessage(progress.update.stage);
+
+    var payload = std.Io.Writer.Allocating.init(context.allocator);
+    defer payload.deinit();
+    var json: std.json.Stringify = .{ .writer = &payload.writer };
+    try json.beginObject();
+    try json.objectField("$kind");
+    try json.write("alpm.progress");
+    try json.objectField("PackageName");
+    try json.write(package_name);
+    try json.objectField("CurrentDownload");
+    try json.write(current);
+    try json.objectField("TotalDownload");
+    try json.write(total);
+    try json.objectField("ProgressType");
+    try json.write(progressType(progress));
+    try json.objectField("Percent");
+    try json.write(percent);
+    try json.objectField("Message");
+    try json.write(message);
+    try json.objectField("Source");
+    try json.write("Alpm");
+    try json.objectField("Level");
+    try json.write("Information");
+    try json.objectField("TimeStamp");
+    const time = try timestamp(context);
+    defer context.allocator.free(time);
+    try json.write(time);
+    try json.endObject();
+    try writeFrame(context, payload.writer.buffered());
+}
+
+fn writeSimpleProgressFrame(
+    context: *runtime.RuntimeContext,
+    kind: []const u8,
+    source: []const u8,
+    status: ?[]const u8,
+    percentage: u8,
+) !void {
+    var payload = std.Io.Writer.Allocating.init(context.allocator);
+    defer payload.deinit();
+    var json: std.json.Stringify = .{ .writer = &payload.writer };
+    try json.beginObject();
+    try json.objectField("$kind");
+    try json.write(kind);
+    try json.objectField("Status");
+    try json.write(status);
+    try json.objectField("Percentage");
+    try json.write(percentage);
+    try json.objectField("Source");
+    try json.write(source);
+    try json.objectField("Level");
+    try json.write("Information");
+    try json.objectField("TimeStamp");
+    const time = try timestamp(context);
+    defer context.allocator.free(time);
+    try json.write(time);
+    try json.endObject();
+    try writeFrame(context, payload.writer.buffered());
+}
+
+fn progressPercentage(update: Zigalpm.operation.ProgressUpdate) u8 {
+    if (update.percentage) |percentage| {
+        if (std.math.isNan(percentage) or percentage <= 0) return 0;
+        if (percentage >= 100) return 100;
+        return @intFromFloat(percentage);
+    }
+    const current = update.bytes_completed orelse update.completed orelse 0;
+    const total = update.bytes_total orelse update.total orelse 0;
+    if (total == 0) return 0;
+    return @intCast(@min(@as(u128, 100), (@as(u128, current) * 100) / total));
+}
+
+fn progressType(progress: Zigalpm.operation.ProgressEvent) []const u8 {
+    if (progress.envelope.backend == .download) {
+        const subject = progress.envelope.subject orelse "";
+        return if (std.mem.endsWith(u8, subject, ".db") or
+            std.mem.endsWith(u8, subject, ".db.sig"))
+            "DatabaseDownload"
+        else
+            "PackageDownload";
+    }
+    if (progress.update.native_code) |native_code| return switch (native_code) {
+        0 => "AddStart",
+        1 => "UpgradeStart",
+        2 => "DowngradeStart",
+        3 => "ReinstallStart",
+        4 => "RemoveStart",
+        5 => "ConflictsStart",
+        6 => "DiskspaceStart",
+        7 => "IntegrityStart",
+        8 => "LoadStart",
+        9 => "KeyringStart",
+        100 => "PackageDownload",
+        101 => "DatabaseDownload",
+        200 => "MakepkgBuild",
+        201 => "MakepkgPackage",
+        202 => "AurDownload",
+        else => fallbackProgressType(progress.envelope.kind),
+    };
+    return fallbackProgressType(progress.envelope.kind);
+}
+
+fn fallbackProgressType(kind: Zigalpm.operation.OperationKind) []const u8 {
+    return switch (kind) {
+        .install => "AddStart",
+        .remove, .cleanup => "RemoveStart",
+        .update => "UpgradeStart",
+        .sync => "DatabaseDownload",
+        .download => "PackageDownload",
+        .build => "MakepkgBuild",
+        .search, .inspect, .configure, .launch => "LoadStart",
+    };
+}
+
+fn progressMessage(stage: ?[]const u8) ?[]const u8 {
+    const value = stage orelse return null;
+    if (std.ascii.eqlIgnoreCase(value, "transaction") or
+        std.ascii.eqlIgnoreCase(value, "download")) return null;
+    return value;
 }
 
 pub fn writeErrorFrame(context: *runtime.RuntimeContext, message: []const u8) !void {
@@ -106,7 +268,9 @@ pub fn writeErrorFrame(context: *runtime.RuntimeContext, message: []const u8) !v
     try json.objectField("Level");
     try json.write("Error");
     try json.objectField("TimeStamp");
-    try json.write(try timestamp(context));
+    const time = try timestamp(context);
+    defer context.allocator.free(time);
+    try json.write(time);
     try json.endObject();
     try writeFrame(context, payload.writer.buffered());
 }
@@ -130,6 +294,7 @@ pub fn writeFailure(context: *runtime.RuntimeContext, message: []const u8) !void
 pub fn writeFrame(context: *runtime.RuntimeContext, payload: []const u8) !void {
     const size = std.base64.standard.Encoder.calcSize(payload.len);
     const encoded = try context.allocator.alloc(u8, size);
+    defer context.allocator.free(encoded);
     const result = std.base64.standard.Encoder.encode(encoded, payload);
     try context.stdout.print("[JSON]{s}[/JSON]\n", .{result});
 }

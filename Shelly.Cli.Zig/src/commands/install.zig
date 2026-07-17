@@ -4,6 +4,7 @@ const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
+const ui_operation = @import("../output/ui_operation.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
@@ -119,31 +120,31 @@ fn executeUi(
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     defer operation_context.deinit();
     if (invocation.globals.no_confirm) {
-        operation_context.setQuestionHandler(.{ .function = acceptQuestionDefaults });
+        operation_context.setQuestionHandler(.{ .function = ui_operation.acceptQuestionDefaults });
         defer operation_context.setQuestionHandler(null);
     }
-    var reporter: UiReporter = .{ .context = context };
+    var reporter: ui_operation.Reporter = .{ .context = context };
     const event_subscription = try operation_context.subscribe(.{
-        .function = UiReporter.handle,
+        .function = ui_operation.Reporter.handle,
         .data = &reporter,
     });
     defer _ = operation_context.unsubscribe(event_subscription);
 
     try output.writeAlpmInfoFrame(context, "TransactionStart", opening);
-    try flushOutput(context);
+    try ui_operation.flush(context);
 
     runner.call(runner.data, context, &operation_context, invocation) catch |err| {
         const message = try std.fmt.allocPrint(context.allocator, "Installation failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
         try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-        try flushOutput(context);
+        try ui_operation.flush(context);
         return 1;
     };
 
     try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
-    try flushOutput(context);
-    return if (reporter.write_failed.load(.acquire)) 1 else 0;
+    try ui_operation.flush(context);
+    return if (reporter.failed()) 1 else 0;
 }
 
 fn runRealInstall(
@@ -505,7 +506,7 @@ fn reportValidationFailure(
     } else {
         try output.writeFailure(context, message);
     }
-    try flushOutput(context);
+    try ui_operation.flush(context);
     return 1;
 }
 
@@ -541,43 +542,6 @@ fn failureMessage(invocation: *const parser.Invocation) []const u8 {
     if (std.mem.eql(u8, invocation.command.path, aur_command_path) and
         optionEnabled(invocation, "--build-deps")) return "Dependency installation failed.";
     return "Installation failed.";
-}
-
-const UiReporter = struct {
-    context: *runtime.RuntimeContext,
-    mutex: std.Io.Mutex = .init,
-    write_failed: std.atomic.Value(bool) = .init(false),
-
-    fn handle(data: ?*anyopaque, event: Zigalpm.OperationEvent) void {
-        const self: *UiReporter = @ptrCast(@alignCast(data.?));
-        self.mutex.lockUncancelable(self.context.io);
-        defer self.mutex.unlock(self.context.io);
-        self.write(event) catch self.write_failed.store(true, .release);
-    }
-
-    fn write(self: *UiReporter, event: Zigalpm.OperationEvent) !void {
-        switch (event) {
-            .status => |status| try output.writeAlpmInfoFrame(self.context, "InformationalOutput", status.message),
-            .progress => |progress| {
-                const message = progress.update.message orelse progress.update.stage orelse return;
-                try output.writeAlpmInfoFrame(self.context, "InformationalOutput", message);
-            },
-            .failure => |failure| try output.writeErrorFrame(self.context, failure.message),
-            .started, .completed => {},
-        }
-        try flushOutput(self.context);
-    }
-};
-
-fn acceptQuestionDefaults(
-    _: ?*anyopaque,
-    question: Zigalpm.OperationQuestion,
-) Zigalpm.OperationQuestionResponse {
-    return switch (question.kind) {
-        .confirmation, .review_changes => .accepted,
-        .select_one, .select_provider => .{ .choice = 0 },
-        .select_many, .select_optional_dependencies => .{ .choices = &.{} },
-    };
 }
 
 fn classifyPackageSource(value: []const u8) PackageSource {
@@ -709,11 +673,6 @@ fn needsElevation(invocation: *const parser.Invocation) bool {
             !optionEnabled(invocation, "--user"));
 }
 
-fn flushOutput(context: *runtime.RuntimeContext) !void {
-    try context.stdout.flush();
-    try context.stderr.flush();
-}
-
 test "install routes every action-first backend and forwards type-specific options" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -786,7 +745,16 @@ test "install uses the shared non-UI and UI transaction lifecycles" {
         .stderr = &stderr.writer,
     };
     const Success = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {}
+        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, invocation: *const parser.Invocation) !void {
+            if (!invocation.globals.ui_mode) return;
+            var operation = operation_context.begin(.{
+                .backend = .aur,
+                .kind = .build,
+                .subject = "demo",
+            });
+            defer operation.finish(.success);
+            operation.progress(.{ .percentage = 42, .native_code = 200 });
+        }
     };
     const runner: Runner = .{ .call = Success.run };
 
@@ -798,7 +766,7 @@ test "install uses the shared non-UI and UI transaction lifecycles" {
     stdout.writer.end = 0;
     outcome = try parser.parse(arena.allocator(), &manifest, &.{ "install", "aur", "--ui-mode", "demo" });
     try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "[JSON]") != null);
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
 }
 
 test "install backend failures return a failing exit code and transaction result" {
