@@ -5,13 +5,9 @@
   <property name="default-width">700</property>
   <property name="default-height">450</property>
   <child>
-    <object class="GtkOverlay" id="root_overlay">
-      <child>
-        <object class="GtkBox" id="shell_box">
-          <property name="hexpand">true</property>
-          <property name="vexpand">true</property>
-        </object>
-      </child>
+    <object class="GtkBox" id="shell_box">
+      <property name="hexpand">true</property>
+      <property name="vexpand">true</property>
     </object>
   </child>
 </template>

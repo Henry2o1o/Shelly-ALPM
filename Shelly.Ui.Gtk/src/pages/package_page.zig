@@ -135,7 +135,7 @@ pub const PackagePage = extern struct {
 
         p.resolver = IconResolver.init(std.heap.c_allocator);
 
-        const use_grid = true; // ← read from config
+        const use_grid = true;
 
         gtk.ToggleButton.setActive(p.grid_view_button, @intFromBool(use_grid));
         gtk.ToggleButton.setActive(p.list_view_button, @intFromBool(!use_grid));
