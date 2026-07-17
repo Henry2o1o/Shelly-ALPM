@@ -402,7 +402,7 @@ test "upgrade action help documents every backend and its actual modifiers" {
     const rendered = output.writer.buffered();
     for ([_][]const u8{ "[shortcode: -US]", "[shortcode: -UX]", "[shortcode: -UI]", "[shortcode: -UA]", "[shortcode: -UF]" }) |needle|
         try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
-    for ([_][]const u8{ "--no-repo", "--no-aur", "--no-flatpak", "--no-appimage", "--check", "--singlepane" }) |needle|
+    for ([_][]const u8{ "--all", "--no-repo", "--no-aur", "--no-flatpak", "--no-appimage", "--check", "--singlepane" }) |needle|
         try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.sync") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.getPackagesNeedingUpdate") != null);

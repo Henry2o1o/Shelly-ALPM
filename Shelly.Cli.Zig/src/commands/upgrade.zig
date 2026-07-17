@@ -308,7 +308,7 @@ fn runSelected(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    if (!std.mem.eql(u8, invocation.command.path, all_command_path)) {
+    if (!upgradesAll(invocation)) {
         try runner.call(
             runner.data,
             context,
@@ -476,7 +476,7 @@ fn runFlatpakStep(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    if (std.mem.eql(u8, invocation.command.path, all_command_path) and
+    if (upgradesAll(invocation) and
         !invocation.globals.ui_mode)
     {
         var arguments: std.ArrayList([]const u8) = .empty;
@@ -603,7 +603,13 @@ fn shouldPrepareStandardPreview(
 ) bool {
     return !running_as_root and
         !invocation.globals.ui_mode and
+        !upgradesAll(invocation) and
         std.mem.eql(u8, invocation.command.path, standard_command_path);
+}
+
+fn upgradesAll(invocation: *const parser.Invocation) bool {
+    return std.mem.eql(u8, invocation.command.path, all_command_path) or
+        optionEnabled(invocation, "--all");
 }
 
 fn backendEnabled(invocation: *const parser.Invocation, backend: Backend) bool {
@@ -624,7 +630,7 @@ fn backendForPath(path: []const u8) ?Backend {
 }
 
 fn openingMessage(invocation: *const parser.Invocation) []const u8 {
-    if (std.mem.eql(u8, invocation.command.path, all_command_path))
+    if (upgradesAll(invocation))
         return "Upgrading all selected package backends...";
     return switch (backendForPath(invocation.command.path) orelse unreachable) {
         .standard => "Performing full system upgrade...",
@@ -635,7 +641,7 @@ fn openingMessage(invocation: *const parser.Invocation) []const u8 {
 }
 
 fn successMessage(invocation: *const parser.Invocation) []const u8 {
-    if (std.mem.eql(u8, invocation.command.path, all_command_path)) return "All upgrades complete.";
+    if (upgradesAll(invocation)) return "All upgrades complete.";
     return switch (backendForPath(invocation.command.path) orelse unreachable) {
         .standard => "System upgraded successfully!",
         .aur => "AUR upgrade complete.",
@@ -645,7 +651,7 @@ fn successMessage(invocation: *const parser.Invocation) []const u8 {
 }
 
 fn failureMessage(invocation: *const parser.Invocation) []const u8 {
-    if (std.mem.eql(u8, invocation.command.path, all_command_path))
+    if (upgradesAll(invocation))
         return "One or more upgrade steps failed.";
     return switch (backendForPath(invocation.command.path) orelse unreachable) {
         .standard => "System upgrade failed.",
@@ -707,6 +713,15 @@ test "standard upgrade preview runs only before non-root elevation" {
     );
     try std.testing.expect(all == .dispatch);
     try std.testing.expect(!shouldPrepareStandardPreview(&all.dispatch, false));
+
+    const standard_all = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "standard", "--all", "--no-confirm" },
+    );
+    try std.testing.expect(standard_all == .dispatch);
+    try std.testing.expect(upgradesAll(&standard_all.dispatch));
+    try std.testing.expect(!shouldPrepareStandardPreview(&standard_all.dispatch, false));
 }
 
 test "upgrade preview size formatting preserves negative net changes" {
@@ -768,6 +783,50 @@ test "upgrade routes every action-first type through the combined handler" {
         try std.testing.expectEqual(expected.backend, observed.?);
         try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
     }
+}
+
+test "standard all modifier routes every backend through the combined coordinator" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "standard", "--all", "--no-confirm" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings("Upgrading all selected package backends...", openingMessage(&outcome.dispatch));
+
+    var stdout = std.Io.Writer.Discarding.init(&.{});
+    var stderr = std.Io.Writer.Discarding.init(&.{});
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
+    defer operation_context.deinit();
+    var calls: std.ArrayList(Backend) = .empty;
+    defer calls.deinit(std.testing.allocator);
+    const runner: Runner = .{
+        .data = &calls,
+        .call = struct {
+            fn run(
+                data: ?*anyopaque,
+                _: *runtime.RuntimeContext,
+                _: *Zigalpm.OperationContext,
+                backend: Backend,
+                _: *const parser.Invocation,
+            ) !void {
+                const captured: *std.ArrayList(Backend) = @ptrCast(@alignCast(data.?));
+                try captured.append(std.testing.allocator, backend);
+            }
+        }.run,
+    };
+
+    try runSelected(runner, &context, &operation_context, &outcome.dispatch);
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
 }
 
 test "upgrade all honors every exclusion" {

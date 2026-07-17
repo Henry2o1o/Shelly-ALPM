@@ -25,7 +25,14 @@ pub const Variant = struct {
     type_code: ?u8,
     keyring_action: ?[]const u8 = null,
     default_for_action: bool = false,
+    additional_modifiers: []const Modifier = &.{},
     help: Help = .{},
+};
+
+pub const Modifier = struct {
+    name: []const u8,
+    aliases: []const []const u8 = &.{},
+    description: []const u8,
 };
 
 pub const HelpText = struct {
@@ -93,6 +100,11 @@ pub const variants = [_]Variant{
         .type_name = "standard",
         .action_code = 'U',
         .type_code = 'S',
+        .additional_modifiers = &.{.{
+            .name = "--all",
+            .aliases = &.{"-a"},
+            .description = "Upgrade standard, AUR, Flatpak, and AppImage backends through the combined coordinator",
+        }},
         .help = .{
             .description = "Synchronize ALPM repositories, show the available repository package upgrades, perform a full system upgrade, and report required restarts.",
             .implementation = "Zigalpm.AlpmManager.sync / get_updates_available / sync_system_update",

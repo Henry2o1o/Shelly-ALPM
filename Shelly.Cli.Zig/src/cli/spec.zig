@@ -243,7 +243,7 @@ fn effectiveOptions(
     source_options: []const Option,
     variant: catalog.Variant,
 ) ![]const Option {
-    if (source_options.len == 0) return source_options;
+    if (source_options.len == 0 and variant.additional_modifiers.len == 0) return source_options;
 
     var options: std.ArrayList(Option) = .empty;
     for (source_options) |source| {
@@ -259,6 +259,23 @@ fn effectiveOptions(
         if (findHelpText(variant.help.options, source.name)) |description|
             option.description = description;
         try options.append(allocator, option);
+    }
+    for (variant.additional_modifiers) |modifier| {
+        try options.append(allocator, .{
+            .name = modifier.name,
+            .aliases = modifier.aliases,
+            .type = "void",
+            .minimumArity = 0,
+            .maximumArity = 0,
+            .required = false,
+            .description = modifier.description,
+            .hidden = false,
+            .recursive = false,
+            .builtIn = false,
+            .hasExplicitDefault = false,
+            .defaultValue = null,
+            .choices = &.{},
+        });
     }
     return options.toOwnedSlice(allocator);
 }
@@ -364,6 +381,7 @@ test "native help overrides describe the implementation that actually executes" 
     const upgrade_standard = manifest.findByPath("shelly upgrade standard").?;
     try std.testing.expectEqualStrings("native", upgrade_standard.status);
     try std.testing.expect(std.mem.indexOf(u8, upgrade_standard.implementation.?, "sync_system_update") != null);
+    try std.testing.expect(manifest.findOption(upgrade_standard, "--all").?.matches("-a"));
     try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade aur").?.implementation.?, "updatePackages") != null);
     try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade flatpak").?.implementation.?, "upgrade_flatpaks") != null);
     try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade appimage").?.implementation.?, "UpdateManager") != null);

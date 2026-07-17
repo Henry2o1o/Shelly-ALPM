@@ -171,6 +171,7 @@ test "translates action-type shortcodes from the command manifest" {
         &.{ "sync", "flatpak" },
     );
     try expectTranslation(allocator, &manifest, &.{"-US"}, &.{ "upgrade", "standard" });
+    try expectTranslation(allocator, &manifest, &.{"-USa"}, &.{ "upgrade", "standard", "-a" });
     try expectTranslation(allocator, &manifest, &.{"-UX"}, &.{ "upgrade", "all" });
     try expectTranslation(allocator, &manifest, &.{"-UI"}, &.{ "upgrade", "appimage" });
     try expectTranslation(allocator, &manifest, &.{"-UA"}, &.{ "upgrade", "aur" });
