@@ -45,12 +45,13 @@ pub fn translate(
     if (try translateCombinedSearch(allocator, manifest, args, token)) |translation|
         return translation;
 
-    const type_code = token[2];
+    const source_type_code = token[2];
+    const type_code = normalizeTypeCode(action_code, source_type_code);
     if (!std.ascii.isAlphabetic(type_code) or catalog.findTypeByCode(type_code) == null) {
         return .{ .failure = try std.fmt.allocPrint(
             allocator,
             "Unknown shortcode type '{c}' for action code '{c}'. Valid types: {s}",
-            .{ type_code, action_code, try validTypes(allocator, action_code) },
+            .{ source_type_code, action_code, try validTypes(allocator, action_code) },
         ) };
     }
 
@@ -58,7 +59,7 @@ pub fn translate(
         return .{ .failure = try std.fmt.allocPrint(
             allocator,
             "Action code '{c}' is not available for type '{c}'. Valid types: {s}",
-            .{ action_code, type_code, try validTypes(allocator, action_code) },
+            .{ action_code, source_type_code, try validTypes(allocator, action_code) },
         ) };
     };
     const path = try std.fmt.allocPrint(
@@ -88,6 +89,17 @@ pub fn translate(
     }
     try result.appendSlice(allocator, args[1..]);
     return .{ .translated = try result.toOwnedSlice(allocator) };
+}
+
+fn normalizeTypeCode(action_code: u8, type_code: u8) u8 {
+    if (action_code != 'R') return type_code;
+    return switch (type_code) {
+        'S' => 's',
+        'I' => 'i',
+        'A' => 'a',
+        'F' => 'f',
+        else => type_code,
+    };
 }
 
 fn translateCombinedSearch(
@@ -375,6 +387,67 @@ test "uses centralized effective modifiers and rejects invalid shortcode types" 
         "Unknown modifier 'o' for combined search.",
         invalid_combined_modifier.failure,
     );
+}
+
+test "translates uppercase remove aliases and preserves lowercase compatibility" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const manifest = try spec.Manifest.load(allocator);
+
+    for ([_]struct {
+        uppercase: []const u8,
+        lowercase: []const u8,
+        command_type: []const u8,
+    }{
+        .{ .uppercase = "-RS", .lowercase = "-Rs", .command_type = "standard" },
+        .{ .uppercase = "-RI", .lowercase = "-Ri", .command_type = "appimage" },
+        .{ .uppercase = "-RA", .lowercase = "-Ra", .command_type = "aur" },
+        .{ .uppercase = "-RF", .lowercase = "-Rf", .command_type = "flatpak" },
+    }) |case| {
+        try expectTranslation(
+            allocator,
+            &manifest,
+            &.{ case.uppercase, "package" },
+            &.{ "remove", case.command_type, "package" },
+        );
+        try expectTranslation(
+            allocator,
+            &manifest,
+            &.{ case.lowercase, "package" },
+            &.{ "remove", case.command_type, "package" },
+        );
+    }
+
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-RScoilf", "package" },
+        &.{ "remove", "standard", "-c", "-o", "-i", "-l", "-f", "package" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-RAcoi", "package" },
+        &.{ "remove", "aur", "-c", "-o", "-i", "package" },
+    );
+
+    const unrelated_uppercase = try translate(allocator, &manifest, &.{ "-RC", "value" });
+    try std.testing.expectEqualStrings(
+        "Unknown shortcode type 'C' for action code 'R'. Valid types: s, i, c, a, k, f",
+        unrelated_uppercase.failure,
+    );
+
+    for ([_][]const u8{ "standard", "appimage", "aur", "flatpak" }) |command_type| {
+        const parsed = try @import("parser.zig").parse(
+            allocator,
+            &manifest,
+            &.{ "remove", command_type, "package" },
+        );
+        try std.testing.expect(parsed == .dispatch);
+        const expected_path = try std.fmt.allocPrint(allocator, "shelly remove {s}", .{command_type});
+        try std.testing.expectEqualStrings(expected_path, parsed.dispatch.command.path);
+    }
 }
 
 test "passes ordinary long form and unrelated options through unchanged" {

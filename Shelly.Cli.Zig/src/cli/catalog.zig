@@ -176,7 +176,16 @@ pub const variants = [_]Variant{
     .{ .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 's' },
     .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'u' },
     .{ .action = "purify", .type_name = "standard", .action_code = 'Z', .type_code = 's' },
-    .{ .action = "remove", .type_name = "standard", .action_code = 'R', .type_code = 's' },
+    .{
+        .action = "remove",
+        .type_name = "standard",
+        .action_code = 'R',
+        .type_code = 's',
+        .help = .{
+            .description = "Remove installed ALPM packages or Shelly-managed local binaries, with optional dependency and configuration cleanup.",
+            .implementation = "Zigalpm.AlpmManager.remove_packages / LocalManager.removeBinaryPackages",
+        },
+    },
     .{
         .action = "sync",
         .type_name = "standard",
@@ -210,7 +219,16 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .action = "remove", .type_name = "appimage", .action_code = 'R', .type_code = 'i' },
+    .{
+        .action = "remove",
+        .type_name = "appimage",
+        .action_code = 'R',
+        .type_code = 'i',
+        .help = .{
+            .description = "Remove an installed AppImage and optionally delete its associated configuration.",
+            .implementation = "Zigalpm.AppImageManager.removeAppImage",
+        },
+    },
     .{ .action = "list", .type_name = "appimage", .action_code = 'L', .type_code = 'i' },
     .{
         .action = "upgrade",
@@ -288,7 +306,16 @@ pub const variants = [_]Variant{
         },
     },
     .{ .action = "install-version", .type_name = "aur", .action_code = 'V', .type_code = 'a' },
-    .{ .action = "remove", .type_name = "aur", .action_code = 'R', .type_code = 'a' },
+    .{
+        .action = "remove",
+        .type_name = "aur",
+        .action_code = 'R',
+        .type_code = 'a',
+        .help = .{
+            .description = "Remove installed AUR packages and optionally remove dependent or optional packages through ALPM.",
+            .implementation = "Zigalpm.AurManager.removePackages",
+        },
+    },
     .{ .action = "update", .type_name = "aur", .action_code = 'T', .type_code = 'a' },
     .{
         .action = "upgrade",
@@ -406,7 +433,16 @@ pub const variants = [_]Variant{
     },
     .{ .action = "running", .type_name = "flatpak", .action_code = 'N', .type_code = 'f' },
     .{ .action = "repair", .type_name = "flatpak", .action_code = 'H', .type_code = 'f' },
-    .{ .action = "remove", .type_name = "flatpak", .action_code = 'R', .type_code = 'f' },
+    .{
+        .action = "remove",
+        .type_name = "flatpak",
+        .action_code = 'R',
+        .type_code = 'f',
+        .help = .{
+            .description = "Remove an installed Flatpak application or runtime, with optional unused dependency and configuration cleanup.",
+            .implementation = "Zigalpm.FlatpakManager.find_installed_flatpak / uninstall_flatpak",
+        },
+    },
     .{ .action = "run", .type_name = "flatpak", .action_code = 'X', .type_code = 'f' },
     .{ .action = "kill", .type_name = "flatpak", .action_code = 'K', .type_code = 'f' },
     .{
@@ -723,17 +759,17 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--orphans", &.{"-o"}, "Include orphaned packages"),
     };
     if (pathIs(action, type_name, "remove", "standard")) return &.{
-        flag("--cascade", &.{}, "Remove dependencies no longer needed"),
-        flag("--opt-deps", &.{}, "Remove unused optional dependencies"),
-        flag("--ripple", &.{}, "Remove packages depending on the targets"),
+        flag("--cascade", &.{"-c"}, "Remove dependencies no longer needed"),
+        flag("--opt-deps", &.{"-o"}, "Remove unused optional dependencies"),
+        flag("--ripple", &.{"-i"}, "Remove packages depending on the targets"),
         flag("--remove-config", &.{}, "Remove package configuration files"),
         flag("--local", &.{"-l"}, "Remove Shelly-managed local binaries"),
         flag("--force", &.{"-f"}, "Force local binary removal"),
     };
     if (pathIs(action, type_name, "remove", "aur")) return &.{
-        flag("--cascade", &.{}, "Remove dependencies no longer needed"),
-        flag("--opt-deps", &.{}, "Remove unused optional dependencies"),
-        flag("--ripple", &.{}, "Remove packages depending on the targets"),
+        flag("--cascade", &.{"-c"}, "Remove dependencies no longer needed"),
+        flag("--opt-deps", &.{"-o"}, "Remove unused optional dependencies"),
+        flag("--ripple", &.{"-i"}, "Remove packages depending on the targets"),
     };
     if (pathIs(action, type_name, "remove", "appimage")) return &.{flag(
         "--remove-config",
@@ -1168,6 +1204,31 @@ test "an action has at most one default type" {
             try std.testing.expect(
                 !other.default_for_action or !std.mem.eql(u8, variant.action, other.action),
             );
+        }
+    }
+}
+
+test "remove variants expose native help and modifier aliases" {
+    for ([_]u8{ 's', 'i', 'a', 'f' }) |type_code| {
+        const variant = findVariantByCodes('R', type_code).?;
+        try std.testing.expect(variant.help.description != null);
+        try std.testing.expect(variant.help.implementation != null);
+    }
+
+    inline for (.{ "standard", "aur" }) |type_name| {
+        const options = optionsFor("remove", type_name);
+        for ([_]struct { name: []const u8, alias: []const u8 }{
+            .{ .name = "--cascade", .alias = "-c" },
+            .{ .name = "--opt-deps", .alias = "-o" },
+            .{ .name = "--ripple", .alias = "-i" },
+        }) |expected| {
+            var found = false;
+            for (options) |option| {
+                if (!std.mem.eql(u8, option.name, expected.name)) continue;
+                found = option.matches(expected.alias);
+                break;
+            }
+            try std.testing.expect(found);
         }
     }
 }
