@@ -36,6 +36,12 @@ pub fn translate(
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (std.mem.eql(u8, token, "-Mh")) {
+        var result: std.ArrayList([]const u8) = .empty;
+        try result.appendSlice(allocator, &.{ "mark", "--help" });
+        try result.appendSlice(allocator, args[1..]);
+        return .{ .translated = try result.toOwnedSlice(allocator) };
+    }
     if (try translateStandaloneAction(allocator, manifest, args, token)) |translation|
         return translation;
     if (token.len < 3 or token[0] != '-') return .{ .unchanged = args };
@@ -49,7 +55,7 @@ pub fn translate(
 
     const source_type_code = token[2];
     const type_code = normalizeTypeCode(action_code, source_type_code);
-    if (!std.ascii.isAlphabetic(type_code) or catalog.findTypeByCode(type_code) == null) {
+    if (!std.ascii.isAlphabetic(type_code)) {
         return .{ .failure = try std.fmt.allocPrint(
             allocator,
             "Unknown shortcode type '{c}' for action code '{c}'. Valid types: {s}",
@@ -58,6 +64,13 @@ pub fn translate(
     }
 
     const variant = catalog.findVariantByCodes(action_code, type_code) orelse {
+        if (catalog.findTypeByCode(type_code) == null) {
+            return .{ .failure = try std.fmt.allocPrint(
+                allocator,
+                "Unknown shortcode type '{c}' for action code '{c}'. Valid types: {s}",
+                .{ source_type_code, action_code, try validTypes(allocator, action_code) },
+            ) };
+        }
         return .{ .failure = try std.fmt.allocPrint(
             allocator,
             "Action code '{c}' is not available for type '{c}'. Valid types: {s}",

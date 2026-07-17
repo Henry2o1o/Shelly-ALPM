@@ -1531,6 +1531,42 @@ test "Manager ignore APIs mutate and report normalized ignored packages" {
     try testing.expect(std.mem.indexOf(u8, rewritten, "#IgnorePkg =") != null);
 }
 
+test "Manager hold APIs mutate HoldPkg while retaining shelly" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try mgr.hold_package(" linux ");
+    var held = try mgr.get_held_packages();
+    defer held.deinit(allocator);
+    try testing.expectEqual(@as(usize, 4), held.items.len);
+    try testing.expectEqualStrings("linux", held.items[3]);
+
+    const removals = [_][]const u8{ "pacman", "glibc", "linux", "shelly" };
+    try mgr.unhold_packages(&removals);
+    var remaining = try mgr.get_held_packages();
+    defer remaining.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), remaining.items.len);
+    try testing.expectEqualStrings("shelly", remaining.items[0]);
+
+    const rewritten = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        workspace.config_path,
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(rewritten);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "HoldPkg = shelly") != null);
+}
+
 test "get_allowed_architecture returns the resolved host architecture and any" {
     const allocator = testing.allocator;
 

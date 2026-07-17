@@ -170,7 +170,46 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .action = "ignore", .type_name = "standard", .action_code = 'G', .type_code = 's' },
+    .{
+        .action = "mark",
+        .type_name = "ignore",
+        .action_code = 'M',
+        .type_code = 'g',
+        .help = .{
+            .description = "List or modify packages excluded from ALPM upgrades through IgnorePkg.",
+            .implementation = "Zigalpm.AlpmManager ignore_package(s) / unignore_package(s) / get_ignored_packages",
+        },
+    },
+    .{
+        .action = "mark",
+        .type_name = "hold",
+        .action_code = 'M',
+        .type_code = 'o',
+        .help = .{
+            .description = "List or modify packages protected from removal through HoldPkg.",
+            .implementation = "Zigalpm.AlpmManager hold_package(s) / unhold_package(s) / get_held_packages",
+        },
+    },
+    .{
+        .action = "mark",
+        .type_name = "explicit",
+        .action_code = 'M',
+        .type_code = 'e',
+        .help = .{
+            .description = "Mark an installed ALPM package as explicitly installed.",
+            .implementation = "Zigalpm.AlpmManager.update_package_reason(.Explicit)",
+        },
+    },
+    .{
+        .action = "mark",
+        .type_name = "dependency",
+        .action_code = 'M',
+        .type_code = 'd',
+        .help = .{
+            .description = "Mark an installed ALPM package as installed as a dependency.",
+            .implementation = "Zigalpm.AlpmManager.update_package_reason(.Dependency)",
+        },
+    },
     .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 's' },
     .{ .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'u' },
     .{ .action = "check-updates", .type_name = "utility", .action_code = 'K', .type_code = 'u' },
@@ -203,7 +242,6 @@ pub const variants = [_]Variant{
     },
     .{ .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'u' },
     .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'u' },
-    .{ .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 's' },
     .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'u' },
     .{
         .action = "purify",
@@ -640,12 +678,18 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "package",
         "Installed ALPM package to downgrade",
     )};
-    if (pathIs(action, type_name, "ignore", "standard")) return &.{repeatedArgument(
+    if (pathIs(action, type_name, "mark", "ignore")) return &.{repeatedArgument(
         "packages",
         0,
         "Package names to add to or remove from IgnorePkg",
     )};
-    if (pathIs(action, type_name, "mark", "standard")) return &.{requiredArgument(
+    if (pathIs(action, type_name, "mark", "hold")) return &.{repeatedArgument(
+        "packages",
+        0,
+        "Package names to add to or remove from HoldPkg",
+    )};
+    if (pathIs(action, type_name, "mark", "explicit") or
+        pathIs(action, type_name, "mark", "dependency")) return &.{requiredArgument(
         "package",
         "Installed package whose reason should be changed",
     )};
@@ -832,11 +876,17 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--list-options", &.{"-l"}, "List available downgrade versions"),
         stringOption("--target", &.{"-t"}, "Install this exact version-release or package filename", false),
     };
-    if (pathIs(action, type_name, "ignore", "standard")) return &.{
-        flag("--list", &.{"-l"}, "List ignored packages"),
+    if (pathIs(action, type_name, "mark", "ignore")) return &.{
+        flag("--list", &.{"-l"}, "List packages in IgnorePkg"),
         flag("--add", &.{"-a"}, "Add packages to IgnorePkg"),
         flag("--remove", &.{"-r"}, "Remove packages from IgnorePkg"),
         flag("--clear", &.{"-c"}, "Clear IgnorePkg"),
+    };
+    if (pathIs(action, type_name, "mark", "hold")) return &.{
+        flag("--list", &.{"-l"}, "List packages in HoldPkg"),
+        flag("--add", &.{"-a"}, "Add packages to HoldPkg"),
+        flag("--remove", &.{"-r"}, "Remove packages from HoldPkg"),
+        flag("--clear", &.{"-c"}, "Clear HoldPkg except for Shelly's protected entry"),
     };
     if (pathIs(action, type_name, "news", "standard")) return &.{flag(
         "--all",
@@ -858,10 +908,6 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
     if (pathIs(action, type_name, "export", "utility")) return &.{
         stringOption("--name", &.{"-a"}, "Export name", false),
         stringOption("--output", &.{"-o"}, "Output file path", false),
-    };
-    if (pathIs(action, type_name, "mark", "standard")) return &.{
-        flag("--explicit", &.{"-e"}, "Mark the package explicitly installed"),
-        flag("--depends", &.{"-d"}, "Mark the package installed as a dependency"),
     };
     if (pathIs(action, type_name, "purify", "standard")) return &.{
         flag("--dry-run", &.{"-d"}, "Show the cleanup plan without changing packages"),
@@ -1220,8 +1266,6 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Update selected standard, AUR, or Flatpak packages.";
     if (std.mem.eql(u8, action, "downgrade"))
         return "Select and install an older version of a standard package.";
-    if (std.mem.eql(u8, action, "ignore"))
-        return "List or modify packages ignored by ALPM upgrades.";
     if (std.mem.eql(u8, action, "news"))
         return "Read Arch Linux news and track viewed entries.";
     if (std.mem.eql(u8, action, "cache-clean"))
@@ -1233,7 +1277,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "fix-permissions"))
         return "Restore Shelly directory ownership to the invoking user.";
     if (std.mem.eql(u8, action, "mark"))
-        return "Change whether an installed package is explicit or a dependency.";
+        return "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.";
     if (std.mem.eql(u8, action, "pacfile"))
         return "Read stored pacnew and pacsave records.";
     if (std.mem.eql(u8, action, "docs"))

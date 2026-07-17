@@ -32,7 +32,7 @@ pub fn render(
                 try writeUsageArgument(allocator, writer, argument);
             }
         } else if (command.isBranch) {
-            try writer.writeAll(if (action_branch) " [type]" else " [command]");
+            try writer.writeAll(if (action_branch and !usesNamedSubcommands(command)) " [type]" else " [command]");
         } else {
             for (command.arguments) |argument| {
                 try writer.writeByte(' ');
@@ -156,7 +156,10 @@ fn writeActionModifiers(
     }
     if (!has_modifiers) return;
 
-    try writer.writeAll("\nModifiers by Type:\n");
+    try writer.writeAll(if (usesNamedSubcommands(action))
+        "\nModifiers by Command:\n"
+    else
+        "\nModifiers by Type:\n");
 
     var shared_rows: std.ArrayList(Row) = .empty;
     for (manifest.commands) |child| {
@@ -171,13 +174,21 @@ fn writeActionModifiers(
                 if (type_names.items.len > 0) try type_names.appendSlice(allocator, ", ");
                 try type_names.appendSlice(allocator, candidate.name);
             }
-            try shared_rows.append(allocator, .{
-                .label = try optionLabel(allocator, option),
-                .description = try std.fmt.allocPrint(
+            const description = if (usesNamedSubcommands(action))
+                try std.fmt.allocPrint(
+                    allocator,
+                    "{s} [commands: {s}]",
+                    .{ option.description orelse "", type_names.items },
+                )
+            else
+                try std.fmt.allocPrint(
                     allocator,
                     "{s} [types: {s}]",
                     .{ option.description orelse "", type_names.items },
-                ),
+                );
+            try shared_rows.append(allocator, .{
+                .label = try optionLabel(allocator, option),
+                .description = description,
             });
         }
     }
@@ -205,7 +216,10 @@ fn writeActionModifiers(
             });
         }
         if (rows.items.len == 0) continue;
-        try writer.print("  {s} only:\n", .{child.name});
+        if (usesNamedSubcommands(action))
+            try writer.print("  {s}:\n", .{child.name})
+        else
+            try writer.print("  {s} only:\n", .{child.name});
         try writeIndentedRows(writer, rows.items, 4);
     }
 }
@@ -215,7 +229,12 @@ fn isChildOf(command: *const spec.Command, parent: *const spec.Command) bool {
     return std.mem.eql(u8, parent_path, parent.path);
 }
 
+fn usesNamedSubcommands(command: *const spec.Command) bool {
+    return std.mem.eql(u8, command.name, "mark");
+}
+
 fn optionTypeCount(manifest: *const spec.Manifest, action: *const spec.Command, name: []const u8) usize {
+    if (usesNamedSubcommands(action)) return 1;
     var count: usize = 0;
     for (manifest.commands) |candidate| {
         if (isChildOf(&candidate, action) and findLocalOption(&candidate, name) != null) count += 1;
@@ -251,8 +270,8 @@ fn writeIndentedRows(writer: *Writer, rows: []const Row, indent: usize) !void {
 fn writeShortcodeHelp(writer: *Writer) !void {
     try writer.writeAll(
         \\Shortcodes:
-        \\  Grammar: -<UppercaseAction><lowercaseType><modifiers...> [positionals]
-        \\  Uppercase Action selects the operation, lowercase Type selects its target, and
+        \\  Grammar: -<UppercaseAction><lowercaseTypeOrCommand><modifiers...> [positionals]
+        \\  Uppercase Action selects the operation, the lowercase selector chooses its target or subcommand, and
         \\  modifiers are that action/type pair's short flags (case-sensitive).
         \\  Standalone root actions such as downgrade omit the lowercase Type.
         \\  Search may combine standard, AUR, and Flatpak types (s/a/f); modifiers apply
@@ -283,6 +302,11 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Ta demo-git   ->  update aur demo-git
         \\    -Tf org.app.Id ->  update flatpak org.app.Id
         \\    -D linux       ->  downgrade linux
+        \\    -Me linux      ->  mark explicit linux
+        \\    -Md linux      ->  mark dependency linux
+        \\    -Mga linux     ->  mark ignore --add linux
+        \\    -Mh            ->  mark --help
+        \\    -Mol           ->  mark hold --list
         \\    -Zs             ->  purify standard
         \\    -Zsc            ->  purify standard --cache
         \\    -Zf             ->  purify flatpak
@@ -535,7 +559,7 @@ test "search help names the native method used by the selected type" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Flathub") == null);
 }
 
-test "help documents only the action-type shortcode grammar" {
+test "help documents action targets and named subcommand shortcodes" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
@@ -544,11 +568,14 @@ test "help documents only the action-type shortcode grammar" {
 
     try render(arena.allocator(), &manifest, manifest.root(), &output.writer);
     const rendered = output.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "-<UppercaseAction><lowercaseType><modifiers...>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-<UppercaseAction><lowercaseTypeOrCommand><modifiers...>") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Isu firefox") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ua") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ux") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Vk ABCD") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Me linux") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Mga linux") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Mh            ->  mark --help") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Search may combine standard, AUR, and Flatpak types (s/a/f)") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssa query") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssafv query") != null);

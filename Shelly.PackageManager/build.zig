@@ -302,6 +302,8 @@ pub fn build(b: *std.Build) void {
             "is_cachyos exposes the detected manager state",
             "fetchCallback accepts prepared cache entries and rejects missing artifacts",
             "parses repositories, servers, siglevel and usage",
+            "hold package mutations rewrite HoldPkg and preserve shelly",
+            "Manager hold APIs mutate HoldPkg while retaining shelly",
             "dependency query APIs resolve exact, versioned, and virtual remote packages",
             "install_packages predownloads prepared repository packages before commit",
             "install_local_packages installs multiple archives in a DB-only transaction",

@@ -50,6 +50,7 @@ pub const TransactionError = error{
 pub const QueryError = error{ DbNotFound, PkgNotFound, NoHandle, OutOfMemory, Cancelled };
 
 pub const IgnorePackageError = configuration.IgnorePackageError;
+pub const HoldPackageError = configuration.HoldPackageError;
 
 /// A package that satisfies a dependency in a configured sync database.
 /// `real_name` is borrowed from libalpm and remains valid while the manager's
@@ -1614,6 +1615,72 @@ pub const Manager = struct {
         defer operation_scope.finish(.success);
         errdefer operation_scope.fail();
         return configuration.Configuration.get_ignored_packages(&self.config, self.allocator);
+    }
+
+    pub fn hold_package(self: *Manager, package_name: []const u8) HoldPackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try configuration.Configuration.add_hold_package(
+            &self.config,
+            self.io(),
+            self.allocator,
+            self.config_path,
+            package_name,
+        );
+    }
+
+    pub fn hold_packages(self: *Manager, package_names: []const []const u8) HoldPackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try configuration.Configuration.add_hold_packages(
+            &self.config,
+            self.io(),
+            self.allocator,
+            self.config_path,
+            package_names,
+        );
+    }
+
+    pub fn unhold_package(self: *Manager, package_name: []const u8) HoldPackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, package_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try configuration.Configuration.remove_hold_package(
+            &self.config,
+            self.io(),
+            self.allocator,
+            self.config_path,
+            package_name,
+        );
+    }
+
+    pub fn unhold_packages(self: *Manager, package_names: []const []const u8) HoldPackageError!void {
+        var operation_scope = OperationScope.init(self, .configure, if (package_names.len == 0) null else package_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try configuration.Configuration.remove_hold_packages(
+            &self.config,
+            self.io(),
+            self.allocator,
+            self.config_path,
+            package_names,
+        );
+    }
+
+    /// Returns a normalized list whose strings are borrowed from `self.config`.
+    /// The caller must deinitialize the returned list, but must not free its items.
+    pub fn get_held_packages(self: *Manager) HoldPackageError!std.ArrayList([:0]const u8) {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        return configuration.Configuration.get_held_packages(&self.config, self.allocator);
     }
 
     /// Returns repository names borrowed from the parsed configuration in
