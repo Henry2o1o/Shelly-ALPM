@@ -302,6 +302,8 @@ pub fn build(b: *std.Build) void {
             "is_cachyos exposes the detected manager state",
             "fetchCallback accepts prepared cache entries and rejects missing artifacts",
             "parses repositories, servers, siglevel and usage",
+            "hold package mutations rewrite HoldPkg and preserve shelly",
+            "Manager hold APIs mutate HoldPkg while retaining shelly",
             "dependency query APIs resolve exact, versioned, and virtual remote packages",
             "install_packages predownloads prepared repository packages before commit",
             "install_local_packages installs multiple archives in a DB-only transaction",
@@ -396,6 +398,13 @@ pub fn build(b: *std.Build) void {
             "AppImage update manager forwards downloader progress",
             "AppImage updates honor shared cancellation",
             "update: returns false when app not found in db",
+            "getAppImagesFromLocalDb maps C# AppImage V2 fields",
+            "getAppImagesFromLocalDb normalizes nullable C# strings",
+            "getAppImagesFromLocalDb maps every C# update type",
+            "getAppImagesFromLocalDb rejects unsupported C# update type",
+            "getAppImagesFromLocalDb migrates C# database and second load is native",
+            "getAppImagesFromLocalDb leaves native database unchanged",
+            "getAppImagesFromLocalDb leaves malformed C# database unchanged",
         },
     });
     const run_appimage_tests = b.addRunArtifact(appimage_tests);

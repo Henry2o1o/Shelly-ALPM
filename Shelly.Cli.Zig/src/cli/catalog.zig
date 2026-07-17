@@ -54,14 +54,14 @@ pub const Type = struct {
 };
 
 pub const types = [_]Type{
-    .{ .name = "standard", .code = 'S', .description = "Arch Linux repository and local ALPM packages" },
-    .{ .name = "aur", .code = 'A', .description = "Arch User Repository packages" },
-    .{ .name = "flatpak", .code = 'F', .description = "Flatpak applications and runtimes" },
-    .{ .name = "appimage", .code = 'I', .description = "AppImage applications" },
-    .{ .name = "utility", .code = 'U', .description = "System and Shelly utility operations" },
-    .{ .name = "config", .code = 'C', .description = "Shelly configuration" },
-    .{ .name = "keyring", .code = 'K', .description = "Pacman keyring operations" },
-    .{ .name = "all", .code = 'X', .description = "All supported package backends" },
+    .{ .name = "standard", .code = 's', .description = "Arch Linux repository and local ALPM packages" },
+    .{ .name = "aur", .code = 'a', .description = "Arch User Repository packages" },
+    .{ .name = "flatpak", .code = 'f', .description = "Flatpak applications and runtimes" },
+    .{ .name = "appimage", .code = 'i', .description = "AppImage applications" },
+    .{ .name = "utility", .code = 'u', .description = "System and Shelly utility operations" },
+    .{ .name = "config", .code = 'c', .description = "Shelly configuration" },
+    .{ .name = "keyring", .code = 'k', .description = "Pacman keyring operations" },
+    .{ .name = "all", .code = 'x', .description = "All supported package backends" },
 };
 
 pub const Variant = struct {
@@ -92,7 +92,7 @@ pub const variants = [_]Variant{
         .action = "search",
         .type_name = "standard",
         .action_code = 'S',
-        .type_code = 'S',
+        .type_code = 's',
         .help = .{
             .description = "Search ALPM repository and installed packages, or Shelly-managed local binary packages. With a package and no source modifier, show exact package details.",
             .implementation = "Zigalpm.AlpmManager.get_installed_packages / get_available_packages; Zigalpm.LocalManager.getInstalledBinaryPackages for --local",
@@ -115,7 +115,7 @@ pub const variants = [_]Variant{
         .action = "install",
         .type_name = "standard",
         .action_code = 'I',
-        .type_code = 'S',
+        .type_code = 's',
         .help = .{
             .description = "Install ALPM repository packages, local Arch or Shelly binary archives, and package archives downloaded from HTTP(S) URLs.",
             .implementation = "Zigalpm.AlpmManager.install_packages / install_local_packages / install_dependencies_only; Zigalpm.LocalManager.installBinariesPackage; Zigalpm.shared.Downloader.downloadToFile for URLs",
@@ -133,7 +133,7 @@ pub const variants = [_]Variant{
         .action = "upgrade",
         .type_name = "standard",
         .action_code = 'U',
-        .type_code = 'S',
+        .type_code = 's',
         .help = .{
             .description = "Synchronize ALPM repositories, show the available repository package upgrades, perform a full system upgrade, and report required restarts.",
             .implementation = "Zigalpm.AlpmManager.sync / get_updates_available / sync_system_update",
@@ -143,29 +143,131 @@ pub const variants = [_]Variant{
         .action = "upgrade",
         .type_name = "all",
         .action_code = 'U',
-        .type_code = 'X',
+        .type_code = 'x',
         .help = .{
             .description = "Upgrade every enabled package backend in one coordinated action, continuing through independent backend failures and returning failure if any selected backend fails.",
             .implementation = "Combined Zig coordinator over AlpmManager, AurManager, FlatpakManager, and appimage.UpdateManager",
         },
     },
-    .{ .action = "downgrade", .type_name = "standard", .action_code = 'D', .type_code = 'S' },
-    .{ .action = "ignore", .type_name = "standard", .action_code = 'G', .type_code = 'S' },
-    .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 'S' },
-    .{ .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'U' },
-    .{ .action = "check-updates", .type_name = "utility", .action_code = 'K', .type_code = 'U' },
-    .{ .action = "list-updates", .type_name = "standard", .action_code = 'P', .type_code = 'S' },
-    .{ .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'U' },
-    .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'U' },
-    .{ .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 'S' },
-    .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'U' },
-    .{ .action = "purify", .type_name = "standard", .action_code = 'Z', .type_code = 'S' },
-    .{ .action = "remove", .type_name = "standard", .action_code = 'R', .type_code = 'S' },
+    .{
+        .action = "downgrade",
+        .type_name = "standard",
+        .action_code = 'D',
+        .type_code = null,
+        .default_for_action = true,
+        .help = .{
+            .description = "Discover cached and archived versions of an installed ALPM package, select one, and install it as a downgrade.",
+            .implementation = "Zigalpm.AlpmManager.get_single_installed_package / Zigalpm.alpm.ArchiveManager.find_candidates / install_candidate / AlpmManager.ignore_package",
+            .arguments = &.{.{
+                .name = "package",
+                .description = "Installed ALPM package to downgrade",
+            }},
+            .options = &.{
+                .{ .name = "--oldest", .description = "Select the oldest available version instead of prompting or selecting the newest version" },
+                .{ .name = "--ignore", .description = "Add the package to IgnorePkg after a successful downgrade" },
+                .{ .name = "--list-options", .description = "List cached and archived versions without installing one" },
+                .{ .name = "--target", .description = "Install an exact version-release or package filename" },
+            },
+        },
+    },
+    .{
+        .action = "mark",
+        .type_name = "ignore",
+        .action_code = 'M',
+        .type_code = 'g',
+        .help = .{
+            .description = "List or modify packages excluded from ALPM upgrades through IgnorePkg.",
+            .implementation = "Zigalpm.AlpmManager ignore_package(s) / unignore_package(s) / get_ignored_packages",
+        },
+    },
+    .{
+        .action = "mark",
+        .type_name = "hold",
+        .action_code = 'M',
+        .type_code = 'o',
+        .help = .{
+            .description = "List or modify packages protected from removal through HoldPkg.",
+            .implementation = "Zigalpm.AlpmManager hold_package(s) / unhold_package(s) / get_held_packages",
+        },
+    },
+    .{
+        .action = "mark",
+        .type_name = "explicit",
+        .action_code = 'M',
+        .type_code = 'e',
+        .help = .{
+            .description = "Mark an installed ALPM package as explicitly installed.",
+            .implementation = "Zigalpm.AlpmManager.update_package_reason(.Explicit)",
+        },
+    },
+    .{
+        .action = "mark",
+        .type_name = "dependency",
+        .action_code = 'M',
+        .type_code = 'd',
+        .help = .{
+            .description = "Mark an installed ALPM package as installed as a dependency.",
+            .implementation = "Zigalpm.AlpmManager.update_package_reason(.Dependency)",
+        },
+    },
+    .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 's' },
+    .{ .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'u' },
+    .{ .action = "check-updates", .type_name = "utility", .action_code = 'K', .type_code = 'u' },
+    .{
+        .action = "list-updates",
+        .type_name = "all",
+        .action_code = 'P',
+        .type_code = 'x',
+        .help = .{
+            .description = "Query available updates from every supported package backend, continuing through independent backend failures.",
+            .implementation = "Combined Zig coordinator over AlpmManager, appimage.UpdateManager, AurManager, and FlatpakManager",
+        },
+    },
+    .{
+        .action = "list-updates",
+        .type_name = "standard",
+        .action_code = 'P',
+        .type_code = 's',
+        .help = .{ .implementation = "Zigalpm.AlpmManager.sync_for_update_check / get_updates_available" },
+    },
+    .{
+        .action = "list",
+        .type_name = "standard",
+        .action_code = 'L',
+        .type_code = 's',
+        .help = .{
+            .description = "List packages installed in the local ALPM database, with optional IgnorePkg and install-reason filters.",
+            .implementation = "Zigalpm.AlpmManager.get_installed_packages",
+        },
+    },
+    .{ .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'u' },
+    .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'u' },
+    .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'u' },
+    .{
+        .action = "purify",
+        .type_name = "standard",
+        .action_code = 'Z',
+        .type_code = 's',
+        .help = .{
+            .description = "Plan corrupted archives, optional orphan cleanup, and optional cache retention cleanup; show the targets, then confirm before changing ALPM or cache state.",
+            .implementation = "Zigalpm.AlpmManager.purify / Zigalpm.alpm.CacheManager",
+        },
+    },
+    .{
+        .action = "remove",
+        .type_name = "standard",
+        .action_code = 'R',
+        .type_code = 's',
+        .help = .{
+            .description = "Remove installed ALPM packages or Shelly-managed local binaries, with optional dependency and configuration cleanup.",
+            .implementation = "Zigalpm.AlpmManager.remove_packages / LocalManager.removeBinaryPackages",
+        },
+    },
     .{
         .action = "sync",
         .type_name = "standard",
         .action_code = 'Y',
-        .type_code = 'S',
+        .type_code = 's',
         .default_for_action = true,
         .help = .{
             .description = "Synchronize the configured ALPM package databases; use --force to refresh databases even when they appear current.",
@@ -176,15 +278,28 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .action = "update", .type_name = "standard", .action_code = 'T', .type_code = 'S' },
-    .{ .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'U' },
-    .{ .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'U' },
+    .{
+        .action = "update",
+        .type_name = "standard",
+        .action_code = 'T',
+        .type_code = 's',
+        .help = .{
+            .description = "Update only the named installed ALPM packages after an explicit partial-upgrade warning and confirmation.",
+            .implementation = "Zigalpm.AlpmManager.update_packages",
+            .arguments = &.{.{
+                .name = "packages",
+                .description = "One or more installed repository package names to update; partial upgrades are unsupported by Arch Linux and require confirmation",
+            }},
+        },
+    },
+    .{ .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'u' },
+    .{ .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'u' },
 
     .{
         .action = "install",
         .type_name = "appimage",
         .action_code = 'I',
-        .type_code = 'I',
+        .type_code = 'i',
         .help = .{
             .description = "Install a local AppImage into the configured AppImage directory and update Shelly's AppImage metadata database.",
             .implementation = "Zigalpm.AppImageManager.installAppImage",
@@ -194,56 +309,77 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .action = "remove", .type_name = "appimage", .action_code = 'R', .type_code = 'I' },
-    .{ .action = "list", .type_name = "appimage", .action_code = 'L', .type_code = 'I' },
+    .{
+        .action = "remove",
+        .type_name = "appimage",
+        .action_code = 'R',
+        .type_code = 'i',
+        .help = .{
+            .description = "Remove an installed AppImage and optionally delete its associated configuration.",
+            .implementation = "Zigalpm.AppImageManager.removeAppImage",
+        },
+    },
+    .{
+        .action = "list",
+        .type_name = "appimage",
+        .action_code = 'L',
+        .type_code = 'i',
+        .help = .{ .implementation = "Zigalpm.AppImageManager.getAppImagesFromLocalDb" },
+    },
     .{
         .action = "upgrade",
         .type_name = "appimage",
         .action_code = 'U',
-        .type_code = 'I',
+        .type_code = 'i',
         .help = .{
             .description = "Check every configured AppImage update source and replace each AppImage for which a newer version is available.",
             .implementation = "Zigalpm.appimage.UpdateManager.get_updates / update",
         },
     },
-    .{ .action = "sync-meta", .type_name = "appimage", .action_code = 'Y', .type_code = 'I' },
-    .{ .action = "list-updates", .type_name = "appimage", .action_code = 'P', .type_code = 'I' },
-    .{ .action = "configure-updates", .type_name = "appimage", .action_code = 'C', .type_code = 'I' },
-    .{ .action = "migrate-manager", .type_name = "appimage", .action_code = 'M', .type_code = 'I' },
+    .{ .action = "sync-meta", .type_name = "appimage", .action_code = 'Y', .type_code = 'i' },
+    .{
+        .action = "list-updates",
+        .type_name = "appimage",
+        .action_code = 'P',
+        .type_code = 'i',
+        .help = .{ .implementation = "Zigalpm.appimage.UpdateManager.get_updates" },
+    },
+    .{ .action = "configure-updates", .type_name = "appimage", .action_code = 'C', .type_code = 'i' },
+    .{ .action = "migrate-manager", .type_name = "appimage", .action_code = 'M', .type_code = 'i' },
 
     .{
         .action = "get",
         .type_name = "config",
         .action_code = 'G',
-        .type_code = 'C',
+        .type_code = 'c',
         .help = .{ .implementation = "config_manager.Manager.get" },
     },
     .{
         .action = "set",
         .type_name = "config",
         .action_code = 'S',
-        .type_code = 'C',
+        .type_code = 'c',
         .help = .{ .implementation = "config_manager.Manager.update" },
     },
     .{
         .action = "list",
         .type_name = "config",
         .action_code = 'L',
-        .type_code = 'C',
+        .type_code = 'c',
         .help = .{ .implementation = "config_manager.Manager.read" },
     },
     .{
         .action = "reset",
         .type_name = "config",
         .action_code = 'R',
-        .type_code = 'C',
+        .type_code = 'c',
         .help = .{ .implementation = "config_manager.Manager.reset" },
     },
     .{
         .action = "parallel",
         .type_name = "config",
         .action_code = 'P',
-        .type_code = 'C',
+        .type_code = 'c',
         .help = .{ .implementation = "config_manager.Manager.update(\"ParallelDownloadCount\", value)" },
     },
 
@@ -251,7 +387,7 @@ pub const variants = [_]Variant{
         .action = "install",
         .type_name = "aur",
         .action_code = 'I',
-        .type_code = 'A',
+        .type_code = 'a',
         .help = .{
             .description = "Fetch, review, build, and install one or more AUR packages, or install only one package's build dependencies.",
             .implementation = "Zigalpm.AurManager.installPackages / installDependenciesOnly",
@@ -265,14 +401,40 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .action = "install-version", .type_name = "aur", .action_code = 'V', .type_code = 'A' },
-    .{ .action = "remove", .type_name = "aur", .action_code = 'R', .type_code = 'A' },
-    .{ .action = "update", .type_name = "aur", .action_code = 'T', .type_code = 'A' },
+    .{ .action = "install-version", .type_name = "aur", .action_code = 'V', .type_code = 'a' },
+    .{
+        .action = "remove",
+        .type_name = "aur",
+        .action_code = 'R',
+        .type_code = 'a',
+        .help = .{
+            .description = "Remove installed AUR packages and optionally remove dependent or optional packages through ALPM.",
+            .implementation = "Zigalpm.AurManager.removePackages",
+        },
+    },
+    .{
+        .action = "update",
+        .type_name = "aur",
+        .action_code = 'T',
+        .type_code = 'a',
+        .help = .{
+            .description = "Fetch, review, rebuild, and reinstall only the named AUR packages.",
+            .implementation = "Zigalpm.AurManager.updatePackages",
+            .arguments = &.{.{
+                .name = "packages",
+                .description = "One or more AUR package names to rebuild and reinstall",
+            }},
+            .options = &.{.{
+                .name = "--check",
+                .description = "Run each PKGBUILD check() function during the rebuild",
+            }},
+        },
+    },
     .{
         .action = "upgrade",
         .type_name = "aur",
         .action_code = 'U',
-        .type_code = 'A',
+        .type_code = 'a',
         .help = .{
             .description = "Find installed foreign packages with newer AUR or VCS revisions, then build and install all available upgrades.",
             .implementation = "Zigalpm.AurManager.getPackagesNeedingUpdate / updatePackages",
@@ -282,13 +444,25 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .action = "list", .type_name = "aur", .action_code = 'L', .type_code = 'A' },
-    .{ .action = "list-updates", .type_name = "aur", .action_code = 'P', .type_code = 'A' },
+    .{
+        .action = "list",
+        .type_name = "aur",
+        .action_code = 'L',
+        .type_code = 'a',
+        .help = .{ .implementation = "Zigalpm.AurManager.getInstalledPackages" },
+    },
+    .{
+        .action = "list-updates",
+        .type_name = "aur",
+        .action_code = 'P',
+        .type_code = 'a',
+        .help = .{ .implementation = "Zigalpm.AurManager.getPackagesNeedingUpdate" },
+    },
     .{
         .action = "search",
         .type_name = "aur",
         .action_code = 'S',
-        .type_code = 'A',
+        .type_code = 'a',
         .help = .{
             .description = "Search the AUR RPC through the native Zig package manager; optionally append high-confidence standard repository matches.",
             .implementation = "Zigalpm.AurManager.searchPackages; Zigalpm.AlpmManager.get_available_packages when --standard is passed",
@@ -302,48 +476,48 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .action = "search-pkgbuild", .type_name = "aur", .action_code = 'B', .type_code = 'A' },
+    .{ .action = "search-pkgbuild", .type_name = "aur", .action_code = 'B', .type_code = 'a' },
 
     .{
         .action = "init",
         .type_name = "keyring",
         .action_code = 'I',
-        .type_code = 'K',
+        .type_code = 'k',
         .help = .{ .description = "Initialize the pacman keyring." },
     },
     .{
         .action = "list",
         .type_name = "keyring",
         .action_code = 'L',
-        .type_code = 'K',
+        .type_code = 'k',
         .help = .{ .description = "List keys in the pacman keyring." },
     },
     .{
         .action = "refresh",
         .type_name = "keyring",
         .action_code = 'R',
-        .type_code = 'K',
+        .type_code = 'k',
         .help = .{ .description = "Refresh pacman keyring keys from the configured keyserver." },
     },
     .{
         .action = "lsign",
         .type_name = "keyring",
         .action_code = 'S',
-        .type_code = 'K',
+        .type_code = 'k',
         .help = .{ .description = "Locally sign one or more keys in the pacman keyring." },
     },
     .{
         .action = "populate",
         .type_name = "keyring",
         .action_code = 'P',
-        .type_code = 'K',
+        .type_code = 'k',
         .help = .{ .description = "Populate the pacman keyring with the default distribution keys." },
     },
     .{
         .action = "recv",
         .type_name = "keyring",
         .action_code = 'V',
-        .type_code = 'K',
+        .type_code = 'k',
         .help = .{ .description = "Receive one or more keys from the configured keyserver." },
     },
 
@@ -351,7 +525,7 @@ pub const variants = [_]Variant{
         .action = "install",
         .type_name = "flatpak",
         .action_code = 'I',
-        .type_code = 'F',
+        .type_code = 'f',
         .help = .{
             .description = "Install a Flatpak application or runtime at system or user scope, resolving omitted remotes and friendly names through cached AppStream catalogs.",
             .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs; Zigalpm.FlatpakManager.install_flatpak",
@@ -367,19 +541,53 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .action = "update", .type_name = "flatpak", .action_code = 'T', .type_code = 'F' },
-    .{ .action = "list", .type_name = "flatpak", .action_code = 'L', .type_code = 'F' },
-    .{ .action = "list-updates", .type_name = "flatpak", .action_code = 'P', .type_code = 'F' },
-    .{ .action = "running", .type_name = "flatpak", .action_code = 'N', .type_code = 'F' },
-    .{ .action = "repair", .type_name = "flatpak", .action_code = 'H', .type_code = 'F' },
-    .{ .action = "remove", .type_name = "flatpak", .action_code = 'R', .type_code = 'F' },
-    .{ .action = "run", .type_name = "flatpak", .action_code = 'X', .type_code = 'F' },
-    .{ .action = "kill", .type_name = "flatpak", .action_code = 'K', .type_code = 'F' },
+    .{
+        .action = "update",
+        .type_name = "flatpak",
+        .action_code = 'T',
+        .type_code = 'f',
+        .help = .{
+            .description = "Update one installed Flatpak application or runtime in its existing user or system installation.",
+            .implementation = "Zigalpm.FlatpakManager.update_installed_flatpak",
+            .arguments = &.{.{
+                .name = "package",
+                .description = "Installed Flatpak application/runtime ID or unambiguous friendly name",
+            }},
+        },
+    },
+    .{
+        .action = "list",
+        .type_name = "flatpak",
+        .action_code = 'L',
+        .type_code = 'f',
+        .help = .{ .implementation = "Zigalpm.FlatpakManager.list_installed_applications" },
+    },
+    .{
+        .action = "list-updates",
+        .type_name = "flatpak",
+        .action_code = 'P',
+        .type_code = 'f',
+        .help = .{ .implementation = "Zigalpm.FlatpakManager.get_updates_flatpak" },
+    },
+    .{ .action = "running", .type_name = "flatpak", .action_code = 'N', .type_code = 'f' },
+    .{ .action = "repair", .type_name = "flatpak", .action_code = 'H', .type_code = 'f' },
+    .{
+        .action = "remove",
+        .type_name = "flatpak",
+        .action_code = 'R',
+        .type_code = 'f',
+        .help = .{
+            .description = "Remove an installed Flatpak application or runtime, with optional unused dependency and configuration cleanup.",
+            .implementation = "Zigalpm.FlatpakManager.find_installed_flatpak / uninstall_flatpak",
+        },
+    },
+    .{ .action = "run", .type_name = "flatpak", .action_code = 'X', .type_code = 'f' },
+    .{ .action = "kill", .type_name = "flatpak", .action_code = 'K', .type_code = 'f' },
     .{
         .action = "search",
         .type_name = "flatpak",
         .action_code = 'S',
-        .type_code = 'F',
+        .type_code = 'f',
         .help = .{
             .description = "Search cached AppStream catalogs from every configured system and user Flatpak remote, with local pagination.",
             .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs",
@@ -393,30 +601,39 @@ pub const variants = [_]Variant{
         .action = "sync",
         .type_name = "flatpak",
         .action_code = 'Y',
-        .type_code = 'F',
+        .type_code = 'f',
         .help = .{
             .description = "Update cached AppStream metadata for every configured system and user Flatpak remote.",
             .implementation = "Zigalpm.flatpak.AppstreamManager.updateAllAppstreams",
         },
     },
-    .{ .action = "get-remote-appstream", .type_name = "flatpak", .action_code = 'G', .type_code = 'F' },
+    .{ .action = "get-remote-appstream", .type_name = "flatpak", .action_code = 'G', .type_code = 'f' },
     .{
         .action = "upgrade",
         .type_name = "flatpak",
         .action_code = 'U',
-        .type_code = 'F',
+        .type_code = 'f',
         .help = .{
             .description = "Upgrade every application and runtime with an available update in the system and user Flatpak installations.",
             .implementation = "Zigalpm.FlatpakManager.upgrade_flatpaks",
         },
     },
-    .{ .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'F' },
-    .{ .action = "add-remotes", .type_name = "flatpak", .action_code = 'A', .type_code = 'F' },
-    .{ .action = "remove-remotes", .type_name = "flatpak", .action_code = 'D', .type_code = 'F' },
-    .{ .action = "install-ref-file", .type_name = "flatpak", .action_code = 'E', .type_code = 'F' },
-    .{ .action = "install-bundle", .type_name = "flatpak", .action_code = 'B', .type_code = 'F' },
-    .{ .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'F' },
-    .{ .action = "purify", .type_name = "flatpak", .action_code = 'Z', .type_code = 'F' },
+    .{ .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'f' },
+    .{ .action = "add-remotes", .type_name = "flatpak", .action_code = 'A', .type_code = 'f' },
+    .{ .action = "remove-remotes", .type_name = "flatpak", .action_code = 'D', .type_code = 'f' },
+    .{ .action = "install-ref-file", .type_name = "flatpak", .action_code = 'E', .type_code = 'f' },
+    .{ .action = "install-bundle", .type_name = "flatpak", .action_code = 'B', .type_code = 'f' },
+    .{ .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'f' },
+    .{
+        .action = "purify",
+        .type_name = "flatpak",
+        .action_code = 'Z',
+        .type_code = 'f',
+        .help = .{
+            .description = "Plan unused dependency cleanup across system and user Flatpak installations, then show and confirm the targets.",
+            .implementation = "Zigalpm.FlatpakManager.remove_unused_dependencies",
+        },
+    },
 };
 
 pub fn argumentsFor(comptime action: []const u8, comptime type_name: []const u8) []const Argument {
@@ -459,14 +676,20 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
 
     if (pathIs(action, type_name, "downgrade", "standard")) return &.{optionalArgument(
         "package",
-        "Package to downgrade; omit only when listing selectable versions",
+        "Installed ALPM package to downgrade",
     )};
-    if (pathIs(action, type_name, "ignore", "standard")) return &.{repeatedArgument(
+    if (pathIs(action, type_name, "mark", "ignore")) return &.{repeatedArgument(
         "packages",
         0,
         "Package names to add to or remove from IgnorePkg",
     )};
-    if (pathIs(action, type_name, "mark", "standard")) return &.{requiredArgument(
+    if (pathIs(action, type_name, "mark", "hold")) return &.{repeatedArgument(
+        "packages",
+        0,
+        "Package names to add to or remove from HoldPkg",
+    )};
+    if (pathIs(action, type_name, "mark", "explicit") or
+        pathIs(action, type_name, "mark", "dependency")) return &.{requiredArgument(
         "package",
         "Installed package whose reason should be changed",
     )};
@@ -593,7 +816,7 @@ pub fn optionsFor(comptime action: []const u8, comptime type_name: []const u8) [
 fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Option {
     if (pathIs(action, type_name, "search", "standard")) return &.{
         flag("--repos", &.{"-r"}, "List configured ALPM repositories"),
-        flag("--available", &.{"-a"}, "Search synchronized ALPM repositories"),
+        flag("--available", &.{"-v"}, "Search synchronized ALPM repositories"),
         flag("--installed", &.{"-i"}, "Search the local ALPM database"),
         flag("--local", &.{"-l"}, "Search Shelly-managed local binaries"),
         integerOption("--limit", &.{}, "Maximum results per page"),
@@ -651,13 +874,19 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--oldest", &.{"-o"}, "Choose the oldest available version"),
         flag("--ignore", &.{"-i"}, "Add the downgraded package to IgnorePkg"),
         flag("--list-options", &.{"-l"}, "List available downgrade versions"),
-        stringOption("--target", &.{"-t"}, "Install this exact version", false),
+        stringOption("--target", &.{"-t"}, "Install this exact version-release or package filename", false),
     };
-    if (pathIs(action, type_name, "ignore", "standard")) return &.{
-        flag("--list", &.{"-l"}, "List ignored packages"),
+    if (pathIs(action, type_name, "mark", "ignore")) return &.{
+        flag("--list", &.{"-l"}, "List packages in IgnorePkg"),
         flag("--add", &.{"-a"}, "Add packages to IgnorePkg"),
         flag("--remove", &.{"-r"}, "Remove packages from IgnorePkg"),
         flag("--clear", &.{"-c"}, "Clear IgnorePkg"),
+    };
+    if (pathIs(action, type_name, "mark", "hold")) return &.{
+        flag("--list", &.{"-l"}, "List packages in HoldPkg"),
+        flag("--add", &.{"-a"}, "Add packages to HoldPkg"),
+        flag("--remove", &.{"-r"}, "Remove packages from HoldPkg"),
+        flag("--clear", &.{"-c"}, "Clear HoldPkg except for Shelly's protected entry"),
     };
     if (pathIs(action, type_name, "news", "standard")) return &.{flag(
         "--all",
@@ -680,26 +909,29 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         stringOption("--name", &.{"-a"}, "Export name", false),
         stringOption("--output", &.{"-o"}, "Output file path", false),
     };
-    if (pathIs(action, type_name, "mark", "standard")) return &.{
-        flag("--explicit", &.{"-e"}, "Mark the package explicitly installed"),
-        flag("--depends", &.{"-d"}, "Mark the package installed as a dependency"),
-    };
     if (pathIs(action, type_name, "purify", "standard")) return &.{
         flag("--dry-run", &.{"-d"}, "Show the cleanup plan without changing packages"),
         flag("--orphans", &.{"-o"}, "Include orphaned packages"),
+        optionalIntegerOptionWithDefault(
+            "--cache",
+            &.{"-c"},
+            "Remove older cached package versions while retaining this many versions",
+            3,
+        ),
     };
     if (pathIs(action, type_name, "remove", "standard")) return &.{
-        flag("--cascade", &.{}, "Remove dependencies no longer needed"),
-        flag("--opt-deps", &.{}, "Remove unused optional dependencies"),
-        flag("--ripple", &.{}, "Remove packages depending on the targets"),
+        booleanOptionWithDefault("--cascade", &.{"-c"}, "Remove dependencies no longer needed", true),
+        flag("--no-cascade", &.{}, "Keep dependencies that become unneeded after removal"),
+        flag("--opt-deps", &.{"-o"}, "Remove unused optional dependencies"),
+        flag("--ripple", &.{"-i"}, "Remove packages depending on the targets"),
         flag("--remove-config", &.{}, "Remove package configuration files"),
         flag("--local", &.{"-l"}, "Remove Shelly-managed local binaries"),
         flag("--force", &.{"-f"}, "Force local binary removal"),
     };
     if (pathIs(action, type_name, "remove", "aur")) return &.{
-        flag("--cascade", &.{}, "Remove dependencies no longer needed"),
-        flag("--opt-deps", &.{}, "Remove unused optional dependencies"),
-        flag("--ripple", &.{}, "Remove packages depending on the targets"),
+        flag("--cascade", &.{"-c"}, "Remove dependencies no longer needed"),
+        flag("--opt-deps", &.{"-o"}, "Remove unused optional dependencies"),
+        flag("--ripple", &.{"-i"}, "Remove packages depending on the targets"),
     };
     if (pathIs(action, type_name, "remove", "appimage")) return &.{flag(
         "--remove-config",
@@ -727,12 +959,18 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         &.{},
         "Run the PKGBUILD check() function",
     )};
+    if (pathIs(action, type_name, "list", "standard")) return &.{
+        flag("--show-hidden", &.{"-w"}, "Include hidden packages"),
+        flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
+        flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
+    };
     if (pathIs(action, type_name, "list", "aur")) return &.{
         flag("--show-hidden", &.{}, "Include hidden packages"),
         flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
         flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
     };
-    if (pathIs(action, type_name, "list-updates", "aur")) return &.{flag(
+    if (pathIs(action, type_name, "list-updates", "aur") or
+        pathIs(action, type_name, "list-updates", "all")) return &.{flag(
         "--show-hidden",
         &.{},
         "Include hidden packages",
@@ -809,6 +1047,18 @@ fn flag(name: []const u8, aliases: []const []const u8, description: []const u8) 
     return .{ .name = name, .aliases = aliases, .description = description };
 }
 
+fn booleanOptionWithDefault(
+    name: []const u8,
+    aliases: []const []const u8,
+    description: []const u8,
+    default_value: bool,
+) Option {
+    var option = flag(name, aliases, description);
+    option.hasExplicitDefault = true;
+    option.defaultValue = .{ .bool = default_value };
+    return option;
+}
+
 fn globalFlag(name: []const u8, aliases: []const []const u8, description: []const u8) Option {
     var option = flag(name, aliases, description);
     option.recursive = true;
@@ -841,6 +1091,24 @@ fn integerOption(name: []const u8, aliases: []const []const u8, description: []c
         .minimumArity = 1,
         .maximumArity = 1,
         .description = description,
+    };
+}
+
+fn optionalIntegerOptionWithDefault(
+    name: []const u8,
+    aliases: []const []const u8,
+    description: []const u8,
+    default_value: i64,
+) Option {
+    return .{
+        .name = name,
+        .aliases = aliases,
+        .type = "uint",
+        .minimumArity = 0,
+        .maximumArity = 1,
+        .description = description,
+        .hasExplicitDefault = true,
+        .defaultValue = .{ .integer = default_value },
     };
 }
 
@@ -946,6 +1214,16 @@ pub fn findVariantByCodes(action_code: u8, type_code: u8) ?*const Variant {
     return null;
 }
 
+pub fn findStandaloneVariantByActionCode(action_code: u8) ?*const Variant {
+    for (&variants) |*variant| {
+        if (variant.action_code == action_code and
+            variant.type_code == null and
+            variant.default_for_action)
+            return variant;
+    }
+    return null;
+}
+
 pub fn findTypeByCode(code: u8) ?Type {
     for (types) |command_type| {
         if (command_type.code == code) return command_type;
@@ -975,11 +1253,11 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "upgrade"))
         return "Upgrade standard, AUR, AppImage, or Flatpak packages, including all supported backends together.";
     if (std.mem.eql(u8, action, "list"))
-        return "List installed AppImages, AUR packages, Flatpak applications, Shelly configuration values, or pacman keyring keys.";
+        return "List installed standard packages, AppImages, AUR packages, Flatpak applications, Shelly configuration values, or pacman keyring keys.";
     if (std.mem.eql(u8, action, "list-updates"))
         return "List available updates for standard, AUR, AppImage, or Flatpak packages.";
     if (std.mem.eql(u8, action, "purify"))
-        return "Remove corrupted or orphaned ALPM packages, or unused Flatpak dependencies.";
+        return "Remove corrupted or orphaned ALPM packages, optionally clean the package cache, or remove unused Flatpak dependencies.";
     if (std.mem.eql(u8, action, "remove"))
         return "Remove standard or local packages, AUR packages, AppImages, or Flatpak applications.";
     if (std.mem.eql(u8, action, "sync"))
@@ -988,8 +1266,6 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Update selected standard, AUR, or Flatpak packages.";
     if (std.mem.eql(u8, action, "downgrade"))
         return "Select and install an older version of a standard package.";
-    if (std.mem.eql(u8, action, "ignore"))
-        return "List or modify packages ignored by ALPM upgrades.";
     if (std.mem.eql(u8, action, "news"))
         return "Read Arch Linux news and track viewed entries.";
     if (std.mem.eql(u8, action, "cache-clean"))
@@ -1001,7 +1277,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "fix-permissions"))
         return "Restore Shelly directory ownership to the invoking user.";
     if (std.mem.eql(u8, action, "mark"))
-        return "Change whether an installed package is explicit or a dependency.";
+        return "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.";
     if (std.mem.eql(u8, action, "pacfile"))
         return "Read stored pacnew and pacsave records.";
     if (std.mem.eql(u8, action, "docs"))
@@ -1063,6 +1339,8 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
 
 pub fn descriptionFor(variant: Variant) []const u8 {
     if (variant.help.description) |description| return description;
+    if (pathIs(variant.action, variant.type_name, "list", "standard"))
+        return "List packages installed in the local ALPM database.";
     if (pathIs(variant.action, variant.type_name, "list", "appimage"))
         return "List installed AppImages.";
     if (pathIs(variant.action, variant.type_name, "list", "aur"))
@@ -1080,7 +1358,7 @@ pub fn descriptionFor(variant: Variant) []const u8 {
     if (pathIs(variant.action, variant.type_name, "list-updates", "flatpak"))
         return "List Flatpak applications and runtimes with available updates.";
     if (pathIs(variant.action, variant.type_name, "purify", "standard"))
-        return "Remove corrupted or orphaned standard packages.";
+        return "Remove corrupted or orphaned standard packages and optionally clean older cached package versions.";
     if (pathIs(variant.action, variant.type_name, "purify", "flatpak"))
         return "Remove unused Flatpak dependencies.";
     if (pathIs(variant.action, variant.type_name, "remove", "standard"))
@@ -1135,4 +1413,43 @@ test "an action has at most one default type" {
             );
         }
     }
+}
+
+test "remove variants expose native help and modifier aliases" {
+    for ([_]u8{ 's', 'i', 'a', 'f' }) |type_code| {
+        const variant = findVariantByCodes('R', type_code).?;
+        try std.testing.expect(variant.help.description != null);
+        try std.testing.expect(variant.help.implementation != null);
+    }
+
+    inline for (.{ "standard", "aur" }) |type_name| {
+        const options = optionsFor("remove", type_name);
+        for ([_]struct { name: []const u8, alias: []const u8 }{
+            .{ .name = "--cascade", .alias = "-c" },
+            .{ .name = "--opt-deps", .alias = "-o" },
+            .{ .name = "--ripple", .alias = "-i" },
+        }) |expected| {
+            var found = false;
+            for (options) |option| {
+                if (!std.mem.eql(u8, option.name, expected.name)) continue;
+                found = option.matches(expected.alias);
+                break;
+            }
+            try std.testing.expect(found);
+        }
+    }
+
+    const standard_options = optionsFor("remove", "standard");
+    var found_no_cascade = false;
+    for (standard_options) |option| {
+        if (std.mem.eql(u8, option.name, "--cascade")) {
+            try std.testing.expect(option.hasExplicitDefault);
+            try std.testing.expect(option.defaultValue.?.bool);
+        }
+        if (std.mem.eql(u8, option.name, "--no-cascade")) {
+            found_no_cascade = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_no_cascade);
 }

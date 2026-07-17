@@ -1531,6 +1531,42 @@ test "Manager ignore APIs mutate and report normalized ignored packages" {
     try testing.expect(std.mem.indexOf(u8, rewritten, "#IgnorePkg =") != null);
 }
 
+test "Manager hold APIs mutate HoldPkg while retaining shelly" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    try mgr.hold_package(" linux ");
+    var held = try mgr.get_held_packages();
+    defer held.deinit(allocator);
+    try testing.expectEqual(@as(usize, 4), held.items.len);
+    try testing.expectEqualStrings("linux", held.items[3]);
+
+    const removals = [_][]const u8{ "pacman", "glibc", "linux", "shelly" };
+    try mgr.unhold_packages(&removals);
+    var remaining = try mgr.get_held_packages();
+    defer remaining.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), remaining.items.len);
+    try testing.expectEqualStrings("shelly", remaining.items[0]);
+
+    const rewritten = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        workspace.config_path,
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(rewritten);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "HoldPkg = shelly") != null);
+}
+
 test "get_allowed_architecture returns the resolved host architecture and any" {
     const allocator = testing.allocator;
 
@@ -1769,7 +1805,7 @@ test "Manager.init registers and deduplicates repository microarchitectures" {
     }
 }
 
-test "purify corruption dry run includes package archives and filters other cache entries" {
+test "purify corruption dry run reports only invalid package archives" {
     const allocator = testing.allocator;
 
     var threaded: std.Io.Threaded = .init(allocator, .{});
@@ -1791,6 +1827,16 @@ test "purify corruption dry run includes package archives and filters other cach
     defer allocator.free(cache_path);
     try std.Io.Dir.cwd().createDirPath(io, cache_path);
     mgr.config.cache_directory = cache_path;
+
+    const valid_source = try workspace.createPackageArchive(allocator, "valid-cache", "1.0-1");
+    defer allocator.free(valid_source);
+    const valid_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/valid-cache-1.0-1-any.pkg.tar",
+        .{cache_path},
+    );
+    defer allocator.free(valid_path);
+    try std.Io.Dir.rename(.cwd(), valid_source, .cwd(), valid_path, io);
 
     const archive_path = try std.fmt.allocPrint(
         allocator,
@@ -1824,6 +1870,8 @@ test "purify corruption dry run includes package archives and filters other cach
 
     try testing.expectEqual(@as(usize, 1), targets.len);
     try testing.expectEqualStrings("candidate.pkg.tar.zst", targets[0]);
+    _ = try std.Io.Dir.cwd().statFile(io, valid_path, .{});
+    _ = try std.Io.Dir.cwd().statFile(io, archive_path, .{});
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,6 +1945,16 @@ test "purify removes an invalid package archive outside dry-run mode" {
     try std.Io.Dir.cwd().createDirPath(io, cache_path);
     mgr.config.cache_directory = cache_path;
 
+    const valid_source = try workspace.createPackageArchive(allocator, "valid-cache", "1.0-1");
+    defer allocator.free(valid_source);
+    const valid_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/valid-cache-1.0-1-any.pkg.tar",
+        .{cache_path},
+    );
+    defer allocator.free(valid_path);
+    try std.Io.Dir.rename(.cwd(), valid_source, .cwd(), valid_path, io);
+
     const corrupt_path = try std.fmt.allocPrint(
         allocator,
         "{s}/corrupt.pkg.tar.zst",
@@ -1917,6 +1975,7 @@ test "purify removes an invalid package archive outside dry-run mode" {
 
     try testing.expectEqual(@as(usize, 1), targets.len);
     try testing.expectEqualStrings("corrupt.pkg.tar.zst", targets[0]);
+    _ = try std.Io.Dir.cwd().statFile(io, valid_path, .{});
     try testing.expectError(
         error.FileNotFound,
         std.Io.Dir.cwd().statFile(io, corrupt_path, .{}),

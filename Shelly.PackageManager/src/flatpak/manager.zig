@@ -16,6 +16,7 @@ pub const InstalledApplication = struct {
     branch: [:0]u8,
     summary: [:0]u8,
     version: [:0]u8,
+    latest_commit: [:0]u8,
     origin: [:0]u8,
     kind: i32,
     installed_size: u64,
@@ -28,8 +29,30 @@ pub const InstalledApplication = struct {
         allocator.free(self.branch);
         allocator.free(self.summary);
         allocator.free(self.version);
+        allocator.free(self.latest_commit);
         allocator.free(self.origin);
         self.* = undefined;
+    }
+
+    pub fn deinitSlice(allocator: std.mem.Allocator, applications: []InstalledApplication) void {
+        for (applications) |*application| application.deinit(allocator);
+        allocator.free(applications);
+    }
+};
+
+/// Fully owned unused Flatpak ref returned by cleanup planning.
+pub const UnusedDependency = struct {
+    reference: [:0]u8,
+    scope: flatpak.Scope,
+
+    pub fn deinit(self: *UnusedDependency, allocator: std.mem.Allocator) void {
+        allocator.free(self.reference);
+        self.* = undefined;
+    }
+
+    pub fn deinitSlice(allocator: std.mem.Allocator, dependencies: []UnusedDependency) void {
+        for (dependencies) |*dependency| dependency.deinit(allocator);
+        allocator.free(dependencies);
     }
 };
 
@@ -163,6 +186,28 @@ pub const Manager = struct {
         }
 
         return list.toOwnedSlice(self.allocator);
+    }
+
+    /// Return owned metadata for every installed system and user Flatpak.
+    /// Unlike `list_installed_flatpak`, the returned values do not borrow
+    /// `FlatpakInstalledRef` objects and remain valid after the native arrays
+    /// and installations have been released.
+    pub fn list_installed_applications(self: Manager) ![]InstalledApplication {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
+
+        var applications: std.ArrayList(InstalledApplication) = .empty;
+        errdefer {
+            for (applications.items) |*application| application.deinit(self.allocator);
+            applications.deinit(self.allocator);
+        }
+
+        try self.appendSystemInstalledApplications(&applications);
+        try self.appendUserInstalledApplications(&applications);
+        return applications.toOwnedSlice(self.allocator);
     }
 
     /// Resolve a system or user installation by exact/partial ID or friendly
@@ -1008,6 +1053,75 @@ pub const Manager = struct {
         return null;
     }
 
+    fn appendSystemInstalledApplications(
+        self: Manager,
+        applications: *std.ArrayList(InstalledApplication),
+    ) !void {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
+
+        const installations = rawflatpak.flatpak_get_system_installations(cancellable, &g_error);
+        if (installations == null or g_error != null) return;
+        defer rawflatpak.g_ptr_array_unref(installations);
+
+        var index: usize = 0;
+        while (index < installations.*.len) : (index += 1) {
+            try self.checkCancelled();
+            const installation: *rawflatpak.FlatpakInstallation = @ptrCast(@alignCast(installations.*.pdata[index]));
+            try self.appendInstalledApplications(installation, .SYSTEM, applications);
+        }
+    }
+
+    fn appendUserInstalledApplications(
+        self: Manager,
+        applications: *std.ArrayList(InstalledApplication),
+    ) !void {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
+
+        const installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (installation == null or g_error != null) return;
+        defer rawflatpak.g_object_unref(installation);
+        try self.appendInstalledApplications(installation, .USER, applications);
+    }
+
+    fn appendInstalledApplications(
+        self: Manager,
+        installation: *rawflatpak.FlatpakInstallation,
+        scope: flatpak.Scope,
+        applications: *std.ArrayList(InstalledApplication),
+    ) !void {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        defer rawflatpak.g_object_unref(cancellable);
+        var g_error: ?*rawflatpak.GError = null;
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
+
+        const refs = rawflatpak.flatpak_installation_list_installed_refs(installation, cancellable, &g_error);
+        if (refs == null or g_error != null) return;
+        defer rawflatpak.g_ptr_array_unref(refs);
+
+        var index: usize = 0;
+        while (index < refs.*.len) : (index += 1) {
+            try self.checkCancelled();
+            const installed: *rawflatpak.FlatpakInstalledRef = @ptrCast(@alignCast(refs.*.pdata[index]));
+            var application = try self.copyInstalledApplication(installed, scope);
+            applications.append(self.allocator, application) catch |err| {
+                application.deinit(self.allocator);
+                return err;
+            };
+        }
+    }
+
     fn findInUserInstallation(self: Manager, name_or_id: []const u8) !?InstalledApplication {
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         defer rawflatpak.g_object_unref(cancellable);
@@ -1071,6 +1185,7 @@ pub const Manager = struct {
             .branch = undefined,
             .summary = undefined,
             .version = undefined,
+            .latest_commit = undefined,
             .origin = undefined,
             .kind = @intCast(rawflatpak.flatpak_ref_get_kind(ref)),
             .installed_size = rawflatpak.flatpak_installed_ref_get_installed_size(installed),
@@ -1087,6 +1202,12 @@ pub const Manager = struct {
         errdefer self.allocator.free(result.summary);
         result.version = try self.allocator.dupeSentinel(u8, if (appdata_version.len == 0) branch else appdata_version, 0);
         errdefer self.allocator.free(result.version);
+        result.latest_commit = try self.allocator.dupeSentinel(
+            u8,
+            spanOrEmpty(rawflatpak.flatpak_installed_ref_get_latest_commit(installed)),
+            0,
+        );
+        errdefer self.allocator.free(result.latest_commit);
         result.origin = try self.allocator.dupeSentinel(u8, spanOrEmpty(rawflatpak.flatpak_installed_ref_get_origin(installed)), 0);
         return result;
     }
@@ -1161,8 +1282,51 @@ pub const Manager = struct {
         return self.finishTransaction(result, g_error, "Flatpak upgrade completed");
     }
 
+    /// Return the exact unused refs that a Flatpak purify operation would
+    /// remove, preserving the installation scope for display and confirmation.
+    pub fn list_unused_dependencies(self: Manager) ![]UnusedDependency {
+        var operation_scope = OperationScope.init(self, .cleanup, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
+
+        var dependencies: std.ArrayList(UnusedDependency) = .empty;
+        errdefer {
+            for (dependencies.items) |*dependency| dependency.deinit(self.allocator);
+            dependencies.deinit(self.allocator);
+        }
+
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        var g_error: ?*rawflatpak.GError = null;
+        defer rawflatpak.g_object_unref(cancellable);
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+
+        const system_installations = rawflatpak.flatpak_get_system_installations(cancellable, &g_error);
+        if (system_installations == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open system Flatpak installations");
+            return error.InstallationCreateFailed;
+        }
+        defer rawflatpak.g_ptr_array_unref(system_installations);
+        var index: usize = 0;
+        while (index < system_installations.*.len) : (index += 1) {
+            const installation: *rawflatpak.FlatpakInstallation = @ptrCast(@alignCast(system_installations.*.pdata[index]));
+            try self.appendUnusedDependencies(installation, flatpak.Scope.SYSTEM, &dependencies);
+        }
+
+        const user_installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
+        if (user_installation == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the user Flatpak installation");
+            return error.InstallationCreateFailed;
+        }
+        defer rawflatpak.g_object_unref(user_installation);
+        try self.appendUnusedDependencies(user_installation, flatpak.Scope.USER, &dependencies);
+
+        return dependencies.toOwnedSlice(self.allocator);
+    }
+
     /// Remove unused dependencies from every system installation and the user
-    /// installation. This is the public backend for `flatpak purify`.
+    /// installation. This is the mutation backend for `flatpak purify`.
     pub fn remove_unused_dependencies(self: Manager) !bool {
         var operation_scope = OperationScope.init(self, .cleanup, null);
         operation_scope.attach();
@@ -1206,6 +1370,42 @@ pub const Manager = struct {
         else
             "Unused Flatpak dependency cleanup completed with errors");
         return succeeded;
+    }
+
+    fn appendUnusedDependencies(
+        self: Manager,
+        installation: [*c]rawflatpak.FlatpakInstallation,
+        scope: flatpak.Scope,
+        dependencies: *std.ArrayList(UnusedDependency),
+    ) !void {
+        const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+        var g_error: ?*rawflatpak.GError = null;
+        defer rawflatpak.g_object_unref(cancellable);
+        defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
+
+        const arch = std.mem.span(rawflatpak.flatpak_get_default_arch());
+        const unused_refs = rawflatpak.flatpak_installation_list_unused_refs(installation, arch, cancellable, &g_error);
+        if (unused_refs == null or g_error != null) {
+            self.emitGError(g_error, "Failed to list unused Flatpak dependencies");
+            return error.ListUnusedDependenciesFailed;
+        }
+        defer rawflatpak.g_ptr_array_unref(unused_refs);
+
+        var index: usize = 0;
+        while (index < unused_refs.*.len) : (index += 1) {
+            try self.checkCancelled();
+            const raw: *rawflatpak.FlatpakRef = @ptrCast(@alignCast(unused_refs.*.pdata[index]));
+            const reference = try flatpak.refToString(self.allocator, raw);
+            dependencies.append(self.allocator, .{
+                .reference = reference,
+                .scope = scope,
+            }) catch {
+                self.allocator.free(reference);
+                return error.OutOfMemory;
+            };
+        }
     }
 
     fn removed_unused(self: Manager, installation: [*c]rawflatpak.FlatpakInstallation) !bool {
@@ -1539,6 +1739,7 @@ test "Flatpak manager exposes strict-parity operations" {
     _ = Manager.find_installed_flatpak;
     _ = Manager.update_installed_flatpak;
     _ = Manager.uninstall_installed_flatpak;
+    _ = Manager.list_unused_dependencies;
     _ = Manager.remove_unused_dependencies;
     _ = Manager.get_remote_appstream;
     _ = Manager.get_all_remote_appstreams;
@@ -1561,6 +1762,8 @@ test "Flatpak manager exposes strict-parity operations" {
         }
         _ = try manager.update_installed_flatpak("org.example.Application", null);
         _ = try manager.uninstall_installed_flatpak("org.example.Application", false);
+        const unused = try manager.list_unused_dependencies();
+        UnusedDependency.deinitSlice(std.testing.allocator, unused);
     }
 }
 

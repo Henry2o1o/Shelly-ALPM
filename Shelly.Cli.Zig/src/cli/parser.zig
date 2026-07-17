@@ -73,7 +73,10 @@ pub fn parse(
                 if (value == null) value = "true";
             } else {
                 if (value == null) {
-                    if (index + 1 >= arguments.len)
+                    const optional_value = option.minimumArity == 0;
+                    const next_is_option = index + 1 < arguments.len and
+                        isOptionToken(arguments[index + 1]);
+                    if (!optional_value and index + 1 >= arguments.len)
                         return .{ .failure = .{
                             .message = try std.fmt.allocPrint(
                                 allocator,
@@ -82,13 +85,17 @@ pub fn parse(
                             ),
                             .help_command = command,
                         } };
-                    index += 1;
-                    value = arguments[index];
+                    if (!optional_value or (index + 1 < arguments.len and !next_is_option)) {
+                        index += 1;
+                        value = arguments[index];
+                    }
                 }
-                if (!validTypedValue(option.type, value.?))
-                    return invalidValue(allocator, command, option.name, value.?);
-                if (!inChoices(option.choices, value.?))
-                    return invalidValue(allocator, command, option.name, value.?);
+                if (value) |provided| {
+                    if (!validTypedValue(option.type, provided))
+                        return invalidValue(allocator, command, option.name, provided);
+                    if (!inChoices(option.choices, provided))
+                        return invalidValue(allocator, command, option.name, provided);
+                }
             }
 
             if (std.mem.eql(u8, option.name, "--help")) help_requested = true;
@@ -102,6 +109,14 @@ pub fn parse(
             if (manifest.findChild(command, token)) |child| {
                 command = child;
                 continue;
+            }
+            // Root actions with a catalog-defined default backend may accept
+            // that backend's positionals without spelling the backend name.
+            // Explicit child names still win above, so both `downgrade pkg`
+            // and `downgrade standard pkg` resolve deterministically.
+            if (command.isBranch) {
+                if (manifest.findDefaultChild(command)) |default_child|
+                    command = default_child;
             }
         }
         try positionals.append(allocator, token);
@@ -249,6 +264,8 @@ fn isBoolean(value: []const u8) bool {
 fn validTypedValue(value_type: []const u8, value: []const u8) bool {
     if (std.mem.eql(u8, value_type, "int")) {
         _ = std.fmt.parseInt(i64, value, 10) catch return false;
+    } else if (std.mem.eql(u8, value_type, "uint")) {
+        _ = std.fmt.parseInt(usize, value, 10) catch return false;
     } else if (std.mem.eql(u8, value_type, "bool")) {
         return isBoolean(value);
     }
@@ -282,7 +299,7 @@ test "parses local options and recursive globals around command tokens" {
         "firefox",
         "--limit",
         "25",
-        "-a",
+        "-v",
         "--verbose=false",
     });
     try std.testing.expect(outcome == .dispatch);
@@ -324,6 +341,22 @@ test "maps bare sync to its catalog-defined standard type" {
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqualStrings("shelly sync standard", outcome.dispatch.command.path);
     try std.testing.expectEqualStrings("--force", outcome.dispatch.options[0].name);
+}
+
+test "maps a default root action positional to its catalog-defined backend" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parse(arena.allocator(), &manifest, &.{
+        "downgrade",
+        "--target",
+        "6.12.1-1",
+        "linux",
+    });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings("shelly downgrade standard", outcome.dispatch.command.path);
+    try std.testing.expectEqualStrings("linux", outcome.dispatch.positionals[0]);
+    try std.testing.expectEqualStrings("6.12.1-1", outcome.dispatch.options[0].value.?);
 }
 
 test "parses Flatpak AppStream sync as an action-type command" {

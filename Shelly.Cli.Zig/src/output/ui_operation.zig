@@ -57,20 +57,23 @@ pub const QuestionResponder = struct {
         question: Zigalpm.OperationQuestion,
     ) Zigalpm.OperationQuestionResponse {
         const self: *QuestionResponder = @ptrCast(@alignCast(data.?));
-        if (question.kind != .review_changes) return if (self.no_confirm)
-            automaticResponse(question.kind)
-        else
-            question.default_response;
         if (self.no_confirm) {
-            self.writeAutomaticReview(question) catch return .declined;
-            return safeReviewDefault(question);
+            if (question.kind == .review_changes) {
+                self.writeAutomaticReview(question) catch return .declined;
+                return safeReviewDefault(question);
+            }
+            return automaticResponse(question.kind);
         }
 
-        output.writePkgbuildQuestionFrame(self.context, question) catch return .declined;
+        switch (question.kind) {
+            .confirmation => output.writeYesNoQuestionFrame(self.context, question) catch return .declined,
+            .review_changes => output.writePkgbuildQuestionFrame(self.context, question) catch return .declined,
+            else => return question.default_response,
+        }
         flush(self.context) catch return .declined;
         if (self.future) |*future| future.await(self.context.io);
-        self.future = self.context.io.concurrent(readAndRespond, .{ self, question.question_id }) catch {
-            readAndRespond(self, question.question_id);
+        self.future = self.context.io.concurrent(readAndRespond, .{ self, question.question_id, question.kind }) catch {
+            readAndRespond(self, question.question_id, question.kind);
             return .deferred;
         };
         return .deferred;
@@ -104,15 +107,28 @@ pub const QuestionResponder = struct {
         try flush(self.context);
     }
 
-    fn readAndRespond(self: *QuestionResponder, question_id: u64) void {
-        const accepted = self.readPkgbuildAnswer(question_id) catch false;
+    fn readAndRespond(
+        self: *QuestionResponder,
+        question_id: u64,
+        kind: Zigalpm.OperationQuestionKind,
+    ) void {
+        const accepted = switch (kind) {
+            .confirmation => self.readBooleanAnswer(question_id, "a.yesno", "Accept") catch false,
+            .review_changes => self.readBooleanAnswer(question_id, "a.pkgbuilddiff", "ProceedWithUpdate") catch false,
+            else => false,
+        };
         self.operation_context.respond(
             question_id,
             if (accepted) .accepted else .declined,
         ) catch {};
     }
 
-    fn readPkgbuildAnswer(self: *QuestionResponder, question_id: u64) !bool {
+    fn readBooleanAnswer(
+        self: *QuestionResponder,
+        question_id: u64,
+        expected_kind: []const u8,
+        answer_field: []const u8,
+    ) !bool {
         const reader = self.context.stdin orelse return error.EndOfStream;
         while ((try reader.takeDelimiter('\n'))) |line| {
             const prefix = "[JSON]";
@@ -135,12 +151,12 @@ pub const QuestionResponder = struct {
             defer parsed.deinit();
             if (parsed.value != .object) continue;
             const kind = parsed.value.object.get("$kind") orelse continue;
-            if (kind != .string or !std.mem.eql(u8, kind.string, "a.pkgbuilddiff")) continue;
+            if (kind != .string or !std.mem.eql(u8, kind.string, expected_kind)) continue;
             const id_value = parsed.value.object.get("QuestionId") orelse continue;
             if (id_value != .string) continue;
             const actual_id = std.fmt.parseInt(u64, id_value.string, 10) catch continue;
             if (actual_id != question_id) continue;
-            const proceed = parsed.value.object.get("ProceedWithUpdate") orelse continue;
+            const proceed = parsed.value.object.get(answer_field) orelse continue;
             if (proceed != .bool) continue;
             return proceed.bool;
         }

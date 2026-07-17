@@ -199,6 +199,37 @@ pub fn writePkgbuildQuestionFrame(
     try writeFrame(context, payload.writer.buffered());
 }
 
+pub fn writeYesNoQuestionFrame(
+    context: *runtime.RuntimeContext,
+    question: Zigalpm.OperationQuestion,
+) !void {
+    const question_id = try std.fmt.allocPrint(context.allocator, "{d}", .{question.question_id});
+    defer context.allocator.free(question_id);
+
+    var payload = std.Io.Writer.Allocating.init(context.allocator);
+    defer payload.deinit();
+    var json: std.json.Stringify = .{ .writer = &payload.writer };
+    try json.beginObject();
+    try json.objectField("$kind");
+    try json.write("q.yesno");
+    try json.objectField("QuestionId");
+    try json.write(question_id);
+    try json.objectField("QuestionKind");
+    try json.write(questionKindName(question));
+    try json.objectField("QuestionText");
+    try json.write(question.prompt);
+    try json.endObject();
+    try writeFrame(context, payload.writer.buffered());
+}
+
+fn questionKindName(question: Zigalpm.OperationQuestion) []const u8 {
+    return switch (question.envelope.kind) {
+        .remove => "RemovePkgs",
+        .update => "ConflictPkg",
+        else => "InstallIgnorePkg",
+    };
+}
+
 fn writeAlpmProgressFrame(
     context: *runtime.RuntimeContext,
     progress: Zigalpm.operation.ProgressEvent,
