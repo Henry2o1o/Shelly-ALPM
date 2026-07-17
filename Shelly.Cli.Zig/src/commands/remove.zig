@@ -199,7 +199,7 @@ fn runStandard(
     defer partition.deinit(context.allocator);
 
     if (partition.alpm.len > 0) {
-        const dependency_removal = dependencyRemoval(invocation, true);
+        const dependency_removal = dependencyRemoval(invocation, true, true);
         const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, null, true, null);
         defer manager.deinit();
         manager.setOperationContext(operation_context);
@@ -224,7 +224,7 @@ fn runAur(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    const dependency_removal = dependencyRemoval(invocation, false);
+    const dependency_removal = dependencyRemoval(invocation, false, false);
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{ .root = true });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
@@ -332,11 +332,17 @@ fn removalFlags(cascade: bool, ripple: bool, force: bool) Zigalpm.alpm.TransFlag
     return .{};
 }
 
-fn dependencyRemoval(invocation: *const parser.Invocation, allow_force: bool) DependencyRemoval {
+fn dependencyRemoval(
+    invocation: *const parser.Invocation,
+    cascade_by_default: bool,
+    allow_force: bool,
+) DependencyRemoval {
     const remove_optional_dependencies = optionEnabled(invocation, "--opt-deps");
+    const cascade = !optionEnabled(invocation, "--no-cascade") and
+        (cascade_by_default or optionEnabled(invocation, "--cascade"));
     return .{
         .flags = removalFlags(
-            optionEnabled(invocation, "--cascade"),
+            cascade,
             optionEnabled(invocation, "--ripple"),
             allow_force and optionEnabled(invocation, "--force"),
         ),
@@ -535,7 +541,7 @@ test "maps optional dependency semantics for ALPM and AUR" {
     var outcome = try parser.parse(arena.allocator(), &manifest, &.{
         "remove", "standard", "--cascade", "--ripple", "--force", "--opt-deps", "demo",
     });
-    var settings = dependencyRemoval(&outcome.dispatch, true);
+    var settings = dependencyRemoval(&outcome.dispatch, true, true);
     try std.testing.expect(settings.flags.nodeps);
     try std.testing.expect(settings.flags.nodepversion);
     try std.testing.expect(!settings.flags.cascade);
@@ -545,10 +551,38 @@ test "maps optional dependency semantics for ALPM and AUR" {
     outcome = try parser.parse(arena.allocator(), &manifest, &.{
         "remove", "aur", "--ripple", "--opt-deps", "demo-git",
     });
-    settings = dependencyRemoval(&outcome.dispatch, false);
+    settings = dependencyRemoval(&outcome.dispatch, false, false);
     try std.testing.expect(settings.flags.cascade);
     try std.testing.expect(settings.remove_optional_dependencies);
     try std.testing.expect(!settings.keep_optional_dependencies);
+}
+
+test "standard removal cascades by default and supports an explicit opt out" {
+    const spec = @import("../cli/spec.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    var outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "remove", "standard", "demo",
+    });
+    var settings = dependencyRemoval(&outcome.dispatch, true, true);
+    try std.testing.expect(settings.flags.nosave);
+    try std.testing.expect(settings.flags.recurse);
+
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "remove", "standard", "--no-cascade", "demo",
+    });
+    settings = dependencyRemoval(&outcome.dispatch, true, true);
+    try std.testing.expect(!settings.flags.nosave);
+    try std.testing.expect(!settings.flags.recurse);
+
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "remove", "standard", "-c", "--no-cascade", "demo",
+    });
+    settings = dependencyRemoval(&outcome.dispatch, true, true);
+    try std.testing.expect(!settings.flags.nosave);
+    try std.testing.expect(!settings.flags.recurse);
 }
 
 test "partitions standard targets case-insensitively and honors local override" {

@@ -830,7 +830,8 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--orphans", &.{"-o"}, "Include orphaned packages"),
     };
     if (pathIs(action, type_name, "remove", "standard")) return &.{
-        flag("--cascade", &.{"-c"}, "Remove dependencies no longer needed"),
+        booleanOptionWithDefault("--cascade", &.{"-c"}, "Remove dependencies no longer needed", true),
+        flag("--no-cascade", &.{}, "Keep dependencies that become unneeded after removal"),
         flag("--opt-deps", &.{"-o"}, "Remove unused optional dependencies"),
         flag("--ripple", &.{"-i"}, "Remove packages depending on the targets"),
         flag("--remove-config", &.{}, "Remove package configuration files"),
@@ -954,6 +955,18 @@ fn argumentWithChoices(
 
 fn flag(name: []const u8, aliases: []const []const u8, description: []const u8) Option {
     return .{ .name = name, .aliases = aliases, .description = description };
+}
+
+fn booleanOptionWithDefault(
+    name: []const u8,
+    aliases: []const []const u8,
+    description: []const u8,
+    default_value: bool,
+) Option {
+    var option = flag(name, aliases, description);
+    option.hasExplicitDefault = true;
+    option.defaultValue = .{ .bool = default_value };
+    return option;
 }
 
 fn globalFlag(name: []const u8, aliases: []const []const u8, description: []const u8) Option {
@@ -1309,4 +1322,18 @@ test "remove variants expose native help and modifier aliases" {
             try std.testing.expect(found);
         }
     }
+
+    const standard_options = optionsFor("remove", "standard");
+    var found_no_cascade = false;
+    for (standard_options) |option| {
+        if (std.mem.eql(u8, option.name, "--cascade")) {
+            try std.testing.expect(option.hasExplicitDefault);
+            try std.testing.expect(option.defaultValue.?.bool);
+        }
+        if (std.mem.eql(u8, option.name, "--no-cascade")) {
+            found_no_cascade = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_no_cascade);
 }
