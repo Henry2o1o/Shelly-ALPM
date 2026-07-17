@@ -270,6 +270,22 @@ pub const Manager = struct {
     }
 
     pub fn sync(self: *Manager, force: bool) TransactionError!void {
+        return self.syncDatabases(force, true);
+    }
+
+    /// Synchronizes repository databases for a non-root update preview. This
+    /// mirrors the C# temporary-DB path: downloads and reloads the user-owned
+    /// databases, but leaves signature enforcement to the eventual root
+    /// transaction instead of rejecting an otherwise readable preview cache.
+    pub fn sync_for_update_check(self: *Manager, force: bool) TransactionError!void {
+        return self.syncDatabases(force, false);
+    }
+
+    fn syncDatabases(
+        self: *Manager,
+        force: bool,
+        enforce_signature_verification: bool,
+    ) TransactionError!void {
         if (self.handle == null) return TransactionError.SyncDbFailed;
         var operation_scope = OperationScope.init(self, .sync, null);
         operation_scope.attach();
@@ -339,16 +355,18 @@ pub const Manager = struct {
 
         if (failed) return TransactionError.UpdateFetchFailed;
 
-        for (self.sync_dbs.items) |db| {
-            if (db.verify()) continue;
-            const name = db.name() orelse continue;
-            const db_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ syncDirectory, name }) catch continue;
-            defer self.allocator.free(db_path);
-            const sig_path = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_path}) catch continue;
-            defer self.allocator.free(sig_path);
-            std.Io.Dir.cwd().deleteFile(self.io(), db_path) catch {};
-            std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
-            return TransactionError.SyncDbFailed;
+        if (enforce_signature_verification) {
+            for (self.sync_dbs.items) |db| {
+                if (db.verify()) continue;
+                const name = db.name() orelse continue;
+                const db_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ syncDirectory, name }) catch continue;
+                defer self.allocator.free(db_path);
+                const sig_path = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_path}) catch continue;
+                defer self.allocator.free(sig_path);
+                std.Io.Dir.cwd().deleteFile(self.io(), db_path) catch {};
+                std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
+                return TransactionError.SyncDbFailed;
+            }
         }
         try self.refresh();
     }

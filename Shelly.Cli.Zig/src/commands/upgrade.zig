@@ -129,7 +129,7 @@ fn prepareStandardUpgradePreview(
         database_path,
     );
     defer manager.deinit();
-    try manager.sync(false);
+    try manager.sync_for_update_check(false);
 
     const updates = try manager.get_updates_available();
     defer Zigalpm.alpm.OwnedPackageWithUpdate.deinitSlice(context.allocator, updates);

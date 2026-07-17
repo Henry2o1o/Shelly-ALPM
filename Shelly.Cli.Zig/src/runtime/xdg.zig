@@ -122,6 +122,10 @@ test "uses absolute XDG paths and rejects relative overrides" {
     try std.testing.expectEqualStrings("/tmp/config-root", try configHome(&context));
     try std.testing.expectEqualStrings("/home/tester/.cache", try cacheHome(&context));
     try std.testing.expectEqualStrings(
+        "/home/tester/.cache/Shelly/db",
+        try shellyCache(&context, &.{"db"}),
+    );
+    try std.testing.expectEqualStrings(
         "/tmp/config-root/shelly/config.json",
         try configPath(&context),
     );

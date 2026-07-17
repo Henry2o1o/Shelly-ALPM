@@ -1356,6 +1356,7 @@ test "previously uncovered Manager APIs reject a null handle" {
     mgr.handle = null;
     mgr.allocator = testing.allocator;
 
+    try testing.expectError(error.SyncDbFailed, mgr.sync_for_update_check(false));
     try testing.expectError(error.NoHandle, mgr.sync_system_update(.{}));
     try testing.expectError(error.NoHandle, mgr.get_package_from_provides("virtual-feature"));
     try testing.expectError(error.NoHandle, mgr.is_dependency_satisfied_by_installed_packages("dependency"));
