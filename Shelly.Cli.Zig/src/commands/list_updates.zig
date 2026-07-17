@@ -251,7 +251,7 @@ fn writeStandardInfoFrame(context: *runtime.RuntimeContext, count: usize) !void 
     else
         try std.fmt.allocPrint(
             context.allocator,
-            "{d} packages can be updated",
+            "{d} standard packages can be updated",
             .{count},
         );
     defer if (count != 0) context.allocator.free(message);
@@ -437,12 +437,12 @@ fn writeStandardPlain(context: *runtime.RuntimeContext, updates: []const Standar
         output.supportsAnsi(context),
     );
     try context.stdout.writeByte('\n');
-    const message = try std.fmt.allocPrint(allocator, "{d} packages can be updated", .{updates.len});
+    const message = try std.fmt.allocPrint(allocator, "{d} standard packages can be updated", .{updates.len});
     try writeColoredLine(context, "255;255;0", message);
 }
 
 fn writeAurPlain(context: *runtime.RuntimeContext, updates: []const AurUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "0;255;0", "All AUR packages are up to date.");
+    if (updates.len == 0) return writeColoredLine(context, "255;255;0", "All AUR packages are up to date.");
 
     var storage = std.heap.ArenaAllocator.init(context.allocator);
     defer storage.deinit();
@@ -468,12 +468,12 @@ fn writeAurPlain(context: *runtime.RuntimeContext, updates: []const AurUpdate) !
         rows,
         output.supportsAnsi(context),
     );
-    const message = try std.fmt.allocPrint(allocator, "Total: {d} packages need updates", .{updates.len});
-    try writeColoredLine(context, "0;0;255", message);
+    const message = try std.fmt.allocPrint(allocator, "AUR Total: {d} packages need updates", .{updates.len});
+    try writeColoredLine(context, "255;255;0", message);
 }
 
 fn writeAppImagePlain(context: *runtime.RuntimeContext, updates: []const AppImageUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "255;255;0", "No updates available");
+    if (updates.len == 0) return writeColoredLine(context, "255;255;0", "No appimage updates available");
     for (updates) |update| {
         const message = try std.fmt.allocPrint(
             context.allocator,
@@ -481,7 +481,7 @@ fn writeAppImagePlain(context: *runtime.RuntimeContext, updates: []const AppImag
             .{ update.name, update.version },
         );
         defer context.allocator.free(message);
-        try writeColoredLine(context, "0;255;0", message);
+        try writeColoredLine(context, "255;255;0", message);
     }
 }
 
@@ -510,8 +510,8 @@ fn writeFlatpakPlain(context: *runtime.RuntimeContext, updates: []const FlatpakU
         output.supportsAnsi(context),
     );
     try context.stdout.writeByte('\n');
-    const message = try std.fmt.allocPrint(allocator, "Total: {d} packages", .{updates.len});
-    try writeColoredLine(context, "0;0;255", message);
+    const message = try std.fmt.allocPrint(allocator, "Flatpak Total: {d} packages", .{updates.len});
+    try writeColoredLine(context, "255;255;0", message);
 }
 
 fn writeColoredLine(
@@ -996,9 +996,9 @@ test "bare list-updates shortcode renders empty plain and UI output" {
     );
     const rendered_plain = plain_stdout.writer.buffered();
     const standard_index = std.mem.indexOf(u8, rendered_plain, "All packages are up to date!").?;
-    const appimage_index = std.mem.indexOf(u8, rendered_plain, "No updates available").?;
+    const appimage_index = std.mem.indexOf(u8, rendered_plain, "No appimage updates available").?;
     const aur_index = std.mem.indexOf(u8, rendered_plain, "All AUR packages are up to date.").?;
-    const flatpak_index = std.mem.indexOf(u8, rendered_plain, "Total: 0 packages").?;
+    const flatpak_index = std.mem.indexOf(u8, rendered_plain, "Flatpak Total: 0 packages").?;
     try std.testing.expect(standard_index < appimage_index);
     try std.testing.expect(appimage_index < aur_index);
     try std.testing.expect(aur_index < flatpak_index);
@@ -1465,7 +1465,7 @@ test "AppImage list-updates preserves order and renders legacy output" {
         @as(?u8, 0),
         try dispatchWithRunner(&context, &outcome.dispatch, empty_runner),
     );
-    try std.testing.expectEqualStrings("No updates available\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("No appimage updates available\n", stdout.writer.buffered());
 }
 
 test "Flatpak list-updates sorts compatibility JSON and renders table" {

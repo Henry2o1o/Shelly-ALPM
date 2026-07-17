@@ -396,6 +396,13 @@ pub fn build(b: *std.Build) void {
             "AppImage update manager forwards downloader progress",
             "AppImage updates honor shared cancellation",
             "update: returns false when app not found in db",
+            "getAppImagesFromLocalDb maps C# AppImage V2 fields",
+            "getAppImagesFromLocalDb normalizes nullable C# strings",
+            "getAppImagesFromLocalDb maps every C# update type",
+            "getAppImagesFromLocalDb rejects unsupported C# update type",
+            "getAppImagesFromLocalDb migrates C# database and second load is native",
+            "getAppImagesFromLocalDb leaves native database unchanged",
+            "getAppImagesFromLocalDb leaves malformed C# database unchanged",
         },
     });
     const run_appimage_tests = b.addRunArtifact(appimage_tests);
