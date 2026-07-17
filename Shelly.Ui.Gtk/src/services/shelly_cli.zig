@@ -33,6 +33,17 @@ pub const ShellyCli = struct {
         });
     }
 
+    pub fn get_installed_packages(self: ShellyCli) !std.json.Parsed([]Package) {
+        const result = try self.run(&.{ "shelly", "-SQi", "--json", "--take", "30000" });
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        return std.json.parseFromSlice([]Package, self.allocator, result.stdout, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        });
+    }
+
     pub fn get_remotes(self: ShellyCli) !std.json.Parsed([]Remote) {
         const result = try self.run(&.{ "shelly", "flatpak", "list-remotes", "--json" });
         defer self.allocator.free(result.stdout);

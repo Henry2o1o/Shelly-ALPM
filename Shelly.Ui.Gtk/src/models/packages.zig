@@ -20,6 +20,7 @@ pub const Package = struct {
     InstalledSize: i64 = 0,
     RequiredBy: []const []const u8 = &.{},
     OptionalFor: []const []const u8 = &.{},
+    Installed: bool = false,
 };
 
 const FileNode = struct { Name: []const u8, Files: []const FileNode };
