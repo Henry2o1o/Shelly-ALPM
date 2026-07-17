@@ -17,14 +17,21 @@ pub fn render(
 ) !void {
     if (!command.hidden) {
         const action_branch = isActionBranch(manifest, command);
-        if (command.description) |description|
+        const standalone_default = standaloneDefaultChild(manifest, command);
+        const detail_command = standalone_default orelse command;
+        if (detail_command.description) |description|
             try writer.print("Description:\n  {s}\n\n", .{description});
 
-        if (command.implementation) |implementation|
+        if (detail_command.implementation) |implementation|
             try writer.print("Implementation:\n  {s}\n\n", .{implementation});
 
         try writer.print("Usage:\n  {s}", .{command.path});
-        if (command.isBranch) {
+        if (standalone_default) |default_child| {
+            for (default_child.arguments) |argument| {
+                try writer.writeByte(' ');
+                try writeUsageArgument(allocator, writer, argument);
+            }
+        } else if (command.isBranch) {
             try writer.writeAll(if (action_branch) " [type]" else " [command]");
         } else {
             for (command.arguments) |argument| {
@@ -34,10 +41,10 @@ pub fn render(
         }
         try writer.writeAll(" [options]\n");
 
-        if (command.arguments.len > 0) {
+        if (detail_command.arguments.len > 0) {
             try writer.writeAll("\nArguments:\n");
             var rows: std.ArrayList(Row) = .empty;
-            for (command.arguments) |argument| {
+            for (detail_command.arguments) |argument| {
                 try rows.append(allocator, .{
                     .label = try argumentLabel(allocator, argument),
                     .description = argument.description orelse "",
@@ -57,7 +64,7 @@ pub fn render(
                     try appendOptionRow(allocator, &option_rows, option);
             }
         } else {
-            for (command.options) |option| {
+            for (detail_command.options) |option| {
                 if (!option.hidden) try appendOptionRow(allocator, &option_rows, option);
             }
             for (manifest.root().options) |option| {
@@ -70,38 +77,40 @@ pub fn render(
             try writeRows(writer, option_rows.items);
         }
 
-        if (action_branch)
+        if (action_branch and standalone_default == null)
             try writeActionModifiers(allocator, manifest, command, writer);
 
         var command_rows: std.ArrayList(Row) = .empty;
-        for (manifest.commands) |child| {
-            const parent_path = child.parentPath orelse continue;
-            if (!std.mem.eql(u8, parent_path, command.path) or child.hidden) continue;
-            var label: std.ArrayList(u8) = .empty;
-            try label.appendSlice(allocator, if (action_branch) child.path else child.name);
-            for (child.arguments) |argument| {
-                try label.append(allocator, ' ');
-                try label.appendSlice(allocator, try argumentLabel(allocator, argument));
+        if (standalone_default == null) {
+            for (manifest.commands) |child| {
+                const parent_path = child.parentPath orelse continue;
+                if (!std.mem.eql(u8, parent_path, command.path) or child.hidden) continue;
+                var label: std.ArrayList(u8) = .empty;
+                try label.appendSlice(allocator, if (action_branch) child.path else child.name);
+                for (child.arguments) |argument| {
+                    try label.append(allocator, ' ');
+                    try label.appendSlice(allocator, try argumentLabel(allocator, argument));
+                }
+                var description: []const u8 = child.description orelse "";
+                if (child.actionCode != null and child.typeCode != null) {
+                    description = try std.fmt.allocPrint(
+                        allocator,
+                        "{s} [shortcode: -{c}{c}]",
+                        .{ description, child.actionCode.?, child.typeCode.? },
+                    );
+                }
+                if (child.implementation) |implementation| {
+                    description = try std.fmt.allocPrint(
+                        allocator,
+                        "{s} [implementation: {s}]",
+                        .{ description, implementation },
+                    );
+                }
+                try command_rows.append(allocator, .{
+                    .label = try label.toOwnedSlice(allocator),
+                    .description = description,
+                });
             }
-            var description: []const u8 = child.description orelse "";
-            if (child.actionCode != null and child.typeCode != null) {
-                description = try std.fmt.allocPrint(
-                    allocator,
-                    "{s} [shortcode: -{c}{c}]",
-                    .{ description, child.actionCode.?, child.typeCode.? },
-                );
-            }
-            if (child.implementation) |implementation| {
-                description = try std.fmt.allocPrint(
-                    allocator,
-                    "{s} [implementation: {s}]",
-                    .{ description, implementation },
-                );
-            }
-            try command_rows.append(allocator, .{
-                .label = try label.toOwnedSlice(allocator),
-                .description = description,
-            });
         }
         if (command_rows.items.len > 0) {
             try writer.writeAll("\nCommands:\n");
@@ -117,6 +126,20 @@ pub fn render(
 fn isActionBranch(manifest: *const spec.Manifest, command: *const spec.Command) bool {
     const parent_path = command.parentPath orelse return false;
     return command.isBranch and std.mem.eql(u8, parent_path, manifest.root().path);
+}
+
+fn standaloneDefaultChild(
+    manifest: *const spec.Manifest,
+    command: *const spec.Command,
+) ?*const spec.Command {
+    if (!isActionBranch(manifest, command)) return null;
+    const default_child = manifest.findDefaultChild(command) orelse return null;
+    var child_count: usize = 0;
+    for (manifest.commands) |candidate| {
+        const parent_path = candidate.parentPath orelse continue;
+        if (std.mem.eql(u8, parent_path, command.path)) child_count += 1;
+    }
+    return if (child_count == 1) default_child else null;
 }
 
 fn writeActionModifiers(
@@ -231,6 +254,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\  Grammar: -<UppercaseAction><lowercaseType><modifiers...> [positionals]
         \\  Uppercase Action selects the operation, lowercase Type selects its target, and
         \\  modifiers are that action/type pair's short flags (case-sensitive).
+        \\  Standalone root actions such as downgrade omit the lowercase Type.
         \\  Search may combine standard, AUR, and Flatpak types (s/a/f); modifiers apply
         \\  only to selected search types that support them.
         \\  List also accepts the compatibility selectors I/A/F used in the examples.
@@ -258,6 +282,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Ts linux      ->  update standard linux
         \\    -Ta demo-git   ->  update aur demo-git
         \\    -Tf org.app.Id ->  update flatpak org.app.Id
+        \\    -D linux       ->  downgrade linux
         \\    -Zs             ->  purify standard
         \\    -Zsc            ->  purify standard --cache
         \\    -Zf             ->  purify flatpak
@@ -450,6 +475,28 @@ test "update action help documents targeted native backends and shortcodes" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.update_installed_flatpak") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "partial-upgrade warning and confirmation") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "--check") != null);
+}
+
+test "downgrade help renders its single default backend as a root command" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var rendered = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer rendered.deinit();
+
+    try render(
+        arena.allocator(),
+        &manifest,
+        manifest.findByPath("shelly downgrade").?,
+        &rendered.writer,
+    );
+    const value = rendered.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, value, "shelly downgrade [<package>] [options]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, value, "shelly downgrade [type]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, value, "--list-options") != null);
+    try std.testing.expect(std.mem.indexOf(u8, value, "ArchiveManager.find_candidates") != null);
+    try std.testing.expect(std.mem.indexOf(u8, value, "-D linux") != null);
+    try std.testing.expect(std.mem.indexOf(u8, value, "-Ds linux") == null);
 }
 
 test "purify action help documents native standard and Flatpak backends" {

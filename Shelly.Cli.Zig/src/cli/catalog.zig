@@ -149,7 +149,27 @@ pub const variants = [_]Variant{
             .implementation = "Combined Zig coordinator over AlpmManager, AurManager, FlatpakManager, and appimage.UpdateManager",
         },
     },
-    .{ .action = "downgrade", .type_name = "standard", .action_code = 'D', .type_code = 's' },
+    .{
+        .action = "downgrade",
+        .type_name = "standard",
+        .action_code = 'D',
+        .type_code = null,
+        .default_for_action = true,
+        .help = .{
+            .description = "Discover cached and archived versions of an installed ALPM package, select one, and install it as a downgrade.",
+            .implementation = "Zigalpm.AlpmManager.get_single_installed_package / Zigalpm.alpm.ArchiveManager.find_candidates / install_candidate / AlpmManager.ignore_package",
+            .arguments = &.{.{
+                .name = "package",
+                .description = "Installed ALPM package to downgrade",
+            }},
+            .options = &.{
+                .{ .name = "--oldest", .description = "Select the oldest available version instead of prompting or selecting the newest version" },
+                .{ .name = "--ignore", .description = "Add the package to IgnorePkg after a successful downgrade" },
+                .{ .name = "--list-options", .description = "List cached and archived versions without installing one" },
+                .{ .name = "--target", .description = "Install an exact version-release or package filename" },
+            },
+        },
+    },
     .{ .action = "ignore", .type_name = "standard", .action_code = 'G', .type_code = 's' },
     .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 's' },
     .{ .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'u' },
@@ -618,7 +638,7 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
 
     if (pathIs(action, type_name, "downgrade", "standard")) return &.{optionalArgument(
         "package",
-        "Package to downgrade; omit only when listing selectable versions",
+        "Installed ALPM package to downgrade",
     )};
     if (pathIs(action, type_name, "ignore", "standard")) return &.{repeatedArgument(
         "packages",
@@ -810,7 +830,7 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--oldest", &.{"-o"}, "Choose the oldest available version"),
         flag("--ignore", &.{"-i"}, "Add the downgraded package to IgnorePkg"),
         flag("--list-options", &.{"-l"}, "List available downgrade versions"),
-        stringOption("--target", &.{"-t"}, "Install this exact version", false),
+        stringOption("--target", &.{"-t"}, "Install this exact version-release or package filename", false),
     };
     if (pathIs(action, type_name, "ignore", "standard")) return &.{
         flag("--list", &.{"-l"}, "List ignored packages"),
@@ -1144,6 +1164,16 @@ pub const shared_modifiers = [_]SharedModifier{
 pub fn findVariantByCodes(action_code: u8, type_code: u8) ?*const Variant {
     for (&variants) |*variant| {
         if (variant.action_code == action_code and variant.type_code == type_code) return variant;
+    }
+    return null;
+}
+
+pub fn findStandaloneVariantByActionCode(action_code: u8) ?*const Variant {
+    for (&variants) |*variant| {
+        if (variant.action_code == action_code and
+            variant.type_code == null and
+            variant.default_for_action)
+            return variant;
     }
     return null;
 }

@@ -110,6 +110,14 @@ pub fn parse(
                 command = child;
                 continue;
             }
+            // Root actions with a catalog-defined default backend may accept
+            // that backend's positionals without spelling the backend name.
+            // Explicit child names still win above, so both `downgrade pkg`
+            // and `downgrade standard pkg` resolve deterministically.
+            if (command.isBranch) {
+                if (manifest.findDefaultChild(command)) |default_child|
+                    command = default_child;
+            }
         }
         try positionals.append(allocator, token);
     }
@@ -333,6 +341,22 @@ test "maps bare sync to its catalog-defined standard type" {
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqualStrings("shelly sync standard", outcome.dispatch.command.path);
     try std.testing.expectEqualStrings("--force", outcome.dispatch.options[0].name);
+}
+
+test "maps a default root action positional to its catalog-defined backend" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parse(arena.allocator(), &manifest, &.{
+        "downgrade",
+        "--target",
+        "6.12.1-1",
+        "linux",
+    });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings("shelly downgrade standard", outcome.dispatch.command.path);
+    try std.testing.expectEqualStrings("linux", outcome.dispatch.positionals[0]);
+    try std.testing.expectEqualStrings("6.12.1-1", outcome.dispatch.options[0].value.?);
 }
 
 test "parses Flatpak AppStream sync as an action-type command" {

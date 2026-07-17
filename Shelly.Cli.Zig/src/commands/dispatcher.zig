@@ -1,4 +1,5 @@
 const config = @import("config.zig");
+const downgrade = @import("downgrade.zig");
 const install = @import("install.zig");
 const list = @import("list.zig");
 const list_updates = @import("list_updates.zig");
@@ -19,6 +20,7 @@ pub fn dispatch(
     if (try upgrade.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try sync.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try update.dispatch(context, invocation)) |exit_code| return exit_code;
+    if (try downgrade.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try install.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try list.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try list_updates.dispatch(context, invocation)) |exit_code| return exit_code;

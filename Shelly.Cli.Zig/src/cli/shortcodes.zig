@@ -36,6 +36,8 @@ pub fn translate(
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (try translateStandaloneAction(allocator, manifest, args, token)) |translation|
+        return translation;
     if (token.len < 3 or token[0] != '-') return .{ .unchanged = args };
 
     const action_code = token[1];
@@ -85,6 +87,48 @@ pub fn translate(
             allocator,
             "Unknown modifier '{c}' for '{s} {s}'. Valid modifiers: {s}",
             .{ modifier, variant.action, variant.type_name, try validModifiers(allocator, manifest, command) },
+        ) };
+    }
+    try result.appendSlice(allocator, args[1..]);
+    return .{ .translated = try result.toOwnedSlice(allocator) };
+}
+
+fn translateStandaloneAction(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    args: []const []const u8,
+    token: []const u8,
+) !?Translation {
+    if (token.len < 2 or token[0] != '-') return null;
+    const variant = catalog.findStandaloneVariantByActionCode(token[1]) orelse return null;
+    // A legacy typed action may share the same uppercase action code. Its
+    // exact action/type pair wins when the first suffix character is a valid
+    // type; otherwise every suffix character is a standalone modifier.
+    if (token.len > 2 and catalog.findVariantByCodes(token[1], token[2]) != null)
+        return null;
+    const path = try std.fmt.allocPrint(
+        allocator,
+        "shelly {s} {s}",
+        .{ variant.action, variant.type_name },
+    );
+    const command = manifest.findByPath(path) orelse return error.InvalidCatalog;
+
+    var result: std.ArrayList([]const u8) = .empty;
+    try result.append(allocator, variant.action);
+    for (token[2..]) |modifier| {
+        const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
+        if (findLocalOption(command, alias) != null) {
+            try result.append(allocator, alias);
+            continue;
+        }
+        if (findRecursiveHelpOption(manifest, alias)) |option| {
+            try result.append(allocator, option.name);
+            continue;
+        }
+        return .{ .failure = try std.fmt.allocPrint(
+            allocator,
+            "Unknown modifier '{c}' for '{s}'. Valid modifiers: {s}",
+            .{ modifier, variant.action, try validModifiers(allocator, manifest, command) },
         ) };
     }
     try result.appendSlice(allocator, args[1..]);
@@ -336,6 +380,14 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(allocator, &manifest, &.{"-Ux"}, &.{ "upgrade", "all" });
     try expectTranslation(allocator, &manifest, &.{"-Ui"}, &.{ "upgrade", "appimage" });
     try expectTranslation(allocator, &manifest, &.{"-Uf"}, &.{ "upgrade", "flatpak" });
+    try expectTranslation(allocator, &manifest, &.{ "-D", "linux" }, &.{ "downgrade", "linux" });
+    try expectTranslation(allocator, &manifest, &.{ "-Do", "linux" }, &.{ "downgrade", "-o", "linux" });
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Dt", "6.12.1-1", "linux" },
+        &.{ "downgrade", "-t", "6.12.1-1", "linux" },
+    );
     try expectTranslation(allocator, &manifest, &.{"-Zs"}, &.{ "purify", "standard" });
     try expectTranslation(allocator, &manifest, &.{"-Zf"}, &.{ "purify", "flatpak" });
     try expectTranslation(
@@ -368,6 +420,12 @@ test "uses centralized effective modifiers and rejects invalid shortcode types" 
     try std.testing.expectEqualStrings(
         "Unknown modifier 'o' for 'install aur'. Valid modifiers: b, m, c, ?, h",
         invalid_modifier.failure,
+    );
+
+    const redundant_downgrade_type = try translate(allocator, &manifest, &.{ "-Ds", "linux" });
+    try std.testing.expectEqualStrings(
+        "Unknown modifier 's' for 'downgrade'. Valid modifiers: o, i, l, t, ?, h",
+        redundant_downgrade_type.failure,
     );
 
     const uppercase_standard = try translate(allocator, &manifest, &.{ "-SS", "query" });
