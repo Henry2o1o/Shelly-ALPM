@@ -3,6 +3,7 @@ const Io = std.Io;
 const Package = @import("../models/packages.zig").Package;
 const Remote = @import("../models/flatpak.zig").Remote;
 const Flatpak = @import("../models/flatpak.zig").Flatpak;
+const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 
 const RunResult = std.process.RunResult;
 
@@ -61,6 +62,17 @@ pub const ShellyCli = struct {
         defer self.allocator.free(result.stderr);
 
         return std.json.parseFromSlice([]Flatpak, self.allocator, result.stdout, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        });
+    }
+
+    pub fn check_updates(self: ShellyCli) !std.json.Parsed(CheckUpdates) {
+        const result = try self.run(&.{ "shelly", "check-updates", "-a", "-l", "-j" });
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        return std.json.parseFromSlice(CheckUpdates, self.allocator, result.stdout, .{
             .ignore_unknown_fields = true,
             .allocate = .alloc_always,
         });

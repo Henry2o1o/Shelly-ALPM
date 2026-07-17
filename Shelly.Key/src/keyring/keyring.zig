@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 
+const elevate = @import("../helpers/elevate.zig");
 const gpg = @import("../gpg.zig");
 const gpgconf = @import("gpgconf.zig");
 const keydir = @import("keydir.zig");
@@ -27,7 +28,16 @@ const master_key_batch =
     \\
 ;
 
-pub fn init(io: Io, keyring_path: []const u8, out: *Io.Writer) !void {
+pub fn init(
+    io: Io,
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    path_env: []const u8,
+    keyring_path: []const u8,
+    out: *Io.Writer,
+) !void {
+    try elevate.ensureRoot(io, allocator, args, path_env);
+
     const base: std.Io.Dir = .cwd();
 
     try keydir.ensureKeyringDir(base, io, keyring_path);
@@ -58,15 +68,102 @@ pub fn init(io: Io, keyring_path: []const u8, out: *Io.Writer) !void {
     }
 }
 
+pub fn updatedb(
+    io: Io,
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    path_env: []const u8,
+    gpgdir: []const u8,
+    stdout: *Io.Writer,
+) !void {
+    try elevate.ensureRoot(io, allocator, args, path_env);
+
+    try stdout.print("Updating trust database...\n", .{});
+    try stdout.flush();
+    const gpg_cli = gpg.Gpg{ .io = io, .homedir = gpgdir };
+    try gpg_cli.checkTrustdb();
+}
+
+pub fn listKeys(
+    io: Io,
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    path_env: []const u8,
+    gpgdir: []const u8,
+    key_ids: []const []const u8,
+) !void {
+    _ = args;
+    _ = path_env;
+    const gpg_cli = gpg.Gpg{ .io = io, .homedir = gpgdir };
+    if (key_ids.len > 0) {
+        try checkKeyidsExist(allocator, gpg_cli, key_ids);
+    }
+    try gpg_cli.listKeys(key_ids);
+}
+
+pub fn finger(
+    io: Io,
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    path_env: []const u8,
+    gpgdir: []const u8,
+    key_ids: []const []const u8,
+) !void {
+    _ = args;
+    _ = path_env;
+    const gpg_cli = gpg.Gpg{ .io = io, .homedir = gpgdir };
+    if (key_ids.len > 0) {
+        try checkKeyidsExist(allocator, gpg_cli, key_ids);
+    }
+    try gpg_cli.finger(key_ids);
+}
+
+pub fn listSigs(
+    io: Io,
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    path_env: []const u8,
+    gpgdir: []const u8,
+    key_ids: []const []const u8,
+) !void {
+    _ = args;
+    _ = path_env;
+    const gpg_cli = gpg.Gpg{ .io = io, .homedir = gpgdir };
+    if (key_ids.len > 0) {
+        try checkKeyidsExist(allocator, gpg_cli, key_ids);
+    }
+    try gpg_cli.listSigs(key_ids);
+}
+
+pub fn exportKeys(
+    io: Io,
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    path_env: []const u8,
+    gpgdir: []const u8,
+    key_ids: []const []const u8,
+) !void {
+    _ = args;
+    _ = path_env;
+    const gpg_cli = gpg.Gpg{ .io = io, .homedir = gpgdir };
+    if (key_ids.len > 0) {
+        try checkKeyidsExist(allocator, gpg_cli, key_ids);
+    }
+    try gpg_cli.exportKeys(key_ids);
+}
+
 pub fn populate(
     io: Io,
     allocator: std.mem.Allocator,
+    args: []const []const u8,
     env_map: *const std.process.Environ.Map,
     gpgdir: []const u8,
     populate_from: []const u8,
     requested: []const []const u8,
     stdout: *Io.Writer,
 ) !void {
+    try elevate.ensureRoot(io, allocator, args, env_map.get("PATH").?);
+
     const base: std.Io.Dir = .cwd();
 
     if (!try keyfiles.trustdbExists(base, io, gpgdir)) return error.TrustdbMissing;
@@ -95,7 +192,7 @@ pub fn populate(
     }
 
     if (keys_to_sign.count() > 0) {
-        try locallySignKeys(allocator, gpg_cli, env_map, stdout, &keys_to_sign);
+        try locallySignKeys(gpg_cli, stdout, &keys_to_sign);
 
         try importOwnertrust(
             gpg_cli,
@@ -166,9 +263,7 @@ fn collectKeysToSign(
 }
 
 fn locallySignKeys(
-    allocator: std.mem.Allocator,
     gpg_cli: gpg.Gpg,
-    env_map: *const std.process.Environ.Map,
     stdout: *Io.Writer,
     keys_to_sign: *const std.StringHashMap(void),
 ) !void {
@@ -179,7 +274,7 @@ fn locallySignKeys(
     while (it.next()) |entry| {
         try stdout.print("  Locally signing key {s}...\n", .{entry.key_ptr.*});
         try stdout.flush();
-        try gpg_cli.locallySignKey(allocator, env_map, entry.key_ptr.*);
+        try gpg_cli.locallySignKey(entry.key_ptr.*);
     }
 
     try stdout.print("  Locally signed {d} key(s).\n", .{keys_to_sign.count()});
@@ -261,4 +356,34 @@ fn disableRevokedKeys(
 
     try stdout.print("  Disabled {d} key(s).\n", .{keys_to_disable.count()});
     try stdout.flush();
+}
+
+/// Check that the specified key IDs exist in the keyring.
+/// Returns error.KeyNotFound if any of the key IDs do not exist.
+fn checkKeyidsExist(
+    allocator: std.mem.Allocator,
+    gpg_cli: gpg.Gpg,
+    key_ids: []const []const u8,
+) !void {
+    for (key_ids) |key_id| {
+        if (!try keyExists(allocator, gpg_cli, key_id)) {
+            return error.KeyNotFound;
+        }
+    }
+}
+
+/// Check if a single key ID exists in the keyring.
+fn keyExists(allocator: std.mem.Allocator, gpg_cli: gpg.Gpg, key_id: []const u8) !bool {
+    const output = try gpg_cli.runCapture(allocator, &.{
+        "--with-colons", "--list-key", "--quiet", key_id,
+    });
+    defer allocator.free(output);
+
+    var iter = std.mem.splitScalar(u8, output, '\n');
+    while (iter.next()) |line| {
+        if (std.mem.eql(u8, line[0..3], "pub")) {
+            return true;
+        }
+    }
+    return false;
 }
