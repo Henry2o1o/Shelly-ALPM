@@ -145,7 +145,7 @@ pub const variants = [_]Variant{
         .action_code = 'U',
         .type_code = 'x',
         .help = .{
-            .description = "Upgrade every enabled package backend in one coordinated action, continuing through independent backend failures and returning failure if any selected backend fails.",
+            .description = "Build and confirm an invoking-user upgrade plan, then upgrade every enabled package backend in one coordinated action, continuing through independent backend failures and returning failure if any selected backend fails.",
             .implementation = "Combined Zig coordinator over AlpmManager, AurManager, FlatpakManager, and appimage.UpdateManager",
         },
     },

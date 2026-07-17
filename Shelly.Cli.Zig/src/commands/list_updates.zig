@@ -117,6 +117,23 @@ const Runner = struct {
 
 const real_runner: Runner = .{ .call = runReal };
 
+/// Collects update metadata without rendering it. Upgrade planning uses this
+/// entry point before elevation so every backend reads the invoking user's
+/// configuration and cache instead of root's.
+pub fn collectUpdates(
+    context: *runtime.RuntimeContext,
+    backend: Backend,
+    show_hidden: bool,
+) !Result {
+    return runReal(null, context, backend, show_hidden);
+}
+
+pub fn resultCount(result: *const Result) usize {
+    return switch (result.*) {
+        inline else => |items| items.items.len,
+    };
+}
+
 const SizeDisplay = enum {
     bytes,
     megabytes,
@@ -278,12 +295,6 @@ fn optionEnabled(invocation: *const parser.Invocation, name: []const u8) bool {
         if (std.mem.eql(u8, option.name, name)) return true;
     }
     return false;
-}
-
-fn resultCount(result: *const Result) usize {
-    return switch (result.*) {
-        inline else => |items| items.items.len,
-    };
 }
 
 fn writeJson(

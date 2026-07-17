@@ -6,6 +6,7 @@ const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const table = @import("../output/table.zig");
 const ui_operation = @import("../output/ui_operation.zig");
+const list_updates = @import("list_updates.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
@@ -81,8 +82,17 @@ pub fn dispatch(
 ) !?u8 {
     if (!isUpgradePath(invocation.command.path)) return null;
 
+    const running_as_root = elevation.isRoot();
+    if (shouldPrepareAllPreview(invocation, running_as_root)) {
+        const preview = prepareAllUpgradePreview(context, invocation) catch |err| {
+            try context.stderr.print("Unable to prepare combined upgrade plan: {t}\n", .{err});
+            return 1;
+        };
+        if (!preview.proceed or !preview.has_updates) return 0;
+    }
+
     if (!invocation.globals.ui_mode and requiresElevation(invocation)) {
-        if (shouldPrepareStandardPreview(invocation, elevation.isRoot())) {
+        if (shouldPrepareStandardPreview(invocation, running_as_root)) {
             const preview = prepareStandardUpgradePreview(context, invocation) catch |err| {
                 try context.stderr.print("Unable to prepare upgrade plan: {t}\n", .{err});
                 return 1;
@@ -103,6 +113,234 @@ const PreviewResult = struct {
     has_updates: bool,
     proceed: bool,
 };
+
+const PlanCollector = struct {
+    data: ?*anyopaque = null,
+    call: *const fn (
+        data: ?*anyopaque,
+        context: *runtime.RuntimeContext,
+        backend: Backend,
+    ) anyerror!list_updates.Result,
+};
+
+const UpgradePlan = struct {
+    results: std.ArrayList(list_updates.Result) = .empty,
+
+    fn deinit(self: *UpgradePlan, allocator: std.mem.Allocator) void {
+        for (self.results.items) |*result| result.deinit(allocator);
+        self.results.deinit(allocator);
+        self.* = undefined;
+    }
+
+    fn isEmpty(self: *const UpgradePlan) bool {
+        for (self.results.items) |*result| {
+            if (list_updates.resultCount(result) != 0) return false;
+        }
+        return true;
+    }
+
+    fn find(self: *const UpgradePlan, backend: list_updates.Backend) ?*const list_updates.Result {
+        for (self.results.items) |*result| {
+            if (std.meta.activeTag(result.*) == backend) return result;
+        }
+        return null;
+    }
+};
+
+const real_plan_collector: PlanCollector = .{ .call = collectPlanUpdates };
+
+fn collectPlanUpdates(
+    _: ?*anyopaque,
+    context: *runtime.RuntimeContext,
+    backend: Backend,
+) !list_updates.Result {
+    return list_updates.collectUpdates(context, listUpdatesBackend(backend), false);
+}
+
+fn prepareAllUpgradePreview(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) !PreviewResult {
+    return prepareAllUpgradePreviewWithCollector(context, invocation, real_plan_collector);
+}
+
+fn prepareAllUpgradePreviewWithCollector(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    collector: PlanCollector,
+) !PreviewResult {
+    var plan = try buildAllUpgradePlan(context, invocation, collector);
+    defer plan.deinit(context.allocator);
+
+    if (plan.isEmpty()) {
+        try context.stdout.writeAll("Everything is up to date.\n");
+        try context.stdout.flush();
+        return .{ .has_updates = false, .proceed = false };
+    }
+
+    try renderAllUpgradePlan(context, &plan);
+    if (invocation.globals.no_confirm)
+        return .{ .has_updates = true, .proceed = true };
+
+    const proceed = try confirmPreparedUpgrade(context, "Proceed with all upgrades?");
+    if (!proceed) {
+        try context.stdout.writeAll("Upgrade cancelled.\n");
+        try context.stdout.flush();
+    }
+    return .{ .has_updates = true, .proceed = proceed };
+}
+
+fn buildAllUpgradePlan(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    collector: PlanCollector,
+) !UpgradePlan {
+    var plan: UpgradePlan = .{};
+    errdefer plan.deinit(context.allocator);
+
+    try context.stdout.writeAll("Building upgrade plan...\n");
+    try context.stdout.flush();
+    for (all_backends) |backend| {
+        if (!backendEnabled(invocation, backend)) continue;
+        try context.stdout.print("{s}\n", .{collectingMessage(backend)});
+        try context.stdout.flush();
+
+        var result = collector.call(collector.data, context, backend) catch |err| {
+            try context.stdout.print("Error collecting {s} upgrades: {t}\n", .{
+                backend.displayName(),
+                err,
+            });
+            try context.stdout.flush();
+            continue;
+        };
+        const count = list_updates.resultCount(&result);
+        if (count == 0) {
+            try context.stdout.print("{s}\n", .{noUpdatesMessage(backend)});
+            try context.stdout.flush();
+        }
+        plan.results.append(context.allocator, result) catch |err| {
+            result.deinit(context.allocator);
+            return err;
+        };
+    }
+    return plan;
+}
+
+fn renderAllUpgradePlan(context: *runtime.RuntimeContext, plan: *const UpgradePlan) !void {
+    try context.stdout.writeAll("The following upgrades are planned:\n\n");
+    const size_display = try loadSizeDisplay(context);
+
+    if (plan.find(.standard)) |result| {
+        const updates = result.standard.items;
+        if (updates.len != 0) try renderPlannedStandardUpdates(context, size_display, updates);
+    }
+    if (plan.find(.aur)) |result| {
+        const updates = result.aur.items;
+        if (updates.len != 0) {
+            try context.stdout.print("AUR ({d}):\n", .{updates.len});
+            for (updates) |update|
+                try context.stdout.print("  {s}: {s} -> {s}\n", .{
+                    update.name,
+                    update.version,
+                    update.new_version,
+                });
+            try context.stdout.writeByte('\n');
+        }
+    }
+    if (plan.find(.flatpak)) |result| {
+        const updates = result.flatpak.items;
+        if (updates.len != 0) {
+            const sorted = try context.allocator.dupe(list_updates.FlatpakUpdate, updates);
+            defer context.allocator.free(sorted);
+            std.mem.sort(list_updates.FlatpakUpdate, sorted, {}, struct {
+                fn lessThan(_: void, lhs: list_updates.FlatpakUpdate, rhs: list_updates.FlatpakUpdate) bool {
+                    return std.mem.lessThan(u8, lhs.id, rhs.id);
+                }
+            }.lessThan);
+            try context.stdout.print("Flatpak ({d}):\n", .{sorted.len});
+            for (sorted) |update|
+                try context.stdout.print("  {s} ({s})\n", .{ update.name, update.id });
+            try context.stdout.writeByte('\n');
+        }
+    }
+    if (plan.find(.appimage)) |result| {
+        const updates = result.appimage.items;
+        if (updates.len != 0) {
+            try context.stdout.print("AppImage ({d}):\n", .{updates.len});
+            for (updates) |update|
+                try context.stdout.print("  {s} -> {s}\n", .{ update.name, update.version });
+            try context.stdout.writeByte('\n');
+        }
+    }
+    try context.stdout.flush();
+}
+
+fn renderPlannedStandardUpdates(
+    context: *runtime.RuntimeContext,
+    size_display: SizeDisplay,
+    updates: []const list_updates.StandardUpdate,
+) !void {
+    var storage = std.heap.ArenaAllocator.init(context.allocator);
+    defer storage.deinit();
+    const allocator = storage.allocator();
+    const rows = try allocator.alloc([]const []const u8, updates.len);
+    var total_download: i128 = 0;
+    var net_change: i128 = 0;
+    for (updates, rows) |update, *row| {
+        total_download += update.download_size;
+        net_change += update.size_difference;
+        const cells = try allocator.alloc([]const u8, 6);
+        cells[0] = update.repository;
+        cells[1] = update.name;
+        cells[2] = update.current_version;
+        cells[3] = update.new_version;
+        cells[4] = try formatUpgradeSize(allocator, size_display, update.size_difference);
+        cells[5] = try formatUpgradeSize(allocator, size_display, update.download_size);
+        row.* = cells;
+    }
+
+    try context.stdout.print("Repository ({d}):\n", .{updates.len});
+    try table.write(
+        context.allocator,
+        context.stdout,
+        &.{ "Repository", "Package", "Old Version", "New Version", "Net Change", "Download Size" },
+        rows,
+        output.supportsAnsi(context),
+    );
+    const formatted_download = try formatUpgradeSize(allocator, size_display, total_download);
+    const formatted_change = try formatUpgradeSize(allocator, size_display, net_change);
+    try context.stdout.print(
+        "\nTotal Download Size: {s}\nNet Upgrade Size: {s}\n\n",
+        .{ formatted_download, formatted_change },
+    );
+}
+
+fn listUpdatesBackend(backend: Backend) list_updates.Backend {
+    return switch (backend) {
+        .standard => .standard,
+        .aur => .aur,
+        .flatpak => .flatpak,
+        .appimage => .appimage,
+    };
+}
+
+fn collectingMessage(backend: Backend) []const u8 {
+    return switch (backend) {
+        .standard => "Collecting Standard Packages for upgrade.",
+        .aur => "Collecting AUR Packages",
+        .flatpak => "Collecting Flatpak Apps",
+        .appimage => "Collecting AppImages",
+    };
+}
+
+fn noUpdatesMessage(backend: Backend) []const u8 {
+    return switch (backend) {
+        .standard => "No standard packages to upgrade.",
+        .aur => "No AUR packages to upgrade.",
+        .flatpak => "No Flatpak apps to upgrade.",
+        .appimage => "No AppImages to upgrade.",
+    };
+}
 
 const SizeDisplay = enum {
     bytes,
@@ -142,7 +380,7 @@ fn prepareStandardUpgradePreview(
     try renderStandardUpgradePreview(context, updates);
     if (invocation.globals.no_confirm) return .{ .has_updates = true, .proceed = true };
 
-    const proceed = try confirmPreparedUpgrade(context);
+    const proceed = try confirmPreparedUpgrade(context, "Proceed with upgrade?");
     if (!proceed) {
         try context.stdout.writeAll("Upgrade cancelled.\n");
         try context.stdout.flush();
@@ -196,10 +434,10 @@ fn renderStandardUpgradePreview(
     try context.stdout.flush();
 }
 
-fn confirmPreparedUpgrade(context: *runtime.RuntimeContext) !bool {
+fn confirmPreparedUpgrade(context: *runtime.RuntimeContext, prompt: []const u8) !bool {
     const reader = context.stdin orelse return false;
     while (true) {
-        try context.stdout.writeAll("Proceed with upgrade? (y/N) ");
+        try context.stdout.print("{s} (y/N) ", .{prompt});
         try context.stdout.flush();
         const input = (try reader.takeDelimiter('\n')) orelse return false;
         const answer = std.mem.trim(u8, input, " \t\r\n");
@@ -610,6 +848,15 @@ fn shouldPrepareStandardPreview(
         std.mem.eql(u8, invocation.command.path, standard_command_path);
 }
 
+fn shouldPrepareAllPreview(
+    invocation: *const parser.Invocation,
+    running_as_root: bool,
+) bool {
+    return !running_as_root and
+        !invocation.globals.ui_mode and
+        upgradesAll(invocation);
+}
+
 fn upgradesAll(invocation: *const parser.Invocation) bool {
     return std.mem.eql(u8, invocation.command.path, all_command_path) or
         optionEnabled(invocation, "--all");
@@ -716,6 +963,8 @@ test "standard upgrade preview runs only before non-root elevation" {
     );
     try std.testing.expect(all == .dispatch);
     try std.testing.expect(!shouldPrepareStandardPreview(&all.dispatch, false));
+    try std.testing.expect(shouldPrepareAllPreview(&all.dispatch, false));
+    try std.testing.expect(!shouldPrepareAllPreview(&all.dispatch, true));
 
     const standard_all = try parser.parse(
         arena.allocator(),
@@ -725,6 +974,151 @@ test "standard upgrade preview runs only before non-root elevation" {
     try std.testing.expect(standard_all == .dispatch);
     try std.testing.expect(upgradesAll(&standard_all.dispatch));
     try std.testing.expect(!shouldPrepareStandardPreview(&standard_all.dispatch, false));
+    try std.testing.expect(shouldPrepareAllPreview(&standard_all.dispatch, false));
+}
+
+test "combined upgrade plan renders enabled user updates and confirms once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "upgrade",
+        "all",
+        "--no-repo",
+        "--no-flatpak",
+        "--no-appimage",
+    });
+    try std.testing.expect(outcome == .dispatch);
+
+    var stdin = std.Io.Reader.fixed("maybe\nyes\n");
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdin = &stdin,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const Capture = struct {
+        calls: std.ArrayList(Backend) = .empty,
+
+        fn collect(
+            data: ?*anyopaque,
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+        ) !list_updates.Result {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            try self.calls.append(std.testing.allocator, backend);
+            try std.testing.expectEqual(Backend.aur, backend);
+            return .{ .aur = .{ .items = &.{.{
+                .name = "demo-git",
+                .version = "1.0",
+                .new_version = "1.1",
+                .download_size = 42,
+                .url = "https://example.invalid/demo-git",
+                .package_base = "demo-git",
+                .description = "fixture",
+            }} } };
+        }
+    };
+    var capture: Capture = .{};
+    defer capture.calls.deinit(std.testing.allocator);
+
+    const preview = try prepareAllUpgradePreviewWithCollector(
+        &context,
+        &outcome.dispatch,
+        .{ .data = &capture, .call = Capture.collect },
+    );
+    try std.testing.expect(preview.has_updates);
+    try std.testing.expect(preview.proceed);
+    try std.testing.expectEqualSlices(Backend, &.{.aur}, capture.calls.items);
+
+    const rendered = stdout.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Building upgrade plan...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AUR (1):") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "demo-git: 1.0 -> 1.1") != null);
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        std.mem.count(u8, rendered, "Proceed with all upgrades? (y/N)"),
+    );
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Please answer 'y' or 'n'.") != null);
+}
+
+test "combined upgrade plan defaults to cancellation and no-confirm bypasses the prompt" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    const Capture = struct {
+        fn collect(
+            _: ?*anyopaque,
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+        ) !list_updates.Result {
+            try std.testing.expectEqual(Backend.appimage, backend);
+            return .{ .appimage = .{ .items = &.{.{
+                .name = "Demo.AppImage",
+                .version = "2.0",
+                .download_url = "https://example.invalid/Demo.AppImage",
+                .is_update_available = true,
+            }} } };
+        }
+    };
+    const collector: PlanCollector = .{ .call = Capture.collect };
+
+    const declined = try parser.parse(arena.allocator(), &manifest, &.{
+        "upgrade",
+        "all",
+        "--no-repo",
+        "--no-aur",
+        "--no-flatpak",
+    });
+    try std.testing.expect(declined == .dispatch);
+    try std.testing.expect(!requiresElevation(&declined.dispatch));
+    try std.testing.expect(shouldPrepareAllPreview(&declined.dispatch, false));
+    var decline_stdin = std.Io.Reader.fixed("\n");
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdin = &decline_stdin,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const declined_preview = try prepareAllUpgradePreviewWithCollector(
+        &context,
+        &declined.dispatch,
+        collector,
+    );
+    try std.testing.expect(declined_preview.has_updates);
+    try std.testing.expect(!declined_preview.proceed);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Upgrade cancelled.") != null);
+
+    stdout.writer.end = 0;
+    context.stdin = null;
+    const automatic = try parser.parse(arena.allocator(), &manifest, &.{
+        "upgrade",
+        "all",
+        "--no-repo",
+        "--no-aur",
+        "--no-flatpak",
+        "--no-confirm",
+    });
+    try std.testing.expect(automatic == .dispatch);
+    const automatic_preview = try prepareAllUpgradePreviewWithCollector(
+        &context,
+        &automatic.dispatch,
+        collector,
+    );
+    try std.testing.expect(automatic_preview.has_updates);
+    try std.testing.expect(automatic_preview.proceed);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Proceed with all upgrades?") == null);
 }
 
 test "upgrade preview size formatting preserves negative net changes" {
