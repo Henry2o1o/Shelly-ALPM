@@ -154,7 +154,23 @@ pub const variants = [_]Variant{
     .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 'S' },
     .{ .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'U' },
     .{ .action = "check-updates", .type_name = "utility", .action_code = 'K', .type_code = 'U' },
-    .{ .action = "list-updates", .type_name = "standard", .action_code = 'P', .type_code = 'S' },
+    .{
+        .action = "list-updates",
+        .type_name = "all",
+        .action_code = 'P',
+        .type_code = 'X',
+        .help = .{
+            .description = "Query available updates from every supported package backend, continuing through independent backend failures.",
+            .implementation = "Combined Zig coordinator over AlpmManager, appimage.UpdateManager, AurManager, and FlatpakManager",
+        },
+    },
+    .{
+        .action = "list-updates",
+        .type_name = "standard",
+        .action_code = 'P',
+        .type_code = 'S',
+        .help = .{ .implementation = "Zigalpm.AlpmManager.sync_for_update_check / get_updates_available" },
+    },
     .{ .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'U' },
     .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'U' },
     .{ .action = "mark", .type_name = "standard", .action_code = 'M', .type_code = 'S' },
@@ -207,7 +223,13 @@ pub const variants = [_]Variant{
         },
     },
     .{ .action = "sync-meta", .type_name = "appimage", .action_code = 'Y', .type_code = 'I' },
-    .{ .action = "list-updates", .type_name = "appimage", .action_code = 'P', .type_code = 'I' },
+    .{
+        .action = "list-updates",
+        .type_name = "appimage",
+        .action_code = 'P',
+        .type_code = 'I',
+        .help = .{ .implementation = "Zigalpm.appimage.UpdateManager.get_updates" },
+    },
     .{ .action = "configure-updates", .type_name = "appimage", .action_code = 'C', .type_code = 'I' },
     .{ .action = "migrate-manager", .type_name = "appimage", .action_code = 'M', .type_code = 'I' },
 
@@ -283,7 +305,13 @@ pub const variants = [_]Variant{
         },
     },
     .{ .action = "list", .type_name = "aur", .action_code = 'L', .type_code = 'A' },
-    .{ .action = "list-updates", .type_name = "aur", .action_code = 'P', .type_code = 'A' },
+    .{
+        .action = "list-updates",
+        .type_name = "aur",
+        .action_code = 'P',
+        .type_code = 'A',
+        .help = .{ .implementation = "Zigalpm.AurManager.getPackagesNeedingUpdate" },
+    },
     .{
         .action = "search",
         .type_name = "aur",
@@ -369,7 +397,13 @@ pub const variants = [_]Variant{
     },
     .{ .action = "update", .type_name = "flatpak", .action_code = 'T', .type_code = 'F' },
     .{ .action = "list", .type_name = "flatpak", .action_code = 'L', .type_code = 'F' },
-    .{ .action = "list-updates", .type_name = "flatpak", .action_code = 'P', .type_code = 'F' },
+    .{
+        .action = "list-updates",
+        .type_name = "flatpak",
+        .action_code = 'P',
+        .type_code = 'F',
+        .help = .{ .implementation = "Zigalpm.FlatpakManager.get_updates_flatpak" },
+    },
     .{ .action = "running", .type_name = "flatpak", .action_code = 'N', .type_code = 'F' },
     .{ .action = "repair", .type_name = "flatpak", .action_code = 'H', .type_code = 'F' },
     .{ .action = "remove", .type_name = "flatpak", .action_code = 'R', .type_code = 'F' },
@@ -732,7 +766,8 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
         flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
     };
-    if (pathIs(action, type_name, "list-updates", "aur")) return &.{flag(
+    if (pathIs(action, type_name, "list-updates", "aur") or
+        pathIs(action, type_name, "list-updates", "all")) return &.{flag(
         "--show-hidden",
         &.{},
         "Include hidden packages",
