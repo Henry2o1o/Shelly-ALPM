@@ -56,14 +56,19 @@ pub fn translate(
     try result.appendSlice(allocator, &.{ variant.action, variant.type_name });
     for (token[3..]) |modifier| {
         const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
-        if (findLocalOption(command, alias) == null) {
-            return .{ .failure = try std.fmt.allocPrint(
-                allocator,
-                "Unknown modifier '{c}' for '{s} {s}'. Valid modifiers: {s}",
-                .{ modifier, variant.action, variant.type_name, try validModifiers(allocator, command) },
-            ) };
+        if (findLocalOption(command, alias) != null) {
+            try result.append(allocator, alias);
+            continue;
         }
-        try result.append(allocator, alias);
+        if (findRecursiveHelpOption(manifest, alias)) |option| {
+            try result.append(allocator, option.name);
+            continue;
+        }
+        return .{ .failure = try std.fmt.allocPrint(
+            allocator,
+            "Unknown modifier '{c}' for '{s} {s}'. Valid modifiers: {s}",
+            .{ modifier, variant.action, variant.type_name, try validModifiers(allocator, manifest, command) },
+        ) };
     }
     try result.appendSlice(allocator, args[1..]);
     return .{ .translated = try result.toOwnedSlice(allocator) };
@@ -71,6 +76,14 @@ pub fn translate(
 
 fn findLocalOption(command: *const spec.Command, alias: []const u8) ?*const spec.Option {
     for (command.options) |*option| {
+        if (option.matches(alias)) return option;
+    }
+    return null;
+}
+
+fn findRecursiveHelpOption(manifest: *const spec.Manifest, alias: []const u8) ?*const spec.Option {
+    for (manifest.root().options) |*option| {
+        if (!option.recursive or !std.mem.eql(u8, option.name, "--help")) continue;
         if (option.matches(alias)) return option;
     }
     return null;
@@ -86,17 +99,33 @@ fn validTypes(allocator: std.mem.Allocator, action_code: u8) ![]const u8 {
     return result.toOwnedSlice(allocator);
 }
 
-fn validModifiers(allocator: std.mem.Allocator, command: *const spec.Command) ![]const u8 {
+fn validModifiers(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    command: *const spec.Command,
+) ![]const u8 {
     var result: std.ArrayList(u8) = .empty;
-    for (command.options) |option| {
+    try appendModifierAliases(allocator, &result, command.options);
+    for (manifest.root().options) |option| {
+        if (!option.recursive or !std.mem.eql(u8, option.name, "--help")) continue;
+        try appendModifierAliases(allocator, &result, &.{option});
+    }
+    if (result.items.len == 0) return "(none)";
+    return result.toOwnedSlice(allocator);
+}
+
+fn appendModifierAliases(
+    allocator: std.mem.Allocator,
+    result: *std.ArrayList(u8),
+    options: []const spec.Option,
+) !void {
+    for (options) |option| {
         for (option.aliases) |alias| {
             if (alias.len != 2 or alias[0] != '-' or alias[1] == '-') continue;
             if (result.items.len > 0) try result.appendSlice(allocator, ", ");
             try result.append(allocator, alias[1]);
         }
     }
-    if (result.items.len == 0) return "(none)";
-    return result.toOwnedSlice(allocator);
 }
 
 test "translates action-type shortcodes from the command manifest" {
@@ -141,6 +170,18 @@ test "translates action-type shortcodes from the command manifest" {
         &.{"-YF"},
         &.{ "sync", "flatpak" },
     );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{"-SAh"},
+        &.{ "search", "aur", "--help" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{"-YS?"},
+        &.{ "sync", "standard", "--help" },
+    );
 }
 
 test "uses centralized effective modifiers and rejects type-first shortcodes" {
@@ -151,7 +192,7 @@ test "uses centralized effective modifiers and rejects type-first shortcodes" {
 
     const invalid_modifier = try translate(allocator, &manifest, &.{"-IAo"});
     try std.testing.expectEqualStrings(
-        "Unknown modifier 'o' for 'install aur'. Valid modifiers: b, m, c",
+        "Unknown modifier 'o' for 'install aur'. Valid modifiers: b, m, c, ?, h",
         invalid_modifier.failure,
     );
 

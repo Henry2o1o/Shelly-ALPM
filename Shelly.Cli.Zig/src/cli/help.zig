@@ -16,12 +16,16 @@ pub fn render(
     writer: *Writer,
 ) !void {
     if (!command.hidden) {
+        const action_branch = isActionBranch(manifest, command);
         if (command.description) |description|
             try writer.print("Description:\n  {s}\n\n", .{description});
 
+        if (command.implementation) |implementation|
+            try writer.print("Implementation:\n  {s}\n\n", .{implementation});
+
         try writer.print("Usage:\n  {s}", .{command.path});
         if (command.isBranch) {
-            try writer.writeAll(if (isActionBranch(manifest, command)) " [type]" else " [command]");
+            try writer.writeAll(if (action_branch) " [type]" else " [command]");
         } else {
             for (command.arguments) |argument| {
                 try writer.writeByte(' ');
@@ -66,7 +70,7 @@ pub fn render(
             try writeRows(writer, option_rows.items);
         }
 
-        if (isActionBranch(manifest, command))
+        if (action_branch)
             try writeActionModifiers(allocator, manifest, command, writer);
 
         var command_rows: std.ArrayList(Row) = .empty;
@@ -74,7 +78,7 @@ pub fn render(
             const parent_path = child.parentPath orelse continue;
             if (!std.mem.eql(u8, parent_path, command.path) or child.hidden) continue;
             var label: std.ArrayList(u8) = .empty;
-            try label.appendSlice(allocator, child.name);
+            try label.appendSlice(allocator, if (action_branch) child.path else child.name);
             for (child.arguments) |argument| {
                 try label.append(allocator, ' ');
                 try label.appendSlice(allocator, try argumentLabel(allocator, argument));
@@ -87,13 +91,20 @@ pub fn render(
                     .{ description, child.actionCode.?, child.typeCode.? },
                 );
             }
+            if (child.implementation) |implementation| {
+                description = try std.fmt.allocPrint(
+                    allocator,
+                    "{s} [implementation: {s}]",
+                    .{ description, implementation },
+                );
+            }
             try command_rows.append(allocator, .{
                 .label = try label.toOwnedSlice(allocator),
                 .description = description,
             });
         }
         if (command_rows.items.len > 0) {
-            try writer.writeAll(if (isActionBranch(manifest, command)) "\nTypes:\n" else "\nCommands:\n");
+            try writer.writeAll("\nCommands:\n");
             try writeRows(writer, command_rows.items);
         }
 
@@ -233,6 +244,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\  Examples:
         \\    -ISu firefox   ->  install standard -u firefox
         \\    -SA query      ->  search aur query
+        \\    -SAh           ->  search aur --help
         \\    -VK ABCD       ->  recv keyring ABCD
         \\
         \\  In shortcode mode use --ui-mode instead of -U.
@@ -351,6 +363,9 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[types: standard, aur]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "aur only:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "--chroot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Commands:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "shelly install aur <packages>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\nTypes:\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -IA]") != null);
 }
 
@@ -368,6 +383,26 @@ test "sync action help lists standard and Flatpak variants" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "flatpak") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YS]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YF]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.sync") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AppstreamManager.updateAllAppstreams") != null);
+}
+
+test "search help names the native method used by the selected type" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(
+        arena.allocator(),
+        &manifest,
+        manifest.findByPath("shelly search flatpak").?,
+        &output.writer,
+    );
+    const rendered = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AppstreamManager.getAllRemoteCatalogs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Flathub") == null);
 }
 
 test "help documents only the action-type shortcode grammar" {

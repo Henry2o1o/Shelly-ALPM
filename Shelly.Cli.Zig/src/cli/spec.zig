@@ -51,6 +51,7 @@ pub const Command = struct {
     risk: []const u8,
     status: []const u8,
     notes: ?[]const u8,
+    implementation: ?[]const u8 = null,
     actionCode: ?u8 = null,
     typeCode: ?u8 = null,
     defaultForAction: bool = false,
@@ -149,11 +150,8 @@ fn projectActionFirst(allocator: std.mem.Allocator, frozen: Manifest) !Manifest 
         if (action_seen) continue;
 
         const action_path = try std.fmt.allocPrint(allocator, "shelly {s}", .{variant.action});
-        const action_description = try std.fmt.allocPrint(
-            allocator,
-            "Run {s} for a package or administrative type.",
-            .{variant.action},
-        );
+        const action_description = catalog.actionDescription(variant.action) orelse
+            try sourceActionDescription(frozen, variant.action);
         var action_hidden = true;
         for (catalog.variants) |candidate| {
             if (!std.mem.eql(u8, candidate.action, variant.action)) continue;
@@ -187,17 +185,18 @@ fn projectActionFirst(allocator: std.mem.Allocator, frozen: Manifest) !Manifest 
                 "shelly {s} {s}",
                 .{ candidate.action, candidate.type_name },
             );
-            const arguments = if (candidate.keyring_action != null)
+            const source_arguments = if (candidate.keyring_action != null)
                 source.arguments[1..]
             else
                 source.arguments;
+            const arguments = try effectiveArguments(allocator, source_arguments, candidate);
             const options = try effectiveOptions(allocator, source.options, candidate);
 
             try commands.append(allocator, .{
                 .path = command_path,
                 .parentPath = action_path,
                 .name = candidate.type_name,
-                .description = source.description,
+                .description = candidate.help.description orelse source.description,
                 .hidden = source.hidden,
                 .isBranch = false,
                 .hasAction = true,
@@ -209,6 +208,7 @@ fn projectActionFirst(allocator: std.mem.Allocator, frozen: Manifest) !Manifest 
                 .risk = source.risk,
                 .status = source.status,
                 .notes = source.notes,
+                .implementation = candidate.help.implementation,
                 .actionCode = candidate.action_code,
                 .typeCode = candidate.type_code,
                 .defaultForAction = candidate.default_for_action,
@@ -226,6 +226,16 @@ fn projectActionFirst(allocator: std.mem.Allocator, frozen: Manifest) !Manifest 
         .leafCommandCount = catalog.variants.len,
         .commands = projected,
     };
+}
+
+fn sourceActionDescription(frozen: Manifest, action: []const u8) ![]const u8 {
+    for (catalog.variants) |variant| {
+        if (!std.mem.eql(u8, variant.action, action)) continue;
+        if (variant.help.description) |description| return description;
+        const source = frozen.findByPath(variant.source_path) orelse return error.InvalidContract;
+        return source.description orelse return error.InvalidContract;
+    }
+    return error.InvalidContract;
 }
 
 fn effectiveOptions(
@@ -246,9 +256,32 @@ fn effectiveOptions(
             option.aliases = shared.aliases;
             option.description = shared.description;
         }
+        if (findHelpText(variant.help.options, source.name)) |description|
+            option.description = description;
         try options.append(allocator, option);
     }
     return options.toOwnedSlice(allocator);
+}
+
+fn effectiveArguments(
+    allocator: std.mem.Allocator,
+    source_arguments: []const Argument,
+    variant: catalog.Variant,
+) ![]const Argument {
+    if (variant.help.arguments.len == 0) return source_arguments;
+    const arguments = try allocator.dupe(Argument, source_arguments);
+    for (arguments) |*argument| {
+        if (findHelpText(variant.help.arguments, argument.name)) |description|
+            argument.description = description;
+    }
+    return arguments;
+}
+
+fn findHelpText(values: []const catalog.HelpText, name: []const u8) ?[]const u8 {
+    for (values) |value| {
+        if (std.mem.eql(u8, value.name, name)) return value.description;
+    }
+    return null;
 }
 
 test "projects the frozen metadata into the action-first command catalog" {
@@ -284,4 +317,50 @@ test "centralizes shared modifiers while retaining type additions" {
     const flatpak_remove = manifest.findByPath("shelly remove flatpak").?;
     try std.testing.expect(manifest.findOption(flatpak_remove, "--remove-config") != null);
     try std.testing.expect(manifest.findOption(flatpak_remove, "--config") == null);
+}
+
+test "native help overrides describe the implementation that actually executes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try Manifest.load(arena.allocator());
+
+    const standard = manifest.findByPath("shelly search standard").?;
+    try std.testing.expect(std.mem.indexOf(u8, standard.description.?, "ALPM repository") != null);
+    try std.testing.expect(std.mem.indexOf(u8, standard.implementation.?, "get_installed_packages") != null);
+    try std.testing.expectEqualStrings(
+        "Search packages from the local ALPM database",
+        manifest.findOption(standard, "--installed").?.description.?,
+    );
+
+    const aur = manifest.findByPath("shelly search aur").?;
+    try std.testing.expectEqualStrings(
+        "Append high-confidence standard ALPM repository matches to the AUR results",
+        manifest.findOption(aur, "--standard").?.description.?,
+    );
+
+    const flatpak = manifest.findByPath("shelly search flatpak").?;
+    try std.testing.expect(std.mem.indexOf(u8, flatpak.description.?, "cached AppStream") != null);
+    try std.testing.expectEqualStrings(
+        "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs",
+        flatpak.implementation.?,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, flatpak.arguments[0].description.?, "local AppStream") != null);
+}
+
+test "every action help entry explains its command instead of using a generic placeholder" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try Manifest.load(arena.allocator());
+
+    for (manifest.commands) |command| {
+        const parent_path = command.parentPath orelse continue;
+        if (!command.isBranch or !std.mem.eql(u8, parent_path, manifest.root().path)) continue;
+        const description = command.description orelse return error.MissingActionDescription;
+        try std.testing.expect(description.len > 0);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            description,
+            "for a package or administrative type",
+        ) == null);
+    }
 }
