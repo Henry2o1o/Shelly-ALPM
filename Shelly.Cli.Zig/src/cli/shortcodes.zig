@@ -23,7 +23,7 @@ pub fn translate(
 ) !Translation {
     if (args.len == 0) return .{ .unchanged = args };
     const token = args[0];
-    if (std.mem.eql(u8, token, "-U") or std.mem.eql(u8, token, "-Ua")) {
+    if (std.mem.eql(u8, token, "-U")) {
         var result: std.ArrayList([]const u8) = .empty;
         try result.appendSlice(allocator, &.{ "upgrade", "all" });
         try result.appendSlice(allocator, args[1..]);
@@ -149,92 +149,100 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(
         allocator,
         &manifest,
-        &.{ "-ISu", "firefox" },
+        &.{ "-Isu", "firefox" },
         &.{ "install", "standard", "-u", "firefox" },
     );
     try expectTranslation(
         allocator,
         &manifest,
-        &.{ "-IAmb", "package" },
+        &.{ "-Iamb", "package" },
         &.{ "install", "aur", "-m", "-b", "package" },
     );
     try expectTranslation(
         allocator,
         &manifest,
-        &.{ "-SA", "query" },
+        &.{ "-Sa", "query" },
         &.{ "search", "aur", "query" },
     );
     try expectTranslation(
         allocator,
         &manifest,
-        &.{ "-VK", "ABCD" },
+        &.{ "-Vk", "ABCD" },
         &.{ "recv", "keyring", "ABCD" },
     );
     try expectTranslation(
         allocator,
         &manifest,
-        &.{"-YSf"},
+        &.{"-Ysf"},
         &.{ "sync", "standard", "-f" },
     );
     try expectTranslation(
         allocator,
         &manifest,
-        &.{"-YF"},
+        &.{"-Yf"},
         &.{ "sync", "flatpak" },
     );
-    try expectTranslation(allocator, &manifest, &.{"-US"}, &.{ "upgrade", "standard" });
-    try expectTranslation(allocator, &manifest, &.{"-USa"}, &.{ "upgrade", "standard", "-a" });
+    try expectTranslation(allocator, &manifest, &.{"-Us"}, &.{ "upgrade", "standard" });
+    try expectTranslation(allocator, &manifest, &.{"-Usa"}, &.{ "upgrade", "standard", "-a" });
     try expectTranslation(allocator, &manifest, &.{"-U"}, &.{ "upgrade", "all" });
-    try expectTranslation(allocator, &manifest, &.{"-Ua"}, &.{ "upgrade", "all" });
+    try expectTranslation(allocator, &manifest, &.{"-Ua"}, &.{ "upgrade", "aur" });
     try expectTranslation(allocator, &manifest, &.{"-P"}, &.{ "list-updates", "all" });
     try expectTranslation(
         allocator,
         &manifest,
-        &.{ "-Ua", "--no-aur" },
+        &.{ "-U", "--no-aur" },
         &.{ "upgrade", "all", "--no-aur" },
     );
-    try expectTranslation(allocator, &manifest, &.{"-UX"}, &.{ "upgrade", "all" });
-    try expectTranslation(allocator, &manifest, &.{"-UI"}, &.{ "upgrade", "appimage" });
-    try expectTranslation(allocator, &manifest, &.{"-UA"}, &.{ "upgrade", "aur" });
-    try expectTranslation(allocator, &manifest, &.{"-UF"}, &.{ "upgrade", "flatpak" });
+    try expectTranslation(allocator, &manifest, &.{"-Ux"}, &.{ "upgrade", "all" });
+    try expectTranslation(allocator, &manifest, &.{"-Ui"}, &.{ "upgrade", "appimage" });
+    try expectTranslation(allocator, &manifest, &.{"-Uf"}, &.{ "upgrade", "flatpak" });
     try expectTranslation(
         allocator,
         &manifest,
-        &.{"-UAh"},
+        &.{"-Uah"},
         &.{ "upgrade", "aur", "--help" },
     );
     try expectTranslation(
         allocator,
         &manifest,
-        &.{"-SAh"},
+        &.{"-Sah"},
         &.{ "search", "aur", "--help" },
     );
     try expectTranslation(
         allocator,
         &manifest,
-        &.{"-YS?"},
+        &.{"-Ys?"},
         &.{ "sync", "standard", "--help" },
     );
 }
 
-test "uses centralized effective modifiers and rejects type-first shortcodes" {
+test "uses centralized effective modifiers and rejects invalid shortcode types" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     const manifest = try spec.Manifest.load(allocator);
 
-    const invalid_modifier = try translate(allocator, &manifest, &.{"-IAo"});
+    const invalid_modifier = try translate(allocator, &manifest, &.{"-Iao"});
     try std.testing.expectEqualStrings(
         "Unknown modifier 'o' for 'install aur'. Valid modifiers: b, m, c, ?, h",
         invalid_modifier.failure,
     );
 
-    const old_standard = try translate(allocator, &manifest, &.{ "-SIu", "firefox" });
-    try std.testing.expect(old_standard == .failure);
-    const old_aur = try translate(allocator, &manifest, &.{ "-AS", "query" });
-    try std.testing.expect(old_aur == .failure);
-    const old_keyring = try translate(allocator, &manifest, &.{ "-KV", "ABCD" });
-    try std.testing.expect(old_keyring == .failure);
+    const uppercase_standard = try translate(allocator, &manifest, &.{ "-SS", "query" });
+    try std.testing.expectEqualStrings(
+        "Unknown shortcode type 'S' for action code 'S'. Valid types: s, c, a, k, f",
+        uppercase_standard.failure,
+    );
+    const uppercase_aur = try translate(allocator, &manifest, &.{ "-IA", "package" });
+    try std.testing.expectEqualStrings(
+        "Unknown shortcode type 'A' for action code 'I'. Valid types: s, i, a, k, f",
+        uppercase_aur.failure,
+    );
+    const invalid_pair = try translate(allocator, &manifest, &.{ "-Si", "query" });
+    try std.testing.expectEqualStrings(
+        "Action code 'S' is not available for type 'i'. Valid types: s, c, a, k, f",
+        invalid_pair.failure,
+    );
 }
 
 test "passes ordinary long form and unrelated options through unchanged" {

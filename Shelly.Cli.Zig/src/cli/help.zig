@@ -228,8 +228,8 @@ fn writeIndentedRows(writer: *Writer, rows: []const Row, indent: usize) !void {
 fn writeShortcodeHelp(writer: *Writer) !void {
     try writer.writeAll(
         \\Shortcodes:
-        \\  Grammar: -<Action><Type><modifiers...> [positionals]
-        \\  Action selects the operation, Type selects its target, and
+        \\  Grammar: -<UppercaseAction><lowercaseType><modifiers...> [positionals]
+        \\  Uppercase Action selects the operation, lowercase Type selects its target, and
         \\  modifiers are that action/type pair's short flags (case-sensitive).
         \\
         \\  Types:
@@ -242,11 +242,16 @@ fn writeShortcodeHelp(writer: *Writer) !void {
     try writer.writeAll(
         \\
         \\  Examples:
-        \\    -U, -Ua        ->  upgrade all
-        \\    -ISu firefox   ->  install standard -u firefox
-        \\    -SA query      ->  search aur query
-        \\    -SAh           ->  search aur --help
-        \\    -VK ABCD       ->  recv keyring ABCD
+        \\    -U             ->  upgrade all
+        \\    -Us            ->  upgrade standard
+        \\    -Ua            ->  upgrade aur
+        \\    -Uf            ->  upgrade flatpak
+        \\    -Ui            ->  upgrade appimage
+        \\    -Ux            ->  upgrade all
+        \\    -Isu firefox   ->  install standard -u firefox
+        \\    -Sa query      ->  search aur query
+        \\    -Sah           ->  search aur --help
+        \\    -Vk ABCD       ->  recv keyring ABCD
         \\
         \\  In shortcode mode use --ui-mode instead of -U.
         \\
@@ -367,7 +372,7 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Commands:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "shelly install aur <packages>") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\nTypes:\n") == null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -IA]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -Ia]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.installPackages") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AppImageManager.installAppImage") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.install_flatpak") != null);
@@ -385,8 +390,8 @@ test "sync action help lists standard and Flatpak variants" {
     const rendered = output.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "standard") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "flatpak") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YS]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YF]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -Ys]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -Yf]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.sync") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AppstreamManager.updateAllAppstreams") != null);
 }
@@ -401,7 +406,7 @@ test "upgrade action help documents every backend and its actual modifiers" {
 
     try render(arena.allocator(), &manifest, command, &output.writer);
     const rendered = output.writer.buffered();
-    for ([_][]const u8{ "[shortcode: -US]", "[shortcode: -UX]", "[shortcode: -UI]", "[shortcode: -UA]", "[shortcode: -UF]" }) |needle|
+    for ([_][]const u8{ "[shortcode: -Us]", "[shortcode: -Ux]", "[shortcode: -Ui]", "[shortcode: -Ua]", "[shortcode: -Uf]" }) |needle|
         try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
     for ([_][]const u8{ "--all", "--no-repo", "--no-aur", "--no-flatpak", "--no-appimage", "--check", "--singlepane" }) |needle|
         try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
@@ -438,7 +443,13 @@ test "help documents only the action-type shortcode grammar" {
 
     try render(arena.allocator(), &manifest, manifest.root(), &output.writer);
     const rendered = output.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "-<Action><Type><modifiers...>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "-ISu firefox") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-<UppercaseAction><lowercaseType><modifiers...>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Isu firefox") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ua") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ux") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Vk ABCD") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\n    s  standard\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\n    S  standard\n") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-ISu firefox") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-<Type><Action>") == null);
 }

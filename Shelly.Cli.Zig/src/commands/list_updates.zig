@@ -838,13 +838,13 @@ test "list-updates routes long and short forms to each backend" {
     };
     const cases = [_]Case{
         .{ .arguments = &.{ "list-updates", "standard" }, .backend = .standard },
-        .{ .arguments = &.{"-PS"}, .backend = .standard },
+        .{ .arguments = &.{"-Ps"}, .backend = .standard },
         .{ .arguments = &.{ "list-updates", "appimage" }, .backend = .appimage },
-        .{ .arguments = &.{"-PI"}, .backend = .appimage },
+        .{ .arguments = &.{"-Pi"}, .backend = .appimage },
         .{ .arguments = &.{ "list-updates", "aur" }, .backend = .aur },
-        .{ .arguments = &.{"-PA"}, .backend = .aur },
+        .{ .arguments = &.{"-Pa"}, .backend = .aur },
         .{ .arguments = &.{ "list-updates", "flatpak" }, .backend = .flatpak },
-        .{ .arguments = &.{"-PF"}, .backend = .flatpak },
+        .{ .arguments = &.{"-Pf"}, .backend = .flatpak },
     };
 
     for (cases) |case| {
