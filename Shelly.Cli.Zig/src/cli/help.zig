@@ -242,6 +242,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
     try writer.writeAll(
         \\
         \\  Examples:
+        \\    -U, -Ua        ->  upgrade all
         \\    -ISu firefox   ->  install standard -u firefox
         \\    -SA query      ->  search aur query
         \\    -SAh           ->  search aur --help

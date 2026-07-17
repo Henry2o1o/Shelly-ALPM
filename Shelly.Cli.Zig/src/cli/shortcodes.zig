@@ -23,6 +23,12 @@ pub fn translate(
 ) !Translation {
     if (args.len == 0) return .{ .unchanged = args };
     const token = args[0];
+    if (std.mem.eql(u8, token, "-U") or std.mem.eql(u8, token, "-Ua")) {
+        var result: std.ArrayList([]const u8) = .empty;
+        try result.appendSlice(allocator, &.{ "upgrade", "all" });
+        try result.appendSlice(allocator, args[1..]);
+        return .{ .translated = try result.toOwnedSlice(allocator) };
+    }
     if (token.len < 3 or token[0] != '-') return .{ .unchanged = args };
 
     const action_code = token[1];
@@ -172,6 +178,14 @@ test "translates action-type shortcodes from the command manifest" {
     );
     try expectTranslation(allocator, &manifest, &.{"-US"}, &.{ "upgrade", "standard" });
     try expectTranslation(allocator, &manifest, &.{"-USa"}, &.{ "upgrade", "standard", "-a" });
+    try expectTranslation(allocator, &manifest, &.{"-U"}, &.{ "upgrade", "all" });
+    try expectTranslation(allocator, &manifest, &.{"-Ua"}, &.{ "upgrade", "all" });
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Ua", "--no-aur" },
+        &.{ "upgrade", "all", "--no-aur" },
+    );
     try expectTranslation(allocator, &manifest, &.{"-UX"}, &.{ "upgrade", "all" });
     try expectTranslation(allocator, &manifest, &.{"-UI"}, &.{ "upgrade", "appimage" });
     try expectTranslation(allocator, &manifest, &.{"-UA"}, &.{ "upgrade", "aur" });
