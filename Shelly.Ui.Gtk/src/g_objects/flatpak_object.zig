@@ -1,8 +1,9 @@
 const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const gobject = bindings.gobject;
+const flatpak = @import("../models/flatpak.zig");
 
-pub const PackageObject = extern struct {
+pub const FlatpakObject = extern struct {
     parent_instance: Parent,
 
     const Self = @This();
@@ -11,18 +12,17 @@ pub const PackageObject = extern struct {
     const Private = struct {
         name: [:0]const u8,
         version: [:0]const u8,
-        repository: [:0]const u8,
-        description: [:0]const u8,
-        groups: []const [:0]const u8,
-        installed_size: i64,
-        installed: bool,
-        selected: bool,
+        remotes: [:0]const u8,
+        id: [:0]const u8,
+        kind: flatpak.FlatpakKind,
 
+        installed_size: i64,
+        installed_level: flatpak.InstallLevel,
         var offset: c_int = 0;
     };
 
     pub const getGObjectType = gobject.ext.defineClass(Self, .{
-        .name = "ShellyPackageObject",
+        .name = "ShellyFlatpakObject",
         .instanceInit = &init,
         .classInit = &Class.init,
         .parent_class = &Class.parent,
@@ -37,41 +37,26 @@ pub const PackageObject = extern struct {
         const p = self.priv();
         p.name = "";
         p.version = "";
-        p.repository = "";
-        p.description = "";
+        p.remotes = "";
+        p.id = "";
         p.installed_size = 0;
-        p.installed = false;
-        p.selected = false;
+        p.installed_level = flatpak.InstallLevel.system;
+        p.kind = flatpak.FlatpakKind.app;
     }
 
     pub fn new(
         arena: std.mem.Allocator,
-        name: []const u8,
-        version: []const u8,
-        repository: []const u8,
-        description: []const u8,
-        groups: []const []const u8,
-        installed_size: i64,
-        installed: bool,
+        f: flatpak.Flatpak,
     ) *Self {
         const self = gobject.ext.newInstance(Self, .{});
         const p = self.priv();
-        p.name = arena.dupeZ(u8, name) catch "";
-        p.version = arena.dupeZ(u8, version) catch "";
-        p.repository = arena.dupeZ(u8, repository) catch "";
-        p.description = arena.dupeZ(u8, description) catch "";
-        p.installed_size = installed_size;
-        p.installed = installed;
-        p.selected = false;
-
-        if (arena.alloc([:0]const u8, groups.len)) |g| {
-            for (groups, 0..) |src, i| {
-                g[i] = arena.dupeZ(u8, src) catch "";
-            }
-            p.groups = g;
-        } else |_| {
-            p.groups = &.{};
-        }
+        p.name = arena.dupeZ(u8, f.Name) catch "";
+        p.version = arena.dupeZ(u8, f.Version) catch "";
+        p.installed_level = f.InstallLevel;
+        p.installed_size = f.InstalledSize;
+        p.remotes = arena.dupeZ(u8, f.Remote) catch "";
+        p.id = arena.dupeZ(u8, f.Id) catch "";
+        p.kind = f.Kind;
 
         return self;
     }
@@ -82,27 +67,25 @@ pub const PackageObject = extern struct {
     pub fn getVersion(self: *Self) [:0]const u8 {
         return self.priv().version;
     }
-    pub fn getRepository(self: *Self) [:0]const u8 {
-        return self.priv().repository;
-    }
-    pub fn getDescription(self: *Self) [:0]const u8 {
-        return self.priv().description;
-    }
+
     pub fn getInstalledSize(self: *Self) i64 {
         return self.priv().installed_size;
     }
-    pub fn isInstalled(self: *Self) bool {
-        return self.priv().installed;
-    }
-    pub fn isSelected(self: *Self) bool {
-        return self.priv().selected;
-    }
-    pub fn setSelected(self: *Self, v: bool) void {
-        self.priv().selected = v;
+
+    pub fn getInstallLevel(self: *Self) flatpak.InstallLevel {
+        return self.priv().installed_level;
     }
 
-    pub fn getGroups(self: *Self) []const [:0]const u8 {
-        return self.priv().groups;
+    pub fn getRemotes(self: *Self) [:0]const u8 {
+        return self.priv().remotes;
+    }
+
+    pub fn getId(self: *Self) [:0]const u8 {
+        return self.priv().id;
+    }
+
+    pub fn getKind(self: *Self) flatpak.FlatpakKind {
+        return self.priv().kind;
     }
 
     pub fn as(self: *Self, comptime T: type) *T {
