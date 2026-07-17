@@ -274,10 +274,13 @@ fn executeUi(
 ) !u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     defer operation_context.deinit();
-    if (invocation.globals.no_confirm) {
-        operation_context.setQuestionHandler(.{ .function = ui_operation.acceptQuestionDefaults });
-        defer operation_context.setQuestionHandler(null);
-    }
+    var question_responder: ui_operation.QuestionResponder = .{
+        .context = context,
+        .operation_context = &operation_context,
+        .no_confirm = invocation.globals.no_confirm,
+    };
+    question_responder.attach();
+    defer question_responder.detach();
     var reporter: ui_operation.Reporter = .{ .context = context };
     const event_subscription = try operation_context.subscribe(.{
         .function = ui_operation.Reporter.handle,

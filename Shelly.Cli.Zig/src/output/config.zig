@@ -3,6 +3,7 @@ const Zigalpm = @import("Zigalpm");
 const model = @import("../config/model.zig");
 const runtime = @import("../runtime/context.zig");
 const xdg = @import("../runtime/xdg.zig");
+const review_output = @import("review.zig");
 
 pub fn writeListPlain(
     context: *runtime.RuntimeContext,
@@ -116,6 +117,86 @@ pub fn writeOperationProgressFrame(
         ),
         .alpm, .aur, .local_package, .download => try writeAlpmProgressFrame(context, progress),
     }
+}
+
+pub fn writePkgbuildQuestionFrame(
+    context: *runtime.RuntimeContext,
+    question: Zigalpm.OperationQuestion,
+) !void {
+    const review = question.review orelse return error.MissingReviewPayload;
+    const diff = try review_output.buildDiff(context.allocator, review.old_content, review.new_content);
+    defer context.allocator.free(diff);
+    const question_id = try std.fmt.allocPrint(context.allocator, "{d}", .{question.question_id});
+    defer context.allocator.free(question_id);
+
+    var payload = std.Io.Writer.Allocating.init(context.allocator);
+    defer payload.deinit();
+    var json: std.json.Stringify = .{ .writer = &payload.writer };
+    try json.beginObject();
+    try json.objectField("$kind");
+    try json.write("q.pkgbuilddiff");
+    try json.objectField("QuestionId");
+    try json.write(question_id);
+    try json.objectField("PackageName");
+    try json.write(review.subject);
+    try json.objectField("OldPkgbuild");
+    try json.write(review.old_content);
+    try json.objectField("NewPkgbuild");
+    try json.write(review.new_content);
+    try json.objectField("Warnings");
+    try json.beginArray();
+    for (review.findings) |finding| {
+        try json.beginObject();
+        try json.objectField("Tool");
+        try json.write(finding.tool);
+        try json.objectField("Severity");
+        try json.write(switch (finding.severity) {
+            .info => "Info",
+            .warning => "Warning",
+            .critical => "Critical",
+        });
+        try json.objectField("Hook");
+        try json.write(finding.hook);
+        try json.objectField("MatchedLine");
+        try json.write(finding.matched_line);
+        try json.objectField("Message");
+        try json.write(finding.message);
+        try json.endObject();
+    }
+    try json.endArray();
+    try json.objectField("DiffLines");
+    try json.beginArray();
+    for (diff) |line| switch (line.kind) {
+        .unchanged => {
+            const value = try std.fmt.allocPrint(context.allocator, "[white]  {s}[/]", .{line.text});
+            defer context.allocator.free(value);
+            try json.write(value);
+        },
+        .added => {
+            const value = try std.fmt.allocPrint(context.allocator, "[green]+ {s}[/]", .{line.text});
+            defer context.allocator.free(value);
+            try json.write(value);
+        },
+        .removed => {
+            const value = try std.fmt.allocPrint(context.allocator, "[red]- {s}[/]", .{line.text});
+            defer context.allocator.free(value);
+            try json.write(value);
+        },
+    };
+    try json.endArray();
+    try json.objectField("SourceFiles");
+    if (review.related_files.len == 0) {
+        try json.write(null);
+    } else {
+        try json.beginObject();
+        for (review.related_files) |file| {
+            try json.objectField(file.name);
+            try json.write(file.content);
+        }
+        try json.endObject();
+    }
+    try json.endObject();
+    try writeFrame(context, payload.writer.buffered());
 }
 
 fn writeAlpmProgressFrame(
