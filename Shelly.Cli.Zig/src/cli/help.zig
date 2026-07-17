@@ -390,6 +390,26 @@ test "sync action help lists standard and Flatpak variants" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AppstreamManager.updateAllAppstreams") != null);
 }
 
+test "upgrade action help documents every backend and its actual modifiers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const command = manifest.findByPath("shelly upgrade").?;
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, command, &output.writer);
+    const rendered = output.writer.buffered();
+    for ([_][]const u8{ "[shortcode: -US]", "[shortcode: -UX]", "[shortcode: -UI]", "[shortcode: -UA]", "[shortcode: -UF]" }) |needle|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
+    for ([_][]const u8{ "--no-repo", "--no-aur", "--no-flatpak", "--no-appimage", "--check", "--singlepane" }) |needle|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.sync") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.getPackagesNeedingUpdate") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.upgrade_flatpaks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "appimage.UpdateManager.get_updates") != null);
+}
+
 test "search help names the native method used by the selected type" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

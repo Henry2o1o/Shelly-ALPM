@@ -12,6 +12,7 @@ pub const commands = @import("commands/dispatcher.zig");
 pub const sync_command = @import("commands/sync.zig");
 pub const install_command = @import("commands/install.zig");
 pub const search_command = @import("commands/search.zig");
+pub const upgrade_command = @import("commands/upgrade.zig");
 pub const config = @import("config/manager.zig");
 pub const config_model = @import("config/model.zig");
 pub const config_output = @import("output/config.zig");
@@ -34,6 +35,7 @@ test {
     _ = sync_command;
     _ = install_command;
     _ = search_command;
+    _ = upgrade_command;
     _ = config;
     _ = config_model;
     _ = config_output;

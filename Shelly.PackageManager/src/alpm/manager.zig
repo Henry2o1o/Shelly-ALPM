@@ -641,6 +641,10 @@ pub const Manager = struct {
             self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {};
             return TransactionError.PrepareFailed;
         }
+        try self.predownloadPreparedPackages(trans_flags);
+
+        // The prepare error list does not belong to the commit call.
+        data = null;
         if (rawLibalpm.alpm_trans_commit(self.handle, &data) != 0) {
             self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {};
             return TransactionError.CommitFailed;
@@ -857,9 +861,7 @@ pub const Manager = struct {
             return TransactionError.PrepareFailed;
         }
 
-        if (!trans_flags.dbonly) {
-            try self.download_prepared_packages();
-        }
+        try self.predownloadPreparedPackages(trans_flags);
 
         data = null;
         if (rawLibalpm.alpm_trans_commit(self.handle, &data) != 0) {
@@ -1818,6 +1820,14 @@ pub const Manager = struct {
             level & rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL == 0;
     }
 
+    /// Downloads every repository package selected by a prepared transaction
+    /// before libalpm begins its commit. DB-only transactions intentionally do
+    /// not require package archives.
+    fn predownloadPreparedPackages(self: *Manager, trans_flags: TransFlag) TransactionError!void {
+        if (trans_flags.dbonly) return;
+        try self.download_prepared_packages();
+    }
+
     fn download_prepared_packages(self: *Manager) TransactionError!void {
         const download_future = std.Io.Future(downloader.DownloadError!void);
 
@@ -1869,6 +1879,7 @@ pub const Manager = struct {
         const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.config.cache_directory, package.file_name() }) catch return;
         defer self.allocator.free(dest);
         const sig_dest = std.fmt.allocPrint(self.allocator, "{s}.sig", .{dest}) catch return;
+        defer self.allocator.free(sig_dest);
 
         var urls = database.servers();
         while (urls.next()) |url| {

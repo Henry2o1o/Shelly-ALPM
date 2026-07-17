@@ -967,6 +967,73 @@ test "install_packages returns PackageFetchFailed when a target cannot be resolv
     );
 }
 
+test "install_packages predownloads prepared repository packages before commit" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.createSyncDatabase(allocator);
+
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{workspace.root});
+    defer allocator.free(cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = auto\n" ++
+            "SigLevel = Never\n" ++
+            "DBPath = {s}\n" ++
+            "CacheDir = {s}\n" ++
+            "\n" ++
+            "[seafoam-labs]\n" ++
+            "Server = file://{s}/mirror\n",
+        .{ workspace.db_path, cache_path, workspace.root },
+    );
+    defer allocator.free(config);
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const CancelDownload = struct {
+        context: *operations.OperationContext,
+        saw_download: bool = false,
+
+        fn handle(data: ?*anyopaque, event: operations.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (event) {
+                .started => |started| {
+                    if (started.envelope.backend != .download) return;
+                    self.saw_download = true;
+                    self.context.cancel();
+                },
+                else => {},
+            }
+        }
+    };
+    var context = operations.OperationContext.init(allocator, io);
+    defer context.deinit();
+    var cancel_download: CancelDownload = .{ .context = &context };
+    _ = try context.subscribe(.{ .function = CancelDownload.handle, .data = &cancel_download });
+    mgr.setOperationContext(&context);
+
+    var package_names = [_][:0]const u8{"remote-provider"};
+    try testing.expectError(
+        error.UpdateFetchFailed,
+        mgr.install_packages(&package_names, .{}),
+    );
+    try testing.expect(cancel_download.saw_download);
+}
+
 // ---------------------------------------------------------------------------
 // install_local_packages
 // ---------------------------------------------------------------------------

@@ -360,6 +360,13 @@ test "native help overrides describe the implementation that actually executes" 
     const install_flatpak = manifest.findByPath("shelly install flatpak").?;
     try std.testing.expect(std.mem.indexOf(u8, install_flatpak.implementation.?, "install_flatpak") != null);
     try std.testing.expect(std.mem.indexOf(u8, install_flatpak.description.?, "AppStream") != null);
+
+    const upgrade_standard = manifest.findByPath("shelly upgrade standard").?;
+    try std.testing.expectEqualStrings("native", upgrade_standard.status);
+    try std.testing.expect(std.mem.indexOf(u8, upgrade_standard.implementation.?, "sync_system_update") != null);
+    try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade aur").?.implementation.?, "updatePackages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade flatpak").?.implementation.?, "upgrade_flatpaks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, manifest.findByPath("shelly upgrade appimage").?.implementation.?, "UpdateManager") != null);
 }
 
 test "every action help entry explains its command instead of using a generic placeholder" {
