@@ -367,6 +367,9 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "shelly install aur <packages>") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\nTypes:\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -IA]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.installPackages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AppImageManager.installAppImage") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.install_flatpak") != null);
 }
 
 test "sync action help lists standard and Flatpak variants" {

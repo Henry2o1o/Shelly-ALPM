@@ -206,7 +206,7 @@ fn projectActionFirst(allocator: std.mem.Allocator, frozen: Manifest) !Manifest 
                 .owner = source.owner,
                 .backends = source.backends,
                 .risk = source.risk,
-                .status = source.status,
+                .status = if (candidate.help.implementation != null) "native" else source.status,
                 .notes = source.notes,
                 .implementation = candidate.help.implementation,
                 .actionCode = candidate.action_code,
@@ -345,6 +345,21 @@ test "native help overrides describe the implementation that actually executes" 
         flatpak.implementation.?,
     );
     try std.testing.expect(std.mem.indexOf(u8, flatpak.arguments[0].description.?, "local AppStream") != null);
+
+    const install_standard = manifest.findByPath("shelly install standard").?;
+    try std.testing.expectEqualStrings("native", install_standard.status);
+    try std.testing.expect(std.mem.indexOf(u8, install_standard.implementation.?, "install_packages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, install_standard.implementation.?, "downloadToFile") != null);
+
+    const install_appimage = manifest.findByPath("shelly install appimage").?;
+    try std.testing.expectEqualStrings("Zigalpm.AppImageManager.installAppImage", install_appimage.implementation.?);
+
+    const install_aur = manifest.findByPath("shelly install aur").?;
+    try std.testing.expect(std.mem.indexOf(u8, install_aur.implementation.?, "installDependenciesOnly") != null);
+
+    const install_flatpak = manifest.findByPath("shelly install flatpak").?;
+    try std.testing.expect(std.mem.indexOf(u8, install_flatpak.implementation.?, "install_flatpak") != null);
+    try std.testing.expect(std.mem.indexOf(u8, install_flatpak.description.?, "AppStream") != null);
 }
 
 test "every action help entry explains its command instead of using a generic placeholder" {

@@ -68,7 +68,25 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .source_path = "shelly install", .action = "install", .type_name = "standard", .action_code = 'I', .type_code = 'S' },
+    .{
+        .source_path = "shelly install",
+        .action = "install",
+        .type_name = "standard",
+        .action_code = 'I',
+        .type_code = 'S',
+        .help = .{
+            .description = "Install ALPM repository packages, local Arch or Shelly binary archives, and package archives downloaded from HTTP(S) URLs.",
+            .implementation = "Zigalpm.AlpmManager.install_packages / install_local_packages / install_dependencies_only; Zigalpm.LocalManager.installBinariesPackage; Zigalpm.shared.Downloader.downloadToFile for URLs",
+            .arguments = &.{.{
+                .name = "packages",
+                .description = "One or more repository names, repository-qualified names, local archive paths, or HTTP(S) package URLs",
+            }},
+            .options = &.{
+                .{ .name = "--no-deps", .description = "Pass the ALPM nodeps transaction flag when installing repository packages" },
+                .{ .name = "--upgrade", .description = "Synchronize and upgrade the standard system before installing the requested repository packages" },
+            },
+        },
+    },
     .{ .source_path = "shelly upgrade", .action = "upgrade", .type_name = "standard", .action_code = 'U', .type_code = 'S' },
     .{ .source_path = "shelly upgrade-all", .action = "upgrade", .type_name = "all", .action_code = 'U', .type_code = 'X' },
     .{ .source_path = "shelly downgrade", .action = "downgrade", .type_name = "standard", .action_code = 'D', .type_code = 'S' },
@@ -103,7 +121,21 @@ pub const variants = [_]Variant{
     .{ .source_path = "shelly docs", .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'U' },
     .{ .source_path = "shelly completions", .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'U' },
 
-    .{ .source_path = "shelly appimage install", .action = "install", .type_name = "appimage", .action_code = 'I', .type_code = 'I' },
+    .{
+        .source_path = "shelly appimage install",
+        .action = "install",
+        .type_name = "appimage",
+        .action_code = 'I',
+        .type_code = 'I',
+        .help = .{
+            .description = "Install a local AppImage into the configured AppImage directory and update Shelly's AppImage metadata database.",
+            .implementation = "Zigalpm.AppImageManager.installAppImage",
+            .arguments = &.{.{
+                .name = "location",
+                .description = "Path to an existing file whose extension is .AppImage",
+            }},
+        },
+    },
     .{ .source_path = "shelly appimage remove", .action = "remove", .type_name = "appimage", .action_code = 'R', .type_code = 'I' },
     .{ .source_path = "shelly appimage list", .action = "list", .type_name = "appimage", .action_code = 'L', .type_code = 'I' },
     .{ .source_path = "shelly appimage upgrade", .action = "upgrade", .type_name = "appimage", .action_code = 'U', .type_code = 'I' },
@@ -153,7 +185,25 @@ pub const variants = [_]Variant{
         .help = .{ .implementation = "config_manager.Manager.update(\"ParallelDownloadCount\", value)" },
     },
 
-    .{ .source_path = "shelly aur install", .action = "install", .type_name = "aur", .action_code = 'I', .type_code = 'A' },
+    .{
+        .source_path = "shelly aur install",
+        .action = "install",
+        .type_name = "aur",
+        .action_code = 'I',
+        .type_code = 'A',
+        .help = .{
+            .description = "Fetch, review, build, and install one or more AUR packages, or install only one package's build dependencies.",
+            .implementation = "Zigalpm.AurManager.installPackages / installDependenciesOnly",
+            .arguments = &.{.{
+                .name = "packages",
+                .description = "One or more AUR package names; dependency-only mode accepts exactly one package",
+            }},
+            .options = &.{
+                .{ .name = "--chroot", .description = "Build packages in a clean chroot with makechrootpkg" },
+                .{ .name = "--check", .description = "Enable the PKGBUILD check() function during package builds" },
+            },
+        },
+    },
     .{ .source_path = "shelly aur install-version", .action = "install-version", .type_name = "aur", .action_code = 'V', .type_code = 'A' },
     .{ .source_path = "shelly aur remove", .action = "remove", .type_name = "aur", .action_code = 'R', .type_code = 'A' },
     .{ .source_path = "shelly aur update", .action = "update", .type_name = "aur", .action_code = 'T', .type_code = 'A' },
@@ -236,7 +286,27 @@ pub const variants = [_]Variant{
         .help = .{ .description = "Receive one or more keys from the configured keyserver." },
     },
 
-    .{ .source_path = "shelly flatpak install", .action = "install", .type_name = "flatpak", .action_code = 'I', .type_code = 'F' },
+    .{
+        .source_path = "shelly flatpak install",
+        .action = "install",
+        .type_name = "flatpak",
+        .action_code = 'I',
+        .type_code = 'F',
+        .help = .{
+            .description = "Install a Flatpak application or runtime at system or user scope, resolving omitted remotes and friendly names through cached AppStream catalogs.",
+            .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs; Zigalpm.FlatpakManager.install_flatpak",
+            .arguments = &.{.{
+                .name = "package",
+                .description = "Flatpak application/runtime ID or a friendly-name search term resolved from local AppStream metadata",
+            }},
+            .options = &.{
+                .{ .name = "--user", .description = "Install into the invoking user's Flatpak installation instead of the system installation" },
+                .{ .name = "--remote", .description = "Install from this remote instead of resolving a remote from cached AppStream metadata" },
+                .{ .name = "--branch", .description = "Install this branch; defaults to stable" },
+                .{ .name = "--runtime", .description = "Build a runtime ref instead of an application ref" },
+            },
+        },
+    },
     .{ .source_path = "shelly flatpak update", .action = "update", .type_name = "flatpak", .action_code = 'T', .type_code = 'F' },
     .{ .source_path = "shelly flatpak list", .action = "list", .type_name = "flatpak", .action_code = 'L', .type_code = 'F' },
     .{ .source_path = "shelly flatpak list-updates", .action = "list-updates", .type_name = "flatpak", .action_code = 'P', .type_code = 'F' },
