@@ -7,6 +7,10 @@ pub const Error = error{
     ElevationFailed,
 };
 
+pub fn isRoot() bool {
+    return builtin.os.tag == .linux and std.os.linux.geteuid() == 0;
+}
+
 /// Relaunches the current executable through the configured privilege
 /// elevator when the process is not already root. A non-null result is the
 /// elevated child's exit code and must be returned by the caller immediately.
@@ -15,7 +19,7 @@ pub fn relaunchIfNeeded(
     arguments: []const []const u8,
 ) !?u8 {
     if (builtin.os.tag != .linux) return error.UnsupportedPlatform;
-    if (std.os.linux.geteuid() == 0) return null;
+    if (isRoot()) return null;
 
     const executable = try std.process.executablePathAlloc(context.io, context.allocator);
     defer context.allocator.free(executable);

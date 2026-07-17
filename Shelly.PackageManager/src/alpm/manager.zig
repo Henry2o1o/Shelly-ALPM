@@ -164,6 +164,7 @@ pub const Manager = struct {
     temp_root_path: []const u8,
     show_hidden_packages: bool = false,
     operation_context: ?*operation_api.OperationContext = null,
+    unexpected_fetch_reported: std.atomic.Value(bool) = .init(false),
 
     /// If null is passed for config it will use the default /etc/pacman.conf.
     /// The caller owns the returned manager and must call deinit when finished.
@@ -1827,6 +1828,7 @@ pub const Manager = struct {
     /// not require package archives.
     fn predownloadPreparedPackages(self: *Manager, trans_flags: TransFlag) TransactionError!void {
         if (trans_flags.dbonly) return;
+        self.unexpected_fetch_reported.store(false, .release);
         try self.download_prepared_packages();
     }
 
@@ -2102,9 +2104,10 @@ pub const Manager = struct {
         return self.allocator.dupeSentinel(u8, step2, 0) catch null;
     }
 
-    // All remote transaction paths predownload their prepared packages. Keep a
-    // fetch callback installed solely as an invariant guard: returning -1 tells
-    // libalpm to abort if a package unexpectedly is not present in its cache.
+    // libalpm invokes an external fetch callback even when a prepared artifact
+    // is already cached. Validate that predownload populated the directory and
+    // report the file as current; never perform network or filesystem writes
+    // from this callback.
     fn fetchCallback(
         ctx: ?*anyopaque,
         url: [*c]const u8,
@@ -2115,10 +2118,44 @@ pub const Manager = struct {
         if (ctx == null or url == null or local_path == null) return -1;
 
         const self: *Manager = @ptrCast(@alignCast(ctx.?));
+        const file_name = fetchUrlBasename(std.mem.span(url)) orelse {
+            self.reportUnexpectedFetch();
+            return -1;
+        };
+        const cached_path = std.fs.path.join(
+            self.allocator,
+            &.{ std.mem.span(local_path), file_name },
+        ) catch {
+            self.reportUnexpectedFetch();
+            return -1;
+        };
+        defer self.allocator.free(cached_path);
+
+        std.Io.Dir.cwd().access(self.io(), cached_path, .{}) catch {
+            self.reportUnexpectedFetch();
+            return -1;
+        };
+        return 1;
+    }
+
+    fn reportUnexpectedFetch(self: *Manager) void {
+        if (self.unexpected_fetch_reported.swap(true, .acq_rel)) return;
         self.dispatcher.raiseError(.{
             .message = "Unexpected libalpm fetch request: prepared package is missing from the cache.",
         });
-        return -1;
+    }
+
+    fn fetchUrlBasename(url: []const u8) ?[]const u8 {
+        var end = url.len;
+        if (std.mem.indexOfScalar(u8, url, '?')) |index| end = @min(end, index);
+        if (std.mem.indexOfScalar(u8, url, '#')) |index| end = @min(end, index);
+        const path = url[0..end];
+        const slash = std.mem.lastIndexOfScalar(u8, path, '/');
+        const file_name = if (slash) |index| path[index + 1 ..] else path;
+        if (file_name.len == 0 or
+            std.mem.eql(u8, file_name, ".") or
+            std.mem.eql(u8, file_name, "..")) return null;
+        return file_name;
     }
 
     fn onDownloadEvent(ctx: ?*anyopaque, event: downloader.DownloadEvent) void {
@@ -2901,10 +2938,14 @@ test "resolveServer returns null and releases intermediates on allocation failur
     }
 }
 
-test "fetchCallback rejects every libalpm fetch request" {
+test "fetchCallback accepts prepared cache entries and rejects missing artifacts" {
     var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
     defer mgr.dispatcher.deinit();
+    mgr.threaded = .init(testing.allocator, .{});
+    defer mgr.threaded.deinit();
+    mgr.unexpected_fetch_reported = .init(false);
 
     var capture = ErrorCapture{};
     _ = try mgr.dispatcher.addErrorHandler(.{
@@ -2912,6 +2953,23 @@ test "fetchCallback rejects every libalpm fetch request" {
         .data = @ptrCast(&capture),
     });
 
+    var temporary = testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const absolute_length = try temporary.dir.realPath(testing.io, &absolute_buffer);
+    const cache_path = try testing.allocator.dupeZ(u8, absolute_buffer[0..absolute_length]);
+    defer testing.allocator.free(cache_path);
+    var cached_file = try temporary.dir.createFile(testing.io, "prepared.pkg.tar.zst", .{});
+    cached_file.close(testing.io);
+
+    try testing.expectEqual(@as(c_int, 1), Manager.fetchCallback(
+        @ptrCast(&mgr),
+        "https://example.invalid/prepared.pkg.tar.zst?mirror=primary",
+        cache_path.ptr,
+        0,
+    ));
+    try testing.expectEqual(@as(usize, 0), capture.len);
+
     try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
         @ptrCast(&mgr),
         null,
@@ -2932,14 +2990,21 @@ test "fetchCallback rejects every libalpm fetch request" {
     ));
     try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
         @ptrCast(&mgr),
-        "https://example.invalid/package",
-        "/tmp",
+        "https://example.invalid/missing.pkg.tar.zst",
+        cache_path.ptr,
+        0,
+    ));
+    try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
+        @ptrCast(&mgr),
+        "https://backup.example.invalid/still-missing.pkg.tar.zst",
+        cache_path.ptr,
         0,
     ));
     try testing.expectEqualStrings(
         "Unexpected libalpm fetch request: prepared package is missing from the cache.",
         capture.text(),
     );
+    try testing.expectEqual(@as(usize, 1), capture.count);
 }
 
 // ---------------------------------------------------------------------------
@@ -3944,6 +4009,7 @@ fn capturePacsave(data: ?*anyopaque, args: events.PacsaveArgs) void {
 const ErrorCapture = struct {
     buf: [2048]u8 = undefined,
     len: usize = 0,
+    count: usize = 0,
 
     fn text(self: *const ErrorCapture) []const u8 {
         return self.buf[0..self.len];
@@ -3952,6 +4018,7 @@ const ErrorCapture = struct {
 
 fn captureError(data: ?*anyopaque, args: events.ErrorArgs) void {
     const cap: *ErrorCapture = @ptrCast(@alignCast(data));
+    cap.count += 1;
     const n = @min(args.message.len, cap.buf.len);
     @memcpy(cap.buf[0..n], args.message[0..n]);
     cap.len = n;

@@ -4,6 +4,7 @@ const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
+const table = @import("../output/table.zig");
 const ui_operation = @import("../output/ui_operation.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
@@ -81,6 +82,13 @@ pub fn dispatch(
     if (!isUpgradePath(invocation.command.path)) return null;
 
     if (!invocation.globals.ui_mode and requiresElevation(invocation)) {
+        if (shouldPrepareStandardPreview(invocation, elevation.isRoot())) {
+            const preview = prepareStandardUpgradePreview(context, invocation) catch |err| {
+                try context.stderr.print("Unable to prepare upgrade plan: {t}\n", .{err});
+                return 1;
+            };
+            if (!preview.proceed or !preview.has_updates) return 0;
+        }
         const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
             try context.stderr.print("Unable to elevate upgrade: {t}\n", .{err});
             return 1;
@@ -89,6 +97,148 @@ pub fn dispatch(
     }
 
     return try executeWithRunner(context, invocation, real_runner);
+}
+
+const PreviewResult = struct {
+    has_updates: bool,
+    proceed: bool,
+};
+
+const SizeDisplay = enum {
+    bytes,
+    megabytes,
+    gigabytes,
+};
+
+fn prepareStandardUpgradePreview(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) !PreviewResult {
+    try context.stdout.writeAll("Preparing standard upgrade plan...\n");
+    try context.stdout.flush();
+
+    const database_path = try xdg.shellyCache(context, &.{"db"});
+    defer context.allocator.free(database_path);
+    try std.Io.Dir.cwd().createDirPath(context.io, database_path);
+
+    const manager = try Zigalpm.AlpmManager.init(
+        context.allocator,
+        context.environ,
+        null,
+        false,
+        database_path,
+    );
+    defer manager.deinit();
+    try manager.sync(false);
+
+    const updates = try manager.get_updates_available();
+    defer Zigalpm.alpm.OwnedPackageWithUpdate.deinitSlice(context.allocator, updates);
+    if (updates.len == 0) {
+        try context.stdout.writeAll("Standard Packages are up to date!\n");
+        try context.stdout.flush();
+        return .{ .has_updates = false, .proceed = false };
+    }
+
+    try renderStandardUpgradePreview(context, updates);
+    if (invocation.globals.no_confirm) return .{ .has_updates = true, .proceed = true };
+
+    const proceed = try confirmPreparedUpgrade(context);
+    if (!proceed) {
+        try context.stdout.writeAll("Upgrade cancelled.\n");
+        try context.stdout.flush();
+    }
+    return .{ .has_updates = true, .proceed = proceed };
+}
+
+fn renderStandardUpgradePreview(
+    context: *runtime.RuntimeContext,
+    updates: []const Zigalpm.alpm.OwnedPackageWithUpdate,
+) !void {
+    var storage = std.heap.ArenaAllocator.init(context.allocator);
+    defer storage.deinit();
+    const allocator = storage.allocator();
+    const size_display = try loadSizeDisplay(context);
+    const rows = try allocator.alloc([]const []const u8, updates.len);
+    var total_download: i128 = 0;
+    var net_change: i128 = 0;
+
+    for (updates, rows) |update, *row| {
+        const download_size: i128 = @max(0, @as(i128, update.new_package.download_size()));
+        const size_change = @as(i128, update.new_package.install_size()) -
+            @as(i128, update.old_package.install_size());
+        total_download += download_size;
+        net_change += size_change;
+
+        const cells = try allocator.alloc([]const u8, 6);
+        cells[0] = update.new_package.repository() orelse "unknown";
+        cells[1] = update.new_package.name() orelse "unknown";
+        cells[2] = update.old_package.version() orelse "unknown";
+        cells[3] = update.new_package.version() orelse "unknown";
+        cells[4] = try formatUpgradeSize(allocator, size_display, size_change);
+        cells[5] = try formatUpgradeSize(allocator, size_display, download_size);
+        row.* = cells;
+    }
+
+    try context.stdout.writeAll("The following upgrades are planned:\n\n");
+    try table.write(
+        context.allocator,
+        context.stdout,
+        &.{ "Repository", "Package", "Old Version", "New Version", "Net Change", "Download Size" },
+        rows,
+        output.supportsAnsi(context),
+    );
+    const formatted_download = try formatUpgradeSize(allocator, size_display, total_download);
+    const formatted_change = try formatUpgradeSize(allocator, size_display, net_change);
+    try context.stdout.print(
+        "\nTotal Download Size: {s}\nNet Upgrade Size: {s}\n\n",
+        .{ formatted_download, formatted_change },
+    );
+    try context.stdout.flush();
+}
+
+fn confirmPreparedUpgrade(context: *runtime.RuntimeContext) !bool {
+    const reader = context.stdin orelse return false;
+    while (true) {
+        try context.stdout.writeAll("Proceed with upgrade? (y/N) ");
+        try context.stdout.flush();
+        const input = (try reader.takeDelimiter('\n')) orelse return false;
+        const answer = std.mem.trim(u8, input, " \t\r\n");
+        if (answer.len == 0 or std.ascii.eqlIgnoreCase(answer, "n") or
+            std.ascii.eqlIgnoreCase(answer, "no")) return false;
+        if (std.ascii.eqlIgnoreCase(answer, "y") or
+            std.ascii.eqlIgnoreCase(answer, "yes")) return true;
+        try context.stdout.writeAll("Please answer 'y' or 'n'.\n");
+    }
+}
+
+fn loadSizeDisplay(context: *runtime.RuntimeContext) !SizeDisplay {
+    const manager = config_manager.Manager.init(context);
+    const configuration = manager.read() catch return .megabytes;
+    const value = configuration.values.get("FileSizeDisplay") orelse return .megabytes;
+    if (value != .string) return .megabytes;
+    if (std.ascii.eqlIgnoreCase(value.string, "Bytes")) return .bytes;
+    if (std.ascii.eqlIgnoreCase(value.string, "Gigabytes")) return .gigabytes;
+    return .megabytes;
+}
+
+fn formatUpgradeSize(
+    allocator: std.mem.Allocator,
+    display: SizeDisplay,
+    bytes: i128,
+) ![]const u8 {
+    return switch (display) {
+        .bytes => std.fmt.allocPrint(allocator, "{d} B", .{bytes}),
+        .megabytes => std.fmt.allocPrint(
+            allocator,
+            "{d:.2} MiB",
+            .{@as(f64, @floatFromInt(bytes)) / 1048576.0},
+        ),
+        .gigabytes => std.fmt.allocPrint(
+            allocator,
+            "{d:.2} GiB",
+            .{@as(f64, @floatFromInt(bytes)) / 1073741824.0},
+        ),
+    };
 }
 
 fn executeWithRunner(
@@ -447,6 +597,15 @@ fn requiresElevation(invocation: *const parser.Invocation) bool {
     return backendEnabled(invocation, .standard) or backendEnabled(invocation, .aur);
 }
 
+fn shouldPrepareStandardPreview(
+    invocation: *const parser.Invocation,
+    running_as_root: bool,
+) bool {
+    return !running_as_root and
+        !invocation.globals.ui_mode and
+        std.mem.eql(u8, invocation.command.path, standard_command_path);
+}
+
 fn backendEnabled(invocation: *const parser.Invocation, backend: Backend) bool {
     return switch (backend) {
         .standard => !optionEnabled(invocation, "--no-repo"),
@@ -517,6 +676,43 @@ fn isUpgradePath(path: []const u8) bool {
         std.mem.eql(u8, path, appimage_command_path) or
         std.mem.eql(u8, path, aur_command_path) or
         std.mem.eql(u8, path, flatpak_command_path);
+}
+
+test "standard upgrade preview runs only before non-root elevation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    const standard = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "standard", "--no-confirm" },
+    );
+    try std.testing.expect(standard == .dispatch);
+    try std.testing.expect(shouldPrepareStandardPreview(&standard.dispatch, false));
+    try std.testing.expect(!shouldPrepareStandardPreview(&standard.dispatch, true));
+
+    const ui = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "standard", "--ui-mode", "--no-confirm" },
+    );
+    try std.testing.expect(ui == .dispatch);
+    try std.testing.expect(!shouldPrepareStandardPreview(&ui.dispatch, false));
+
+    const all = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm" },
+    );
+    try std.testing.expect(all == .dispatch);
+    try std.testing.expect(!shouldPrepareStandardPreview(&all.dispatch, false));
+}
+
+test "upgrade preview size formatting preserves negative net changes" {
+    const formatted = try formatUpgradeSize(std.testing.allocator, .megabytes, -1048576);
+    defer std.testing.allocator.free(formatted);
+    try std.testing.expectEqualStrings("-1.00 MiB", formatted);
 }
 
 test "upgrade routes every action-first type through the combined handler" {
