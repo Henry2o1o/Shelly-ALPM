@@ -282,7 +282,7 @@ test "parses local options and recursive globals around command tokens" {
         "firefox",
         "--limit",
         "25",
-        "-a",
+        "-v",
         "--verbose=false",
     });
     try std.testing.expect(outcome == .dispatch);

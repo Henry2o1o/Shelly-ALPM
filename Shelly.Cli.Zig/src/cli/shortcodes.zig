@@ -5,13 +5,14 @@ const spec = @import("spec.zig");
 pub const Translation = union(enum) {
     unchanged: []const []const u8,
     translated: []const []const u8,
+    expanded: []const []const []const u8,
     failure: []const u8,
 
     pub fn arguments(self: Translation) ?[]const []const u8 {
         return switch (self) {
             .unchanged => |value| value,
             .translated => |value| value,
-            .failure => null,
+            .expanded, .failure => null,
         };
     }
 };
@@ -40,6 +41,9 @@ pub fn translate(
     const action_code = token[1];
     if (!std.ascii.isAlphabetic(action_code) or !catalog.hasActionCode(action_code))
         return .{ .unchanged = args };
+
+    if (try translateCombinedSearch(allocator, manifest, args, token)) |translation|
+        return translation;
 
     const type_code = token[2];
     if (!std.ascii.isAlphabetic(type_code) or catalog.findTypeByCode(type_code) == null) {
@@ -84,6 +88,81 @@ pub fn translate(
     }
     try result.appendSlice(allocator, args[1..]);
     return .{ .translated = try result.toOwnedSlice(allocator) };
+}
+
+fn translateCombinedSearch(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    args: []const []const u8,
+    token: []const u8,
+) !?Translation {
+    if (token[1] != 'S') return null;
+
+    var selected: std.ArrayList(*const catalog.Variant) = .empty;
+    var modifiers: std.ArrayList(u8) = .empty;
+    var seen = [_]bool{false} ** 256;
+    for (token[2..]) |code| {
+        const variant = catalog.findVariantByCodes('S', code) orelse {
+            try modifiers.append(allocator, code);
+            continue;
+        };
+        if (!std.mem.eql(u8, variant.action, "search")) {
+            try modifiers.append(allocator, code);
+            continue;
+        }
+        if (seen[code]) {
+            return .{ .failure = try std.fmt.allocPrint(
+                allocator,
+                "Duplicate search type '{c}' in shortcode.",
+                .{code},
+            ) };
+        }
+        seen[code] = true;
+        try selected.append(allocator, variant);
+    }
+    if (selected.items.len < 2) return null;
+
+    var commands: std.ArrayList(*const spec.Command) = .empty;
+    for (selected.items) |variant| {
+        const path = try std.fmt.allocPrint(
+            allocator,
+            "shelly {s} {s}",
+            .{ variant.action, variant.type_name },
+        );
+        try commands.append(allocator, manifest.findByPath(path) orelse return error.InvalidCatalog);
+    }
+
+    var expanded: std.ArrayList([]const []const u8) = .empty;
+    for (selected.items, commands.items) |variant, command| {
+        var result: std.ArrayList([]const u8) = .empty;
+        try result.appendSlice(allocator, &.{ variant.action, variant.type_name });
+        for (modifiers.items) |modifier| {
+            const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
+            if (findLocalOption(command, alias) != null) {
+                try result.append(allocator, alias);
+            } else if (findRecursiveHelpOption(manifest, alias)) |option| {
+                try result.append(allocator, option.name);
+            }
+        }
+        try result.appendSlice(allocator, args[1..]);
+        try expanded.append(allocator, try result.toOwnedSlice(allocator));
+    }
+
+    for (modifiers.items) |modifier| {
+        const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
+        if (findRecursiveHelpOption(manifest, alias) != null) continue;
+        for (commands.items) |command| {
+            if (findLocalOption(command, alias) != null) break;
+        } else {
+            return .{ .failure = try std.fmt.allocPrint(
+                allocator,
+                "Unknown modifier '{c}' for combined search.",
+                .{modifier},
+            ) };
+        }
+    }
+
+    return .{ .expanded = try expanded.toOwnedSlice(allocator) };
 }
 
 fn findLocalOption(command: *const spec.Command, alias: []const u8) ?*const spec.Option {
@@ -167,6 +246,49 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(
         allocator,
         &manifest,
+        &.{ "-Ssv", "query" },
+        &.{ "search", "standard", "-v", "query" },
+    );
+    try expectExpandedTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Ssafv", "query" },
+        &.{
+            &.{ "search", "standard", "-v", "query" },
+            &.{ "search", "aur", "query" },
+            &.{ "search", "flatpak", "query" },
+        },
+    );
+    try expectExpandedTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Sasv", "query" },
+        &.{
+            &.{ "search", "aur", "query" },
+            &.{ "search", "standard", "-v", "query" },
+        },
+    );
+    try expectExpandedTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Ssva", "query" },
+        &.{
+            &.{ "search", "standard", "-v", "query" },
+            &.{ "search", "aur", "query" },
+        },
+    );
+    try expectExpandedTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Ssav", "query" },
+        &.{
+            &.{ "search", "standard", "-v", "query" },
+            &.{ "search", "aur", "query" },
+        },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
         &.{ "-Vk", "ABCD" },
         &.{ "recv", "keyring", "ABCD" },
     );
@@ -243,6 +365,16 @@ test "uses centralized effective modifiers and rejects invalid shortcode types" 
         "Action code 'S' is not available for type 'i'. Valid types: s, c, a, k, f",
         invalid_pair.failure,
     );
+    const duplicate_search_type = try translate(allocator, &manifest, &.{ "-Ssas", "query" });
+    try std.testing.expectEqualStrings(
+        "Duplicate search type 's' in shortcode.",
+        duplicate_search_type.failure,
+    );
+    const invalid_combined_modifier = try translate(allocator, &manifest, &.{ "-Ssao", "query" });
+    try std.testing.expectEqualStrings(
+        "Unknown modifier 'o' for combined search.",
+        invalid_combined_modifier.failure,
+    );
 }
 
 test "passes ordinary long form and unrelated options through unchanged" {
@@ -301,4 +433,20 @@ fn expectTranslation(
     try std.testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |expected_argument, actual_argument|
         try std.testing.expectEqualStrings(expected_argument, actual_argument);
+}
+
+fn expectExpandedTranslation(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    input: []const []const u8,
+    expected: []const []const []const u8,
+) !void {
+    const result = try translate(allocator, manifest, input);
+    try std.testing.expect(result == .expanded);
+    try std.testing.expectEqual(expected.len, result.expanded.len);
+    for (expected, result.expanded) |expected_arguments, actual_arguments| {
+        try std.testing.expectEqual(expected_arguments.len, actual_arguments.len);
+        for (expected_arguments, actual_arguments) |expected_argument, actual_argument|
+            try std.testing.expectEqualStrings(expected_argument, actual_argument);
+    }
 }

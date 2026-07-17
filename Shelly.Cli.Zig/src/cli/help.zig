@@ -231,6 +231,8 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\  Grammar: -<UppercaseAction><lowercaseType><modifiers...> [positionals]
         \\  Uppercase Action selects the operation, lowercase Type selects its target, and
         \\  modifiers are that action/type pair's short flags (case-sensitive).
+        \\  Search may combine standard, AUR, and Flatpak types (s/a/f); modifiers apply
+        \\  only to selected search types that support them.
         \\
         \\  Types:
         \\
@@ -250,6 +252,8 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Ux            ->  upgrade all
         \\    -Isu firefox   ->  install standard -u firefox
         \\    -Sa query      ->  search aur query
+        \\    -Ssa query     ->  search standard and aur for query
+        \\    -Ssafv query   ->  search standard (available), aur, and flatpak for query
         \\    -Sah           ->  search aur --help
         \\    -Vk ABCD       ->  recv keyring ABCD
         \\
@@ -448,6 +452,9 @@ test "help documents only the action-type shortcode grammar" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ua") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ux") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Vk ABCD") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Search may combine standard, AUR, and Flatpak types (s/a/f)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssa query") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssafv query") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\n    s  standard\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\n    S  standard\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-ISu firefox") == null);

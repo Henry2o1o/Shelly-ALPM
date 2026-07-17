@@ -627,7 +627,7 @@ pub fn optionsFor(comptime action: []const u8, comptime type_name: []const u8) [
 fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Option {
     if (pathIs(action, type_name, "search", "standard")) return &.{
         flag("--repos", &.{"-r"}, "List configured ALPM repositories"),
-        flag("--available", &.{"-a"}, "Search synchronized ALPM repositories"),
+        flag("--available", &.{"-v"}, "Search synchronized ALPM repositories"),
         flag("--installed", &.{"-i"}, "Search the local ALPM database"),
         flag("--local", &.{"-l"}, "Search Shelly-managed local binaries"),
         integerOption("--limit", &.{}, "Maximum results per page"),
