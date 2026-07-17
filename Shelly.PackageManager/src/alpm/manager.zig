@@ -1436,6 +1436,8 @@ pub const Manager = struct {
             return TransactionError.PrepareFailed;
         }
 
+        try self.predownloadPreparedPackages(trans_flags);
+
         data = null;
         if (rawLibalpm.alpm_trans_commit(self.handle, &data) != 0) {
             self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {
@@ -2100,41 +2102,23 @@ pub const Manager = struct {
         return self.allocator.dupeSentinel(u8, step2, 0) catch null;
     }
 
-    // Matches libalpm's `alpm_cb_fetch`: receives C strings and an int flag and
-    // returns 0 (downloaded), 1 (already up to date), or -1 (error).
+    // All remote transaction paths predownload their prepared packages. Keep a
+    // fetch callback installed solely as an invariant guard: returning -1 tells
+    // libalpm to abort if a package unexpectedly is not present in its cache.
     fn fetchCallback(
         ctx: ?*anyopaque,
         url: [*c]const u8,
         local_path: [*c]const u8,
         force: c_int,
     ) callconv(.c) c_int {
-        const self: *Manager = @ptrCast(@alignCast(ctx));
+        _ = force;
+        if (ctx == null or url == null or local_path == null) return -1;
 
-        // libalpm may hand us null pointers; treat that as a hard error.
-        if (url == null or local_path == null) return -1;
-        const url_slice = std.mem.span(url);
-        const local_slice = std.mem.span(local_path);
-
-        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
-        var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
-        defer downloader_instance.deinit();
-        if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
-
-        downloader_instance.setEventCallback(onDownloadEvent, self);
-        switch (downloader_instance.downloadToFile(url_slice, local_slice, force != 0)) {
-            .succes => |succ| {
-                self.dispatcher.raiseInformational(.{ .event_type = .pkg_retrieve_done, .message = succ.destination_path });
-                return 0;
-            },
-            .skipped => |skip| {
-                self.dispatcher.raiseInformational(.{ .event_type = .pkg_retrieve_done, .message = skip.destination_path });
-                return 1;
-            },
-            .failure => |err| {
-                self.dispatcher.raiseError(.{ .message = @errorName(err) });
-                return -1;
-            },
-        }
+        const self: *Manager = @ptrCast(@alignCast(ctx.?));
+        self.dispatcher.raiseError(.{
+            .message = "Unexpected libalpm fetch request: prepared package is missing from the cache.",
+        });
+        return -1;
     }
 
     fn onDownloadEvent(ctx: ?*anyopaque, event: downloader.DownloadEvent) void {
@@ -2917,8 +2901,16 @@ test "resolveServer returns null and releases intermediates on allocation failur
     }
 }
 
-test "fetchCallback rejects null C string arguments" {
+test "fetchCallback rejects every libalpm fetch request" {
     var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var capture = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&capture),
+    });
 
     try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
         @ptrCast(&mgr),
@@ -2932,6 +2924,22 @@ test "fetchCallback rejects null C string arguments" {
         null,
         0,
     ));
+    try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
+        null,
+        "https://example.invalid/package",
+        "/tmp",
+        0,
+    ));
+    try testing.expectEqual(@as(c_int, -1), Manager.fetchCallback(
+        @ptrCast(&mgr),
+        "https://example.invalid/package",
+        "/tmp",
+        0,
+    ));
+    try testing.expectEqualStrings(
+        "Unexpected libalpm fetch request: prepared package is missing from the cache.",
+        capture.text(),
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -281,6 +281,7 @@ pub fn build(b: *std.Build) void {
             "compare_package_versions uses libalpm ordering",
             "dependencyName strips constraints",
             "is_cachyos exposes the detected manager state",
+            "fetchCallback rejects every libalpm fetch request",
             "parses repositories, servers, siglevel and usage",
             "dependency query APIs resolve exact, versioned, and virtual remote packages",
             "install_packages predownloads prepared repository packages before commit",
