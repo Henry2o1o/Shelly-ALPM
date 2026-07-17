@@ -61,7 +61,7 @@ pub const ShellyWindow = extern struct {
         p.rail = null;
         p.chevron_img = null;
         p.nav_buttons = .empty;
-        p.collapsed = false;
+        p.collapsed = true;
         build_shell(self, readNavMode());
         populate_stack(self);
     }
@@ -108,7 +108,8 @@ pub const ShellyWindow = extern struct {
 
         const chevron = gtk.Button.new();
         gtk.Widget.addCssClass(chevron.as(gtk.Widget), "flat");
-        const chevron_img = gtk.Image.newFromIconName("go-previous-symbolic");
+        const chevron_img = gtk.Image.newFromIconName(if (p.collapsed) "go-next-symbolic" else "go-previous-symbolic");
+
         gtk.Widget.setSizeRequest(chevron_img.as(gtk.Widget), ICON_SLOT, -1);
         gtk.Widget.setHalign(chevron_img.as(gtk.Widget), .center);
         gtk.Button.setChild(chevron, chevron_img.as(gtk.Widget));

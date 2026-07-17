@@ -11,6 +11,7 @@ const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const IconResolver = @import("../services/icon_resolver.zig").IconResolver;
 const Package = @import("../models/packages.zig").Package;
 const runtime = @import("../services/runtime.zig");
+const c_string = @import("../helpers/c_string.zig");
 
 pub const PackagePage = extern struct {
     parent_instance: Parent,
@@ -33,6 +34,7 @@ pub const PackagePage = extern struct {
         list_store: *gio.ListStore,
         loading_overlay: *gtk.Box,
         filter: *gtk.CustomFilter,
+        grouping_selection: *gtk.DropDown,
         loading_spinner: *gtk.Spinner,
         error_label: *gtk.Label,
         search_entry: *gtk.SearchEntry,
@@ -40,8 +42,13 @@ pub const PackagePage = extern struct {
         grid_view: *gtk.GridView,
         detail_hbox: *gtk.Box,
         detail_grid_hbox: *gtk.Box,
+        grid_view_button: *gtk.ToggleButton,
+        list_view_button: *gtk.ToggleButton,
         arena: ?*std.heap.ArenaAllocator,
+        selected_group: [64]u8,
+        selected_group_len: usize,
         generation: u64,
+        show_installed_only: bool,
         loaded: bool,
         resolver: IconResolver,
         search_text: [256]u8,
@@ -52,6 +59,7 @@ pub const PackagePage = extern struct {
     const LoadResult = struct {
         page: *Self,
         packages: []Package,
+        groups: []const []const u8,
         arena: *std.heap.ArenaAllocator,
         generation: u64,
         index: usize = 0,
@@ -83,6 +91,7 @@ pub const PackagePage = extern struct {
         p.loaded = false;
         p.arena = null;
         p.generation = 0;
+        p.show_installed_only = false;
 
         p.list_store = gio.ListStore.new(PackageObject.getGObjectType());
         p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
@@ -116,7 +125,22 @@ pub const PackagePage = extern struct {
 
         _ = gtk.SearchEntry.signals.search_changed.connect(p.search_entry, *Self, &on_search_changed, self, .{});
 
+        _ = gobject.Object.signals.notify.connect(
+            p.grouping_selection.as(gobject.Object),
+            *Self,
+            &on_group_notify,
+            self,
+            .{ .detail = "selected" },
+        );
+
         p.resolver = IconResolver.init(std.heap.c_allocator);
+
+        const use_grid = true; // ← read from config
+
+        gtk.ToggleButton.setActive(p.grid_view_button, @intFromBool(use_grid));
+        gtk.ToggleButton.setActive(p.list_view_button, @intFromBool(!use_grid));
+        gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), @intFromBool(use_grid));
+        gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), @intFromBool(!use_grid));
 
         support.connectLifecycle(Self, self);
     }
@@ -360,7 +384,7 @@ pub const PackagePage = extern struct {
                 gobject.Object.setData(selection_check.as(gobject.Object), "syncing", @ptrFromInt(1));
                 gtk.CheckButton.setActive(selection_check, @intFromBool(pkg.isSelected()));
                 gobject.Object.setData(selection_check.as(gobject.Object), "syncing", null);
-             
+
                 const p = page.priv();
                 if (p.resolver.resolve(pkg.getName())) |path| {
                     gtk.Image.setFromFile(icon_image, path);
@@ -390,7 +414,7 @@ pub const PackagePage = extern struct {
         const obj = gtk.ListItem.getItem(list_item) orelse return;
         const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
         pkg.setSelected(gtk.CheckButton.getActive(check) != 0);
-        
+
         //TODO: Cart logic.
     }
 
@@ -398,9 +422,24 @@ pub const PackagePage = extern struct {
         const self: *Self = @ptrCast(@alignCast(data.?));
         const p = self.priv();
 
+        const pkg = gobject.ext.cast(PackageObject, item) orelse return 0;
+
+        if (p.selected_group_len > 0) {
+            const group = p.selected_group[0..p.selected_group_len];
+            var found = false;
+            for (pkg.getGroups()) |g| {
+                if (std.mem.eql(u8, g, group)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return 0;
+        }
+
+        if (p.show_installed_only and !pkg.isInstalled()) return 0;
+
         if (p.search_len < 1) return 1;
 
-        const pkg = gobject.ext.cast(PackageObject, item) orelse return 0;
         const needle = p.search_text[0..p.search_len];
 
         return @intFromBool(contains_ignore_case(pkg.getName(), needle));
@@ -430,6 +469,25 @@ pub const PackagePage = extern struct {
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 
+    fn on_group_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        const p = self.priv();
+
+        const idx = gtk.DropDown.getSelected(p.grouping_selection);
+        if (idx == 0 or idx == std.math.maxInt(u32)) {
+            p.selected_group_len = 0;
+        } else {
+            const model = gtk.DropDown.getModel(p.grouping_selection) orelse return;
+            const obj = gio.ListModel.getObject(model, idx) orelse return;
+            const so = gobject.ext.cast(gtk.StringObject, obj) orelse return;
+            const s = std.mem.span(gtk.StringObject.getString(so));
+            const len = @min(s.len, p.selected_group.len);
+            @memcpy(p.selected_group[0..len], s[0..len]);
+            p.selected_group_len = len;
+        }
+
+        gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+    }
+
     pub fn onMap(self: *Self) void {
         const p = self.priv();
         if (p.loaded) return;
@@ -446,6 +504,8 @@ pub const PackagePage = extern struct {
         thread.detach();
     }
 
+    extern fn malloc_trim(pad: usize) c_int;
+
     //Unmap stuff we owned
     pub fn onUnmap(self: *Self) void {
         const p = self.priv();
@@ -459,6 +519,8 @@ pub const PackagePage = extern struct {
             std.heap.c_allocator.destroy(a);
             p.arena = null;
         }
+
+        _ = malloc_trim(0);
     }
 
     fn load_worker(page: *Self, generation: u64) void {
@@ -499,14 +561,24 @@ pub const PackagePage = extern struct {
             for (parsed.value) |*pkg| pkg.Installed = set.contains(pkg.Name);
         }
 
-        post_result(page, parsed.value, arena_ptr, generation);
+        var set: std.StringHashMapUnmanaged(void) = .empty;
+        for (parsed.value) |pkg| {
+            for (pkg.Groups) |g| set.put(alloc, g, {}) catch {};
+        }
+
+        var list: std.ArrayListUnmanaged([]const u8) = .empty;
+        var it = set.keyIterator();
+        while (it.next()) |k| list.append(alloc, k.*) catch {};
+
+        post_result(page, parsed.value, list.items, arena_ptr, generation);
     }
 
-    fn post_result(page: *Self, packages: []Package, arena: *std.heap.ArenaAllocator, generation: u64) void {
+    fn post_result(page: *Self, packages: []Package, groups: []const []const u8, arena: *std.heap.ArenaAllocator, generation: u64) void {
         const result = std.heap.c_allocator.create(LoadResult) catch return;
         result.* = .{
             .page = page,
             .packages = packages,
+            .groups = groups,
             .arena = arena,
             .generation = generation,
         };
@@ -531,14 +603,34 @@ pub const PackagePage = extern struct {
             return 0;
         }).allocator();
 
-        const batch_size = 250;
-        const end = @min(result.index + batch_size, result.packages.len);
-
-        for (result.packages[result.index..end]) |d| {
-            const pkg = PackageObject.new(page_alloc, d.Name, d.Version, d.Repository, d.Description, d.InstalledSize, d.Installed);
-            gio.ListStore.append(p.list_store, pkg.as(gobject.Object));
-            pkg.as(gobject.Object).unref();
+        if (result.index == 0) {
+            const strings = gtk.StringList.new(null);
+            gtk.StringList.append(strings, "Any");
+            for (result.groups) |g| {
+                var buf: [128]u8 = undefined;
+                gtk.StringList.append(strings, c_string.cstr(&buf, g));
+            }
+            gtk.DropDown.setModel(p.grouping_selection, strings.as(gio.ListModel));
+            gtk.DropDown.setSelected(p.grouping_selection, 0);
         }
+
+        const batch_size = 500;
+        const end = @min(result.index + batch_size, result.packages.len);
+        const n = end - result.index;
+
+        var batch: [500]*gobject.Object = undefined;
+        var i: usize = 0;
+        for (result.packages[result.index..end]) |d| {
+            const pkg = PackageObject.new(page_alloc, d.Name, d.Version, d.Repository, d.Description, d.Groups, d.InstalledSize, d.Installed);
+            batch[i] = pkg.as(gobject.Object);
+            i += 1;
+        }
+
+        const pos = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        gio.ListStore.splice(p.list_store, pos, 0, &batch, @intCast(n));
+
+        for (batch[0..n]) |o| o.unref();
+
         result.index = end;
 
         if (result.index < result.packages.len) return 1;
@@ -580,6 +672,9 @@ pub const PackagePage = extern struct {
         .{ "list_packages", @offsetOf(Private, "grid_view") },
         .{ "detail_hbox", @offsetOf(Private, "detail_hbox") },
         .{ "detail_grid_hbox", @offsetOf(Private, "detail_grid_hbox") },
+        .{ "grid_view_button", @offsetOf(Private, "grid_view_button") },
+        .{ "list_view_button", @offsetOf(Private, "list_view_button") },
+        .{ "grouping_selection", @offsetOf(Private, "grouping_selection") },
     };
 
     pub const Class = extern struct {
@@ -597,6 +692,7 @@ pub const PackagePage = extern struct {
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "install_selected", @ptrCast(&install_selected));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_grid_view_toggled", @ptrCast(&on_grid_view_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_list_view_toggled", @ptrCast(&on_list_view_toggled));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_installed_only_toggled", @ptrCast(&on_installed_only_toggled));
         }
     };
 
@@ -611,6 +707,7 @@ pub const PackagePage = extern struct {
         const p = self.priv();
         gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), 1);
         gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), 0);
+
         // TODO: save to config
     }
 
@@ -618,5 +715,11 @@ pub const PackagePage = extern struct {
         const p = self.priv();
         gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), 1);
         gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), 0);
+    }
+
+    fn on_installed_only_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        p.show_installed_only = gtk.CheckButton.getActive(check) != 0;
+        gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 };

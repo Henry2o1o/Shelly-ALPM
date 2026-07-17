@@ -13,6 +13,7 @@ pub const PackageObject = extern struct {
         version: [:0]const u8,
         repository: [:0]const u8,
         description: [:0]const u8,
+        groups: []const [:0]const u8,
         installed_size: i64,
         installed: bool,
         selected: bool,
@@ -49,6 +50,7 @@ pub const PackageObject = extern struct {
         version: []const u8,
         repository: []const u8,
         description: []const u8,
+        groups: []const []const u8,
         installed_size: i64,
         installed: bool,
     ) *Self {
@@ -61,6 +63,16 @@ pub const PackageObject = extern struct {
         p.installed_size = installed_size;
         p.installed = installed;
         p.selected = false;
+
+        if (arena.alloc([:0]const u8, groups.len)) |g| {
+            for (groups, 0..) |src, i| {
+                g[i] = arena.dupeZ(u8, src) catch "";
+            }
+            p.groups = g;
+        } else |_| {
+            p.groups = &.{};
+        }
+
         return self;
     }
 
@@ -87,6 +99,10 @@ pub const PackageObject = extern struct {
     }
     pub fn setSelected(self: *Self, v: bool) void {
         self.priv().selected = v;
+    }
+
+    pub fn getGroups(self: *Self) []const [:0]const u8 {
+        return self.priv().groups;
     }
 
     pub fn as(self: *Self, comptime T: type) *T {
