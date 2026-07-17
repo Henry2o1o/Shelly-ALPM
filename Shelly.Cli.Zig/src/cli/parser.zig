@@ -254,7 +254,8 @@ fn splitOption(token: []const u8) SplitOption {
 }
 
 fn isOptionToken(token: []const u8) bool {
-    return token.len > 1 and (token[0] == '-' or token[0] == '/');
+    if (token.len > 1 and token[0] == '-') return true;
+    return std.mem.eql(u8, token, "/?") or std.ascii.eqlIgnoreCase(token, "/h");
 }
 
 fn isBoolean(value: []const u8) bool {

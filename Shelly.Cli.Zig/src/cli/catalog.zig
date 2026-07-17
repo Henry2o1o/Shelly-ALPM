@@ -621,8 +621,26 @@ pub const variants = [_]Variant{
     .{ .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'f' },
     .{ .action = "add-remotes", .type_name = "flatpak", .action_code = 'A', .type_code = 'f' },
     .{ .action = "remove-remotes", .type_name = "flatpak", .action_code = 'D', .type_code = 'f' },
-    .{ .action = "install-ref-file", .type_name = "flatpak", .action_code = 'E', .type_code = 'f' },
-    .{ .action = "install-bundle", .type_name = "flatpak", .action_code = 'B', .type_code = 'f' },
+    .{
+        .action = "install-ref-file",
+        .type_name = "flatpak",
+        .action_code = null,
+        .type_code = null,
+        .help = .{
+            .description = "Install a Flatpak application from a local .flatpakref file at system or user scope.",
+            .implementation = "Zigalpm.FlatpakManager.install_from_ref_flatpak",
+        },
+    },
+    .{
+        .action = "install-bundle",
+        .type_name = "flatpak",
+        .action_code = null,
+        .type_code = null,
+        .help = .{
+            .description = "Install a local .flatpak bundle at system or user scope.",
+            .implementation = "Zigalpm.FlatpakManager.install_from_bundle_flatpak",
+        },
+    },
     .{ .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'f' },
     .{
         .action = "purify",
@@ -987,12 +1005,17 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--system", &.{"-s"}, "Add the remote to the system installation"),
         flag("--gpg-verify", &.{"-g"}, "Require GPG verification for the remote"),
     };
-    if (pathIs(action, type_name, "remove-remotes", "flatpak") or
-        pathIs(action, type_name, "install-ref-file", "flatpak") or
-        pathIs(action, type_name, "install-bundle", "flatpak")) return &.{flag(
+    if (pathIs(action, type_name, "remove-remotes", "flatpak")) return &.{flag(
         "--system",
         &.{"-s"},
         "Operate on the system Flatpak installation",
+    )};
+    if (pathIs(action, type_name, "install-ref-file", "flatpak") or
+        pathIs(action, type_name, "install-bundle", "flatpak")) return &.{booleanOptionWithDefault(
+        "--system",
+        &.{"-s"},
+        "Install into the system Flatpak installation; pass false for the user installation",
+        true,
     )};
     return &.{};
 }

@@ -36,12 +36,20 @@ pub fn translate(
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (std.mem.eql(u8, token, "-Ih")) {
+        var result: std.ArrayList([]const u8) = .empty;
+        try result.appendSlice(allocator, &.{ "install", "--help" });
+        try result.appendSlice(allocator, args[1..]);
+        return .{ .translated = try result.toOwnedSlice(allocator) };
+    }
     if (std.mem.eql(u8, token, "-Mh")) {
         var result: std.ArrayList([]const u8) = .empty;
         try result.appendSlice(allocator, &.{ "mark", "--help" });
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (try translateFlatpakFileInstall(allocator, manifest, args, token)) |translation|
+        return translation;
     if (try translateStandaloneAction(allocator, manifest, args, token)) |translation|
         return translation;
     if (token.len < 3 or token[0] != '-') return .{ .unchanged = args };
@@ -100,6 +108,43 @@ pub fn translate(
             allocator,
             "Unknown modifier '{c}' for '{s} {s}'. Valid modifiers: {s}",
             .{ modifier, variant.action, variant.type_name, try validModifiers(allocator, manifest, command) },
+        ) };
+    }
+    try result.appendSlice(allocator, args[1..]);
+    return .{ .translated = try result.toOwnedSlice(allocator) };
+}
+
+fn translateFlatpakFileInstall(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    args: []const []const u8,
+    token: []const u8,
+) !?Translation {
+    if (token.len < 4 or !std.mem.eql(u8, token[0..3], "-If")) return null;
+    const action = switch (token[3]) {
+        'r' => "install-ref-file",
+        'b' => "install-bundle",
+        else => return null,
+    };
+    const path = try std.fmt.allocPrint(allocator, "shelly {s} flatpak", .{action});
+    const command = manifest.findByPath(path) orelse return error.InvalidCatalog;
+
+    var result: std.ArrayList([]const u8) = .empty;
+    try result.appendSlice(allocator, &.{ action, "flatpak" });
+    for (token[4..]) |modifier| {
+        const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
+        if (findLocalOption(command, alias) != null) {
+            try result.append(allocator, alias);
+            continue;
+        }
+        if (findRecursiveHelpOption(manifest, alias)) |option| {
+            try result.append(allocator, option.name);
+            continue;
+        }
+        return .{ .failure = try std.fmt.allocPrint(
+            allocator,
+            "Unknown modifier '{c}' for '{s} flatpak'. Valid modifiers: {s}",
+            .{ modifier, action, try validModifiers(allocator, manifest, command) },
         ) };
     }
     try result.appendSlice(allocator, args[1..]);
@@ -315,6 +360,24 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(
         allocator,
         &manifest,
+        &.{ "-Ifr", "/tmp/demo.flatpakref" },
+        &.{ "install-ref-file", "flatpak", "/tmp/demo.flatpakref" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Ifb", "/tmp/demo.flatpak" },
+        &.{ "install-bundle", "flatpak", "/tmp/demo.flatpak" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{"-Ifrh"},
+        &.{ "install-ref-file", "flatpak", "--help" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
         &.{ "-Sa", "query" },
         &.{ "search", "aur", "query" },
     );
@@ -393,6 +456,7 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(allocator, &manifest, &.{"-Ux"}, &.{ "upgrade", "all" });
     try expectTranslation(allocator, &manifest, &.{"-Ui"}, &.{ "upgrade", "appimage" });
     try expectTranslation(allocator, &manifest, &.{"-Uf"}, &.{ "upgrade", "flatpak" });
+    try expectTranslation(allocator, &manifest, &.{"-Ih"}, &.{ "install", "--help" });
     try expectTranslation(allocator, &manifest, &.{ "-D", "linux" }, &.{ "downgrade", "linux" });
     try expectTranslation(allocator, &manifest, &.{ "-Do", "linux" }, &.{ "downgrade", "-o", "linux" });
     try expectTranslation(

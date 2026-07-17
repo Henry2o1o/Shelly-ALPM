@@ -307,6 +307,9 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Mga linux     ->  mark ignore --add linux
         \\    -Mh            ->  mark --help
         \\    -Mol           ->  mark hold --list
+        \\    -Ih            ->  install --help
+        \\    -Ifr file      ->  install-ref-file flatpak file
+        \\    -Ifb file      ->  install-bundle flatpak file
         \\    -Zs             ->  purify standard
         \\    -Zsc            ->  purify standard --cache
         \\    -Zf             ->  purify flatpak
