@@ -31,6 +31,7 @@
                 <child>
                   <object class="GtkButton" id="overlay_delete_remote_button">
                     <property name="label" translatable="yes">Delete Selected Remote</property>
+                      <signal name="clicked" handler="remove_selected_remote" swapped="true"/>
                     <style>
                       <class name="destructive-action"/>
                     </style>
@@ -39,6 +40,7 @@
                 <child>
                   <object class="GtkButton" id="overlay_add_remote_button">
                     <property name="label" translatable="yes">Add Remote</property>
+                     <signal name="clicked" handler="add_remote" swapped="true"/>
                     <style>
                       <class name="suggested-action"/>
                     </style>
@@ -57,13 +59,12 @@
                 <property name="vexpand">true</property>
                 <property name="hexpand">true</property>
                 <child>
-                  <object class="GtkListView" id="list_remotes"/>
+                  <object class="GtkListBox" id="list_remotes"/>
                 </child>
               </object>
             </child>
           </object>
         </child>
-
         <child>
           <object class="GtkBox" id="add_remote_page">
             <property name="orientation">vertical</property>
@@ -81,6 +82,7 @@
                   <object class="GtkButton" id="overlay_add_remote_back_button">
                     <property name="icon-name">go-previous-symbolic</property>
                     <property name="tooltip-text" translatable="yes">Back</property>
+                     <signal name="clicked" handler="back_to_list" swapped="true"/>
                   </object>
                 </child>
                 <child>

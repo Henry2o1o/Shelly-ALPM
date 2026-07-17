@@ -9,6 +9,7 @@ const PackageObject = @import("../g_objects/package_object.zig").PackageObject;
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const IconResolver = @import("../services/icon_resolver.zig").IconResolver;
+const Package = @import("../models/packages.zig").Package;
 const runtime = @import("../services/runtime.zig");
 
 pub const PackagePage = extern struct {
@@ -47,7 +48,7 @@ pub const PackagePage = extern struct {
 
     const LoadResult = struct {
         page: *Self,
-        packages: []ShellyCli.Package,
+        packages: []Package,
         arena: *std.heap.ArenaAllocator,
         generation: u64,
         index: usize = 0,
@@ -278,7 +279,7 @@ pub const PackagePage = extern struct {
         post_result(page, parsed.value, arena_ptr, generation);
     }
 
-    fn post_result(page: *Self, packages: []ShellyCli.Package, arena: *std.heap.ArenaAllocator, generation: u64) void {
+    fn post_result(page: *Self, packages: []Package, arena: *std.heap.ArenaAllocator, generation: u64) void {
         const result = std.heap.c_allocator.create(LoadResult) catch return;
         result.* = .{
             .page = page,

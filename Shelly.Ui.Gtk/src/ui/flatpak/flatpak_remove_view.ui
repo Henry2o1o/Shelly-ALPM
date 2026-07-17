@@ -66,6 +66,7 @@
         <child>
           <object class="GtkCheckButton" id="runtime_check">
             <property name="label" translatable="yes">Show Runtimes</property>
+            <signal name="toggled" handler="show_runtimes" swapped="true"/>
           </object>
         </child>
         <child>

@@ -23,3 +23,8 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }
+
+test {
+    // _ = @import("services/icon_resolver.zig");
+    _ = @import("services/shelly_cli.zig");
+}
