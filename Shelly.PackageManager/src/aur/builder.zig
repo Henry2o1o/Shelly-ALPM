@@ -1,4 +1,5 @@
 const std = @import("std");
+const operation_api = @import("operation_context");
 
 pub const ProcessResult = struct {
     exit_code: u8,
@@ -72,6 +73,28 @@ pub fn runStreamingWithEnvironment(
     timeout_seconds: ?u32,
     line_handler: LineHandler,
 ) !u8 {
+    return runStreamingWithEnvironmentOperation(
+        allocator,
+        io,
+        environ,
+        argv,
+        working_directory,
+        timeout_seconds,
+        line_handler,
+        null,
+    );
+}
+
+pub fn runStreamingWithEnvironmentOperation(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    argv: []const []const u8,
+    working_directory: ?[]const u8,
+    timeout_seconds: ?u32,
+    line_handler: LineHandler,
+    operation: ?*const operation_api.Operation,
+) !u8 {
     var environ_map = try executionEnvironment(allocator, environ);
     defer environ_map.deinit();
     var child = try std.process.spawn(io, .{
@@ -89,21 +112,52 @@ pub fn runStreamingWithEnvironment(
     multi_reader.init(allocator, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
     defer multi_reader.deinit();
 
-    const timeout: std.Io.Timeout = if (timeout_seconds) |seconds|
+    const poll_for_cancellation = operation != null;
+    const timeout: std.Io.Timeout = if (poll_for_cancellation)
+        .{ .duration = .{ .clock = .awake, .raw = .fromMilliseconds(250) } }
+    else if (timeout_seconds) |seconds|
         .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(seconds) } }
     else
         .none;
-    while (multi_reader.fill(4096, timeout)) |_| {
+    const start = std.Io.Timestamp.now(io, .awake).nanoseconds;
+    read_loop: while (true) {
+        multi_reader.fill(4096, timeout) catch |err| switch (err) {
+            error.EndOfStream => break :read_loop,
+            error.Timeout => {
+                if (operation) |active_operation| {
+                    if (active_operation.isCancelled()) {
+                        child.kill(io);
+                        return error.Cancelled;
+                    }
+                    if (timeout_seconds) |seconds| {
+                        const elapsed = std.Io.Timestamp.now(io, .awake).nanoseconds - start;
+                        if (elapsed >= @as(i96, seconds) * std.time.ns_per_s) return error.Timeout;
+                    }
+                    continue :read_loop;
+                }
+                return error.Timeout;
+            },
+            else => |other| return other,
+        };
+        if (operation) |active_operation| {
+            if (active_operation.isCancelled()) {
+                child.kill(io);
+                return error.Cancelled;
+            }
+        }
         drainLines(multi_reader.reader(0), .stdout, false, line_handler);
         drainLines(multi_reader.reader(1), .stderr, false, line_handler);
-    } else |err| switch (err) {
-        error.EndOfStream => {},
-        else => |other| return other,
     }
     try multi_reader.checkAnyError();
     drainLines(multi_reader.reader(0), .stdout, true, line_handler);
     drainLines(multi_reader.reader(1), .stderr, true, line_handler);
 
+    if (operation) |active_operation| {
+        if (active_operation.isCancelled()) {
+            child.kill(io);
+            return error.Cancelled;
+        }
+    }
     return switch ((try child.wait(io))) {
         .exited => |code| code,
         else => 255,
@@ -139,7 +193,7 @@ fn runWithEnvironmentMap(
         .stdout_limit = .limited(16 * 1024 * 1024),
         .stderr_limit = .limited(16 * 1024 * 1024),
         .timeout = if (timeout_seconds) |seconds|
-            .{ .duration = .fromSeconds(seconds) }
+            .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(seconds) } }
         else
             .none,
     });
@@ -567,4 +621,27 @@ test "streaming process execution delivers output before the child exits" {
     try std.testing.expectEqual(@as(u8, 0), exit_code);
     try std.testing.expect(capture.saw_first);
     try std.testing.expect(capture.saw_second);
+}
+
+test "streaming process execution terminates when the shared operation is cancelled" {
+    const Capture = struct {
+        fn onLine(_: ?*anyopaque, _: StreamKind, _: []const u8) void {}
+    };
+
+    var context = operation_api.OperationContext.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+    context.cancel();
+    var operation = context.begin(.{ .backend = .aur, .kind = .build, .subject = "cancelled-build" });
+    defer operation.finish(.cancelled);
+
+    try std.testing.expectError(error.Cancelled, runStreamingWithEnvironmentOperation(
+        std.testing.allocator,
+        std.testing.io,
+        std.testing.environ,
+        &.{ "sh", "-c", "sleep 5" },
+        null,
+        null,
+        .{ .function = Capture.onLine },
+        &operation,
+    ));
 }

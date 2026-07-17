@@ -1,4 +1,5 @@
 const std = @import("std");
+const operations = @import("operation_context");
 
 pub const Level = enum {
     information,
@@ -39,6 +40,7 @@ pub const Cancellation = struct {
 pub const Dispatcher = struct {
     allocator: std.mem.Allocator,
     handlers: std.ArrayList(Handler) = .empty,
+    operation: ?*operations.Operation = null,
 
     pub fn init(allocator: std.mem.Allocator) Dispatcher {
         return .{ .allocator = allocator };
@@ -59,7 +61,17 @@ pub const Dispatcher = struct {
         _ = self.handlers.swapRemove(index);
     }
 
+    pub fn setOperation(self: *Dispatcher, operation: ?*operations.Operation) void {
+        self.operation = operation;
+    }
+
     pub fn raise(self: *Dispatcher, message: Message) void {
+        if (self.operation) |operation| switch (message.level) {
+            .information => operation.status(.information, message.text, "local.status", null),
+            .warning => operation.status(.warning, message.text, "local.warning", null),
+            .success => operation.status(.success, message.text, "local.success", null),
+            .err => operation.reportError(error.LocalPackageOperationFailed, message.text, "local-package", null, false),
+        };
         const snapshot = self.allocator.dupe(Handler, self.handlers.items) catch {
             for (self.handlers.items) |handler| handler.call(message);
             return;

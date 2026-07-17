@@ -15,9 +15,11 @@ pub const Dispatcher = struct {
 pub const RuntimeContext = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
+    stdin: ?*std.Io.Reader = null,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
     environment: ?*const std.process.Environ.Map = null,
+    environ: std.process.Environ = .empty,
     stdin_is_tty: bool = false,
     stdout_is_tty: bool = false,
     dispatcher: Dispatcher = .{},

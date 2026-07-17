@@ -3,13 +3,22 @@ pub const parser = @import("cli/parser.zig");
 pub const runtime = @import("runtime/context.zig");
 pub const log = @import("runtime/log.zig");
 pub const signals = @import("runtime/signals.zig");
+pub const elevation = @import("runtime/elevation.zig");
 pub const xdg = @import("runtime/xdg.zig");
 pub const shortcodes = @import("cli/shortcodes.zig");
+pub const catalog = @import("cli/catalog.zig");
 pub const spec = @import("cli/spec.zig");
 pub const commands = @import("commands/dispatcher.zig");
+pub const sync_command = @import("commands/sync.zig");
+pub const install_command = @import("commands/install.zig");
+pub const search_command = @import("commands/search.zig");
+pub const upgrade_command = @import("commands/upgrade.zig");
 pub const config = @import("config/manager.zig");
 pub const config_model = @import("config/model.zig");
 pub const config_output = @import("output/config.zig");
+pub const standard_single_pane = @import("output/standard_single_pane.zig");
+pub const ui_operation_output = @import("output/ui_operation.zig");
+pub const table_output = @import("output/table.zig");
 
 test {
     _ = app;
@@ -17,11 +26,20 @@ test {
     _ = runtime;
     _ = log;
     _ = signals;
+    _ = elevation;
     _ = xdg;
     _ = shortcodes;
+    _ = catalog;
     _ = spec;
     _ = commands;
+    _ = sync_command;
+    _ = install_command;
+    _ = search_command;
+    _ = upgrade_command;
     _ = config;
     _ = config_model;
     _ = config_output;
+    _ = standard_single_pane;
+    _ = ui_operation_output;
+    _ = table_output;
 }

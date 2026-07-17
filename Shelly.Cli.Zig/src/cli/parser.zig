@@ -110,6 +110,10 @@ pub fn parse(
     if (help_requested) return .{ .help = command };
     if (version_requested) return .version;
 
+    if (command.isBranch and positionals.items.len == 0) {
+        if (manifest.findDefaultChild(command)) |default_child| command = default_child;
+    }
+
     for (command.options) |option| {
         if (!option.required) continue;
         var present = false;
@@ -130,7 +134,7 @@ pub fn parse(
     }
 
     if (command == manifest.root() and positionals.items.len == 0) {
-        command = manifest.findByPath("shelly upgrade-all") orelse return error.InvalidContract;
+        command = manifest.findByPath("shelly upgrade all") orelse return error.InvalidCatalog;
     } else if (command.isBranch and positionals.items.len > 0) {
         return unrecognized(allocator, command, positionals.items[0], false);
     } else if (command.isBranch and !command.hasAction) {
@@ -273,15 +277,16 @@ test "parses local options and recursive globals around command tokens" {
     const manifest = try spec.Manifest.load(arena.allocator());
     const outcome = try parse(arena.allocator(), &manifest, &.{
         "--json",
-        "query",
+        "search",
+        "standard",
         "firefox",
-        "--take",
+        "--limit",
         "25",
         "-a",
         "--verbose=false",
     });
     try std.testing.expect(outcome == .dispatch);
-    try std.testing.expectEqualStrings("shelly query", outcome.dispatch.command.path);
+    try std.testing.expectEqualStrings("shelly search standard", outcome.dispatch.command.path);
     try std.testing.expectEqualStrings("firefox", outcome.dispatch.positionals[0]);
     try std.testing.expect(outcome.dispatch.globals.json);
     try std.testing.expect(!outcome.dispatch.globals.verbose);
@@ -293,20 +298,73 @@ test "validates required options but help bypasses validation" {
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
 
-    const missing = try parse(arena.allocator(), &manifest, &.{ "flatpak", "add-remotes", "flathub" });
+    const missing = try parse(arena.allocator(), &manifest, &.{ "add-remotes", "flatpak", "flathub" });
     try std.testing.expect(missing == .failure);
     try std.testing.expectEqualStrings("Option '--remote-url' is required.", missing.failure.message);
 
-    const help = try parse(arena.allocator(), &manifest, &.{ "flatpak", "add-remotes", "--help" });
+    const help = try parse(arena.allocator(), &manifest, &.{ "add-remotes", "flatpak", "--help" });
     try std.testing.expect(help == .help);
-    try std.testing.expectEqualStrings("shelly flatpak add-remotes", help.help.path);
+    try std.testing.expectEqualStrings("shelly add-remotes flatpak", help.help.path);
 }
 
-test "maps an empty invocation to upgrade-all" {
+test "maps an empty invocation to upgrade all" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
     const outcome = try parse(arena.allocator(), &manifest, &.{});
     try std.testing.expect(outcome == .dispatch);
-    try std.testing.expectEqualStrings("shelly upgrade-all", outcome.dispatch.command.path);
+    try std.testing.expectEqualStrings("shelly upgrade all", outcome.dispatch.command.path);
+}
+
+test "maps bare sync to its catalog-defined standard type" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parse(arena.allocator(), &manifest, &.{ "sync", "--force" });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings("shelly sync standard", outcome.dispatch.command.path);
+    try std.testing.expectEqualStrings("--force", outcome.dispatch.options[0].name);
+}
+
+test "parses Flatpak AppStream sync as an action-type command" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parse(arena.allocator(), &manifest, &.{ "sync", "flatpak" });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings("shelly sync flatpak", outcome.dispatch.command.path);
+}
+
+test "hard cut rejects old type-first and implicit-standard paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    const type_first = try parse(arena.allocator(), &manifest, &.{ "flatpak", "search", "query" });
+    try std.testing.expect(type_first == .failure);
+    try std.testing.expectEqualStrings(
+        "Unrecognized command or argument 'flatpak'.",
+        type_first.failure.message,
+    );
+
+    const old_flatpak_sync = try parse(arena.allocator(), &manifest, &.{ "sync-remote-appstream", "flatpak" });
+    try std.testing.expect(old_flatpak_sync == .failure);
+    try std.testing.expectEqualStrings(
+        "Unrecognized command or argument 'sync-remote-appstream'.",
+        old_flatpak_sync.failure.message,
+    );
+
+    const implicit_standard = try parse(arena.allocator(), &manifest, &.{ "install", "firefox" });
+    try std.testing.expect(implicit_standard == .failure);
+    try std.testing.expectEqualStrings(
+        "Unrecognized command or argument 'firefox'.",
+        implicit_standard.failure.message,
+    );
+
+    const upgrade_all = try parse(arena.allocator(), &manifest, &.{"upgrade-all"});
+    try std.testing.expect(upgrade_all == .failure);
+    try std.testing.expectEqualStrings(
+        "Unrecognized command or argument 'upgrade-all'.",
+        upgrade_all.failure.message,
+    );
 }

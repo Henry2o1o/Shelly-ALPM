@@ -7,7 +7,7 @@ const runtime = @import("../runtime/context.zig");
 
 pub fn run(context: *runtime.RuntimeContext, arguments: []const []const u8) !u8 {
     const manifest = try spec.Manifest.load(context.allocator);
-    const translation = try shortcodes.translate(context.allocator, arguments);
+    const translation = try shortcodes.translate(context.allocator, &manifest, arguments);
     const translated = switch (translation) {
         .unchanged => |value| value,
         .translated => |value| value,
@@ -51,7 +51,7 @@ fn renderFailure(
     return 1;
 }
 
-test "no arguments dispatch upgrade-all through the injected runtime" {
+test "no arguments dispatch upgrade all through the injected runtime" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -73,7 +73,7 @@ test "no arguments dispatch upgrade-all through the injected runtime" {
             ) !u8 {
                 const called: *bool = @ptrCast(@alignCast(data.?));
                 called.* = true;
-                try std.testing.expectEqualStrings("shelly upgrade-all", invocation.command.path);
+                try std.testing.expectEqualStrings("shelly upgrade all", invocation.command.path);
                 return 37;
             }
         }.dispatch },
@@ -97,10 +97,40 @@ test "help and parser errors bypass dispatch" {
         .stderr = &stderr.writer,
     };
 
-    try std.testing.expectEqual(@as(u8, 0), try run(&context, &.{ "query", "--help" }));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shelly query [<package>]") != null);
+    try std.testing.expectEqual(@as(u8, 0), try run(&context, &.{ "search", "standard", "--help" }));
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shelly search standard [<package>]") != null);
 
     stdout.writer.end = 0;
-    try std.testing.expectEqual(@as(u8, 1), try run(&context, &.{ "config", "get" }));
+    try std.testing.expectEqual(@as(u8, 0), try run(&context, &.{"-SAh"}));
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shelly search aur <query>...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AurManager.searchPackages") != null);
+
+    stdout.writer.end = 0;
+    try std.testing.expectEqual(@as(u8, 0), try run(&context, &.{"-IAh"}));
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shelly install aur [<packages>...]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AurManager.installPackages") != null);
+
+    stdout.writer.end = 0;
+    try std.testing.expectEqual(@as(u8, 1), try run(&context, &.{ "get", "config" }));
     try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "Required argument 'key' missing") != null);
+}
+
+test "old type-first and implicit-standard inputs are rejected without rewriting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+
+    try std.testing.expectEqual(@as(u8, 1), try run(&context, &.{ "aur", "install", "pkg" }));
+    stdout.writer.end = 0;
+    stderr.writer.end = 0;
+    try std.testing.expectEqual(@as(u8, 1), try run(&context, &.{ "install", "pkg" }));
 }

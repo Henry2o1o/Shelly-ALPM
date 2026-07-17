@@ -3,6 +3,7 @@ const archive = @import("archive.zig");
 const events = @import("events.zig");
 const file_inspector = @import("file_inspector.zig");
 const xdg_integration = @import("xdg_integration.zig");
+const operations = @import("operation_context");
 
 pub const Error = error{
     Cancelled,
@@ -50,6 +51,7 @@ pub const Manager = struct {
     options: Options,
     dispatcher: events.Dispatcher,
     cancellation: ?events.Cancellation = null,
+    operation_context: ?*operations.OperationContext = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, options: Options) Manager {
         return .{
@@ -77,11 +79,21 @@ pub const Manager = struct {
         self.cancellation = cancellation;
     }
 
+    /// Borrows a shared operation context for subsequent synchronous calls.
+    pub fn setOperationContext(self: *Manager, context: ?*operations.OperationContext) void {
+        self.operation_context = context;
+    }
+
     /// Extracts a local binary archive into the configured package root and
     /// creates links and desktop integration for extensionless ELF commands.
     pub fn installBinariesPackage(self: *Manager, archive_path: []const u8) !bool {
+        var scope = OperationScope.init(self, .install, archive_path);
+        scope.attach();
+        defer scope.finish(.success);
         return self.installBinariesPackageImpl(archive_path) catch |err| {
+            self.reportError(err, @errorName(err));
             self.emitFmt(.err, "Failed to install local package: {s}", .{@errorName(err)});
+            scope.finish(if (err == Error.Cancelled) .cancelled else .failed);
             return err;
         };
     }
@@ -94,10 +106,12 @@ pub const Manager = struct {
         }
 
         const inspector: file_inspector.Inspector = .{ .allocator = self.allocator, .io = self.io };
+        self.progress("inspect", 0, 1, "Inspecting local package archive");
         if (!(try inspector.isBinariesPackage(archive_path))) {
             self.emit(.warning, "Archive does not contain an ELF binary");
             return false;
         }
+        self.progress("inspect", 1, 1, "Local package archive inspected");
 
         const package_name = try packageName(self.allocator, archive_path);
         defer self.allocator.free(package_name);
@@ -140,8 +154,9 @@ pub const Manager = struct {
         try std.Io.Dir.cwd().createDirPath(self.io, self.options.binary_directory);
 
         const integration = self.xdg();
-        for (assets.binaries.items) |binary_path| {
+        for (assets.binaries.items, 0..) |binary_path, binary_index| {
             try self.checkCancelled();
+            self.progress("integrate", binary_index, assets.binaries.items.len, "Integrating local commands");
             const binary_name = std.fs.path.basename(binary_path);
             const link_path = try std.fs.path.join(self.allocator, &.{ self.options.binary_directory, binary_name });
             defer self.allocator.free(link_path);
@@ -175,6 +190,7 @@ pub const Manager = struct {
                 self.emitFmt(.warning, "Could not create desktop entry for {s}: {s}", .{ binary_name, @errorName(err) });
             };
         }
+        self.progress("integrate", assets.binaries.items.len, assets.binaries.items.len, "Local command integration complete");
 
         self.emitFmt(.success, "Installed local package {s}", .{package_name});
         return true;
@@ -182,9 +198,20 @@ pub const Manager = struct {
 
     /// Returns owned package records for direct children of the install root.
     pub fn getInstalledBinaryPackages(self: *Manager) ![]Package {
-        var root = std.Io.Dir.cwd().openDir(self.io, self.options.install_directory, .{ .iterate = true }) catch |err| switch (err) {
+        var scope = OperationScope.init(self, .inspect, self.options.install_directory);
+        scope.attach();
+        defer scope.finish(.success);
+        return self.getInstalledBinaryPackagesImpl() catch |err| {
+            self.reportError(err, "Failed to inspect installed local packages");
+            scope.finish(if (err == Error.Cancelled) .cancelled else .failed);
+            return err;
+        };
+    }
+
+    fn getInstalledBinaryPackagesImpl(self: *Manager) ![]Package {
+        var root = std.Io.Dir.cwd().openDir(self.io, self.options.install_directory, .{ .iterate = true }) catch |open_err| switch (open_err) {
             error.FileNotFound => return self.allocator.alloc(Package, 0),
-            else => return err,
+            else => return open_err,
         };
         defer root.close(self.io);
 
@@ -214,16 +241,22 @@ pub const Manager = struct {
     /// Removes package directories and only deletes command links which still
     /// point into the package being removed.
     pub fn removeBinaryPackages(self: *Manager, package_names_or_paths: []const []const u8) !bool {
+        var scope = OperationScope.init(self, .remove, null);
+        scope.attach();
+        defer scope.finish(.success);
         return self.removeBinaryPackagesImpl(package_names_or_paths) catch |err| {
+            self.reportError(err, @errorName(err));
             self.emitFmt(.err, "Failed to remove local package: {s}", .{@errorName(err)});
+            scope.finish(if (err == Error.Cancelled) .cancelled else .failed);
             return err;
         };
     }
 
     fn removeBinaryPackagesImpl(self: *Manager, package_names_or_paths: []const []const u8) !bool {
         var removed_any = false;
-        for (package_names_or_paths) |value| {
+        for (package_names_or_paths, 0..) |value, package_index| {
             try self.checkCancelled();
+            self.progress("remove", package_index, package_names_or_paths.len, "Removing local packages");
             const package_path = self.resolvePackagePath(value) catch |err| {
                 self.emitFmt(.warning, "Ignoring invalid local package path {s}: {s}", .{ value, @errorName(err) });
                 continue;
@@ -256,6 +289,7 @@ pub const Manager = struct {
             self.emitFmt(.success, "Removed local package {s}", .{std.fs.path.basename(package_path)});
             removed_any = true;
         }
+        self.progress("remove", package_names_or_paths.len, package_names_or_paths.len, "Local package removal complete");
         return removed_any;
     }
 
@@ -269,6 +303,7 @@ pub const Manager = struct {
         while (try reader.next()) |entry| {
             try self.checkCancelled();
             entry_count += 1;
+            self.progress("extract", entry_count, null, entry.path);
             if (entry_count > self.options.max_entries) return Error.TooManyArchiveEntries;
             if (entry.size > self.options.max_entry_size) return Error.PackageTooLarge;
             const relative_path = try archive.normalizeEntryPath(self.allocator, entry.path);
@@ -438,8 +473,28 @@ pub const Manager = struct {
     }
 
     fn checkCancelled(self: *Manager) !void {
+        if (self.dispatcher.operation) |operation|
+            if (operation.isCancelled()) return Error.Cancelled;
+        if (self.operation_context) |context|
+            if (context.isCancelled()) return Error.Cancelled;
         if (self.cancellation) |cancellation|
             if (cancellation.isCancelled()) return Error.Cancelled;
+    }
+
+    fn progress(self: *Manager, stage: []const u8, completed: usize, total: ?usize, message: []const u8) void {
+        const operation = self.dispatcher.operation orelse return;
+        operation.progress(.{
+            .stage = stage,
+            .completed = @intCast(completed),
+            .total = if (total) |value| @intCast(value) else null,
+            .percentage = if (total) |value| if (value == 0) 100 else @as(f64, @floatFromInt(completed)) * 100.0 / @as(f64, @floatFromInt(value)) else null,
+            .message = message,
+        });
+    }
+
+    fn reportError(self: *Manager, err: anyerror, message: []const u8) void {
+        if (self.dispatcher.operation) |operation|
+            operation.reportError(err, message, "local-package", null, false);
     }
 
     fn emit(self: *Manager, level: events.Level, message: []const u8) void {
@@ -450,6 +505,36 @@ pub const Manager = struct {
         const message = std.fmt.allocPrint(self.allocator, format, args) catch return;
         defer self.allocator.free(message);
         self.emit(level, message);
+    }
+};
+
+const OperationScope = struct {
+    manager: *Manager,
+    operation: ?operations.Operation = null,
+    previous: ?*operations.Operation = null,
+    attached: bool = false,
+
+    fn init(manager: *Manager, kind: operations.OperationKind, subject: ?[]const u8) OperationScope {
+        var scope: OperationScope = .{ .manager = manager, .previous = manager.dispatcher.operation };
+        if (scope.previous) |parent| {
+            scope.operation = parent.child(.{ .backend = .local_package, .kind = kind, .subject = subject });
+        } else if (manager.operation_context) |context| {
+            scope.operation = context.begin(.{ .backend = .local_package, .kind = kind, .subject = subject });
+        }
+        return scope;
+    }
+
+    fn attach(self: *OperationScope) void {
+        if (self.operation) |*operation| self.manager.dispatcher.setOperation(operation);
+        self.attached = true;
+    }
+
+    fn finish(self: *OperationScope, status: operations.CompletionStatus) void {
+        if (self.operation) |*operation| operation.finish(status);
+        if (self.attached) {
+            self.manager.dispatcher.setOperation(self.previous);
+            self.attached = false;
+        }
     }
 };
 
@@ -672,4 +757,15 @@ test "installation does not replace an unmanaged command" {
     const committed = try std.fs.path.join(testing.allocator, &.{ install_root, "conflict" });
     defer testing.allocator.free(committed);
     try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, committed, .{}));
+}
+
+test "local packages honor shared cancellation" {
+    var context = operations.OperationContext.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+    var manager = Manager.init(std.testing.allocator, std.testing.io, .{ .run_cache_updates = false });
+    defer manager.deinit();
+    manager.setOperationContext(&context);
+
+    context.cancel();
+    try std.testing.expectError(Error.Cancelled, manager.installBinariesPackage("cancelled.tar.gz"));
 }

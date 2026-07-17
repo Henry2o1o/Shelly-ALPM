@@ -1,5 +1,6 @@
 const std = @import("std");
 const bindings = @import("bindings.zig");
+const operation_api = @import("operation_context");
 
 const libalpm = bindings.libalpm;
 const raw_libalpm = bindings.libalpm.alpm;
@@ -10,6 +11,7 @@ pub const Error = error{
     RemovalFailed,
     InvalidPlan,
     OutOfMemory,
+    Cancelled,
 };
 
 pub const InstalledFilter = enum {
@@ -120,6 +122,8 @@ pub const CacheManager = struct {
     io: std.Io,
     cache_directory: []const u8,
     handle: libalpm.Handle,
+    operation_context: ?*operation_api.OperationContext = null,
+    parent_operation: ?*const operation_api.Operation = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, options: Options) CacheManager {
         return .{
@@ -134,23 +138,44 @@ pub const CacheManager = struct {
         self.handle = handle;
     }
 
+    /// Borrows a context for cache planning and deletion.
+    pub fn setOperationContext(self: *CacheManager, context: ?*operation_api.OperationContext) void {
+        self.operation_context = context;
+    }
+
+    pub fn setParentOperation(self: *CacheManager, parent: ?*const operation_api.Operation) void {
+        self.parent_operation = parent;
+        if (parent) |operation| self.operation_context = operation.context;
+    }
+
     /// Scans the package cache and returns an owned removal plan. No files are
     /// deleted by this operation.
     pub fn plan_cache_cleanup(self: *CacheManager, options: CleanOptions) Error!RemovalPlan {
         if (options.installed_filter != .all and self.handle == null) return Error.NoHandle;
-        return buildRemovalPlan(
+        var scope = CacheOperationScope.init(self.operation_context, self.parent_operation, .cleanup, options.cache_directory orelse self.cache_directory);
+        defer scope.finish(.success);
+        errdefer scope.fail();
+        try scope.checkCancelled();
+        const plan = try buildRemovalPlan(
             self.allocator,
             self.io,
             options.cache_directory orelse self.cache_directory,
             options,
             .{ .context = self, .function = managerPackageInstalled },
+            scope.operationPointer(),
         );
+        scope.progress(plan.items.len, plan.items.len, "Package-cache removal plan ready");
+        return plan;
     }
 
     /// Executes the exact paths in a previously generated plan. Dry-run plans
     /// are validated but never mutate the filesystem.
     pub fn execute_cache_removal_plan(self: *CacheManager, plan: *const RemovalPlan) Error!ExecutionResult {
-        return executeRemovalPlan(self.io, plan);
+        var scope = CacheOperationScope.init(self.operation_context, self.parent_operation, .cleanup, plan.cache_directory);
+        defer scope.finish(.success);
+        errdefer scope.fail();
+        try scope.checkCancelled();
+        return executeRemovalPlan(self.io, plan, scope.operationPointer());
     }
 
     fn isPackageInstalled(self: *CacheManager, package_name: [:0]const u8) bool {
@@ -232,6 +257,7 @@ fn buildRemovalPlan(
     cache_directory: []const u8,
     options: CleanOptions,
     installed_lookup: InstalledLookup,
+    operation: ?*const operation_api.Operation,
 ) Error!RemovalPlan {
     const owned_cache_directory = allocator.dupe(u8, cache_directory) catch return Error.OutOfMemory;
     errdefer allocator.free(owned_cache_directory);
@@ -247,6 +273,7 @@ fn buildRemovalPlan(
     }
     var iterator = directory.iterate();
     while (iterator.next(io) catch return Error.DirectoryReadFailed) |directory_entry| {
+        if (operation) |active_operation| if (active_operation.isCancelled()) return Error.Cancelled;
         if (directory_entry.kind != .file) continue;
         const full_path = std.fs.path.join(allocator, &.{ cache_directory, directory_entry.name }) catch
             return Error.OutOfMemory;
@@ -271,6 +298,7 @@ fn buildRemovalPlan(
     var signature_bytes: u64 = 0;
     var group_start: usize = 0;
     while (group_start < entries.items.len) {
+        if (operation) |active_operation| if (active_operation.isCancelled()) return Error.Cancelled;
         var group_end = group_start + 1;
         while (group_end < entries.items.len and
             std.mem.eql(u8, entries.items[group_start].name, entries.items[group_end].name)) : (group_end += 1)
@@ -384,12 +412,23 @@ fn deleteFile(io: std.Io, path: []const u8) !bool {
     return true;
 }
 
-fn executeRemovalPlan(io: std.Io, plan: *const RemovalPlan) Error!ExecutionResult {
+fn executeRemovalPlan(io: std.Io, plan: *const RemovalPlan, operation: ?*const operation_api.Operation) Error!ExecutionResult {
     try validateRemovalPlan(plan);
+    if (operation) |active_operation| if (active_operation.isCancelled()) return Error.Cancelled;
     if (plan.dry_run) return .{ .dry_run = true };
 
     var result: ExecutionResult = .{ .dry_run = false };
-    for (plan.items) |item| {
+    for (plan.items, 0..) |item, item_index| {
+        if (operation) |active_operation| {
+            if (active_operation.isCancelled()) return Error.Cancelled;
+            active_operation.progress(.{
+                .stage = "cache-clean",
+                .completed = @intCast(item_index),
+                .total = @intCast(plan.items.len),
+                .percentage = if (plan.items.len == 0) 100 else @as(f64, @floatFromInt(item_index)) * 100.0 / @as(f64, @floatFromInt(plan.items.len)),
+                .message = item.package.full_path,
+            });
+        }
         const package_removed = deleteFile(io, item.package.full_path) catch
             return Error.RemovalFailed;
         if (package_removed) {
@@ -410,8 +449,63 @@ fn executeRemovalPlan(io: std.Io, plan: *const RemovalPlan) Error!ExecutionResul
             }
         }
     }
+    if (operation) |active_operation| active_operation.progress(.{
+        .stage = "cache-clean",
+        .completed = @intCast(plan.items.len),
+        .total = @intCast(plan.items.len),
+        .percentage = 100,
+        .message = "Package-cache cleanup complete",
+    });
     return result;
 }
+
+const CacheOperationScope = struct {
+    operation: ?operation_api.Operation = null,
+
+    fn init(
+        context: ?*operation_api.OperationContext,
+        parent: ?*const operation_api.Operation,
+        kind: operation_api.OperationKind,
+        subject: ?[]const u8,
+    ) CacheOperationScope {
+        if (parent) |active_parent| return .{ .operation = active_parent.child(.{ .backend = .alpm, .kind = kind, .subject = subject }) };
+        if (context) |operation_context| return .{ .operation = operation_context.begin(.{ .backend = .alpm, .kind = kind, .subject = subject }) };
+        return .{};
+    }
+
+    fn operationPointer(self: *CacheOperationScope) ?*const operation_api.Operation {
+        return if (self.operation) |*operation| operation else null;
+    }
+
+    fn checkCancelled(self: *const CacheOperationScope) error{Cancelled}!void {
+        if (self.operation) |*operation| try operation.checkCancelled();
+    }
+
+    fn progress(self: *const CacheOperationScope, completed: usize, total: usize, message: []const u8) void {
+        if (self.operation) |*operation| operation.progress(.{
+            .stage = "cache-plan",
+            .completed = @intCast(completed),
+            .total = @intCast(total),
+            .percentage = if (total == 0) 100 else @as(f64, @floatFromInt(completed)) * 100.0 / @as(f64, @floatFromInt(total)),
+            .message = message,
+        });
+    }
+
+    fn fail(self: *CacheOperationScope) void {
+        if (self.operation) |*operation| operation.reportError(
+            if (operation.isCancelled()) error.Cancelled else error.CacheOperationFailed,
+            if (operation.isCancelled()) "Package-cache operation cancelled" else "Package-cache operation failed",
+            "alpm-cache",
+            null,
+            false,
+        );
+        self.finish(if (self.operation) |*operation| if (operation.isCancelled()) .cancelled else .failed else .failed);
+    }
+
+    fn finish(self: *CacheOperationScope, status: operation_api.CompletionStatus) void {
+        if (self.operation) |*operation| operation.finish(status);
+    }
+};
 
 const testing = std.testing;
 
@@ -430,6 +524,16 @@ const TestInstalledPackages = struct {
 test "cache cleanup exposes planning and execution through CacheManager" {
     _ = CacheManager.plan_cache_cleanup;
     _ = CacheManager.execute_cache_removal_plan;
+}
+
+test "package-cache operations honor shared cancellation" {
+    var context = operation_api.OperationContext.init(testing.allocator, testing.io);
+    defer context.deinit();
+    var manager = CacheManager.init(testing.allocator, testing.io, .{ .cache_directory = "/nonexistent" });
+    manager.setOperationContext(&context);
+
+    context.cancel();
+    try testing.expectError(Error.Cancelled, manager.plan_cache_cleanup(.{}));
 }
 
 test "cache cleanup parses package filenames from right to left" {
@@ -498,6 +602,7 @@ test "cache cleanup plans retention targets installation filters and signatures"
         cache_directory,
         .{ .keep = 2, .targets = &.{"FO"}, .dry_run = true },
         lookup,
+        null,
     );
     defer dry_run_plan.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), dry_run_plan.items.len);
@@ -506,7 +611,7 @@ test "cache cleanup plans retention targets installation filters and signatures"
     try testing.expect(dry_run_plan.items[0].signature_path != null);
     try testing.expect(dry_run_plan.package_bytes > 0);
     try testing.expect(dry_run_plan.signature_bytes > 0);
-    const dry_result = try executeRemovalPlan(testing.io, &dry_run_plan);
+    const dry_result = try executeRemovalPlan(testing.io, &dry_run_plan, null);
     try testing.expect(dry_result.dry_run);
     try std.Io.Dir.cwd().access(testing.io, oldest_path, .{});
     try std.Io.Dir.cwd().access(testing.io, oldest_signature, .{});
@@ -517,6 +622,7 @@ test "cache cleanup plans retention targets installation filters and signatures"
         cache_directory,
         .{ .keep = 0, .installed_filter = .installed_only },
         lookup,
+        null,
     );
     defer installed_plan.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 4), installed_plan.items.len);
@@ -528,6 +634,7 @@ test "cache cleanup plans retention targets installation filters and signatures"
         cache_directory,
         .{ .keep = 0, .installed_filter = .uninstalled_only, .targets = &.{"MY"} },
         lookup,
+        null,
     );
     defer uninstalled_plan.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), uninstalled_plan.items.len);
@@ -539,9 +646,10 @@ test "cache cleanup plans retention targets installation filters and signatures"
         cache_directory,
         .{ .keep = 2, .targets = &.{"foo"} },
         lookup,
+        null,
     );
     defer removal_plan.deinit(testing.allocator);
-    const result = try executeRemovalPlan(testing.io, &removal_plan);
+    const result = try executeRemovalPlan(testing.io, &removal_plan, null);
     try testing.expect(!result.dry_run);
     try testing.expectEqual(@as(usize, 2), result.packages_removed);
     try testing.expectEqual(@as(usize, 1), result.signatures_removed);

@@ -3,6 +3,7 @@ const bindings = @import("bindings.zig");
 const cache_manager = @import("cache_manager.zig");
 const alpm_manager = @import("manager.zig");
 const shared_downloader = @import("../shared/downloader.zig");
+const operation_api = @import("operation_context");
 
 pub const arch_linux_archive = "https://archive.archlinux.org/packages";
 pub const cachyos_archive = "https://archive.cachyos.org/archive/cachyos";
@@ -22,6 +23,7 @@ pub const Error = error{
     LocalPackageMissing,
     TempFileFailed,
     DownloadFailed,
+    Cancelled,
 };
 
 pub const DiscoveryError = Error || alpm_manager.QueryError;
@@ -116,6 +118,8 @@ pub const ArchiveManager = struct {
     http_client: std.http.Client,
     download_event_callback: ?shared_downloader.DownloadEventCallback = null,
     download_event_context: ?*anyopaque = null,
+    operation_context: ?*operation_api.OperationContext = null,
+    parent_operation: ?*const operation_api.Operation = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, options: Options) ArchiveManager {
         return .{
@@ -128,6 +132,16 @@ pub const ArchiveManager = struct {
 
     pub fn deinit(self: *ArchiveManager) void {
         self.http_client.deinit();
+    }
+
+    /// Borrows a context for archive HTTP and package downloads.
+    pub fn setOperationContext(self: *ArchiveManager, context: ?*operation_api.OperationContext) void {
+        self.operation_context = context;
+    }
+
+    pub fn setParentOperation(self: *ArchiveManager, parent: ?*const operation_api.Operation) void {
+        self.parent_operation = parent;
+        if (parent) |operation| self.operation_context = operation.context;
     }
 
     pub fn set_download_event_callback(
@@ -147,6 +161,7 @@ pub const ArchiveManager = struct {
         include_v3: bool,
         include_v4: bool,
     ) Error![]ArchiveEndpoint {
+        try self.checkCancelled();
         if (!isValidPackageName(package_name)) return Error.InvalidPackageName;
 
         var endpoints: std.ArrayList(ArchiveEndpoint) = .empty;
@@ -178,6 +193,7 @@ pub const ArchiveManager = struct {
         installed_version: ?[]const u8,
         cache_directories: []const []const u8,
     ) Error![]DowngradeCandidate {
+        try self.checkCancelled();
         if (!isValidPackageName(package_name)) return Error.InvalidPackageName;
 
         var candidates: std.ArrayList(DowngradeCandidate) = .empty;
@@ -192,6 +208,7 @@ pub const ArchiveManager = struct {
 
             var iterator = directory.iterate();
             while (iterator.next(self.io) catch return Error.DirectoryReadFailed) |directory_entry| {
+                try self.checkCancelled();
                 if (directory_entry.kind == .directory) continue;
                 const full_path = std.fs.path.join(self.allocator, &.{ cache_directory, directory_entry.name }) catch
                     return Error.OutOfMemory;
@@ -228,6 +245,7 @@ pub const ArchiveManager = struct {
         installed_version: ?[]const u8,
         endpoint: ArchiveEndpoint,
     ) Error![]DowngradeCandidate {
+        try self.checkCancelled();
         const listing = try self.fetchListing(endpoint.url);
         defer self.allocator.free(listing);
         return parseArchiveListing(
@@ -249,6 +267,7 @@ pub const ArchiveManager = struct {
         package_name: []const u8,
         installed_version: ?[]const u8,
     ) DiscoveryError![]DowngradeCandidate {
+        try self.checkCancelled();
         var cache_directories = try manager.get_cache_directories();
         defer cache_directories.deinit(manager.allocator);
 
@@ -289,8 +308,10 @@ pub const ArchiveManager = struct {
         );
         defer ArchiveEndpoint.deinitSlice(self.allocator, endpoints);
         for (endpoints) |endpoint| {
+            try self.checkCancelled();
             const remote = self.list_remote_archive(package_name, installed_version, endpoint) catch |err| switch (err) {
                 Error.OutOfMemory => return Error.OutOfMemory,
+                Error.Cancelled => return Error.Cancelled,
                 else => continue,
             };
             try moveCandidates(self.allocator, &candidates, remote);
@@ -307,7 +328,7 @@ pub const ArchiveManager = struct {
         candidates: []const DowngradeCandidate,
         target: []const u8,
     ) Error!*const DowngradeCandidate {
-        _ = self;
+        try self.checkCancelled();
         if (target.len == 0) return Error.TargetNotFound;
         const filename_target = std.mem.indexOf(u8, target, ".pkg.tar.") != null;
         for (candidates) |*candidate| {
@@ -323,6 +344,7 @@ pub const ArchiveManager = struct {
         self: *ArchiveManager,
         candidate: *const DowngradeCandidate,
     ) Error!PreparedPackage {
+        try self.checkCancelled();
         if (!isSafeFilename(candidate.filename)) return Error.InvalidCandidate;
         if (!candidate.source.is_remote()) {
             _ = std.Io.Dir.cwd().statFile(self.io, candidate.location, .{}) catch
@@ -339,6 +361,7 @@ pub const ArchiveManager = struct {
         self: *ArchiveManager,
         candidate: *const DowngradeCandidate,
     ) Error!PreparedPackage {
+        try self.checkCancelled();
         if (!candidate.source.is_remote() or !isSafeFilename(candidate.filename))
             return Error.InvalidCandidate;
         std.Io.Dir.cwd().createDirPath(self.io, self.options.temporary_directory) catch
@@ -362,11 +385,13 @@ pub const ArchiveManager = struct {
         if (self.download_event_callback) |callback| {
             core.setEventCallback(callback, self.download_event_context);
         }
+        if (self.parent_operation) |operation| core.setParentOperation(operation) else core.setOperationContext(self.operation_context);
 
         switch (core.downloadToFile(candidate.location, destination_path, true)) {
             .succes, .skipped => {},
-            .failure => {
+            .failure => |err| {
                 std.Io.Dir.cwd().deleteFile(self.io, destination_path) catch {};
+                if (err == shared_downloader.DownloadError.Cancelled) return Error.Cancelled;
                 return Error.DownloadFailed;
             },
         }
@@ -381,13 +406,41 @@ pub const ArchiveManager = struct {
         candidate: *const DowngradeCandidate,
         flags: bindings.libalpm.TransFlag,
     ) InstallError!void {
+        try self.checkCancelled();
         var prepared = try self.prepare_candidate(candidate);
         defer prepared.deinit(self.allocator, self.io);
         var paths = [_][]const u8{prepared.path};
         try manager.install_local_packages(paths[0..], flags);
     }
 
+    fn checkCancelled(self: *const ArchiveManager) error{Cancelled}!void {
+        if (self.operation_context) |context| {
+            if (context.isCancelled()) return error.Cancelled;
+        }
+        if (self.parent_operation) |operation| try operation.checkCancelled();
+    }
+
     fn fetchListing(self: *ArchiveManager, url: []const u8) Error![]u8 {
+        var operation_storage: operation_api.Operation = undefined;
+        const has_operation = if (self.parent_operation) |parent| blk: {
+            operation_storage = parent.child(.{ .backend = .download, .kind = .download, .subject = url });
+            break :blk true;
+        } else if (self.operation_context) |context| blk: {
+            operation_storage = context.begin(.{ .backend = .download, .kind = .download, .subject = url });
+            break :blk true;
+        } else false;
+        var successful = false;
+        defer if (has_operation) {
+            if (!successful) operation_storage.reportError(
+                if (operation_storage.isCancelled()) error.Cancelled else error.ArchiveListingDownloadFailed,
+                if (operation_storage.isCancelled()) "Archive listing download cancelled" else "Archive listing download failed",
+                "download",
+                null,
+                false,
+            );
+            operation_storage.finish(if (successful) .success else if (operation_storage.isCancelled()) .cancelled else .failed);
+        };
+        if (has_operation and operation_storage.isCancelled()) return Error.Cancelled;
         const uri = std.Uri.parse(url) catch return Error.RemoteListingFailed;
         var request = self.http_client.request(.GET, uri, .{
             .headers = .{
@@ -404,13 +457,28 @@ pub const ArchiveManager = struct {
         var response = request.receiveHead(&redirect_buffer) catch return Error.RemoteListingFailed;
         if (response.head.status.class() != .success) return Error.RemoteListingFailed;
         var transfer_buffer: [8 * 1024]u8 = undefined;
-        return response.reader(&transfer_buffer).allocRemaining(
-            self.allocator,
-            .limited(self.options.max_listing_size),
-        ) catch |err| {
-            if (err == error.OutOfMemory) return Error.OutOfMemory;
-            return Error.RemoteListingFailed;
-        };
+        const reader = response.reader(&transfer_buffer);
+        var listing: std.ArrayList(u8) = .empty;
+        errdefer listing.deinit(self.allocator);
+        var read_buffer: [16 * 1024]u8 = undefined;
+        while (true) {
+            if (has_operation and operation_storage.isCancelled()) return Error.Cancelled;
+            const amount = reader.readSliceShort(&read_buffer) catch return Error.RemoteListingFailed;
+            if (amount == 0) break;
+            if (listing.items.len + amount > self.options.max_listing_size) return Error.RemoteListingFailed;
+            listing.appendSlice(self.allocator, read_buffer[0..amount]) catch return Error.OutOfMemory;
+            if (has_operation) operation_storage.progress(.{
+                .stage = "archive-listing",
+                .completed = @intCast(listing.items.len),
+                .total = response.head.content_length,
+                .percentage = if (response.head.content_length) |total| if (total == 0) 100 else @as(f64, @floatFromInt(listing.items.len)) * 100.0 / @as(f64, @floatFromInt(total)) else null,
+                .bytes_completed = @intCast(listing.items.len),
+                .bytes_total = response.head.content_length,
+            });
+        }
+        const owned = listing.toOwnedSlice(self.allocator) catch return Error.OutOfMemory;
+        successful = true;
+        return owned;
     }
 };
 
@@ -805,4 +873,18 @@ test "archive installation API delegates through the ALPM manager" {
     _ = ArchiveManager.download_candidate;
     _ = DowngradeCandidate;
     _ = PreparedPackage;
+}
+
+test "archive downloads honor shared cancellation" {
+    var context = operation_api.OperationContext.init(testing.allocator, testing.io);
+    defer context.deinit();
+    var archive = ArchiveManager.init(testing.allocator, testing.io, .{});
+    defer archive.deinit();
+    archive.setOperationContext(&context);
+
+    context.cancel();
+    try testing.expectError(error.Cancelled, archive.list_remote_archive("demo", null, .{
+        .source = .arch_linux,
+        .url = @constCast("https://example.invalid/"),
+    }));
 }

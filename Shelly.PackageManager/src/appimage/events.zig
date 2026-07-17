@@ -1,4 +1,5 @@
 const std = @import("std");
+const operation_api = @import("operation_context");
 
 /// Values intentionally match the C# AppImageEvents ordering.
 pub const StatusKind = enum(u8) {
@@ -48,6 +49,7 @@ pub const Dispatcher = struct {
     allocator: std.mem.Allocator,
     statuses: std.ArrayList(StatusHandler) = .empty,
     download_progress: std.ArrayList(DownloadProgressHandler) = .empty,
+    operation: ?*operation_api.Operation = null,
 
     pub fn init(allocator: std.mem.Allocator) Dispatcher {
         return .{ .allocator = allocator };
@@ -77,11 +79,30 @@ pub const Dispatcher = struct {
         removeHandler(DownloadProgressHandler, &self.download_progress, token);
     }
 
+    pub fn setOperation(self: *Dispatcher, operation: ?*operation_api.Operation) void {
+        self.operation = operation;
+    }
+
     pub fn raiseStatus(self: *Dispatcher, args: StatusArgs) void {
+        if (self.operation) |operation| switch (args.kind) {
+            .information => operation.status(.information, args.message, "appimage.status", null),
+            .warning => operation.status(.warning, args.message, "appimage.warning", null),
+            .success => operation.status(.success, args.message, "appimage.success", null),
+            .err => operation.reportError(error.AppImageOperationFailed, args.message, "appimage", null, false),
+        };
         dispatch(self, StatusArgs, StatusHandler, self.statuses.items, args);
     }
 
     pub fn raiseDownloadProgress(self: *Dispatcher, args: DownloadProgressArgs) void {
+        if (self.operation) |operation| operation.progress(.{
+            .stage = "download",
+            .completed = args.downloaded_bytes,
+            .total = args.total_bytes,
+            .percentage = args.percentage,
+            .bytes_completed = args.downloaded_bytes,
+            .bytes_total = args.total_bytes,
+            .message = args.app_name,
+        });
         dispatch(self, DownloadProgressArgs, DownloadProgressHandler, self.download_progress.items, args);
     }
 
@@ -104,6 +125,59 @@ pub const Dispatcher = struct {
     fn removeHandler(comptime HandlerType: type, handlers: *std.ArrayList(HandlerType), token: usize) void {
         if (token >= handlers.items.len) return;
         _ = handlers.swapRemove(token);
+    }
+};
+
+pub const OperationScope = struct {
+    dispatcher: ?*Dispatcher,
+    operation: ?operation_api.Operation = null,
+    previous: ?*operation_api.Operation = null,
+    attached: bool = false,
+
+    pub fn init(
+        context: ?*operation_api.OperationContext,
+        dispatcher: ?*Dispatcher,
+        kind: operation_api.OperationKind,
+        subject: ?[]const u8,
+    ) OperationScope {
+        var scope: OperationScope = .{ .dispatcher = dispatcher };
+        if (dispatcher) |value| scope.previous = value.operation;
+        if (scope.previous) |parent| {
+            scope.operation = parent.child(.{ .backend = .appimage, .kind = kind, .subject = subject });
+        } else if (context) |operation_context| {
+            scope.operation = operation_context.begin(.{ .backend = .appimage, .kind = kind, .subject = subject });
+        }
+        return scope;
+    }
+
+    pub fn attach(self: *OperationScope) void {
+        if (self.dispatcher) |dispatcher| {
+            if (self.operation) |*operation| dispatcher.setOperation(operation);
+        }
+        self.attached = true;
+    }
+
+    pub fn fail(self: *OperationScope) void {
+        if (self.operation) |*operation| operation.reportError(
+            if (operation.isCancelled()) error.Cancelled else error.AppImageOperationFailed,
+            if (operation.isCancelled()) "AppImage operation cancelled" else "AppImage operation failed",
+            "appimage",
+            null,
+            false,
+        );
+        const status: operation_api.CompletionStatus = if (self.operation) |*operation|
+            if (operation.isCancelled()) .cancelled else .failed
+        else
+            .failed;
+        self.finish(status);
+    }
+
+    pub fn finish(self: *OperationScope, status: operation_api.CompletionStatus) void {
+        if (self.operation) |*operation| operation.finish(status);
+        if (self.attached) {
+            if (self.dispatcher) |dispatcher| dispatcher.setOperation(self.previous);
+            self.attached = false;
+        }
     }
 };
 

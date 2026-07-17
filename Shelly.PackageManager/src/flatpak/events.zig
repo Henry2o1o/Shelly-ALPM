@@ -1,4 +1,6 @@
 const std = @import("std");
+const operations = @import("operation_context");
+const rawflatpak = @import("bindings.zig").libflatpak.flatpak;
 
 /// Values intentionally match the C# FlatpakEventEnum ordering.
 pub const EventType = enum(u8) {
@@ -59,6 +61,7 @@ pub const Dispatcher = struct {
     allocator: std.mem.Allocator,
     statuses: std.ArrayList(StatusHandler) = .empty,
     progress: std.ArrayList(ProgressHandler) = .empty,
+    operation: ?*operations.Operation = null,
 
     pub fn init(allocator: std.mem.Allocator) Dispatcher {
         return .{ .allocator = allocator };
@@ -88,11 +91,26 @@ pub const Dispatcher = struct {
         removeHandler(ProgressHandler, &self.progress, token);
     }
 
+    pub fn setOperation(self: *Dispatcher, operation: ?*operations.Operation) void {
+        self.operation = operation;
+    }
+
     pub fn raiseStatus(self: *Dispatcher, args: StatusArgs) void {
+        if (self.operation) |operation| switch (args.event_type) {
+            .information => operation.status(.information, args.message, "flatpak.status", null),
+            .warning => operation.status(.warning, args.message, "flatpak.warning", null),
+            .success => operation.status(.success, args.message, "flatpak.success", null),
+            .err => operation.reportError(error.FlatpakOperationFailed, args.message, "flatpak", null, false),
+        };
         dispatch(self, StatusArgs, StatusHandler, self.statuses.items, args);
     }
 
     pub fn raiseProgress(self: *Dispatcher, args: ProgressArgs) void {
+        if (self.operation) |operation| operation.progress(.{
+            .stage = args.status,
+            .percentage = @floatFromInt(args.percentage),
+            .message = args.name,
+        });
         dispatch(self, ProgressArgs, ProgressHandler, self.progress.items, args);
     }
 
@@ -115,6 +133,109 @@ pub const Dispatcher = struct {
     fn removeHandler(comptime HandlerType: type, handlers: *std.ArrayList(HandlerType), token: usize) void {
         if (token >= handlers.items.len) return;
         _ = handlers.swapRemove(token);
+    }
+};
+
+/// Lifecycle adapter shared by the primary, remote, and AppStream managers.
+pub const OperationScope = struct {
+    dispatcher: ?*Dispatcher,
+    operation: ?operations.Operation = null,
+    previous: ?*operations.Operation = null,
+    attached: bool = false,
+
+    pub fn init(
+        context: ?*operations.OperationContext,
+        parent: ?*const operations.Operation,
+        dispatcher: ?*Dispatcher,
+        kind: operations.OperationKind,
+        subject: ?[]const u8,
+    ) OperationScope {
+        var scope: OperationScope = .{ .dispatcher = dispatcher };
+        if (dispatcher) |value| scope.previous = value.operation;
+        const effective_parent = parent orelse scope.previous;
+        if (effective_parent) |active_parent| {
+            scope.operation = active_parent.child(.{ .backend = .flatpak, .kind = kind, .subject = subject });
+        } else if (context) |operation_context| {
+            scope.operation = operation_context.begin(.{ .backend = .flatpak, .kind = kind, .subject = subject });
+        }
+        return scope;
+    }
+
+    pub fn attach(self: *OperationScope) void {
+        if (self.dispatcher) |dispatcher| {
+            if (self.operation) |*operation| dispatcher.setOperation(operation);
+        }
+        self.attached = true;
+    }
+
+    pub fn checkCancelled(self: *const OperationScope) error{Cancelled}!void {
+        if (self.operation) |*operation| try operation.checkCancelled();
+    }
+
+    pub fn status(self: *const OperationScope, level: operations.StatusLevel, message: []const u8, code: ?[]const u8) void {
+        if (self.operation) |*operation| operation.status(level, message, code, null);
+    }
+
+    pub fn progress(self: *const OperationScope, update: operations.ProgressUpdate) void {
+        if (self.operation) |*operation| operation.progress(update);
+    }
+
+    pub fn reportError(self: *const OperationScope, err: anyerror, message: []const u8, native_code: ?i64) void {
+        if (self.operation) |*operation| operation.reportError(err, message, "flatpak", native_code, false);
+    }
+
+    pub fn fail(self: *OperationScope) void {
+        if (self.operation) |*operation| operation.reportError(
+            if (operation.isCancelled()) error.Cancelled else error.FlatpakOperationFailed,
+            if (operation.isCancelled()) "Flatpak operation cancelled" else "Flatpak operation failed",
+            "flatpak",
+            null,
+            false,
+        );
+        self.finish(if (self.operation) |*operation| if (operation.isCancelled()) .cancelled else .failed else .failed);
+    }
+
+    pub fn finish(self: *OperationScope, status_value: operations.CompletionStatus) void {
+        if (self.operation) |*operation| operation.finish(status_value);
+        if (self.attached) {
+            if (self.dispatcher) |dispatcher| dispatcher.setOperation(self.previous);
+            self.attached = false;
+        }
+    }
+
+    pub fn childParent(self: *OperationScope) ?*const operations.Operation {
+        return if (self.operation) |*operation| operation else null;
+    }
+};
+
+/// Connects context cancellation to a GLib cancellable for blocking Flatpak
+/// APIs. The bridge borrows both values and must be deinitialized first.
+pub const CancellationBridge = struct {
+    context: ?*operations.OperationContext = null,
+    subscription: ?operations.SubscriptionId = null,
+
+    pub fn init(context: ?*operations.OperationContext, cancellable: *rawflatpak.GCancellable) !CancellationBridge {
+        var bridge: CancellationBridge = .{ .context = context };
+        if (context) |operation_context| {
+            bridge.subscription = try operation_context.subscribeCancellation(.{
+                .function = cancelGlib,
+                .data = cancellable,
+            });
+            if (operation_context.isCancelled()) rawflatpak.g_cancellable_cancel(cancellable);
+        }
+        return bridge;
+    }
+
+    pub fn deinit(self: *CancellationBridge) void {
+        if (self.context) |context| {
+            if (self.subscription) |subscription| _ = context.unsubscribeCancellation(subscription);
+        }
+        self.* = undefined;
+    }
+
+    fn cancelGlib(data: ?*anyopaque) void {
+        const cancellable: *rawflatpak.GCancellable = @ptrCast(@alignCast(data orelse return));
+        rawflatpak.g_cancellable_cancel(cancellable);
     }
 };
 

@@ -3,6 +3,7 @@ const std = @import("std");
 const remotes = @import("remote_manager.zig");
 const events = @import("events.zig");
 const appstreams = @import("appstream_manager.zig");
+const operation_api = @import("operation_context");
 
 const flatpak = bindings.libflatpak;
 const rawflatpak = bindings.libflatpak.flatpak;
@@ -37,21 +38,53 @@ pub const Manager = struct {
     io: std.Io,
     dispatcher: ?*events.Dispatcher = null,
     cancellation: ?events.Cancellation = null,
+    operation_context: ?*operation_api.OperationContext = null,
+    owned_dispatcher: ?*events.Dispatcher = null,
 
     pub fn setEventDispatcher(self: *Manager, dispatcher: ?*events.Dispatcher) void {
-        self.dispatcher = dispatcher;
+        self.dispatcher = dispatcher orelse self.owned_dispatcher;
     }
 
     pub fn setCancellation(self: *Manager, cancellation: ?events.Cancellation) void {
         self.cancellation = cancellation;
     }
 
+    /// Borrows the shared operation context. If no legacy dispatcher is
+    /// installed, a private compatibility dispatcher is created so existing
+    /// status/progress emission automatically reaches the shared context. The
+    /// context must outlive this manager and all synchronous calls.
+    pub fn setOperationContext(self: *Manager, context: ?*operation_api.OperationContext) !void {
+        self.operation_context = context;
+        if (context != null and self.dispatcher == null) {
+            const dispatcher = try self.allocator.create(events.Dispatcher);
+            dispatcher.* = events.Dispatcher.init(self.allocator);
+            self.owned_dispatcher = dispatcher;
+            self.dispatcher = dispatcher;
+        }
+    }
+
+    pub fn deinit(self: *Manager) void {
+        if (self.owned_dispatcher) |dispatcher| {
+            if (self.dispatcher == dispatcher) self.dispatcher = null;
+            dispatcher.deinit();
+            self.allocator.destroy(dispatcher);
+            self.owned_dispatcher = null;
+        }
+        self.operation_context = null;
+    }
+
     pub fn install_flatpak(self: Manager, flatpak_id: [:0]const u8, remote_name: [:0]const u8, scope: flatpak.Scope, branch: [:0]const u8, runtime: bool) !bool {
+        var operation_scope = OperationScope.init(self, .install, flatpak_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const installation = if (scope == flatpak.Scope.SYSTEM)
             rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
@@ -99,6 +132,11 @@ pub const Manager = struct {
     }
 
     pub fn list_installed_flatpak(self: Manager) ![]flatpak.Flatpak {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -130,6 +168,10 @@ pub const Manager = struct {
     /// Resolve a system or user installation by exact/partial ID or friendly
     /// application name, following the original manager's system-first order.
     pub fn find_installed_flatpak(self: Manager, name_or_id: []const u8) !?InstalledApplication {
+        var operation_scope = OperationScope.init(self, .search, name_or_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         if (try self.findInSystemInstallations(name_or_id)) |application| return application;
         return self.findInUserInstallation(name_or_id);
@@ -142,6 +184,10 @@ pub const Manager = struct {
         name_or_id: []const u8,
         commit: ?[]const u8,
     ) !bool {
+        var operation_scope = OperationScope.init(self, .update, name_or_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         var application = (try self.find_installed_flatpak(name_or_id)) orelse return error.FlatpakNotFound;
         defer application.deinit(self.allocator);
         const commit_z: ?[:0]u8 = if (commit) |value| try self.allocator.dupeSentinel(u8, value, 0) else null;
@@ -156,17 +202,27 @@ pub const Manager = struct {
         name_or_id: []const u8,
         remove_unused: bool,
     ) !bool {
+        var operation_scope = OperationScope.init(self, .remove, name_or_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         var application = (try self.find_installed_flatpak(name_or_id)) orelse return error.FlatpakNotFound;
         defer application.deinit(self.allocator);
         return self.uninstall_flatpak(application.id, application.scope, remove_unused);
     }
 
     pub fn upgrade_flatpaks(self: Manager) !bool {
+        var operation_scope = OperationScope.init(self, .update, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const installation_system = rawflatpak.flatpak_installation_new_system(cancellable, &g_error);
         if (installation_system == null or g_error != null) {
@@ -188,11 +244,17 @@ pub const Manager = struct {
     }
 
     pub fn uninstall_flatpak(self: Manager, flatpak_id: [:0]const u8, scope: flatpak.Scope, remove_unused: bool) !bool {
+        var operation_scope = OperationScope.init(self, .remove, flatpak_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const installation = if (scope == flatpak.Scope.SYSTEM)
             rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
@@ -236,11 +298,17 @@ pub const Manager = struct {
     }
 
     pub fn update_flatpak(self: Manager, flatpak_id: [:0]const u8, scope: flatpak.Scope, commit: ?[:0]const u8) !bool {
+        var operation_scope = OperationScope.init(self, .update, flatpak_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const installation = if (scope == flatpak.Scope.SYSTEM)
             rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
@@ -284,6 +352,11 @@ pub const Manager = struct {
     }
 
     pub fn launch_flatpak(self: Manager, flatpak_id: [:0]const u8) !bool {
+        var operation_scope = OperationScope.init(self, .launch, flatpak_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         var application = (try self.find_installed_flatpak(flatpak_id)) orelse return false;
         defer application.deinit(self.allocator);
 
@@ -291,6 +364,8 @@ pub const Manager = struct {
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const installation = if (application.scope == .SYSTEM)
             rawflatpak.flatpak_installation_new_system(cancellable, &g_error)
@@ -320,11 +395,17 @@ pub const Manager = struct {
     }
 
     pub fn install_from_ref_flatpak(self: Manager, flatpak_location: [:0]const u8, scope: flatpak.Scope) !bool {
+        var operation_scope = OperationScope.init(self, .install, flatpak_location);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         var installation: ?*rawflatpak.FlatpakInstallation = null;
         if (scope == flatpak.Scope.SYSTEM) {
@@ -365,11 +446,17 @@ pub const Manager = struct {
     }
 
     pub fn install_from_bundle_flatpak(self: Manager, flatpak_location: [:0]const u8, scope: flatpak.Scope) !bool {
+        var operation_scope = OperationScope.init(self, .install, flatpak_location);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         var installation: ?*rawflatpak.FlatpakInstallation = null;
         if (scope == flatpak.Scope.SYSTEM) {
@@ -411,6 +498,11 @@ pub const Manager = struct {
     }
 
     pub fn search_remote_refs_flatpak(self: Manager, query: [:0]const u8) ![]flatpak.Flatpak {
+        var operation_scope = OperationScope.init(self, .search, query);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -437,7 +529,13 @@ pub const Manager = struct {
         remote_name: []const u8,
         arch: ?[]const u8,
     ) !appstreams.AppstreamCatalog {
-        const appstream_manager = appstreams.AppstreamManager.init(self.allocator, self.io);
+        var operation_scope = OperationScope.init(self, .search, remote_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
+        var appstream_manager = appstreams.AppstreamManager.init(self.allocator, self.io);
+        if (operation_scope.operation) |*operation| appstream_manager.setParentOperation(operation) else appstream_manager.setOperationContext(self.operation_context);
         return appstream_manager.getRemoteCatalog(remote_name, arch);
     }
 
@@ -445,11 +543,22 @@ pub const Manager = struct {
         self: Manager,
         arch: ?[]const u8,
     ) ![]appstreams.AppstreamCatalog {
-        const appstream_manager = appstreams.AppstreamManager.init(self.allocator, self.io);
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
+        var appstream_manager = appstreams.AppstreamManager.init(self.allocator, self.io);
+        if (operation_scope.operation) |*operation| appstream_manager.setParentOperation(operation) else appstream_manager.setOperationContext(self.operation_context);
         return appstream_manager.getAllRemoteCatalogs(arch);
     }
 
     pub fn get_flatpaks_from_remote(self: Manager, remote_name: [:0]const u8) ![]flatpak.Flatpak {
+        var operation_scope = OperationScope.init(self, .search, remote_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -458,7 +567,8 @@ pub const Manager = struct {
         var list: std.ArrayList(flatpak.Flatpak) = .empty;
         errdefer list.deinit(self.allocator);
 
-        const remote_manager = remotes.RemoteManager{ .allocator = self.allocator, .io = self.io };
+        var remote_manager = remotes.RemoteManager{ .allocator = self.allocator, .io = self.io };
+        if (operation_scope.operation) |*operation| remote_manager.setParentOperation(operation) else remote_manager.setOperationContext(self.operation_context);
         const configured_remotes = try remote_manager.listRemotesWithDetails();
         defer self.allocator.free(configured_remotes);
 
@@ -489,6 +599,11 @@ pub const Manager = struct {
     }
 
     pub fn get_remote_ref_info_flatpak(self: Manager, remote_name: [:0]const u8, flatpak_name: [:0]const u8, branch: [:0]const u8, scope: flatpak.Scope) !flatpak.RemoteRef {
+        var operation_scope = OperationScope.init(self, .search, flatpak_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -513,6 +628,11 @@ pub const Manager = struct {
     }
 
     pub fn get_updates_flatpak(self: Manager) ![]flatpak.InstalledFlatpak {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -540,6 +660,11 @@ pub const Manager = struct {
     }
 
     pub fn get_running_instances_flatpak(self: Manager) ![]flatpak.InstalledFlatpak {
+        var operation_scope = OperationScope.init(self, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         var list: std.ArrayList(flatpak.InstalledFlatpak) = .empty;
         errdefer list.deinit(self.allocator);
 
@@ -555,6 +680,10 @@ pub const Manager = struct {
     }
 
     pub fn kill_flatpak(self: Manager, flatpak_id: [:0]const u8) !bool {
+        var operation_scope = OperationScope.init(self, .remove, flatpak_id);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const instances_ptr = rawflatpak.flatpak_instance_get_all();
         var pid: ?i32 = null;
@@ -597,6 +726,8 @@ pub const Manager = struct {
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         var list: std.ArrayList(flatpak.InstalledFlatpak) = .empty;
         errdefer list.deinit(self.allocator);
@@ -779,6 +910,8 @@ pub const Manager = struct {
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         var list: std.ArrayList(flatpak.Flatpak) = .empty;
         errdefer list.deinit(self.allocator);
@@ -810,6 +943,8 @@ pub const Manager = struct {
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const remote_manager = remotes.RemoteManager{ .allocator = self.allocator, .io = self.io };
         const configured_remotes = try remote_manager.listRemotesWithDetails();
@@ -857,6 +992,8 @@ pub const Manager = struct {
         defer rawflatpak.g_object_unref(cancellable);
         var g_error: ?*rawflatpak.GError = null;
         defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const installations = rawflatpak.flatpak_get_system_installations(cancellable, &g_error);
         if (installations == null or g_error != null) return null;
@@ -876,6 +1013,8 @@ pub const Manager = struct {
         defer rawflatpak.g_object_unref(cancellable);
         var g_error: ?*rawflatpak.GError = null;
         defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
         if (installation == null or g_error != null) return null;
@@ -893,6 +1032,8 @@ pub const Manager = struct {
         defer rawflatpak.g_object_unref(cancellable);
         var g_error: ?*rawflatpak.GError = null;
         defer if (g_error) |value| rawflatpak.g_error_free(value);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const refs = rawflatpak.flatpak_installation_list_installed_refs(installation, cancellable, &g_error);
         if (refs == null or g_error != null) return null;
@@ -950,11 +1091,13 @@ pub const Manager = struct {
         return result;
     }
 
-    fn get_ref_id_and_installation(_: Manager, flatpak_id: [:0]const u8, installation: [*c]rawflatpak.FlatpakInstallation) !flatpak.Flatpak {
+    fn get_ref_id_and_installation(self: Manager, flatpak_id: [:0]const u8, installation: [*c]rawflatpak.FlatpakInstallation) !flatpak.Flatpak {
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const ref_ptrs = rawflatpak.flatpak_installation_list_installed_refs(installation, cancellable, &g_error);
         if (ref_ptrs == null or g_error != null) return error.FlatpakError;
@@ -978,6 +1121,8 @@ pub const Manager = struct {
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const update_refs_ptr = rawflatpak.flatpak_installation_list_installed_refs_for_update(installation, cancellable, &g_error);
         if (update_refs_ptr == null or g_error != null) {
@@ -1019,6 +1164,10 @@ pub const Manager = struct {
     /// Remove unused dependencies from every system installation and the user
     /// installation. This is the public backend for `flatpak purify`.
     pub fn remove_unused_dependencies(self: Manager) !bool {
+        var operation_scope = OperationScope.init(self, .cleanup, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
         try self.checkCancelled();
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
@@ -1064,6 +1213,8 @@ pub const Manager = struct {
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
         defer if (g_error) |e| rawflatpak.g_error_free(e);
+        var cancellation_bridge = try CancellationBridge.init(self, cancellable);
+        defer cancellation_bridge.deinit();
 
         const arch = std.mem.span(rawflatpak.flatpak_get_default_arch());
         const unused_ref_ptrs = rawflatpak.flatpak_installation_list_unused_refs(installation, arch, cancellable, &g_error);
@@ -1130,6 +1281,14 @@ pub const Manager = struct {
         user_data: ?*anyopaque,
     ) callconv(.c) void {
         const context: *TransactionCallbackContext = @ptrCast(@alignCast(user_data orelse return));
+        if (context.dispatcher) |dispatcher| {
+            if (dispatcher.operation) |operation| {
+                if (operation.isCancelled()) {
+                    rawflatpak.g_cancellable_cancel(context.cancellable);
+                    return;
+                }
+            }
+        }
         if (context.cancellation) |cancellation| {
             if (cancellation.isCancelled()) {
                 rawflatpak.g_cancellable_cancel(context.cancellable);
@@ -1174,6 +1333,14 @@ pub const Manager = struct {
     }
 
     fn checkCancelled(self: Manager) !void {
+        if (self.dispatcher) |dispatcher| {
+            if (dispatcher.operation) |operation| {
+                if (operation.isCancelled()) return error.Cancelled;
+            }
+        }
+        if (self.operation_context) |context| {
+            if (context.isCancelled()) return error.Cancelled;
+        }
         if (self.cancellation) |cancellation| {
             if (cancellation.isCancelled()) return error.Cancelled;
         }
@@ -1188,7 +1355,20 @@ pub const Manager = struct {
 
     fn emitGError(self: Manager, g_error: ?*rawflatpak.GError, fallback: []const u8) void {
         if (g_error) |value| {
-            self.emitStatus(.err, std.mem.span(value.message));
+            const message = std.mem.span(value.message);
+            if (self.dispatcher) |dispatcher| {
+                if (dispatcher.operation) |operation| {
+                    const domain_ptr = rawflatpak.g_quark_to_string(value.domain);
+                    operation.reportError(
+                        error.FlatpakError,
+                        message,
+                        if (domain_ptr == null) "flatpak" else std.mem.span(domain_ptr),
+                        value.code,
+                        false,
+                    );
+                }
+            }
+            self.emitStatus(.err, message);
         } else {
             self.emitStatus(.err, fallback);
         }
@@ -1242,6 +1422,87 @@ pub const Manager = struct {
         manager: Manager,
         list: *std.ArrayList(flatpak.InstalledFlatpak),
     };
+};
+
+const OperationScope = struct {
+    manager: Manager,
+    operation: ?operation_api.Operation = null,
+    previous: ?*operation_api.Operation = null,
+    attached: bool = false,
+
+    fn init(manager: Manager, kind: operation_api.OperationKind, subject: ?[]const u8) OperationScope {
+        var scope: OperationScope = .{ .manager = manager };
+        if (manager.dispatcher) |dispatcher| scope.previous = dispatcher.operation;
+        if (scope.previous) |parent| {
+            scope.operation = parent.child(.{ .backend = .flatpak, .kind = kind, .subject = subject });
+        } else if (manager.operation_context) |context| {
+            scope.operation = context.begin(.{ .backend = .flatpak, .kind = kind, .subject = subject });
+        }
+        return scope;
+    }
+
+    fn attach(self: *OperationScope) void {
+        if (self.manager.dispatcher) |dispatcher| {
+            if (self.operation) |*operation| dispatcher.setOperation(operation);
+        }
+        self.attached = true;
+    }
+
+    fn fail(self: *OperationScope) void {
+        if (self.operation) |*operation| operation.reportError(
+            if (operation.isCancelled()) error.Cancelled else error.FlatpakOperationFailed,
+            if (operation.isCancelled()) "Flatpak operation cancelled" else "Flatpak operation failed",
+            "flatpak",
+            null,
+            false,
+        );
+        const status: operation_api.CompletionStatus = if (self.operation) |*operation|
+            if (operation.isCancelled()) .cancelled else .failed
+        else
+            .failed;
+        self.finish(status);
+    }
+
+    fn finish(self: *OperationScope, status: operation_api.CompletionStatus) void {
+        if (self.operation) |*operation| operation.finish(status);
+        if (self.attached) {
+            if (self.manager.dispatcher) |dispatcher| dispatcher.setOperation(self.previous);
+            self.attached = false;
+        }
+    }
+};
+
+const CancellationBridge = struct {
+    context: ?*operation_api.OperationContext = null,
+    subscription: ?operation_api.SubscriptionId = null,
+
+    fn init(manager: Manager, cancellable: *rawflatpak.GCancellable) !CancellationBridge {
+        const context = if (manager.dispatcher) |dispatcher|
+            if (dispatcher.operation) |operation| operation.context else manager.operation_context
+        else
+            manager.operation_context;
+        var bridge: CancellationBridge = .{ .context = context };
+        if (context) |operation_context| {
+            bridge.subscription = try operation_context.subscribeCancellation(.{
+                .function = cancelGlib,
+                .data = cancellable,
+            });
+            if (operation_context.isCancelled()) rawflatpak.g_cancellable_cancel(cancellable);
+        }
+        return bridge;
+    }
+
+    fn deinit(self: *CancellationBridge) void {
+        if (self.context) |context| {
+            if (self.subscription) |subscription| _ = context.unsubscribeCancellation(subscription);
+        }
+        self.* = undefined;
+    }
+
+    fn cancelGlib(data: ?*anyopaque) void {
+        const cancellable: *rawflatpak.GCancellable = @ptrCast(@alignCast(data orelse return));
+        rawflatpak.g_cancellable_cancel(cancellable);
+    }
 };
 
 fn spanOrEmpty(pointer: [*c]const u8) []const u8 {
@@ -1301,6 +1562,23 @@ test "Flatpak manager exposes strict-parity operations" {
         _ = try manager.update_installed_flatpak("org.example.Application", null);
         _ = try manager.uninstall_installed_flatpak("org.example.Application", false);
     }
+}
+
+test "shared cancellation propagates to GLib cancellables" {
+    var context = operation_api.OperationContext.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+    const manager = Manager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .operation_context = &context,
+    };
+    const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
+    defer rawflatpak.g_object_unref(cancellable);
+    var bridge = try CancellationBridge.init(manager, cancellable);
+    defer bridge.deinit();
+
+    context.cancel();
+    try std.testing.expect(rawflatpak.g_cancellable_is_cancelled(cancellable) != 0);
 }
 
 //disabled until uninstall is added.

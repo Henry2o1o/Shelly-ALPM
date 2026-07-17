@@ -1,31 +1,8 @@
 const std = @import("std");
+const catalog = @import("catalog.zig");
 const spec = @import("spec.zig");
 
 const Writer = std.Io.Writer;
-
-const shortcode_help =
-    \\Shortcodes:
-    \\  Grammar: -<Type><Action><modifiers...> [positionals]
-    \\  Type selects the command group, Action selects the verb, and
-    \\  modifiers are that verb's own short flags (case-sensitive).
-    \\
-    \\  Types:
-    \\    I  appimage
-    \\    A  aur
-    \\    C  config
-    \\    F  flatpak
-    \\    K  keyring
-    \\    S  standard
-    \\    U  utility
-    \\
-    \\  Examples:
-    \\    -SIu firefox   ->  install -u firefox
-    \\    -AS query      ->  aur search query
-    \\    -KV ABCD       ->  keyring recv ABCD
-    \\
-    \\  In shortcode mode use --ui-mode instead of -U.
-    \\
-;
 
 const Row = struct {
     label: []const u8,
@@ -39,12 +16,16 @@ pub fn render(
     writer: *Writer,
 ) !void {
     if (!command.hidden) {
+        const action_branch = isActionBranch(manifest, command);
         if (command.description) |description|
             try writer.print("Description:\n  {s}\n\n", .{description});
 
+        if (command.implementation) |implementation|
+            try writer.print("Implementation:\n  {s}\n\n", .{implementation});
+
         try writer.print("Usage:\n  {s}", .{command.path});
         if (command.isBranch) {
-            try writer.writeAll(" [command]");
+            try writer.writeAll(if (action_branch) " [type]" else " [command]");
         } else {
             for (command.arguments) |argument| {
                 try writer.writeByte(' ');
@@ -89,19 +70,37 @@ pub fn render(
             try writeRows(writer, option_rows.items);
         }
 
+        if (action_branch)
+            try writeActionModifiers(allocator, manifest, command, writer);
+
         var command_rows: std.ArrayList(Row) = .empty;
         for (manifest.commands) |child| {
             const parent_path = child.parentPath orelse continue;
             if (!std.mem.eql(u8, parent_path, command.path) or child.hidden) continue;
             var label: std.ArrayList(u8) = .empty;
-            try label.appendSlice(allocator, child.name);
+            try label.appendSlice(allocator, if (action_branch) child.path else child.name);
             for (child.arguments) |argument| {
                 try label.append(allocator, ' ');
                 try label.appendSlice(allocator, try argumentLabel(allocator, argument));
             }
+            var description: []const u8 = child.description orelse "";
+            if (child.actionCode != null and child.typeCode != null) {
+                description = try std.fmt.allocPrint(
+                    allocator,
+                    "{s} [shortcode: -{c}{c}]",
+                    .{ description, child.actionCode.?, child.typeCode.? },
+                );
+            }
+            if (child.implementation) |implementation| {
+                description = try std.fmt.allocPrint(
+                    allocator,
+                    "{s} [implementation: {s}]",
+                    .{ description, implementation },
+                );
+            }
             try command_rows.append(allocator, .{
                 .label = try label.toOwnedSlice(allocator),
-                .description = child.description orelse "",
+                .description = description,
             });
         }
         if (command_rows.items.len > 0) {
@@ -111,8 +110,147 @@ pub fn render(
 
         try writer.writeByte('\n');
     }
-    try writer.writeAll(shortcode_help);
+    try writeShortcodeHelp(writer);
     try writer.writeByte('\n');
+}
+
+fn isActionBranch(manifest: *const spec.Manifest, command: *const spec.Command) bool {
+    const parent_path = command.parentPath orelse return false;
+    return command.isBranch and std.mem.eql(u8, parent_path, manifest.root().path);
+}
+
+fn writeActionModifiers(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    action: *const spec.Command,
+    writer: *Writer,
+) !void {
+    var has_modifiers = false;
+    for (manifest.commands) |child| {
+        if (!isChildOf(&child, action) or child.options.len == 0) continue;
+        has_modifiers = true;
+        break;
+    }
+    if (!has_modifiers) return;
+
+    try writer.writeAll("\nModifiers by Type:\n");
+
+    var shared_rows: std.ArrayList(Row) = .empty;
+    for (manifest.commands) |child| {
+        if (!isChildOf(&child, action)) continue;
+        for (child.options) |option| {
+            if (option.hidden or option.builtIn or optionTypeCount(manifest, action, option.name) < 2) continue;
+            if (hasOptionRow(shared_rows.items, option.name)) continue;
+
+            var type_names: std.ArrayList(u8) = .empty;
+            for (manifest.commands) |candidate| {
+                if (!isChildOf(&candidate, action) or findLocalOption(&candidate, option.name) == null) continue;
+                if (type_names.items.len > 0) try type_names.appendSlice(allocator, ", ");
+                try type_names.appendSlice(allocator, candidate.name);
+            }
+            try shared_rows.append(allocator, .{
+                .label = try optionLabel(allocator, option),
+                .description = try std.fmt.allocPrint(
+                    allocator,
+                    "{s} [types: {s}]",
+                    .{ option.description orelse "", type_names.items },
+                ),
+            });
+        }
+    }
+    if (shared_rows.items.len > 0) {
+        try writer.writeAll("  Shared:\n");
+        try writeIndentedRows(writer, shared_rows.items, 4);
+    }
+
+    for (manifest.commands) |child| {
+        if (!isChildOf(&child, action)) continue;
+        var rows: std.ArrayList(Row) = .empty;
+        for (child.options) |option| {
+            if (option.hidden or option.builtIn or optionTypeCount(manifest, action, option.name) > 1) continue;
+            var description: []const u8 = option.description orelse "";
+            if (option.hasExplicitDefault) {
+                description = try std.fmt.allocPrint(
+                    allocator,
+                    "{s} [default: {s}]",
+                    .{ description, try formatDefault(allocator, option.defaultValue) },
+                );
+            }
+            try rows.append(allocator, .{
+                .label = try optionLabel(allocator, option),
+                .description = description,
+            });
+        }
+        if (rows.items.len == 0) continue;
+        try writer.print("  {s} only:\n", .{child.name});
+        try writeIndentedRows(writer, rows.items, 4);
+    }
+}
+
+fn isChildOf(command: *const spec.Command, parent: *const spec.Command) bool {
+    const parent_path = command.parentPath orelse return false;
+    return std.mem.eql(u8, parent_path, parent.path);
+}
+
+fn optionTypeCount(manifest: *const spec.Manifest, action: *const spec.Command, name: []const u8) usize {
+    var count: usize = 0;
+    for (manifest.commands) |candidate| {
+        if (isChildOf(&candidate, action) and findLocalOption(&candidate, name) != null) count += 1;
+    }
+    return count;
+}
+
+fn findLocalOption(command: *const spec.Command, name: []const u8) ?*const spec.Option {
+    for (command.options) |*option| {
+        if (std.mem.eql(u8, option.name, name)) return option;
+    }
+    return null;
+}
+
+fn hasOptionRow(rows: []const Row, name: []const u8) bool {
+    for (rows) |row| {
+        if (std.mem.indexOf(u8, row.label, name) != null) return true;
+    }
+    return false;
+}
+
+fn writeIndentedRows(writer: *Writer, rows: []const Row, indent: usize) !void {
+    var width: usize = 0;
+    for (rows) |row| width = @max(width, row.label.len);
+    for (rows) |row| {
+        try writer.splatByteAll(' ', indent);
+        try writer.print("{s}", .{row.label});
+        try writer.splatByteAll(' ', width - row.label.len + 2);
+        try writer.print("{s}\n", .{row.description});
+    }
+}
+
+fn writeShortcodeHelp(writer: *Writer) !void {
+    try writer.writeAll(
+        \\Shortcodes:
+        \\  Grammar: -<Action><Type><modifiers...> [positionals]
+        \\  Action selects the operation, Type selects its target, and
+        \\  modifiers are that action/type pair's short flags (case-sensitive).
+        \\
+        \\  Types:
+        \\
+    );
+    for (catalog.types) |command_type| {
+        const code = command_type.code orelse continue;
+        try writer.print("    {c}  {s}\n", .{ code, command_type.name });
+    }
+    try writer.writeAll(
+        \\
+        \\  Examples:
+        \\    -U, -Ua        ->  upgrade all
+        \\    -ISu firefox   ->  install standard -u firefox
+        \\    -SA query      ->  search aur query
+        \\    -SAh           ->  search aur --help
+        \\    -VK ABCD       ->  recv keyring ABCD
+        \\
+        \\  In shortcode mode use --ui-mode instead of -U.
+        \\
+    );
 }
 
 fn appendOptionRow(
@@ -207,4 +345,100 @@ fn formatDefault(allocator: std.mem.Allocator, value: ?std.json.Value) ![]const 
         .string => |string| string,
         else => "",
     };
+}
+
+test "action help shows shared and type-specific modifiers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const command = manifest.findByPath("shelly install").?;
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, command, &output.writer);
+    const rendered = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "shelly install [type]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Modifiers by Type:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Shared:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "--build-deps") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[types: standard, aur]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "aur only:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "--chroot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Commands:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "shelly install aur <packages>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\nTypes:\n") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -IA]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.installPackages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AppImageManager.installAppImage") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.install_flatpak") != null);
+}
+
+test "sync action help lists standard and Flatpak variants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const command = manifest.findByPath("shelly sync").?;
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, command, &output.writer);
+    const rendered = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "standard") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "flatpak") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YS]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -YF]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.sync") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AppstreamManager.updateAllAppstreams") != null);
+}
+
+test "upgrade action help documents every backend and its actual modifiers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const command = manifest.findByPath("shelly upgrade").?;
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, command, &output.writer);
+    const rendered = output.writer.buffered();
+    for ([_][]const u8{ "[shortcode: -US]", "[shortcode: -UX]", "[shortcode: -UI]", "[shortcode: -UA]", "[shortcode: -UF]" }) |needle|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
+    for ([_][]const u8{ "--all", "--no-repo", "--no-aur", "--no-flatpak", "--no-appimage", "--check", "--singlepane" }) |needle|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AlpmManager.sync") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.getPackagesNeedingUpdate") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.upgrade_flatpaks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "appimage.UpdateManager.get_updates") != null);
+}
+
+test "search help names the native method used by the selected type" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(
+        arena.allocator(),
+        &manifest,
+        manifest.findByPath("shelly search flatpak").?,
+        &output.writer,
+    );
+    const rendered = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "AppstreamManager.getAllRemoteCatalogs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Flathub") == null);
+}
+
+test "help documents only the action-type shortcode grammar" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try render(arena.allocator(), &manifest, manifest.root(), &output.writer);
+    const rendered = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-<Action><Type><modifiers...>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-ISu firefox") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-<Type><Action>") == null);
 }

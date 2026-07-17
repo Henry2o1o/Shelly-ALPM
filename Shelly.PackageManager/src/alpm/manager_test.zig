@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const manager = @import("manager.zig");
 const bindings = @import("bindings.zig");
 const events = @import("events.zig");
+const operations = @import("operation_context");
 
 const Manager = manager.Manager;
 const libalpm = bindings.libalpm;
@@ -403,6 +404,23 @@ test "get_installed_packages returns an empty list when no packages are installe
 
     // A fresh temporary database has no installed packages.
     try testing.expectEqual(@as(usize, 0), packages.len);
+}
+
+test "ALPM queries honor shared cancellation" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    var context = operations.OperationContext.init(allocator, io);
+    defer context.deinit();
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, workspace.db_path);
+    defer mgr.deinit();
+    mgr.setOperationContext(&context);
+
+    context.cancel();
+    try testing.expectError(error.Cancelled, mgr.get_installed_packages());
 }
 
 test "get_installed_packages lists packages from the system database" {
@@ -949,6 +967,73 @@ test "install_packages returns PackageFetchFailed when a target cannot be resolv
     );
 }
 
+test "install_packages predownloads prepared repository packages before commit" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.createSyncDatabase(allocator);
+
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{workspace.root});
+    defer allocator.free(cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = auto\n" ++
+            "SigLevel = Never\n" ++
+            "DBPath = {s}\n" ++
+            "CacheDir = {s}\n" ++
+            "\n" ++
+            "[seafoam-labs]\n" ++
+            "Server = file://{s}/mirror\n",
+        .{ workspace.db_path, cache_path, workspace.root },
+    );
+    defer allocator.free(config);
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const CancelDownload = struct {
+        context: *operations.OperationContext,
+        saw_download: bool = false,
+
+        fn handle(data: ?*anyopaque, event: operations.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (event) {
+                .started => |started| {
+                    if (started.envelope.backend != .download) return;
+                    self.saw_download = true;
+                    self.context.cancel();
+                },
+                else => {},
+            }
+        }
+    };
+    var context = operations.OperationContext.init(allocator, io);
+    defer context.deinit();
+    var cancel_download: CancelDownload = .{ .context = &context };
+    _ = try context.subscribe(.{ .function = CancelDownload.handle, .data = &cancel_download });
+    mgr.setOperationContext(&context);
+
+    var package_names = [_][:0]const u8{"remote-provider"};
+    try testing.expectError(
+        error.UpdateFetchFailed,
+        mgr.install_packages(&package_names, .{}),
+    );
+    try testing.expect(cancel_download.saw_download);
+}
+
 // ---------------------------------------------------------------------------
 // install_local_packages
 // ---------------------------------------------------------------------------
@@ -1271,6 +1356,7 @@ test "previously uncovered Manager APIs reject a null handle" {
     mgr.handle = null;
     mgr.allocator = testing.allocator;
 
+    try testing.expectError(error.SyncDbFailed, mgr.sync_for_update_check(false));
     try testing.expectError(error.NoHandle, mgr.sync_system_update(.{}));
     try testing.expectError(error.NoHandle, mgr.get_package_from_provides("virtual-feature"));
     try testing.expectError(error.NoHandle, mgr.is_dependency_satisfied_by_installed_packages("dependency"));

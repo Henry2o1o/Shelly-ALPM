@@ -5,6 +5,7 @@ const appimage_manager = @import("manager.zig");
 const events = @import("events.zig");
 const xdg_paths = @import("../shared/xdg_paths.zig").xdg_paths;
 const downloader = @import("../shared/downloader.zig");
+const operation_api = @import("operation_context");
 
 pub const UpdateManager = struct {
     allocator: std.mem.Allocator,
@@ -13,12 +14,41 @@ pub const UpdateManager = struct {
     install_directory: []const u8,
     local_db_path: []const u8,
     dispatcher: ?*events.Dispatcher = null,
+    operation_context: ?*operation_api.OperationContext = null,
+    owned_dispatcher: ?*events.Dispatcher = null,
 
     pub fn setEventDispatcher(self: *UpdateManager, dispatcher: ?*events.Dispatcher) void {
-        self.dispatcher = dispatcher;
+        self.dispatcher = dispatcher orelse self.owned_dispatcher;
+    }
+
+    /// Borrows a shared context and creates an internal legacy adapter when
+    /// needed. The context must outlive this manager and all active calls.
+    pub fn setOperationContext(self: *UpdateManager, context: ?*operation_api.OperationContext) !void {
+        self.operation_context = context;
+        if (context != null and self.dispatcher == null) {
+            const dispatcher = try self.allocator.create(events.Dispatcher);
+            dispatcher.* = events.Dispatcher.init(self.allocator);
+            self.owned_dispatcher = dispatcher;
+            self.dispatcher = dispatcher;
+        }
+    }
+
+    pub fn deinit(self: *UpdateManager) void {
+        if (self.owned_dispatcher) |dispatcher| {
+            if (self.dispatcher == dispatcher) self.dispatcher = null;
+            dispatcher.deinit();
+            self.allocator.destroy(dispatcher);
+            self.owned_dispatcher = null;
+        }
+        self.operation_context = null;
     }
 
     pub fn configure_updates(self: UpdateManager, update_info: []const u8, name: []const u8, update_type: appimage.UpdateType, allow_prerelease: bool) !bool {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .configure, name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         std.log.info("Configuring updates for {s} {s}, type: {s}, allowPrerelease: {}", .{ name, update_info, @tagName(update_type), allow_prerelease });
 
         const manager = appimage_manager.AppImageManager{
@@ -28,6 +58,7 @@ pub const UpdateManager = struct {
             .install_directory = self.install_directory,
             .local_db_path = self.local_db_path,
             .dispatcher = self.dispatcher,
+            .operation_context = self.operation_context,
         };
 
         const app_images = try manager.getAppImagesFromLocalDb();
@@ -99,6 +130,11 @@ pub const UpdateManager = struct {
     /// Returns an owned list containing only available updates. Call
     /// `deinit` on the returned value when it is no longer needed.
     pub fn get_updates(self: UpdateManager) !appimage.UpdateList {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, null);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const manager = self.appImageManager();
         const apps = try manager.getAppImagesFromLocalDb();
         defer manager.freeAppImages(apps);
@@ -110,7 +146,9 @@ pub const UpdateManager = struct {
         }
 
         self.emitStatus(.information, "Checking for AppImage updates...");
-        for (apps) |*app| {
+        for (apps, 0..) |*app, app_index| {
+            try self.checkCancelled();
+            self.emitProgress("check-updates", app.name, app_index, apps.len);
             if (try self.get_update(app)) |update_result| {
                 if (update_result.is_update_available) {
                     try updates.append(self.allocator, update_result);
@@ -121,6 +159,7 @@ pub const UpdateManager = struct {
         }
 
         const owned = try updates.toOwnedSlice(self.allocator);
+        self.emitProgress("check-updates", "AppImage update check complete", apps.len, apps.len);
         self.emitStatusFmt(.success, "Found {d} AppImage update(s).", .{owned.len});
         return appimage.UpdateList.init(self.allocator, owned);
     }
@@ -129,6 +168,11 @@ pub const UpdateManager = struct {
     /// valid update configuration/provider result. The caller owns a non-null
     /// result and must call `deinit` on it.
     pub fn get_update(self: UpdateManager, app: *const appimage.AppImage) !?appimage.AppImageUpdate {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app.name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         switch (app.update_type) {
             .none => return null,
             .static_url => {
@@ -191,6 +235,11 @@ pub const UpdateManager = struct {
     }
 
     pub fn update(self: UpdateManager, appimage_ptr: *appimage.AppImageUpdate) !bool {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .update, appimage_ptr.name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const manager = appimage_manager.AppImageManager{
             .allocator = self.allocator,
             .io = self.io,
@@ -198,6 +247,7 @@ pub const UpdateManager = struct {
             .install_directory = self.install_directory,
             .local_db_path = self.local_db_path,
             .dispatcher = self.dispatcher,
+            .operation_context = self.operation_context,
         };
 
         const apps = try manager.getAppImagesFromLocalDb();
@@ -261,6 +311,11 @@ pub const UpdateManager = struct {
 
         var dl = downloader.CoreDownloader.init(self.allocator, self.io, .default());
         defer dl.deinit();
+        if (self.dispatcher) |dispatcher| {
+            if (dispatcher.operation) |operation| dl.setParentOperation(operation) else dl.setOperationContext(self.operation_context);
+        } else {
+            dl.setOperationContext(self.operation_context);
+        }
         var download_context = DownloadContext{ .manager = self, .app_name = appimage_ptr.name };
         dl.setEventCallback(onDownloadEvent, &download_context);
 
@@ -326,6 +381,11 @@ pub const UpdateManager = struct {
     }
 
     pub fn check_static_url_update(self: UpdateManager, url: []const u8, app_name: []const u8, current_version: []const u8) !?appimage.AppImageUpdate {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const uri = std.Uri.parse(url) catch return null;
 
         var client: std.http.Client = .{ .allocator = self.allocator, .io = self.io };
@@ -459,6 +519,11 @@ pub const UpdateManager = struct {
     }
 
     pub fn check_gitea_update(self: UpdateManager, domain: []const u8, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const url = try gitea_to_releases_api(self.allocator, domain, owner, repo);
         defer self.allocator.free(url);
 
@@ -468,10 +533,20 @@ pub const UpdateManager = struct {
     }
 
     pub fn check_codeberg_update(self: UpdateManager, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         return self.check_gitea_update("codeberg.org", owner, repo, app_name, current_version, allow_prerelease);
     }
 
     pub fn check_forgejo_update(self: UpdateManager, update_url: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const uri = std.Uri.parse(update_url) catch return null;
         const host = switch (uri.host orelse return null) {
             .raw => |h| h,
@@ -491,6 +566,11 @@ pub const UpdateManager = struct {
     }
 
     pub fn check_github_update(self: UpdateManager, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const url = try github_to_releases_api(self.allocator, owner, repo);
         defer self.allocator.free(url);
 
@@ -569,6 +649,11 @@ pub const UpdateManager = struct {
     }
 
     pub fn check_gitlab_update(self: UpdateManager, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
+        var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app_name);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
         const url = try gitlab_to_releases_api(self.allocator, owner, repo);
         defer self.allocator.free(url);
 
@@ -687,6 +772,7 @@ pub const UpdateManager = struct {
     }
 
     fn fetchJson(self: UpdateManager, url: []const u8, accept: []const u8) !?[]u8 {
+        try self.checkCancelled();
         const uri = std.Uri.parse(url) catch {
             self.emitStatus(.err, "The AppImage update provider URL is invalid.");
             return null;
@@ -725,13 +811,24 @@ pub const UpdateManager = struct {
         }
 
         var transfer_buffer: [8 * 1024]u8 = undefined;
-        return response.reader(&transfer_buffer).allocRemaining(
-            self.allocator,
-            .limited(16 * 1024 * 1024),
-        ) catch {
-            self.emitStatus(.err, "Could not read the AppImage update response.");
-            return null;
-        };
+        const body_reader = response.reader(&transfer_buffer);
+        var body: std.ArrayList(u8) = .empty;
+        errdefer body.deinit(self.allocator);
+        var read_buffer: [16 * 1024]u8 = undefined;
+        while (true) {
+            try self.checkCancelled();
+            const amount = body_reader.readSliceShort(&read_buffer) catch {
+                self.emitStatus(.err, "Could not read the AppImage update response.");
+                return null;
+            };
+            if (amount == 0) break;
+            if (body.items.len + amount > 16 * 1024 * 1024) {
+                self.emitStatus(.err, "The AppImage update response was too large.");
+                return null;
+            }
+            try body.appendSlice(self.allocator, read_buffer[0..amount]);
+        }
+        return @as(?[]u8, try body.toOwnedSlice(self.allocator));
     }
 
     fn endsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
@@ -764,6 +861,7 @@ pub const UpdateManager = struct {
             .install_directory = self.install_directory,
             .local_db_path = self.local_db_path,
             .dispatcher = self.dispatcher,
+            .operation_context = self.operation_context,
         };
     }
 
@@ -782,6 +880,27 @@ pub const UpdateManager = struct {
         };
         defer self.allocator.free(message);
         self.emitStatus(kind, message);
+    }
+
+    fn emitProgress(self: UpdateManager, stage: []const u8, message: []const u8, completed: usize, total: usize) void {
+        if (self.dispatcher) |dispatcher| {
+            if (dispatcher.operation) |operation| operation.progress(.{
+                .stage = stage,
+                .completed = @intCast(completed),
+                .total = @intCast(total),
+                .percentage = if (total == 0) 100 else @as(f64, @floatFromInt(completed)) * 100.0 / @as(f64, @floatFromInt(total)),
+                .message = message,
+            });
+        }
+    }
+
+    fn checkCancelled(self: UpdateManager) error{Cancelled}!void {
+        if (self.dispatcher) |dispatcher| {
+            if (dispatcher.operation) |operation| try operation.checkCancelled();
+        }
+        if (self.operation_context) |context| {
+            if (context.isCancelled()) return error.Cancelled;
+        }
     }
 
     fn emitDownloadProgress(self: UpdateManager, app_name: []const u8, progress: downloader.DownloadProgress) void {
@@ -1399,6 +1518,23 @@ test "AppImage update manager forwards downloader progress" {
     try std.testing.expectEqual(@as(?u64, 200), capture.total);
     try std.testing.expectEqual(@as(u64, 25), capture.downloaded);
     try std.testing.expectEqual(@as(?f64, 12.5), capture.percentage);
+}
+
+test "AppImage updates honor shared cancellation" {
+    var context = operation_api.OperationContext.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+    var manager = UpdateManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = std.testing.environ,
+        .install_directory = "/tmp/shelly-appimage-cancelled",
+        .local_db_path = "/tmp/shelly-appimage-cancelled.json",
+    };
+    defer manager.deinit();
+    try manager.setOperationContext(&context);
+
+    context.cancel();
+    try std.testing.expectError(error.Cancelled, manager.get_updates());
 }
 
 test "update: returns false when app not found in db" {
