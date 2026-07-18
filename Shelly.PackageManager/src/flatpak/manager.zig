@@ -706,12 +706,18 @@ pub const Manager = struct {
         } else {
             installation = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
         }
+        if (installation == null or g_error != null) {
+            self.emitGError(g_error, "Failed to open the Flatpak installation");
+            return error.FlatpakError;
+        }
+        defer rawflatpak.g_object_unref(installation);
 
         const remote_ref_ptr = rawflatpak.flatpak_installation_fetch_remote_ref_sync(installation, cStr(remote_name), 0, cStr(flatpak_name), rawflatpak.flatpak_get_default_arch(), cStr(branch), cancellable, &g_error);
         if (remote_ref_ptr == null) {
-            if (g_error) |e| std.debug.print("failed to fetch remote ref: {s}\n", .{e.*.message});
+            self.emitGError(g_error, "Failed to fetch the Flatpak remote reference");
             return error.FetchRemoteRefFailed;
         }
+        errdefer rawflatpak.g_object_unref(remote_ref_ptr);
 
         const permissions = try get_permissions_from_remote_ref(self, remote_ref_ptr);
         return flatpak.RemoteRef.new(remote_ref_ptr, scope, permissions);
@@ -1939,7 +1945,7 @@ test "test getAllFlatpaksFromRemotes" {
 test "test getRemoteRefInfo" {
     const manager = Manager{ .allocator = std.testing.allocator, .io = std.testing.io };
     const result = try manager.get_remote_ref_info_flatpak("flathub", "it.mijorus.gearlever", "stable", flatpak.Scope.SYSTEM);
-    defer result.deinitPermissions(std.testing.allocator);
+    defer result.deinit(std.testing.allocator);
     try std.testing.expect(result.permissions.len > 1);
 }
 

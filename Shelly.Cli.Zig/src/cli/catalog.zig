@@ -635,7 +635,20 @@ pub const variants = [_]Variant{
         .type_name = "flatpak",
         .action_code = 'L',
         .type_code = 'f',
-        .help = .{ .implementation = "Zigalpm.FlatpakManager.list_installed_applications" },
+        .help = .{
+            .description = "List installed Flatpaks, configured system and user remotes, or cached AppStream JSON for one or every remote.",
+            .implementation = "Zigalpm.FlatpakManager.list_installed_applications / get_remote_appstream / get_all_remote_appstreams",
+            .arguments = &.{
+                .{
+                    .name = "source",
+                    .description = "Use remote to return cached remote AppStream applications instead of installed Flatpaks",
+                },
+                .{
+                    .name = "query",
+                    .description = "Remote name, or all; omit it to list the configured system and user remotes",
+                },
+            },
+        },
     },
     .{
         .action = "list-updates",
@@ -694,8 +707,8 @@ pub const variants = [_]Variant{
         .action_code = 'S',
         .type_code = 'f',
         .help = .{
-            .description = "Search cached AppStream catalogs from every configured system and user Flatpak remote, with local pagination.",
-            .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs",
+            .description = "Search cached AppStream catalogs from every configured system and user Flatpak remote, with local pagination and remote-reference sizes and permissions.",
+            .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs; Zigalpm.FlatpakManager.get_remote_ref_info_flatpak",
             .arguments = &.{.{
                 .name = "query",
                 .description = "Application name or ID matched against the configured remotes' local AppStream catalogs",
@@ -752,6 +765,17 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "query",
         "Application name or ID matched against cached AppStream catalogs",
     )};
+    if (pathIs(action, type_name, "list", "flatpak")) return &.{
+        optionalArgumentWithChoices(
+            "source",
+            "Use remote to return cached remote AppStream applications",
+            &.{"remote"},
+        ),
+        optionalArgument(
+            "query",
+            "Remote name, or all; omit to list configured remotes",
+        ),
+    };
 
     if (pathIs(action, type_name, "install", "standard")) return &.{repeatedArgument(
         "packages",

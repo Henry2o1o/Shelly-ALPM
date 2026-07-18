@@ -156,6 +156,8 @@ fn dispatchWithRunner(
     runner: Runner,
 ) !?u8 {
     const backend = backendForPath(invocation.command.path) orelse return null;
+    if (isFlatpakRemoteList(invocation))
+        return try dispatchFlatpakRemote(context, invocation);
     var result = runner.call(
         runner.data,
         context,
@@ -179,6 +181,320 @@ fn dispatchWithRunner(
         try writePlain(context, invocation, &result);
     }
     return 0;
+}
+
+fn isFlatpakRemoteList(invocation: *const parser.Invocation) bool {
+    return std.mem.eql(u8, invocation.command.path, flatpak_command_path) and
+        invocation.positionals.len > 0 and
+        std.mem.eql(u8, invocation.positionals[0], "remote");
+}
+
+fn dispatchFlatpakRemote(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) !u8 {
+    if (invocation.positionals.len == 1)
+        return dispatchConfiguredFlatpakRemotes(context, invocation);
+
+    const query = invocation.positionals[1];
+    const get_all = std.ascii.eqlIgnoreCase(query, "all");
+    var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
+    defer manager.deinit();
+
+    if (get_all) {
+        const catalogs = manager.get_all_remote_appstreams(null) catch |err| {
+            try writeRemoteQueryFailure(context, invocation, query, err);
+            return 1;
+        };
+        defer Zigalpm.flatpak.AppstreamCatalog.deinitSlice(context.allocator, catalogs);
+        return writeRemoteResult(context, invocation, catalogs, true);
+    }
+
+    var catalog = manager.get_remote_appstream(query, null) catch |err| {
+        try writeRemoteQueryFailure(context, invocation, query, err);
+        return 1;
+    };
+    defer catalog.deinit();
+    return writeRemoteResult(context, invocation, &.{catalog}, false);
+}
+
+const ConfiguredRemote = struct {
+    name: []const u8,
+    scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    url: []const u8,
+};
+
+fn dispatchConfiguredFlatpakRemotes(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) !u8 {
+    const manager = Zigalpm.flatpak.RemoteManager{
+        .allocator = context.allocator,
+        .io = context.io,
+    };
+    const native_remotes = manager.listRemotesWithDetails() catch |err| {
+        try writeConfiguredRemoteFailure(context, invocation, err);
+        return 1;
+    };
+    defer context.allocator.free(native_remotes);
+    const remotes = try context.allocator.alloc(ConfiguredRemote, native_remotes.len);
+    defer context.allocator.free(remotes);
+    for (native_remotes, remotes) |remote, *item| item.* = .{
+        .name = remote.name() orelse "",
+        .scope = remote.get_scope(),
+        .url = remote.url() orelse "",
+    };
+
+    if (invocation.globals.ui_mode) {
+        var payload = std.Io.Writer.Allocating.init(context.allocator);
+        defer payload.deinit();
+        try writeConfiguredRemotesJson(&payload.writer, remotes);
+        try output.writeFrame(context, payload.writer.buffered());
+    } else if (invocation.globals.json) {
+        try writeConfiguredRemotesJson(context.stdout, remotes);
+        try context.stdout.writeByte('\n');
+    } else {
+        try writeConfiguredRemotesPlain(context, remotes);
+    }
+    return 0;
+}
+
+fn writeConfiguredRemoteFailure(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    err: anyerror,
+) !void {
+    const message = try std.fmt.allocPrint(
+        context.allocator,
+        "Unable to list configured Flatpak remotes: {t}",
+        .{err},
+    );
+    defer context.allocator.free(message);
+    if (invocation.globals.ui_mode)
+        try output.writeErrorFrame(context, message)
+    else
+        try output.writeFailure(context, message);
+}
+
+fn writeConfiguredRemotesJson(
+    writer: *std.Io.Writer,
+    remotes: []const ConfiguredRemote,
+) !void {
+    var json: std.json.Stringify = .{ .writer = writer };
+    try json.beginArray();
+    for (remotes) |remote| {
+        try json.beginObject();
+        try field(&json, "Name", remote.name);
+        try field(&json, "Scope", @intFromEnum(remote.scope));
+        try field(&json, "Url", remote.url);
+        try json.endObject();
+    }
+    try json.endArray();
+}
+
+fn writeConfiguredRemotesPlain(
+    context: *runtime.RuntimeContext,
+    remotes: []const ConfiguredRemote,
+) !void {
+    const ansi = output.supportsAnsi(context);
+    if (ansi)
+        try context.stdout.writeAll("\x1b[38;2;0;0;255mRemotes:\x1b[0m\n")
+    else
+        try context.stdout.writeAll("Remotes:\n");
+    for (remotes) |remote| {
+        const scope = switch (remote.scope) {
+            .SYSTEM => "System",
+            .USER => "User",
+            .UNKNOWN => "Unknown",
+        };
+        if (ansi) {
+            const color = if (remote.scope == .SYSTEM) "\x1b[32m" else "\x1b[33m";
+            try context.stdout.print("{s} {s}({s})\x1b[0m\n", .{ remote.name, color, scope });
+        } else {
+            try context.stdout.print("{s} ({s})\n", .{ remote.name, scope });
+        }
+    }
+}
+
+fn writeRemoteQueryFailure(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    query: []const u8,
+    err: anyerror,
+) !void {
+    const message = try std.fmt.allocPrint(
+        context.allocator,
+        "Unable to read Flatpak AppStream catalog '{s}': {t}",
+        .{ query, err },
+    );
+    defer context.allocator.free(message);
+    if (invocation.globals.ui_mode)
+        try output.writeErrorFrame(context, message)
+    else
+        try output.writeFailure(context, message);
+}
+
+fn writeRemoteResult(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    catalogs: []const Zigalpm.flatpak.AppstreamCatalog,
+    merge_remotes: bool,
+) !u8 {
+    if (invocation.globals.ui_mode) {
+        var payload = std.Io.Writer.Allocating.init(context.allocator);
+        defer payload.deinit();
+        try writeRemoteJson(context.allocator, &payload.writer, catalogs, merge_remotes);
+        try output.writeFrame(context, payload.writer.buffered());
+    } else {
+        try writeRemoteJson(context.allocator, context.stdout, catalogs, merge_remotes);
+        try context.stdout.writeByte('\n');
+    }
+    return 0;
+}
+
+const AppstreamRemote = struct {
+    name: []const u8,
+    scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+};
+
+const MergedAppstreamApp = struct {
+    app: *const Zigalpm.flatpak.AppstreamApp,
+    remotes: std.ArrayList(AppstreamRemote) = .empty,
+};
+
+fn writeRemoteJson(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    catalogs: []const Zigalpm.flatpak.AppstreamCatalog,
+    merge_remotes: bool,
+) !void {
+    var json: std.json.Stringify = .{ .writer = writer };
+    try json.beginArray();
+    if (!merge_remotes) {
+        for (catalogs) |catalog| {
+            for (catalog.apps) |*app| try writeAppstreamAppJson(&json, app, &.{});
+        }
+    } else {
+        var indices: std.StringHashMapUnmanaged(usize) = .empty;
+        defer indices.deinit(allocator);
+        var apps: std.ArrayList(MergedAppstreamApp) = .empty;
+        defer {
+            for (apps.items) |*app| app.remotes.deinit(allocator);
+            apps.deinit(allocator);
+        }
+        for (catalogs) |catalog| {
+            for (catalog.apps) |*app| {
+                if (indices.get(app.id)) |index| {
+                    try apps.items[index].remotes.append(allocator, .{
+                        .name = catalog.remote_name,
+                        .scope = catalog.scope,
+                    });
+                    continue;
+                }
+                const index = apps.items.len;
+                try apps.append(allocator, .{ .app = app });
+                try apps.items[index].remotes.append(allocator, .{
+                    .name = catalog.remote_name,
+                    .scope = catalog.scope,
+                });
+                try indices.put(allocator, app.id, index);
+            }
+        }
+        for (apps.items) |app| try writeAppstreamAppJson(&json, app.app, app.remotes.items);
+    }
+    try json.endArray();
+}
+
+fn writeAppstreamAppJson(
+    json: *std.json.Stringify,
+    app: *const Zigalpm.flatpak.AppstreamApp,
+    remotes: []const AppstreamRemote,
+) !void {
+    try json.beginObject();
+    try field(json, "Id", app.id);
+    try field(json, "Name", app.name);
+    try field(json, "Summary", app.summary);
+    try field(json, "Description", app.description);
+    try field(json, "Type", app.type);
+    try field(json, "ProjectLicense", app.project_license);
+    try field(json, "DeveloperName", app.developer_name);
+    try field(json, "Categories", app.categories);
+    try field(json, "Keywords", app.keywords);
+
+    try json.objectField("Icons");
+    try json.beginArray();
+    for (app.icons) |icon| {
+        try json.beginObject();
+        try field(json, "Type", icon.type);
+        try field(json, "Url", icon.url);
+        try field(json, "Width", icon.width orelse 0);
+        try field(json, "Height", icon.height orelse 0);
+        try field(json, "Scale", icon.scale orelse 1);
+        try json.endObject();
+    }
+    try json.endArray();
+
+    try json.objectField("Screenshots");
+    try json.beginArray();
+    for (app.screenshots) |screenshot| {
+        try json.beginObject();
+        try field(json, "Caption", screenshot.caption);
+        try field(json, "IsDefault", screenshot.is_default);
+        try json.objectField("Images");
+        try json.beginArray();
+        for (screenshot.images) |appstream_image| {
+            try json.beginObject();
+            try field(json, "Type", appstream_image.type);
+            try field(json, "Url", appstream_image.url);
+            try field(json, "Width", appstream_image.width orelse 0);
+            try field(json, "Height", appstream_image.height orelse 0);
+            try json.endObject();
+        }
+        try json.endArray();
+        try json.endObject();
+    }
+    try json.endArray();
+
+    try json.objectField("Releases");
+    try json.beginArray();
+    for (app.releases) |release| {
+        try json.beginObject();
+        try field(json, "Version", release.version);
+        try field(json, "Type", release.type);
+        try field(json, "Timestamp", release.timestamp orelse 0);
+        try field(json, "Description", release.description);
+        try json.endObject();
+    }
+    try json.endArray();
+
+    try json.objectField("Urls");
+    try json.beginObject();
+    var url_iterator = app.urls.iterator();
+    while (url_iterator.next()) |entry| {
+        try json.objectField(entry.key_ptr.*);
+        try json.write(entry.value_ptr.*);
+    }
+    try json.endObject();
+    try field(json, "IsVerified", app.is_verified);
+    try field(json, "VerificationMethod", app.verification_method orelse "");
+
+    try json.objectField("Remotes");
+    try json.beginArray();
+    for (remotes) |remote| {
+        try json.beginObject();
+        try field(json, "Name", remote.name);
+        try field(json, "Scope", @intFromEnum(remote.scope));
+        try field(json, "Url", "");
+        try json.endObject();
+    }
+    try json.endArray();
+    try field(json, "Extends", app.extends);
+
+    try json.objectField("Addons");
+    try json.beginArray();
+    for (app.addons) |*addon| try writeAppstreamAppJson(json, addon, &.{});
+    try json.endArray();
+    try json.endObject();
 }
 
 fn backendForPath(path: []const u8) ?Backend {
@@ -1021,4 +1337,166 @@ test "AppImage and Flatpak lists emit compatibility JSON and stable ordering" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "a.app").? < std.mem.indexOf(u8, rendered, "z.app").?);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"Permissions\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"InstallLevel\":0") != null);
+}
+
+test "Flatpak remote mode parses configured remotes and AppStream queries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    var outcome = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "flatpak", "remote" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(isFlatpakRemoteList(&outcome.dispatch));
+    try std.testing.expectEqual(@as(usize, 1), outcome.dispatch.positionals.len);
+
+    outcome = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "flatpak", "remote", "flathub" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(isFlatpakRemoteList(&outcome.dispatch));
+    try std.testing.expectEqualStrings("flathub", outcome.dispatch.positionals[1]);
+
+    const invalid = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "flatpak", "installed" },
+    );
+    try std.testing.expect(invalid == .failure);
+}
+
+test "configured Flatpak remotes use compatibility JSON fields and scopes" {
+    const remotes = [_]ConfiguredRemote{
+        .{ .name = "flathub", .scope = .SYSTEM, .url = "https://dl.flathub.org/repo/" },
+        .{ .name = "flathub-beta", .scope = .USER, .url = "https://flathub.org/beta-repo/" },
+    };
+    var rendered = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer rendered.deinit();
+    try writeConfiguredRemotesJson(&rendered.writer, &remotes);
+    const json = rendered.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        json,
+        "\"Name\":\"flathub\",\"Scope\":0,\"Url\":\"https://dl.flathub.org/repo/\"",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        json,
+        "\"Name\":\"flathub-beta\",\"Scope\":1,\"Url\":\"https://flathub.org/beta-repo/\"",
+    ) != null);
+}
+
+test "Flatpak all-remote AppStream JSON merges IDs and records scopes" {
+    var first_apps = [_]Zigalpm.flatpak.AppstreamApp{.{
+        .type = "desktop-application",
+        .id = "org.example.App",
+        .name = "Example",
+        .summary = "First catalog",
+        .project_license = "MIT",
+        .developer_name = "Example Org",
+        .extends = null,
+        .description = "An example application",
+        .categories = &.{"Utility"},
+        .keywords = &.{"example"},
+        .urls = .empty,
+        .icons = &.{.{ .type = "cached", .url = "icon.png" }},
+        .screenshots = &.{},
+        .releases = &.{},
+        .is_verified = false,
+        .verification_method = null,
+        .addons = &.{},
+    }};
+    var second_apps = [_]Zigalpm.flatpak.AppstreamApp{first_apps[0]};
+    second_apps[0].summary = "Second catalog";
+    const catalogs = [_]Zigalpm.flatpak.AppstreamCatalog{
+        .{
+            .owner_allocator = std.testing.allocator,
+            .arena_state = undefined,
+            .remote_name = "flathub",
+            .scope = .SYSTEM,
+            .arch = "x86_64",
+            .path = "",
+            .apps = &first_apps,
+        },
+        .{
+            .owner_allocator = std.testing.allocator,
+            .arena_state = undefined,
+            .remote_name = "flathub-user",
+            .scope = .USER,
+            .arch = "x86_64",
+            .path = "",
+            .apps = &second_apps,
+        },
+    };
+    var rendered = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer rendered.deinit();
+    try writeRemoteJson(std.testing.allocator, &rendered.writer, &catalogs, true);
+    const json = rendered.writer.buffered();
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\"Id\":\"org.example.App\""));
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"Name\":\"flathub\",\"Scope\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"Name\":\"flathub-user\",\"Scope\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"Width\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"Scale\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"VerificationMethod\":\"\"") != null);
+}
+
+test "Flatpak named-remote AppStream JSON uses UI framing" {
+    var apps = [_]Zigalpm.flatpak.AppstreamApp{.{
+        .type = "desktop-application",
+        .id = "org.example.App",
+        .name = "Example",
+        .summary = "Example summary",
+        .project_license = "",
+        .developer_name = "",
+        .extends = null,
+        .description = "",
+        .categories = &.{},
+        .keywords = &.{},
+        .urls = .empty,
+        .icons = &.{},
+        .screenshots = &.{},
+        .releases = &.{},
+        .is_verified = false,
+        .verification_method = null,
+        .addons = &.{},
+    }};
+    const catalogs = [_]Zigalpm.flatpak.AppstreamCatalog{.{
+        .owner_allocator = std.testing.allocator,
+        .arena_state = undefined,
+        .remote_name = "flathub",
+        .scope = .SYSTEM,
+        .arch = "x86_64",
+        .path = "",
+        .apps = &apps,
+    }};
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "flatpak", "remote", "flathub", "--ui-mode" },
+    );
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        try writeRemoteResult(&context, &outcome.dispatch, &catalogs, false),
+    );
+    const payload = try decodeFirstTestFrame(arena.allocator(), stdout.writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"Id\":\"org.example.App\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"Remotes\":[]") != null);
 }

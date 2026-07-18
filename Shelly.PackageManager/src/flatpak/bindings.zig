@@ -147,6 +147,11 @@ pub const libflatpak = struct {
             for (self.permissions) |p| allocator.free(p);
             allocator.free(self.permissions);
         }
+
+        pub fn deinit(self: RemoteRef, allocator: std.mem.Allocator) void {
+            self.deinitPermissions(allocator);
+            flatpak.g_object_unref(self.ptr);
+        }
     };
 
     pub const InstalledFlatpak = struct {

@@ -80,6 +80,10 @@ const FlatpakPackage = struct {
     keywords: []const []const u8 = &.{},
     verified: bool = false,
     verification_method: ?[]const u8 = null,
+    download_size: u64 = 0,
+    installed_size: u64 = 0,
+    permissions: []const []const u8 = &.{},
+    scope: Zigalpm.flatpak.bindings.libflatpak.Scope = .UNKNOWN,
 };
 
 const StandardMode = enum { packages, repositories, groups, detail };
@@ -449,18 +453,46 @@ fn runFlatpak(
                     try context.allocator.dupe(u8, value)
                 else
                     null,
+                .scope = catalog.scope,
             });
         }
     }
     const total_hits = matches.items.len;
+    const packages = try pageSlice(FlatpakPackage, context.allocator, matches.items, page, limit);
+    try enrichFlatpakRemoteInfo(context, packages);
     return .{
         .query = try context.allocator.dupe(u8, query),
-        .packages = try pageSlice(FlatpakPackage, context.allocator, matches.items, page, limit),
+        .packages = packages,
         .page = page,
         .limit = limit,
         .total_pages = if (total_hits == 0) 0 else (total_hits + limit - 1) / limit,
         .total_hits = total_hits,
     };
+}
+
+fn enrichFlatpakRemoteInfo(
+    context: *runtime.RuntimeContext,
+    packages: []FlatpakPackage,
+) !void {
+    var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
+    defer manager.deinit();
+    for (packages) |*package| {
+        if (package.scope == .UNKNOWN or package.remote.len == 0 or package.id.len == 0) continue;
+        const remote = try context.allocator.dupeZ(u8, package.remote);
+        defer context.allocator.free(remote);
+        const id = try context.allocator.dupeZ(u8, package.id);
+        defer context.allocator.free(id);
+        const info = manager.get_remote_ref_info_flatpak(
+            remote,
+            id,
+            "stable",
+            package.scope,
+        ) catch continue;
+        defer info.deinit(context.allocator);
+        package.download_size = info.download_size();
+        package.installed_size = info.installed_size();
+        package.permissions = try copySentinelStrings(context.allocator, info.permissions);
+    }
 }
 
 fn renderStandard(
@@ -675,16 +707,20 @@ fn renderFlatpak(
     }
 
     var rows: std.ArrayList([]const []const u8) = .empty;
+    const size_display = try loadSizeDisplay(context);
     for (result.packages) |package| try rows.append(context.allocator, try row(context.allocator, &.{
         package.name,
         package.id,
         truncate(package.summary, 70),
         package.remote,
+        try formatSize(context.allocator, size_display, package.download_size),
+        try formatSize(context.allocator, size_display, package.installed_size),
+        try joined(context.allocator, package.permissions),
     }));
     try table.write(
         context.allocator,
         context.stdout,
-        &.{ "Name", "AppId", "Summary", "Remote" },
+        &.{ "Name", "AppId", "Summary", "Remote", "Download Size", "Installed Size", "Permissions" },
         rows.items,
         output.supportsAnsi(context),
     );
@@ -895,6 +931,9 @@ fn writeFlatpakResponseJson(writer: *std.Io.Writer, result: FlatpakResult) !void
         try field(&json, "verification_verified", package.verified);
         try field(&json, "verification_method", package.verification_method);
         try field(&json, "remote", package.remote);
+        try field(&json, "download_size", package.download_size);
+        try field(&json, "installed_size", package.installed_size);
+        try field(&json, "permissions", package.permissions);
         try json.endObject();
     }
     try json.endArray();
@@ -978,7 +1017,7 @@ fn copyOptionalStrings(allocator: std.mem.Allocator, value: ?[][]u8) !?[]const [
     return if (value) |items| try copyStrings(allocator, items) else null;
 }
 
-fn copySentinelStrings(allocator: std.mem.Allocator, values: []const [:0]u8) ![]const []const u8 {
+fn copySentinelStrings(allocator: std.mem.Allocator, values: anytype) ![]const []const u8 {
     const result = try allocator.alloc([]const u8, values.len);
     for (values, result) |value, *destination| destination.* = try allocator.dupe(u8, value);
     return result;
@@ -1097,7 +1136,7 @@ fn pageSlice(
     values: []const T,
     page: usize,
     limit: usize,
-) ![]const T {
+) ![]T {
     const start = std.math.mul(usize, page - 1, limit) catch values.len;
     if (start >= values.len) return allocator.alloc(T, 0);
     const end = @min(values.len, start +| limit);
@@ -1353,7 +1392,15 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
         fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return .{ .flatpak = .{
                 .query = "editor",
-                .packages = &.{.{ .name = "Editor", .id = "org.example.Editor", .summary = "Edit", .remote = "flathub" }},
+                .packages = &.{.{
+                    .name = "Editor",
+                    .id = "org.example.Editor",
+                    .summary = "Edit",
+                    .remote = "flathub",
+                    .download_size = 1048576,
+                    .installed_size = 2097152,
+                    .permissions = &.{ "shared=network", "sockets=wayland" },
+                }},
                 .page = 2,
                 .limit = 1,
                 .total_pages = 3,
@@ -1364,6 +1411,17 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
     try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak.dispatch, flatpak_runner));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"page\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "org.example.Editor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"download_size\":1048576") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"installed_size\":2097152") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"permissions\":[\"shared=network\",\"sockets=wayland\"]") != null);
+
+    stdout.writer.end = 0;
+    const flatpak_plain = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor" });
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak_plain.dispatch, flatpak_runner));
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Download Size") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Installed Size") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shared=network") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "sockets=wayland") != null);
 }
 
 test "AUR pkgbuild search displays fetched content and structured output" {
