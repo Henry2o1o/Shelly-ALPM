@@ -439,7 +439,7 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[types: standard, aur]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "aur only:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "--chroot") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "--version") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-v, --version") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-e, --ref-file") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-u, --bundle") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Commands:") != null);

@@ -316,7 +316,7 @@ test "verbose options are not accepted by commands" {
     try std.testing.expect(long == .failure);
     try std.testing.expectEqualStrings("Unrecognized command or argument '--verbose'.", long.failure.message);
 
-    const short = try parse(arena.allocator(), &manifest, &.{ "install", "aur", "demo-git", "-v" });
+    const short = try parse(arena.allocator(), &manifest, &.{ "install", "flatpak", "demo-git", "-v" });
     try std.testing.expect(short == .failure);
     try std.testing.expectEqualStrings("Unrecognized command or argument '-v'.", short.failure.message);
 }

@@ -501,7 +501,7 @@ test "uses centralized effective modifiers and rejects invalid shortcode types" 
 
     const invalid_modifier = try translate(allocator, &manifest, &.{"-Iao"});
     try std.testing.expectEqualStrings(
-        "Unknown modifier 'o' for 'install aur'. Valid modifiers: b, m, c, ?, h",
+        "Unknown modifier 'o' for 'install aur'. Valid modifiers: b, m, c, v, ?, h",
         invalid_modifier.failure,
     );
 

@@ -833,7 +833,7 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--make-deps", &.{}, "Include make dependencies"),
         flag("--chroot", &.{"-c"}, "Build in a clean chroot"),
         flag("--check", &.{}, "Run the PKGBUILD check() function"),
-        flag("--version", &.{}, "Install one package at the following Git commit"),
+        flag("--version", &.{"-v"}, "Install one package at the following Git commit"),
     };
     if (pathIs(action, type_name, "install", "flatpak")) return &.{
         flag("--user", &.{}, "Install into the user Flatpak installation"),
