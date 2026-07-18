@@ -621,7 +621,7 @@ pub const PackagePage = extern struct {
         var batch: [500]*gobject.Object = undefined;
         var i: usize = 0;
         for (result.packages[result.index..end]) |d| {
-            const pkg = PackageObject.new(page_alloc, d.Name, d.Version, d.Repository, d.Description, d.Groups, d.InstalledSize, d.Installed);
+            const pkg = PackageObject.new(page_alloc, d);
             batch[i] = pkg.as(gobject.Object);
             i += 1;
         }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
+const Package = @import("../models/packages.zig").Package;
 const gobject = bindings.gobject;
 
 pub const PackageObject = extern struct {
@@ -44,19 +45,19 @@ pub const PackageObject = extern struct {
         p.selected = false;
     }
 
-    pub fn new(arena: std.mem.Allocator, name: []const u8, version: []const u8, repository: []const u8, description: []const u8, groups: []const []const u8, installed_size: i64, installed: bool) *Self {
+    pub fn new(arena: std.mem.Allocator, package: Package) *Self {
         const self = gobject.ext.newInstance(Self, .{});
         const p = self.priv();
-        p.name = arena.dupeZ(u8, name) catch "";
-        p.version = arena.dupeZ(u8, version) catch "";
-        p.repository = arena.dupeZ(u8, repository) catch "";
-        p.description = arena.dupeZ(u8, description) catch "";
-        p.installed_size = installed_size;
-        p.installed = installed;
+        p.name = arena.dupeZ(u8, package.Name) catch "";
+        p.version = arena.dupeZ(u8, package.Version) catch "";
+        p.repository = arena.dupeZ(u8, package.Repository) catch "";
+        p.description = arena.dupeZ(u8, package.Description) catch "";
+        p.installed_size = package.InstalledSize;
+        p.installed = package.Installed;
         p.selected = false;
 
-        if (arena.alloc([:0]const u8, groups.len)) |g| {
-            for (groups, 0..) |src, i| {
+        if (arena.alloc([:0]const u8, package.Groups.len)) |g| {
+            for (package.Groups, 0..) |src, i| {
                 g[i] = arena.dupeZ(u8, src) catch "";
             }
             p.groups = g;
