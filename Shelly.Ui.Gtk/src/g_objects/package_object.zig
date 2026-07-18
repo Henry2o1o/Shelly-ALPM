@@ -44,16 +44,7 @@ pub const PackageObject = extern struct {
         p.selected = false;
     }
 
-    pub fn new(
-        arena: std.mem.Allocator,
-        name: []const u8,
-        version: []const u8,
-        repository: []const u8,
-        description: []const u8,
-        groups: []const []const u8,
-        installed_size: i64,
-        installed: bool,
-    ) *Self {
+    pub fn new(arena: std.mem.Allocator, name: []const u8, version: []const u8, repository: []const u8, description: []const u8, groups: []const []const u8, installed_size: i64, installed: bool) *Self {
         const self = gobject.ext.newInstance(Self, .{});
         const p = self.priv();
         p.name = arena.dupeZ(u8, name) catch "";

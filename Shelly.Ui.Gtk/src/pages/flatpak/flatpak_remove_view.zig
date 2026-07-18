@@ -10,6 +10,7 @@ const Flatpak = @import("../../models/flatpak.zig").Flatpak;
 const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const FlatpakObject = @import("../../g_objects/flatpak_object.zig").FlatpakObject;
 const sizeconverter = @import("../../helpers/size_converts.zig");
+const search = @import("../../helpers/search.zig");
 
 pub const FlatpakRemoveView = extern struct {
     parent_instance: Parent,
@@ -23,7 +24,6 @@ pub const FlatpakRemoveView = extern struct {
         installed_flatpaks: *gtk.ListView,
         selection: *gtk.SingleSelection,
         list_store: *gio.ListStore,
-        search_entry: *gtk.SearchEntry,
         filter_model: *gtk.FilterListModel,
         arena: ?*std.heap.ArenaAllocator,
         filter: *gtk.CustomFilter,
@@ -100,7 +100,18 @@ pub const FlatpakRemoveView = extern struct {
 
         if (!p.show_runtimes and pkg.getKind() == .runtime) return 0;
 
+        const query = p.search_text[0..p.search_len];
+        if (!search.matchesAnyIgnoreCase(query, &.{ pkg.getName(), pkg.getId() })) return 0;
+
         return 1;
+    }
+
+    pub fn applySearch(self: *Self, text: []const u8) void {
+        const p = self.priv();
+        const len = @min(text.len, p.search_text.len);
+        @memcpy(p.search_text[0..len], text[0..len]);
+        p.search_len = len;
+        gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 
     fn on_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {

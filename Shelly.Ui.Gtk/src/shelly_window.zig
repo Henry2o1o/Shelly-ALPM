@@ -93,6 +93,7 @@ pub const ShellyWindow = extern struct {
                 gtk.StackSwitcher.setStack(switcher, stack);
                 gtk.Orientable.setOrientation(switcher.as(gtk.Orientable), .horizontal);
                 const sep = gtk.Separator.new(.horizontal);
+
                 gtk.Box.append(p.shell_box, switcher.as(gtk.Widget));
                 gtk.Box.append(p.shell_box, sep.as(gtk.Widget));
                 gtk.Box.append(p.shell_box, stack.as(gtk.Widget));
@@ -122,6 +123,37 @@ pub const ShellyWindow = extern struct {
         add_nav_button(self, rail, stack, "flatpak", FlatpakPage.icon_name, FlatpakPage.title);
         add_nav_button(self, rail, stack, "appimage", AppImagePage.icon_name, AppImagePage.title);
         add_nav_button(self, rail, stack, "update", UpdatePage.icon_name, UpdatePage.title);
+
+        const sep = gtk.Box.new(.horizontal, 0);
+        gtk.Widget.setVexpand(sep.as(gtk.Widget), 1);
+        gtk.Box.append(rail, sep.as(gtk.Widget));
+
+        const menu_button = gtk.MenuButton.new();
+        gtk.Widget.addCssClass(menu_button.as(gtk.Widget), "flat");
+        gtk.MenuButton.setIconName(menu_button, "open-menu-symbolic");
+
+        const popover = gtk.Popover.new();
+
+        const menu_box = gtk.Box.new(.vertical, 4);
+        gtk.Widget.setMarginStart(menu_box.as(gtk.Widget), 8);
+        gtk.Widget.setMarginEnd(menu_box.as(gtk.Widget), 8);
+        gtk.Widget.setMarginTop(menu_box.as(gtk.Widget), 8);
+        gtk.Widget.setMarginBottom(menu_box.as(gtk.Widget), 8);
+
+        const settings_btn = gtk.Button.newWithLabel("Settings");
+        gtk.Widget.addCssClass(settings_btn.as(gtk.Widget), "flat");
+        //    _ = gtk.Button.signals.clicked.connect(settings_btn, *ShellyWindow, &on_settings, self, .{});
+        gtk.Box.append(menu_box, settings_btn.as(gtk.Widget));
+
+        const utils_btn = gtk.Button.newWithLabel("Utilities");
+        gtk.Widget.addCssClass(utils_btn.as(gtk.Widget), "flat");
+        //    _ = gtk.Button.signals.clicked.connect(utils_btn, *ShellyWindow, &on_utils, self, .{});
+        gtk.Box.append(menu_box, utils_btn.as(gtk.Widget));
+
+        gtk.Popover.setChild(popover, menu_box.as(gtk.Widget));
+        gtk.MenuButton.setPopover(menu_button, popover);
+
+        gtk.Box.append(rail, menu_button.as(gtk.Widget));
 
         return rail;
     }

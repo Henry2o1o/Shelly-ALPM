@@ -24,6 +24,9 @@ pub const FlatpakPage = extern struct {
         nav_install_row: *gtk.ListBoxRow,
         nav_remove_row: *gtk.ListBoxRow,
         nav_remote_row: *gtk.ListBoxRow,
+        search_entry: *gtk.SearchEntry,
+        install_view: *FlatpakInstallView,
+        remove_view: *FlatpakRemoveView,
         loaded: bool,
         var offset: c_int = 0;
     };
@@ -55,6 +58,8 @@ pub const FlatpakPage = extern struct {
 
         populateStack(self);
 
+        _ = gtk.SearchEntry.signals.search_changed.connect(p.search_entry, *Self, &onSearchChanged, self, .{});
+
         _ = gtk.ListBox.signals.row_selected.connect(
             p.section_nav_list,
             *Self,
@@ -74,9 +79,11 @@ pub const FlatpakPage = extern struct {
         const p = self.priv();
 
         const install = FlatpakInstallView.new();
+        p.install_view = install;
         _ = gtk.Stack.addNamed(p.main_content_stack, install.as(gtk.Widget), "install");
 
         const remove = FlatpakRemoveView.new();
+        p.remove_view = remove;
         _ = gtk.Stack.addNamed(p.main_content_stack, remove.as(gtk.Widget), "remove");
 
         const remotes = FlatpakRemotesView.new();
@@ -91,6 +98,13 @@ pub const FlatpakPage = extern struct {
             if (r == p.nav_install_row) "install" else if (r == p.nav_remove_row) "remove" else if (r == p.nav_remote_row) "remotes" else return;
 
         gtk.Stack.setVisibleChildName(p.main_content_stack, name);
+    }
+
+    fn onSearchChanged(entry: *gtk.SearchEntry, self: *Self) callconv(.c) void {
+        const text = std.mem.span(gtk.Editable.getText(entry.as(gtk.Editable)));
+        const p = self.priv();
+        p.install_view.apply_search(text);
+        p.remove_view.applySearch(text);
     }
 
     pub fn onMap(self: *Self) void {
@@ -111,6 +125,7 @@ pub const FlatpakPage = extern struct {
         .{ "nav_install_row", @offsetOf(Private, "nav_install_row") },
         .{ "nav_remove_row", @offsetOf(Private, "nav_remove_row") },
         .{ "nav_remote_row", @offsetOf(Private, "nav_remote_row") },
+        .{ "search_entry", @offsetOf(Private, "search_entry") },
     };
 
     pub const Class = extern struct {

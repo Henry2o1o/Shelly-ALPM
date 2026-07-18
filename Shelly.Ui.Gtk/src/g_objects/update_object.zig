@@ -66,15 +66,7 @@ pub const UpdateObject = extern struct {
         p.enabled = true;
     }
 
-    pub fn new(
-        allocator: std.mem.Allocator,
-        source: UpdateSource,
-        name: []const u8,
-        description: []const u8,
-        old_version: []const u8,
-        new_version: []const u8,
-        size: []const u8,
-    ) *Self {
+    pub fn new(allocator: std.mem.Allocator, source: UpdateSource, name: []const u8, description: []const u8, old_version: []const u8, new_version: []const u8, size: []const u8) *Self {
         const self = gobject.ext.newInstance(Self, .{});
         const p = self.priv();
         p.source = source;
