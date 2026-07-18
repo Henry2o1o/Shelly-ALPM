@@ -1,7 +1,8 @@
 # Maintainer: Zoey Bauer <zoey.erin.bauer@gmail.com>
 
-pkgname=shelly-cli-beta
-pkgver=2.4.1.4.r0.g0000000
+pkgname=shelly-cli
+pkgbase=shelly-cli
+pkgver=3.0.0.0.r0.g0000000
 pkgrel=1
 pkgdesc='Native Shelly package-manager CLI beta'
 arch=('x86_64')
@@ -39,8 +40,9 @@ sha256sums=('SKIP')
 pkgver() {
   cd "${srcdir}/${pkgname}"
 
-  git describe --long --tags --always \
-    | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  printf '3.0.0.0.r%s.g%s' \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=7 HEAD)"
 }
 
 build() {
