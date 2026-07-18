@@ -410,6 +410,12 @@ fn writeLeafExamples(
         .label = base_shortcode,
         .description = "Shortcode",
     });
+    if (std.mem.eql(u8, command.path, "shelly sync appimage")) {
+        try rows.append(allocator, .{
+            .label = "-CI <appimage> <url> <type>",
+            .description = "Compatibility shortcode for update configuration",
+        });
+    }
 
     for (command.options) |*option| {
         if (option.hidden or option.builtIn) continue;
@@ -697,7 +703,7 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ua") == null);
 }
 
-test "sync action help lists standard and Flatpak variants" {
+test "sync action help lists standard AppImage and Flatpak variants" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
@@ -708,8 +714,10 @@ test "sync action help lists standard and Flatpak variants" {
     try render(arena.allocator(), &manifest, command, &output.writer);
     const rendered = output.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "standard") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "appimage") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "flatpak") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -Ys]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -Yi]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -Yf]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Implementation:") == null);
 }
@@ -827,7 +835,7 @@ test "root help combines shortcodes with implemented top-level command examples"
         try std.testing.expect(std.mem.indexOf(u8, rendered, shortcode) != null);
     for ([_][]const u8{ "-Ife", "-Ifu", "-Iav", "-Mga", "-Ki", "-Ks", "-Sap", "-Ssa", "-Ssafv" }) |nested_example|
         try std.testing.expect(std.mem.indexOf(u8, rendered, nested_example) == null);
-    for ([_][]const u8{ "sync-meta", "configure-updates", "running", "repair", "get-remote-appstream", "list-remotes", "add-remotes", "remove-remotes", "app-remote-info" }) |unimplemented|
+    for ([_][]const u8{ "sync-meta", "configure-updates", "running", "get-remote-appstream", "list-remotes", "add-remotes", "remove-remotes", "app-remote-info" }) |unimplemented|
         try std.testing.expect(std.mem.indexOf(u8, rendered, unimplemented) == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Search may combine standard, AUR, and Flatpak types (s/a/f)") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Run `shelly <command> --help` for examples within a command.") != null);
@@ -874,6 +882,7 @@ test "leaf help shows long-form and modifier shortcode usage for that command" {
         "shelly install flatpak <package>  Long form",
         "-If <package>",
         "-Ifr <remote> <package>",
+        "-Iff <package>",
         "-Ifb <branch> <package>",
         "-Ife <package>",
         "-Ifu <package>",

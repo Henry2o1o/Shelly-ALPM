@@ -658,7 +658,10 @@ pub const AppImageManager = struct {
         defer list.deinit(self.allocator);
 
         for (existing) |item| {
-            if (appimage_struct.desktop_name.len > 0 and std.ascii.eqlIgnoreCase(item.desktop_name, appimage_struct.desktop_name)) continue;
+            const same_name = std.ascii.eqlIgnoreCase(item.name, appimage_struct.name);
+            const same_desktop_name = appimage_struct.desktop_name.len > 0 and
+                std.ascii.eqlIgnoreCase(item.desktop_name, appimage_struct.desktop_name);
+            if (same_name or same_desktop_name) continue;
             try list.append(self.allocator, item);
         }
         try list.append(self.allocator, appimage_struct);
@@ -842,7 +845,7 @@ pub const AppImageManager = struct {
         const desktop_file_path = try std.fs.path.join(self.allocator, &.{ desktop_dir, desktop_file_name });
         defer self.allocator.free(desktop_file_path);
 
-        std.Io.Dir.cwd().statFile(self.io, desktop_file_path, .{}) catch return;
+        _ = std.Io.Dir.cwd().statFile(self.io, desktop_file_path, .{}) catch return;
 
         const contents = try self.readFileAllocOwned(desktop_file_path);
         defer self.allocator.free(contents);

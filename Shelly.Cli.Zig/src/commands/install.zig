@@ -76,6 +76,7 @@ pub fn dispatch(
     if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
         const ref_file = optionEnabled(invocation, "--ref-file");
         const bundle = optionEnabled(invocation, "--bundle");
+        const repair = optionEnabled(invocation, "--repair");
         if (ref_file and bundle)
             return try reportValidationFailure(
                 context,
@@ -90,6 +91,17 @@ pub fn dispatch(
                 context,
                 invocation,
                 "Cannot combine --ref-file or --bundle with --remote, --branch, or --runtime.",
+            );
+        if (repair and
+            (ref_file or bundle or
+                optionEnabled(invocation, "--user") or
+                optionValue(invocation, "--remote") != null or
+                optionValue(invocation, "--branch") != null or
+                optionEnabled(invocation, "--runtime")))
+            return try reportValidationFailure(
+                context,
+                invocation,
+                "Cannot combine --repair with --user, --remote, --branch, --runtime, --ref-file, or --bundle.",
             );
     }
     if (needsPackages(invocation) and invocation.positionals.len == 0)
@@ -108,7 +120,19 @@ pub fn dispatch(
             "Cannot build dependencies for multiple packages at once.",
         );
 
-    if (!invocation.globals.ui_mode and needsElevation(invocation)) {
+    if (isFlatpakRepair(invocation) and !invocation.globals.ui_mode and !elevation.isRoot()) {
+        const elevate = repairTargetRequiresElevation(context, invocation.positionals[0]) catch |err| {
+            try context.stderr.print("Unable to inspect Flatpak before repair: {t}\n", .{err});
+            return 1;
+        };
+        if (elevate) {
+            const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
+                try context.stderr.print("Unable to elevate Flatpak repair: {t}\n", .{err});
+                return 1;
+            };
+            if (elevated_exit) |exit_code| return exit_code;
+        }
+    } else if (!invocation.globals.ui_mode and needsElevation(invocation)) {
         const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
             try context.stderr.print("Unable to elevate install: {t}\n", .{err});
             return 1;
@@ -200,6 +224,8 @@ fn runRealInstall(
     if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
         return runAppImage(context, operation_context, invocation);
     if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
+        if (isFlatpakRepair(invocation))
+            return runFlatpakRepair(context, operation_context, invocation);
         if (flatpakFileKind(invocation)) |kind|
             return runFlatpakFile(context, operation_context, invocation, kind);
         return runFlatpak(context, operation_context, invocation);
@@ -482,6 +508,34 @@ fn runFlatpak(
     )) return InstallError.BackendFailed;
 }
 
+fn runFlatpakRepair(
+    context: *runtime.RuntimeContext,
+    operation_context: *Zigalpm.OperationContext,
+    invocation: *const parser.Invocation,
+) !void {
+    var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
+    defer manager.deinit();
+    try manager.setOperationContext(operation_context);
+    defer manager.setOperationContext(null) catch {};
+    if (!try manager.repair_installed_flatpak(invocation.positionals[0]))
+        return InstallError.BackendFailed;
+}
+
+fn repairTargetRequiresElevation(context: *runtime.RuntimeContext, target: []const u8) !bool {
+    var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
+    defer manager.deinit();
+    var application = (try manager.find_installed_flatpak(target)) orelse return false;
+    defer application.deinit(context.allocator);
+    return repairScopeRequiresElevation(application.scope, elevation.isRoot());
+}
+
+fn repairScopeRequiresElevation(
+    scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    running_as_root: bool,
+) bool {
+    return !running_as_root and scope == .SYSTEM;
+}
+
 const FlatpakFileKind = enum {
     ref_file,
     bundle,
@@ -616,6 +670,8 @@ fn openingMessage(allocator: std.mem.Allocator, invocation: *const parser.Invoca
     }
     if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
         return std.fmt.allocPrint(allocator, "Installing AppImage: {s}", .{invocation.positionals[0]});
+    if (isFlatpakRepair(invocation))
+        return std.fmt.allocPrint(allocator, "Repairing Flatpak: {s}...", .{invocation.positionals[0]});
     if (flatpakFileKind(invocation)) |kind| return switch (kind) {
         .ref_file => std.fmt.allocPrint(
             allocator,
@@ -641,12 +697,14 @@ fn successMessage(invocation: *const parser.Invocation) []const u8 {
             "Installation complete.";
     if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
         return "Successfully installed appimage.";
+    if (isFlatpakRepair(invocation)) return "Flatpak repaired successfully!";
     return "Flatpak install complete.";
 }
 
 fn failureMessage(invocation: *const parser.Invocation) []const u8 {
     if (std.mem.eql(u8, invocation.command.path, aur_command_path) and
         optionEnabled(invocation, "--build-deps")) return "Dependency installation failed.";
+    if (isFlatpakRepair(invocation)) return "Flatpak repair failed.";
     return "Installation failed.";
 }
 
@@ -781,7 +839,113 @@ fn needsElevation(invocation: *const parser.Invocation) bool {
     return std.mem.eql(u8, invocation.command.path, standard_command_path) or
         std.mem.eql(u8, invocation.command.path, aur_command_path) or
         (std.mem.eql(u8, invocation.command.path, flatpak_command_path) and
+            !isFlatpakRepair(invocation) and
             !optionEnabled(invocation, "--user"));
+}
+
+fn isFlatpakRepair(invocation: *const parser.Invocation) bool {
+    return std.mem.eql(u8, invocation.command.path, flatpak_command_path) and
+        optionEnabled(invocation, "--repair");
+}
+
+test "Flatpak repair is an install modifier with f shortcode" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    var outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "flatpak", "--repair", "org.example.App" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(isFlatpakRepair(&outcome.dispatch));
+    try std.testing.expect(!needsElevation(&outcome.dispatch));
+
+    const translated = try @import("../cli/shortcodes.zig").translate(
+        arena.allocator(),
+        &manifest,
+        &.{ "-Iff", "org.example.App" },
+    );
+    outcome = try parser.parse(arena.allocator(), &manifest, translated.arguments().?);
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(isFlatpakRepair(&outcome.dispatch));
+    try std.testing.expectEqualStrings("org.example.App", outcome.dispatch.positionals[0]);
+}
+
+test "Flatpak repair rejects install source modifiers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "flatpak", "--repair", "--remote", "flathub", "org.example.App" },
+    );
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Cannot combine --repair with",
+    ) != null);
+}
+
+test "Flatpak repair lifecycle and elevation follow the installed scope" {
+    try std.testing.expect(repairScopeRequiresElevation(.SYSTEM, false));
+    try std.testing.expect(!repairScopeRequiresElevation(.USER, false));
+    try std.testing.expect(!repairScopeRequiresElevation(.SYSTEM, true));
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "flatpak", "--repair", "org.example.App" },
+    );
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const Capture = struct {
+        called: bool = false,
+
+        fn run(
+            data: ?*anyopaque,
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            invocation: *const parser.Invocation,
+        ) !void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.called = true;
+            try std.testing.expect(isFlatpakRepair(invocation));
+        }
+    };
+    var capture: Capture = .{};
+    const runner: Runner = .{ .data = &capture, .call = Capture.run };
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expect(capture.called);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Repairing Flatpak: org.example.App",
+    ) != null);
 }
 
 test "Flatpak file install modifiers use the shared command and scope" {

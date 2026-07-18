@@ -60,6 +60,21 @@ pub fn translate(
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (std.mem.startsWith(u8, token, "-CI")) {
+        var result: std.ArrayList([]const u8) = .empty;
+        try result.appendSlice(allocator, &.{ "sync", "appimage", "--configure-updates" });
+        for (token[3..]) |modifier| switch (modifier) {
+            'p' => try result.append(allocator, "--prerelease"),
+            'h' => try result.append(allocator, "--help"),
+            else => return .{ .failure = try std.fmt.allocPrint(
+                allocator,
+                "Unknown modifier '{c}' for AppImage update configuration. Valid modifiers: h, p",
+                .{modifier},
+            ) },
+        };
+        try result.appendSlice(allocator, args[1..]);
+        return .{ .translated = try result.toOwnedSlice(allocator) };
+    }
     if (try translateAurVersionInstall(allocator, manifest, args, token)) |translation|
         return translation;
     if (try translateStandaloneAction(allocator, manifest, args, token)) |translation|

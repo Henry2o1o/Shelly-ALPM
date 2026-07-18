@@ -364,6 +364,34 @@ pub const variants = [_]Variant{
         },
     },
     .{
+        .action = "sync",
+        .type_name = "appimage",
+        .action_code = 'Y',
+        .type_code = 'i',
+        .help = .{
+            .description = "Synchronize extracted AppImage metadata, or configure an installed AppImage's update source with the appimage/url/type overload.",
+            .implementation = "Zigalpm.AppImageManager.syncAppImageMeta / Zigalpm.appimage.UpdateManager.configure_updates",
+            .arguments = &.{
+                .{
+                    .name = "appimage",
+                    .description = "Optional case-insensitive AppImage name query",
+                },
+                .{
+                    .name = "url",
+                    .description = "Update URL or owner/repository value when configuring updates",
+                },
+                .{
+                    .name = "type",
+                    .description = "Update source type when configuring updates",
+                },
+            },
+            .options = &.{.{
+                .name = "--prerelease",
+                .description = "Allow prerelease versions for the configured update source",
+            }},
+        },
+    },
+    .{
         .action = "list-updates",
         .type_name = "appimage",
         .action_code = 'P',
@@ -571,11 +599,11 @@ pub const variants = [_]Variant{
         .action_code = 'I',
         .type_code = 'f',
         .help = .{
-            .description = "Install a Flatpak application, runtime, .flatpakref file, or bundle at system or user scope.",
-            .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs; Zigalpm.FlatpakManager.install_flatpak / install_from_ref_flatpak / install_from_bundle_flatpak",
+            .description = "Install a Flatpak application, runtime, .flatpakref file, or bundle, or repair an installed Flatpak while preserving its configuration.",
+            .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs; Zigalpm.FlatpakManager.install_flatpak / install_from_ref_flatpak / install_from_bundle_flatpak / repair_installed_flatpak",
             .arguments = &.{.{
                 .name = "package",
-                .description = "Application/runtime ID, friendly AppStream name, .flatpakref path with --ref-file, or bundle path with --bundle",
+                .description = "Application/runtime ID, friendly AppStream name, installed target with --repair, .flatpakref path with --ref-file, or bundle path with --bundle",
             }},
             .options = &.{
                 .{ .name = "--user", .description = "Install into the invoking user's Flatpak installation instead of the system installation" },
@@ -584,6 +612,7 @@ pub const variants = [_]Variant{
                 .{ .name = "--runtime", .description = "Build a runtime ref instead of an application ref" },
                 .{ .name = "--ref-file", .description = "Treat the package operand as a local .flatpakref file" },
                 .{ .name = "--bundle", .description = "Treat the package operand as a local Flatpak bundle" },
+                .{ .name = "--repair", .description = "Reinstall the installed Flatpak and its dependencies while preserving application configuration" },
             },
         },
     },
@@ -787,6 +816,21 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "package",
         "Flatpak application or runtime to update",
     )};
+    if (pathIs(action, type_name, "sync", "appimage")) return &.{
+        optionalArgument(
+            "appimage",
+            "Case-insensitive AppImage name query; omit to synchronize every AppImage",
+        ),
+        optionalArgument(
+            "url",
+            "Update URL or owner/repository value for the configuration overload",
+        ),
+        optionalArgumentWithChoices(
+            "type",
+            "Update source type for the configuration overload",
+            &.{ "None", "StaticUrl", "GitHub", "GitLab", "Codeberg", "Forgejo" },
+        ),
+    };
 
     if (pathIs(action, type_name, "get", "config")) return &.{requiredArgument(
         "key",
@@ -916,6 +960,7 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--runtime", &.{}, "Install a runtime instead of an application"),
         flag("--ref-file", &.{"-e"}, "Treat the package operand as a local .flatpakref file"),
         flag("--bundle", &.{"-u"}, "Treat the package operand as a local Flatpak bundle"),
+        flag("--repair", &.{"-f"}, "Repair an installed Flatpak while preserving configuration"),
     };
 
     if (pathIs(action, type_name, "upgrade", "standard")) return &.{flag(
@@ -1012,6 +1057,15 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         &.{"-f"},
         "Refresh databases even when they appear current",
     )};
+    if (pathIs(action, type_name, "sync", "appimage")) return &.{ flag(
+        "--prerelease",
+        &.{"-p"},
+        "Allow prerelease updates for the configured AppImage",
+    ), .{
+        .name = "--configure-updates",
+        .description = "Select the AppImage update-configuration overload",
+        .hidden = true,
+    } };
 
     if (pathIs(action, type_name, "update", "aur")) return &.{flag(
         "--check",
@@ -1066,6 +1120,20 @@ fn requiredArgument(name: []const u8, description: []const u8) Argument {
 
 fn optionalArgument(name: []const u8, description: []const u8) Argument {
     return .{ .name = name, .minimumArity = 0, .maximumArity = 1, .description = description };
+}
+
+fn optionalArgumentWithChoices(
+    name: []const u8,
+    description: []const u8,
+    choices: []const []const u8,
+) Argument {
+    return .{
+        .name = name,
+        .minimumArity = 0,
+        .maximumArity = 1,
+        .description = description,
+        .choices = choices,
+    };
 }
 
 fn repeatedArgument(name: []const u8, minimum: usize, description: []const u8) Argument {
@@ -1282,7 +1350,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "search"))
         return "Search ALPM repositories, the AUR, or cached Flatpak AppStream catalogs.";
     if (std.mem.eql(u8, action, "install"))
-        return "Install packages or applications from ALPM repositories, the AUR, AppImages, Flatpak remotes, or local Flatpak files.";
+        return "Install packages or applications from ALPM repositories, the AUR, AppImages, Flatpak remotes, or local Flatpak files, and repair installed Flatpaks.";
     if (std.mem.eql(u8, action, "upgrade"))
         return "Upgrade standard, AUR, AppImage, or Flatpak packages, including all supported backends together.";
     if (std.mem.eql(u8, action, "list"))
@@ -1294,7 +1362,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "remove"))
         return "Remove standard or local packages, AUR packages, AppImages, or Flatpak applications.";
     if (std.mem.eql(u8, action, "sync"))
-        return "Synchronize ALPM package databases or cached Flatpak AppStream metadata.";
+        return "Synchronize ALPM package databases, AppImage metadata, or cached Flatpak AppStream metadata.";
     if (std.mem.eql(u8, action, "update"))
         return "Update selected standard, AUR, or Flatpak packages.";
     if (std.mem.eql(u8, action, "downgrade"))

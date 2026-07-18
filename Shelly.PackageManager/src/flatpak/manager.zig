@@ -279,6 +279,28 @@ pub const Manager = struct {
         return self.uninstall_flatpak(application.id, application.scope, remove_unused);
     }
 
+    /// Reinstall an installed Flatpak while preserving its application data.
+    /// The original ID, origin, branch, scope, and app/runtime kind are
+    /// retained. Unused refs are deliberately not removed; the subsequent
+    /// install transaction resolves and restores every required dependency.
+    pub fn repair_installed_flatpak(self: Manager, name_or_id: []const u8) !bool {
+        var application = (try self.find_installed_flatpak(name_or_id)) orelse
+            return error.FlatpakNotFound;
+        defer application.deinit(self.allocator);
+        if (application.origin.len == 0) return error.FlatpakOriginMissing;
+        if (application.scope == .UNKNOWN) return error.FlatpakScopeUnknown;
+
+        if (!try self.uninstall_flatpak(application.id, application.scope, false))
+            return false;
+        return self.install_flatpak(
+            application.id,
+            application.origin,
+            application.scope,
+            application.branch,
+            application.kind != rawflatpak.FLATPAK_REF_KIND_APP,
+        );
+    }
+
     pub fn upgrade_flatpaks(self: Manager) !bool {
         var operation_scope = OperationScope.init(self, .update, null);
         operation_scope.attach();
