@@ -8,21 +8,27 @@ const FlatpakRemoteInfo = @import("../models/flatpak.zig").FlatpakRemoteInfo;
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const RunResult = std.process.RunResult;
+const builtin = @import("builtin");
 
 pub const ShellyCli = struct {
     allocator: std.mem.Allocator,
     io: Io,
 
     fn run(self: ShellyCli, args: []const []const u8) !RunResult {
-        var argv = try self.allocator.alloc([]const u8, args.len + 1);
+        const shelly_bin = if (builtin.mode == .Debug)
+            "../Shelly.Cli.Zig/zig-out/bin/shelly"
+        else
+            "shelly";
+
+        var argv = try self.allocator.alloc([]const u8, args.len + 2);
         defer self.allocator.free(argv);
-        @memcpy(argv[0..args.len], args);
-        argv[args.len] = "--ui-mode";
+        argv[0] = shelly_bin;
+        @memcpy(argv[1 .. 1 + args.len], args);
+        argv[argv.len - 1] = "--ui-mode";
 
         const result = try std.process.run(self.allocator, self.io, .{ .argv = argv });
         errdefer self.allocator.free(result.stdout);
         errdefer self.allocator.free(result.stderr);
-
         if (result.term != .exited or result.term.exited != 0) {
             std.debug.print("failed: {s}\n", .{result.stderr});
             return error.CommandFailed;
@@ -31,11 +37,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_packages(self: ShellyCli) !std.json.Parsed([]Package) {
-        const result = try self.run(&.{
-            "shelly",
-            "query",
-            "--available",
-        });
+        const result = try self.run(&.{"-Ssv"});
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
@@ -43,11 +45,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_installed_packages(self: ShellyCli) !std.json.Parsed([]Package) {
-        const result = try self.run(&.{
-            "shelly",
-            "query",
-            "--installed",
-        });
+        const result = try self.run(&.{"-Ls"});
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
@@ -55,11 +53,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_remotes(self: ShellyCli) !std.json.Parsed([]Remote) {
-        const result = try self.run(&.{
-            "shelly",
-            "flatpak",
-            "list-remotes",
-        });
+        const result = try self.run(&.{ "flatpak", "list", "remote" });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
@@ -67,14 +61,14 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_installed_flatpaks(self: ShellyCli) !std.json.Parsed([]Flatpak) {
-        const result = try self.run(&.{ "shelly", "flatpak", "list" });
+        const result = try self.run(&.{"-Lf"});
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
         return try JsonPackFrame.decode([]Flatpak, self.allocator, result.stdout);
     }
 
     pub fn get_remote_appstream_apps(self: ShellyCli) !std.json.Parsed([]AppstreamApp) {
-        const result = try self.run(&.{ "shelly", "flatpak", "get-remote-appstream", "all" });
+        const result = try self.run(&.{ "shelly", "flatpak", "remote", "all" });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
@@ -82,7 +76,9 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_flatpak_remote_info(self: ShellyCli, remote: []const u8, id: []const u8, branch: []const u8) !std.json.Parsed(FlatpakRemoteInfo) {
-        const result = try self.run(&.{ "shelly", "flatpak", "app-remote-info", remote, id, branch, "--json" });
+        const result = try self.run(&.{ "shelly", "flatpak", "search", id });
+        _ = remote;
+        _ = branch;
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
@@ -90,7 +86,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn check_updates(self: ShellyCli) !std.json.Parsed(CheckUpdates) {
-        const result = try self.run(&.{ "shelly", "check-updates", "-a", "-l", "-j" });
+        const result = try self.run(&.{"-P"});
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 

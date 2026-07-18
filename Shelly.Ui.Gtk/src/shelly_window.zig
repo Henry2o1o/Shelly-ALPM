@@ -207,6 +207,10 @@ pub const ShellyWindow = extern struct {
     fn populate_stack(self: *ShellyWindow) void {
         const stack = self.private().content_stack;
 
+        const pp = PackagePage.new();
+        const pp_page = gtk.Stack.addTitled(stack, pp.as(gtk.Widget), "package", PackagePage.title);
+        gtk.StackPage.setIconName(pp_page, PackagePage.icon_name);
+
         const fp = FlatpakPage.new();
         const fp_page = gtk.Stack.addTitled(stack, fp.as(gtk.Widget), "flatpak", FlatpakPage.title);
         gtk.StackPage.setIconName(fp_page, FlatpakPage.icon_name);
@@ -214,10 +218,6 @@ pub const ShellyWindow = extern struct {
         const ai = AppImagePage.new();
         const ai_page = gtk.Stack.addTitled(stack, ai.as(gtk.Widget), "appimage", AppImagePage.title);
         gtk.StackPage.setIconName(ai_page, AppImagePage.icon_name);
-
-        const pp = PackagePage.new();
-        const pp_page = gtk.Stack.addTitled(stack, pp.as(gtk.Widget), "package", PackagePage.title);
-        gtk.StackPage.setIconName(pp_page, PackagePage.icon_name);
 
         const au = AurPage.new();
         const au_page = gtk.Stack.addTitled(stack, au.as(gtk.Widget), "aur", AurPage.title);
