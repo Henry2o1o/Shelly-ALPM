@@ -617,8 +617,34 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.FlatpakManager.find_installed_flatpak / uninstall_flatpak",
         },
     },
-    .{ .action = "run", .type_name = "flatpak", .action_code = 'X', .type_code = 'f' },
-    .{ .action = "kill", .type_name = "flatpak", .action_code = 'K', .type_code = 'f' },
+    .{
+        .action = "run",
+        .type_name = "flatpak",
+        .action_code = 'X',
+        .type_code = 'f',
+        .help = .{
+            .description = "Launch an installed Flatpak application, or stop it with --kill.",
+            .implementation = "Zigalpm.FlatpakManager.launch_flatpak / kill_flatpak",
+            .options = &.{.{
+                .name = "--kill",
+                .description = "Stop the selected application instead of launching it",
+            }},
+        },
+    },
+    .{
+        .action = "run",
+        .type_name = "appimage",
+        .action_code = 'X',
+        .type_code = 'i',
+        .help = .{
+            .description = "Launch an installed AppImage, or stop it with --kill.",
+            .implementation = "Native AppImage resolution, process spawning, tracking, and signaling",
+            .options = &.{.{
+                .name = "--kill",
+                .description = "Stop the selected application instead of launching it",
+            }},
+        },
+    },
     .{
         .action = "search",
         .type_name = "flatpak",
@@ -809,11 +835,15 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "Distribution keyring names; omit to populate the defaults",
     )};
 
-    if (pathIs(action, type_name, "run", "flatpak") or
-        pathIs(action, type_name, "kill", "flatpak")) return &.{requiredArgument(
-        "package",
-        "Flatpak application ID",
-    )};
+    if (std.mem.eql(u8, action, "run") and
+        (std.mem.eql(u8, type_name, "flatpak") or std.mem.eql(u8, type_name, "appimage")))
+        return &.{requiredArgument(
+            "package",
+            if (std.mem.eql(u8, type_name, "flatpak"))
+                "Flatpak application ID or friendly name"
+            else
+                "Installed AppImage name or path",
+        )};
     if (pathIs(action, type_name, "get-remote-appstream", "flatpak")) return &.{requiredArgument(
         "query",
         "Remote name, or all to return every cached remote catalog",
@@ -836,6 +866,9 @@ pub fn optionsFor(comptime action: []const u8, comptime type_name: []const u8) [
 }
 
 fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Option {
+    if (std.mem.eql(u8, action, "run") and
+        (std.mem.eql(u8, type_name, "flatpak") or std.mem.eql(u8, type_name, "appimage")))
+        return &.{flag("--kill", &.{"-k"}, "Stop the selected application instead of launching it")};
     if (pathIs(action, type_name, "search", "standard")) return &.{
         flag("--repos", &.{"-r"}, "List configured ALPM repositories"),
         flag("--available", &.{"-v"}, "Search synchronized ALPM repositories"),
@@ -1329,9 +1362,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "repair"))
         return "Inspect and repair Flatpak installations.";
     if (std.mem.eql(u8, action, "run"))
-        return "Launch a Flatpak application.";
-    if (std.mem.eql(u8, action, "kill"))
-        return "Stop a running Flatpak application.";
+        return "Launch or stop a Flatpak or AppImage application.";
     if (std.mem.eql(u8, action, "get-remote-appstream"))
         return "Read cached Flatpak AppStream data.";
     if (std.mem.eql(u8, action, "list-remotes"))

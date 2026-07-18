@@ -23,6 +23,7 @@ pub const mark_command = @import("commands/mark.zig");
 pub const news_command = @import("commands/news.zig");
 pub const purify_command = @import("commands/purify.zig");
 pub const remove_command = @import("commands/remove.zig");
+pub const run_command = @import("commands/run.zig");
 pub const config = @import("config/manager.zig");
 pub const config_model = @import("config/model.zig");
 pub const config_output = @import("output/config.zig");
@@ -56,6 +57,7 @@ test {
     _ = news_command;
     _ = purify_command;
     _ = remove_command;
+    _ = run_command;
     _ = config;
     _ = config_model;
     _ = config_output;
