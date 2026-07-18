@@ -303,12 +303,14 @@ fn appendRootActionExample(
     rows: *std.ArrayList(Row),
     action: *const spec.Command,
 ) !bool {
-    if (actionHelpShortcode(action)) |help_shortcode| {
-        try rows.append(allocator, .{
-            .label = help_shortcode,
-            .description = try std.fmt.allocPrint(allocator, "Show help for `{s}`", .{action.path}),
-        });
-        return true;
+    if (!std.mem.eql(u8, action.name, "upgrade")) {
+        if (actionHelpShortcode(action)) |help_shortcode| {
+            try rows.append(allocator, .{
+                .label = help_shortcode,
+                .description = try std.fmt.allocPrint(allocator, "Show help for `{s}`", .{action.path}),
+            });
+            return true;
+        }
     }
 
     const child = rootExampleChild(manifest, action) orelse return false;
@@ -431,6 +433,7 @@ fn writeLeafExamples(
 
 fn actionHelpShortcode(action: *const spec.Command) ?[]const u8 {
     if (std.mem.eql(u8, action.name, "install")) return "-Ih";
+    if (std.mem.eql(u8, action.name, "upgrade")) return "-Uh";
     if (std.mem.eql(u8, action.name, "mark")) return "-Mh";
     if (std.mem.eql(u8, action.name, "keyring")) return "-K / -Kh";
     return null;
@@ -712,6 +715,7 @@ test "upgrade action help documents every backend and its actual modifiers" {
 
     try render(arena.allocator(), &manifest, command, &output.writer);
     const rendered = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Uh") != null);
     for ([_][]const u8{ "[shortcode: -Us]", "[shortcode: -Ux]", "[shortcode: -Ui]", "[shortcode: -Ua]", "[shortcode: -Uf]" }) |needle|
         try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
     for ([_][]const u8{ "--all", "--no-repo", "--no-aur", "--no-flatpak", "--no-appimage", "--check", "--singlepane" }) |needle|
@@ -729,7 +733,7 @@ test "update action help documents targeted native backends and shortcodes" {
 
     try render(arena.allocator(), &manifest, command, &output.writer);
     const rendered = output.writer.buffered();
-    for ([_][]const u8{ "[shortcode: -Ts]", "[shortcode: -Ta]", "[shortcode: -Tf]" }) |needle|
+    for ([_][]const u8{ "[shortcode: -Es]", "[shortcode: -Ea]", "[shortcode: -Ef]" }) |needle|
         try std.testing.expect(std.mem.indexOf(u8, rendered, needle) != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Implementation:") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "partial-upgrade warning and confirmation") != null);

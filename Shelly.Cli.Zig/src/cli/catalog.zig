@@ -256,7 +256,22 @@ pub const variants = [_]Variant{
             .description = "Back up explicitly installed standard packages, AUR packages, and Flatpak applications as type-grouped TOML.",
         },
     },
-    .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'u' },
+    .{
+        .action = "utility",
+        .type_name = "utility",
+        .action_code = 'T',
+        .type_code = null,
+        .default_for_action = true,
+        .help = .{
+            .description = "Run Shelly maintenance and command-catalog generators.",
+            .implementation = "Native Zig ownership repair, Markdown documentation generator, and Bash/Fish/Zsh completion generators",
+            .options = &.{
+                .{ .name = "--fix-permissions", .description = "Restore the invoking user's ownership of Shelly's configuration, cache, and data directories" },
+                .{ .name = "--docs", .description = "Write Markdown CLI reference documentation to standard output" },
+                .{ .name = "--completions", .description = "Write a Bash, Fish, or Zsh completion script to standard output" },
+            },
+        },
+    },
     .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'u' },
     .{
         .action = "purify",
@@ -296,7 +311,7 @@ pub const variants = [_]Variant{
     .{
         .action = "update",
         .type_name = "standard",
-        .action_code = 'T',
+        .action_code = 'E',
         .type_code = 's',
         .help = .{
             .description = "Update only the named installed ALPM packages after an explicit partial-upgrade warning and confirmation.",
@@ -307,9 +322,6 @@ pub const variants = [_]Variant{
             }},
         },
     },
-    .{ .action = "docs", .type_name = "utility", .action_code = null, .type_code = 'u' },
-    .{ .action = "completions", .type_name = "utility", .action_code = null, .type_code = 'u' },
-
     .{
         .action = "install",
         .type_name = "appimage",
@@ -428,7 +440,7 @@ pub const variants = [_]Variant{
     .{
         .action = "update",
         .type_name = "aur",
-        .action_code = 'T',
+        .action_code = 'E',
         .type_code = 'a',
         .help = .{
             .description = "Fetch, review, rebuild, and reinstall only the named AUR packages.",
@@ -580,7 +592,7 @@ pub const variants = [_]Variant{
     .{
         .action = "update",
         .type_name = "flatpak",
-        .action_code = 'T',
+        .action_code = 'E',
         .type_code = 'f',
         .help = .{
             .description = "Update one installed Flatpak application or runtime in its existing user or system installation.",
@@ -785,11 +797,6 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "Flatpak application or runtime to update",
     )};
 
-    if (pathIs(action, type_name, "completions", "utility")) return &.{argumentWithChoices(
-        "shell",
-        "Shell completion format",
-        &.{ "bash", "zsh", "fish", "powershell" },
-    )};
     if (pathIs(action, type_name, "sync-meta", "appimage")) return &.{optionalArgument(
         "package",
         "Installed AppImage to refresh; omit to refresh every AppImage",
@@ -866,6 +873,19 @@ pub fn optionsFor(comptime action: []const u8, comptime type_name: []const u8) [
 }
 
 fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Option {
+    if (pathIs(action, type_name, "utility", "utility")) return &.{
+        flag("--fix-permissions", &.{"-f"}, "Restore ownership of Shelly's user directories"),
+        flag("--docs", &.{"-d"}, "Generate Markdown CLI documentation"),
+        .{
+            .name = "--completions",
+            .aliases = &.{"-c"},
+            .type = "string",
+            .minimumArity = 1,
+            .maximumArity = 1,
+            .description = "Generate shell completions for bash, fish, or zsh",
+            .choices = &.{ "bash", "fish", "zsh" },
+        },
+    };
     if (std.mem.eql(u8, action, "run") and
         (std.mem.eql(u8, type_name, "flatpak") or std.mem.eql(u8, type_name, "appimage")))
         return &.{flag("--kill", &.{"-k"}, "Stop the selected application instead of launching it")};
@@ -1333,18 +1353,14 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Read Arch Linux news and track viewed entries.";
     if (std.mem.eql(u8, action, "backup"))
         return "Back up explicitly installed packages as type-grouped TOML.";
-    if (std.mem.eql(u8, action, "fix-permissions"))
-        return "Restore Shelly directory ownership to the invoking user.";
+    if (std.mem.eql(u8, action, "utility"))
+        return "Repair Shelly directory ownership or generate CLI documentation and shell completions.";
     if (std.mem.eql(u8, action, "mark"))
         return "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.";
     if (std.mem.eql(u8, action, "keyring"))
         return "Initialize, inspect, refresh, populate, receive, or locally sign keys in the pacman keyring.";
     if (std.mem.eql(u8, action, "pacfile"))
         return "Read stored pacnew and pacsave records.";
-    if (std.mem.eql(u8, action, "docs"))
-        return "Generate Markdown documentation from the native Zig command catalog.";
-    if (std.mem.eql(u8, action, "completions"))
-        return "Generate completion definitions from the native Zig command catalog.";
     if (std.mem.eql(u8, action, "sync-meta"))
         return "Refresh metadata for installed AppImages.";
     if (std.mem.eql(u8, action, "configure-updates"))

@@ -30,6 +30,12 @@ pub fn translate(
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (std.mem.eql(u8, token, "-Uh")) {
+        var result: std.ArrayList([]const u8) = .empty;
+        try result.appendSlice(allocator, &.{ "upgrade", "--help" });
+        try result.appendSlice(allocator, args[1..]);
+        return .{ .translated = try result.toOwnedSlice(allocator) };
+    }
     if (std.mem.eql(u8, token, "-P")) {
         var result: std.ArrayList([]const u8) = .empty;
         try result.appendSlice(allocator, &.{ "list-updates", "all" });
@@ -480,6 +486,7 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(allocator, &manifest, &.{"-Us"}, &.{ "upgrade", "standard" });
     try expectTranslation(allocator, &manifest, &.{"-Usa"}, &.{ "upgrade", "standard", "-a" });
     try expectTranslation(allocator, &manifest, &.{"-U"}, &.{ "upgrade", "all" });
+    try expectTranslation(allocator, &manifest, &.{"-Uh"}, &.{ "upgrade", "--help" });
     try expectTranslation(allocator, &manifest, &.{"-Ua"}, &.{ "upgrade", "aur" });
     try expectTranslation(allocator, &manifest, &.{"-P"}, &.{ "list-updates", "all" });
     try expectTranslation(

@@ -407,9 +407,9 @@ test "routes update long forms and canonical shortcodes" {
         package: []const u8,
         path: []const u8,
     }{
-        .{ .shortcode = "-Ts", .package = "linux", .path = standard_command_path },
-        .{ .shortcode = "-Ta", .package = "demo-git", .path = aur_command_path },
-        .{ .shortcode = "-Tf", .package = "org.example.App", .path = flatpak_command_path },
+        .{ .shortcode = "-Es", .package = "linux", .path = standard_command_path },
+        .{ .shortcode = "-Ea", .package = "demo-git", .path = aur_command_path },
+        .{ .shortcode = "-Ef", .package = "org.example.App", .path = flatpak_command_path },
     }) |expected| {
         const translation = try shortcodes.translate(
             arena.allocator(),
@@ -422,7 +422,7 @@ test "routes update long forms and canonical shortcodes" {
         try std.testing.expectEqualStrings(expected.path, outcome.dispatch.command.path);
     }
 
-    const uppercase_standard = try shortcodes.translate(arena.allocator(), &manifest, &.{ "-TS", "linux" });
+    const uppercase_standard = try shortcodes.translate(arena.allocator(), &manifest, &.{ "-ES", "linux" });
     try std.testing.expect(uppercase_standard == .failure);
 
     const missing_flatpak = try parser.parse(arena.allocator(), &manifest, &.{ "update", "flatpak" });

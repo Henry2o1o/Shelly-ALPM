@@ -61,6 +61,11 @@ fn invokingUserHome(context: *const runtime.RuntimeContext) ![]const u8 {
             if (try homeFromPasswd(context, user, null)) |home| return home;
         }
     }
+    if (getEnv(context, "DOAS_USER")) |user| {
+        if (user.len > 0 and !std.mem.eql(u8, user, "root")) {
+            if (try homeFromPasswd(context, user, null)) |home| return home;
+        }
+    }
     if (getEnv(context, "PKEXEC_UID")) |uid| {
         if (uid.len > 0) {
             if (try homeFromPasswd(context, null, uid)) |home| return home;

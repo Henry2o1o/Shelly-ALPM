@@ -14,6 +14,7 @@ const search = @import("search.zig");
 const sync = @import("sync.zig");
 const update = @import("update.zig");
 const upgrade = @import("upgrade.zig");
+const utility = @import("utility.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 
@@ -38,5 +39,6 @@ pub fn dispatch(
     if (try purify.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try remove.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try run.dispatch(context, invocation)) |exit_code| return exit_code;
+    if (try utility.dispatch(context, invocation)) |exit_code| return exit_code;
     return runtime.unimplemented(null, context, invocation);
 }
