@@ -209,7 +209,16 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.AlpmManager.update_package_reason(.Dependency)",
         },
     },
-    .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 's' },
+    .{
+        .action = "news",
+        .type_name = "standard",
+        .action_code = 'N',
+        .type_code = null,
+        .default_for_action = true,
+        .help = .{
+            .description = "Fetch Arch Linux news, display unread entries by default, and remember viewed entries in the invoking user's XDG cache.",
+        },
+    },
     .{
         .action = "list-updates",
         .type_name = "all",

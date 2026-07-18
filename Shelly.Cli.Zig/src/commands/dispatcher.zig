@@ -5,6 +5,7 @@ const keyring = @import("keyring.zig");
 const list = @import("list.zig");
 const list_updates = @import("list_updates.zig");
 const mark = @import("mark.zig");
+const news = @import("news.zig");
 const purify = @import("purify.zig");
 const remove = @import("remove.zig");
 const search = @import("search.zig");
@@ -28,6 +29,7 @@ pub fn dispatch(
     if (try list.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try list_updates.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try mark.dispatch(context, invocation)) |exit_code| return exit_code;
+    if (try news.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try search.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try config.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try purify.dispatch(context, invocation)) |exit_code| return exit_code;
