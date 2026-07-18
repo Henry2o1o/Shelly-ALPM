@@ -254,7 +254,7 @@ pub const Manager = struct {
         self.handle = handle;
         self.is_initialized = true;
 
-        self.applyConfig(self.config, self.is_root);
+        self.applyConfig(self.config);
         self.setupCallbacks();
         return self;
     }
@@ -1867,7 +1867,7 @@ pub const Manager = struct {
             return TransactionError.RefreshFailed;
         }
 
-        self.applyConfig(self.config, self.is_root);
+        self.applyConfig(self.config);
         self.setupCallbacks();
     }
 
@@ -2045,7 +2045,7 @@ pub const Manager = struct {
         _ = rawLibalpm.alpm_option_set_fetchcb(h, fetchCallback, self);
     }
 
-    fn applyConfig(self: *Manager, config: configuration.Configuration.Config, root: bool) void {
+    fn applyConfig(self: *Manager, config: configuration.Configuration.Config) void {
         const h = self.handle;
 
         for (config.ignore_package.items) |pkg_name| {
@@ -2060,9 +2060,7 @@ pub const Manager = struct {
             self.check("hook_directory", rawLibalpm.alpm_option_add_hookdir(h, hook_dir.ptr));
         }
 
-        if (root and config.gpg_directory.len != 0) {
-            self.check("gpgdir", rawLibalpm.alpm_option_set_gpgdir(h, config.gpg_directory.ptr));
-        }
+        self.check("gpgdir", rawLibalpm.alpm_option_set_gpgdir(h, config.gpg_directory.ptr));
 
         if (config.signature_level != 0) {
             self.check("default_sig_level", rawLibalpm.alpm_option_set_default_siglevel(h, @intCast(config.signature_level)));
