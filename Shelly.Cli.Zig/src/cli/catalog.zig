@@ -363,7 +363,6 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.appimage.UpdateManager.get_updates / update",
         },
     },
-    .{ .action = "sync-meta", .type_name = "appimage", .action_code = 'Y', .type_code = 'i' },
     .{
         .action = "list-updates",
         .type_name = "appimage",
@@ -371,7 +370,6 @@ pub const variants = [_]Variant{
         .type_code = 'i',
         .help = .{ .implementation = "Zigalpm.appimage.UpdateManager.get_updates" },
     },
-    .{ .action = "configure-updates", .type_name = "appimage", .action_code = 'C', .type_code = 'i' },
     .{
         .action = "get",
         .type_name = "config",
@@ -617,8 +615,6 @@ pub const variants = [_]Variant{
         .type_code = 'f',
         .help = .{ .implementation = "Zigalpm.FlatpakManager.get_updates_flatpak" },
     },
-    .{ .action = "running", .type_name = "flatpak", .action_code = 'N', .type_code = 'f' },
-    .{ .action = "repair", .type_name = "flatpak", .action_code = 'H', .type_code = 'f' },
     .{
         .action = "remove",
         .type_name = "flatpak",
@@ -681,7 +677,6 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.flatpak.AppstreamManager.updateAllAppstreams",
         },
     },
-    .{ .action = "get-remote-appstream", .type_name = "flatpak", .action_code = 'G', .type_code = 'f' },
     .{
         .action = "upgrade",
         .type_name = "flatpak",
@@ -692,10 +687,6 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.FlatpakManager.upgrade_flatpaks",
         },
     },
-    .{ .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'f' },
-    .{ .action = "add-remotes", .type_name = "flatpak", .action_code = 'A', .type_code = 'f' },
-    .{ .action = "remove-remotes", .type_name = "flatpak", .action_code = 'D', .type_code = 'f' },
-    .{ .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'f' },
     .{
         .action = "purify",
         .type_name = "flatpak",
@@ -791,20 +782,6 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "Flatpak application or runtime to update",
     )};
 
-    if (pathIs(action, type_name, "sync-meta", "appimage")) return &.{optionalArgument(
-        "package",
-        "Installed AppImage to refresh; omit to refresh every AppImage",
-    )};
-    if (pathIs(action, type_name, "configure-updates", "appimage")) return &.{
-        requiredArgument("appimage", "Installed AppImage to configure"),
-        requiredArgument("url", "Update metadata URL"),
-        argumentWithChoices(
-            "type",
-            "Update source type",
-            &.{ "None", "StaticUrl", "GitHub", "GitLab", "Codeberg", "Forgejo" },
-        ),
-    };
-
     if (pathIs(action, type_name, "get", "config")) return &.{requiredArgument(
         "key",
         "Configuration property name",
@@ -845,20 +822,6 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
             else
                 "Installed AppImage name or path",
         )};
-    if (pathIs(action, type_name, "get-remote-appstream", "flatpak")) return &.{requiredArgument(
-        "query",
-        "Remote name, or all to return every cached remote catalog",
-    )};
-    if (pathIs(action, type_name, "add-remotes", "flatpak") or
-        pathIs(action, type_name, "remove-remotes", "flatpak")) return &.{requiredArgument(
-        "remote",
-        "Flatpak remote name",
-    )};
-    if (pathIs(action, type_name, "app-remote-info", "flatpak")) return &.{
-        requiredArgument("remote", "Flatpak remote name"),
-        requiredArgument("id", "Application or runtime ID"),
-        requiredArgument("branch", "Remote branch"),
-    };
     return &.{};
 }
 
@@ -1041,11 +1004,6 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         "Refresh databases even when they appear current",
     )};
 
-    if (pathIs(action, type_name, "configure-updates", "appimage")) return &.{flag(
-        "--prerelease",
-        &.{"-p"},
-        "Allow prerelease AppImage updates",
-    )};
     if (pathIs(action, type_name, "update", "aur")) return &.{flag(
         "--check",
         &.{},
@@ -1074,16 +1032,6 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         false,
     )};
 
-    if (pathIs(action, type_name, "add-remotes", "flatpak")) return &.{
-        stringOption("--remote-url", &.{"-u"}, "URL for the new remote", true),
-        flag("--system", &.{"-s"}, "Add the remote to the system installation"),
-        flag("--gpg-verify", &.{"-g"}, "Require GPG verification for the remote"),
-    };
-    if (pathIs(action, type_name, "remove-remotes", "flatpak")) return &.{flag(
-        "--system",
-        &.{"-s"},
-        "Operate on the system Flatpak installation",
-    )};
     return &.{};
 }
 
@@ -1117,20 +1065,6 @@ fn repeatedArgument(name: []const u8, minimum: usize, description: []const u8) A
 
 fn integerArgument(name: []const u8, description: []const u8) Argument {
     return .{ .name = name, .type = "int", .minimumArity = 1, .maximumArity = 1, .description = description };
-}
-
-fn argumentWithChoices(
-    name: []const u8,
-    description: []const u8,
-    choices: []const []const u8,
-) Argument {
-    return .{
-        .name = name,
-        .minimumArity = 1,
-        .maximumArity = 1,
-        .description = description,
-        .choices = choices,
-    };
 }
 
 fn flag(name: []const u8, aliases: []const []const u8, description: []const u8) Option {
@@ -1366,10 +1300,6 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.";
     if (std.mem.eql(u8, action, "keyring"))
         return "Initialize, inspect, refresh, populate, receive, or locally sign keys in the pacman keyring.";
-    if (std.mem.eql(u8, action, "sync-meta"))
-        return "Refresh metadata for installed AppImages.";
-    if (std.mem.eql(u8, action, "configure-updates"))
-        return "Configure how an installed AppImage discovers updates.";
     if (std.mem.eql(u8, action, "get"))
         return "Read a Shelly configuration value.";
     if (std.mem.eql(u8, action, "set"))
@@ -1378,22 +1308,8 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Reset Shelly configuration to native defaults.";
     if (std.mem.eql(u8, action, "parallel"))
         return "Set Shelly's parallel download count.";
-    if (std.mem.eql(u8, action, "running"))
-        return "List running Flatpak applications and process identifiers.";
-    if (std.mem.eql(u8, action, "repair"))
-        return "Inspect and repair Flatpak installations.";
     if (std.mem.eql(u8, action, "run"))
         return "Launch or stop a Flatpak or AppImage application.";
-    if (std.mem.eql(u8, action, "get-remote-appstream"))
-        return "Read cached Flatpak AppStream data.";
-    if (std.mem.eql(u8, action, "list-remotes"))
-        return "List configured user and system Flatpak remotes.";
-    if (std.mem.eql(u8, action, "add-remotes"))
-        return "Add a Flatpak remote.";
-    if (std.mem.eql(u8, action, "remove-remotes"))
-        return "Remove a Flatpak remote.";
-    if (std.mem.eql(u8, action, "app-remote-info"))
-        return "Show size and permission information for a remote Flatpak application.";
     return null;
 }
 

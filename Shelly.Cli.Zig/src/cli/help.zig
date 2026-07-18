@@ -268,7 +268,7 @@ fn writeRootShortcodeHelp(
     writer: *Writer,
 ) !void {
     try writer.writeAll(
-        \\Shortcodes:
+        \\Shortcodes and top-level examples:
         \\  Grammar: -<UppercaseAction><lowercaseTypeOrCommand><modifiers...> [positionals]
         \\  Uppercase Action selects the operation, the lowercase selector chooses its target or subcommand, and
         \\  modifiers are that action/type pair's short flags (case-sensitive).
@@ -284,7 +284,7 @@ fn writeRootShortcodeHelp(
         const code = command_type.code orelse continue;
         try writer.print("    {c}  {s}\n", .{ code, command_type.name });
     }
-    try writer.writeAll("\n  Top-level examples:\n");
+    try writer.writeByte('\n');
 
     var rows: std.ArrayList(Row) = .empty;
     for (manifest.commands) |*action| {
@@ -800,7 +800,7 @@ test "leaf help describes the selected type without implementation metadata" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Flathub") == null);
 }
 
-test "root help limits shortcode examples to top-level command forms" {
+test "root help combines shortcodes with implemented top-level command examples" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
@@ -812,11 +812,14 @@ test "root help limits shortcode examples to top-level command forms" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Implementation:") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[implementation:") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-<UppercaseAction><lowercaseTypeOrCommand><modifiers...>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Top-level examples:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Shortcodes and top-level examples:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\n  Top-level examples:") == null);
     for ([_][]const u8{ "-Ss [<package>]", "-Ih", "-U", "-D [<package>]", "-Mh", "-P", "-Ls", "-K / -Kh" }) |shortcode|
         try std.testing.expect(std.mem.indexOf(u8, rendered, shortcode) != null);
     for ([_][]const u8{ "-Ife", "-Ifu", "-Iav", "-Mga", "-Ki", "-Ks", "-Sap", "-Ssa", "-Ssafv" }) |nested_example|
         try std.testing.expect(std.mem.indexOf(u8, rendered, nested_example) == null);
+    for ([_][]const u8{ "sync-meta", "configure-updates", "running", "repair", "get-remote-appstream", "list-remotes", "add-remotes", "remove-remotes", "app-remote-info" }) |unimplemented|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, unimplemented) == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Search may combine standard, AUR, and Flatpak types (s/a/f)") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Run `shelly <command> --help` for examples within a command.") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\n    s  standard\n") != null);

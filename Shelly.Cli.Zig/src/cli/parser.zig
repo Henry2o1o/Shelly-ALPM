@@ -321,18 +321,14 @@ test "verbose options are not accepted by commands" {
     try std.testing.expectEqualStrings("Unrecognized command or argument '-v'.", short.failure.message);
 }
 
-test "validates required options but help bypasses validation" {
+test "commands without native dispatchers are not registered" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
 
-    const missing = try parse(arena.allocator(), &manifest, &.{ "add-remotes", "flatpak", "flathub" });
-    try std.testing.expect(missing == .failure);
-    try std.testing.expectEqualStrings("Option '--remote-url' is required.", missing.failure.message);
-
-    const help = try parse(arena.allocator(), &manifest, &.{ "add-remotes", "flatpak", "--help" });
-    try std.testing.expect(help == .help);
-    try std.testing.expectEqualStrings("shelly add-remotes flatpak", help.help.path);
+    const outcome = try parse(arena.allocator(), &manifest, &.{ "add-remotes", "flatpak", "flathub" });
+    try std.testing.expect(outcome == .failure);
+    try std.testing.expectEqualStrings("Unrecognized command or argument 'add-remotes'.", outcome.failure.message);
 }
 
 test "maps an empty invocation to upgrade all" {
