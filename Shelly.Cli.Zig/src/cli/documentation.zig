@@ -173,6 +173,8 @@ test "renders catalog-driven Markdown with utility and shell choices" {
     try std.testing.expect(std.mem.indexOf(u8, markdown, "`shelly utility --docs`") != null);
     try std.testing.expect(std.mem.indexOf(u8, markdown, "| `-T` | `shelly utility` |") != null);
     try std.testing.expect(std.mem.indexOf(u8, markdown, "`--completions, -c <completions>`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, markdown, "`--pacfiles, -p`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, markdown, "`--threeway, -3`") != null);
     try std.testing.expect(std.mem.indexOf(u8, markdown, "`bash`, `fish`, `zsh`") != null);
     try std.testing.expect(std.mem.indexOf(u8, markdown, "shelly utility utility") == null);
     try std.testing.expect(std.mem.indexOf(u8, markdown, "shelly docs") == null);

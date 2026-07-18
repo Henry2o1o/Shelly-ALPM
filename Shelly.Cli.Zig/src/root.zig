@@ -27,6 +27,7 @@ pub const purify_command = @import("commands/purify.zig");
 pub const remove_command = @import("commands/remove.zig");
 pub const run_command = @import("commands/run.zig");
 pub const utility_command = @import("commands/utility.zig");
+pub const pacfiles_command = @import("commands/pacfiles.zig");
 pub const config = @import("config/manager.zig");
 pub const config_model = @import("config/model.zig");
 pub const config_output = @import("output/config.zig");
@@ -64,6 +65,7 @@ test {
     _ = remove_command;
     _ = run_command;
     _ = utility_command;
+    _ = pacfiles_command;
     _ = config;
     _ = config_model;
     _ = config_output;

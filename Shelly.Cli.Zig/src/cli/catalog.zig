@@ -40,7 +40,7 @@ pub const Option = struct {
 
 pub const root_options = [_]Option{
     voidOption("--help", &.{ "-?", "-h", "/?", "/h" }, "Show command-specific help and usage information", true, true),
-    voidOption("--version", &.{}, "Show version information", false, true),
+    voidOption("--version", &.{"-V"}, "Show version information", false, true),
     globalFlag("--no-confirm", &.{"-n"}, "Use safe automatic answers instead of prompting"),
     globalFlag("--ui-mode", &.{"-U"}, "Emit framed output for the Shelly UI"),
     globalFlag("--json", &.{"-j"}, "Output structured JSON where the command supports it"),
@@ -263,16 +263,16 @@ pub const variants = [_]Variant{
         .type_code = null,
         .default_for_action = true,
         .help = .{
-            .description = "Run Shelly maintenance and command-catalog generators.",
-            .implementation = "Native Zig ownership repair, Markdown documentation generator, and Bash/Fish/Zsh completion generators",
+            .description = "Run Shelly maintenance, pacnew/pacsave management, and command-catalog generators.",
+            .implementation = "Native Zig ownership repair; Zigalpm.PacfileManager pacdiff workflow; Markdown documentation and Bash/Fish/Zsh completion generators",
             .options = &.{
                 .{ .name = "--fix-permissions", .description = "Restore the invoking user's ownership of Shelly's configuration, cache, and data directories" },
                 .{ .name = "--docs", .description = "Write Markdown CLI reference documentation to standard output" },
                 .{ .name = "--completions", .description = "Write a Bash, Fish, or Zsh completion script to standard output" },
+                .{ .name = "--pacfiles", .description = "Run the pacdiff-compatible pacnew, pacorig, and pacsave maintenance workflow" },
             },
         },
     },
-    .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'u' },
     .{
         .action = "purify",
         .type_name = "standard",
@@ -765,12 +765,6 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "package",
         "Installed package whose reason should be changed",
     )};
-    if (pathIs(action, type_name, "pacfile", "utility")) return &.{repeatedArgument(
-        "pacfiles",
-        0,
-        "Stored pacnew or pacsave records to display; omit to display all",
-    )};
-
     if (pathIs(action, type_name, "remove", "standard") or
         pathIs(action, type_name, "remove", "aur")) return &.{repeatedArgument(
         "packages",
@@ -885,6 +879,19 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
             .description = "Generate shell completions for bash, fish, or zsh",
             .choices = &.{ "bash", "fish", "zsh" },
         },
+        flag("--pacfiles", &.{"-p"}, "Manage pacnew, pacorig, and pacsave files like pacdiff"),
+        flag("--find", &.{"-F"}, "Recursively find pacfiles instead of reading the pacman database"),
+        flag("--locate", &.{"-l"}, "Find pacfiles with locate instead of reading the pacman database"),
+        flag("--pacmandb", &.{"-P"}, "Search backup paths from the local pacman database (default)"),
+        flag("--backup", &.{"-b"}, "Save the old original as .bak before overwriting"),
+        stringOption("--cachedir", &.{"-C"}, "Package cache directory for three-way base archives; repeat to add directories", false),
+        flag("--output", &.{"-o"}, "Print discovered pacfile paths without modifying them"),
+        flag("--sudo", &.{"-s"}, "Explicitly request elevation; interactive pacfile maintenance elevates automatically"),
+        flag("--threeway", &.{"-3"}, "Use a cached older package as the third input when viewing differences"),
+        flag("--nocolor", &.{}, "Disable colored pacfile status output"),
+        stringOption("--search-path", &.{}, "Path to scan with --find; repeat to add paths", false),
+        stringOption("--diff-program", &.{}, "Diff command, overriding DIFFPROG", false),
+        stringOption("--merge-program", &.{}, "Merge command, overriding MERGEPROG", false),
     };
     if (std.mem.eql(u8, action, "run") and
         (std.mem.eql(u8, type_name, "flatpak") or std.mem.eql(u8, type_name, "appimage")))
@@ -1354,13 +1361,11 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "backup"))
         return "Back up explicitly installed packages as type-grouped TOML.";
     if (std.mem.eql(u8, action, "utility"))
-        return "Repair Shelly directory ownership or generate CLI documentation and shell completions.";
+        return "Repair Shelly directory ownership, manage pacfiles, or generate CLI documentation and shell completions.";
     if (std.mem.eql(u8, action, "mark"))
         return "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.";
     if (std.mem.eql(u8, action, "keyring"))
         return "Initialize, inspect, refresh, populate, receive, or locally sign keys in the pacman keyring.";
-    if (std.mem.eql(u8, action, "pacfile"))
-        return "Read stored pacnew and pacsave records.";
     if (std.mem.eql(u8, action, "sync-meta"))
         return "Refresh metadata for installed AppImages.";
     if (std.mem.eql(u8, action, "configure-updates"))

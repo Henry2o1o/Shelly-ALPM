@@ -2,6 +2,7 @@ const std = @import("std");
 const completions = @import("../cli/completions.zig");
 const documentation = @import("../cli/documentation.zig");
 const output = @import("../output/config.zig");
+const pacfiles = @import("pacfiles.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
@@ -14,6 +15,7 @@ const Operation = union(enum) {
     fix_permissions,
     docs,
     completions: completions.Shell,
+    pacfiles,
 };
 
 const Selection = union(enum) {
@@ -44,9 +46,11 @@ pub fn dispatch(
     if (selection != .operation) return try writeSelectionError(context, selection);
     const operation = selection.operation;
 
-    if (operation == .fix_permissions and !elevation.isRoot()) {
+    const needs_elevation = operation == .fix_permissions or
+        (operation == .pacfiles and pacfiles.requiresElevation(invocation));
+    if (needs_elevation and !elevation.isRoot()) {
         const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
-            try context.stderr.print("Unable to elevate permission repair: {t}\n", .{err});
+            try context.stderr.print("Unable to elevate utility operation: {t}\n", .{err});
             return 1;
         };
         if (elevated_exit) |exit_code| return exit_code;
@@ -65,6 +69,7 @@ fn execute(
         .fix_permissions => fixPermissions(context, invocation, permission_runner),
         .docs => generateDocs(context),
         .completions => |shell| generateCompletions(context, shell),
+        .pacfiles => pacfiles.run(context, invocation),
     };
 }
 
@@ -92,19 +97,41 @@ fn selectOperation(invocation: *const parser.Invocation) Selection {
                 if (completions.Shell.parse(value)) |shell| .{ .completions = shell } else null
             else
                 null
+        else if (std.mem.eql(u8, option.name, "--pacfiles"))
+            .pacfiles
+        else if (isPacfileOption(option.name))
+            .pacfiles
         else
             null;
         if (operation) |value| {
-            if (selected != null) return .conflicting;
+            if (selected) |current| {
+                if (current == .pacfiles and value == .pacfiles) continue;
+                return .conflicting;
+            }
             selected = value;
         }
     }
     return if (selected) |operation| .{ .operation = operation } else .missing;
 }
 
+fn isPacfileOption(name: []const u8) bool {
+    return std.mem.eql(u8, name, "--find") or
+        std.mem.eql(u8, name, "--locate") or
+        std.mem.eql(u8, name, "--pacmandb") or
+        std.mem.eql(u8, name, "--backup") or
+        std.mem.eql(u8, name, "--cachedir") or
+        std.mem.eql(u8, name, "--output") or
+        std.mem.eql(u8, name, "--sudo") or
+        std.mem.eql(u8, name, "--threeway") or
+        std.mem.eql(u8, name, "--nocolor") or
+        std.mem.eql(u8, name, "--search-path") or
+        std.mem.eql(u8, name, "--diff-program") or
+        std.mem.eql(u8, name, "--merge-program");
+}
+
 fn writeSelectionError(context: *runtime.RuntimeContext, selection: Selection) !u8 {
     const message = switch (selection) {
-        .missing => "No utility operation selected. Use --fix-permissions, --docs, or --completions <shell>.",
+        .missing => "No utility operation selected. Use --fix-permissions, --docs, --completions <shell>, or --pacfiles.",
         .conflicting => "Utility operations are mutually exclusive; select exactly one.",
         .operation => unreachable,
     };
@@ -259,6 +286,7 @@ test "utility long forms and -T modifiers select each operation" {
         .{ .shortcode = &.{"-Tf"}, .expected = &.{ "utility", "-f" }, .option_name = "--fix-permissions" },
         .{ .shortcode = &.{"-Td"}, .expected = &.{ "utility", "-d" }, .option_name = "--docs" },
         .{ .shortcode = &.{ "-Tc", "fish" }, .expected = &.{ "utility", "-c", "fish" }, .option_name = "--completions", .value = "fish" },
+        .{ .shortcode = &.{"-Tp"}, .expected = &.{ "utility", "-p" }, .option_name = "--pacfiles" },
     }) |expected| {
         const translation = try shortcodes.translate(arena.allocator(), &manifest, expected.shortcode);
         try std.testing.expect(translation == .translated);
@@ -276,6 +304,13 @@ test "utility long forms and -T modifiers select each operation" {
 
     const help = try shortcodes.translate(arena.allocator(), &manifest, &.{"-Th"});
     try expectArguments(&.{ "utility", "--help" }, help.translated);
+
+    const pacdiff_output = try shortcodes.translate(arena.allocator(), &manifest, &.{"-To"});
+    try expectArguments(&.{ "utility", "-o" }, pacdiff_output.translated);
+    const parsed_pacdiff = try parser.parse(arena.allocator(), &manifest, pacdiff_output.translated);
+    try std.testing.expect(parsed_pacdiff == .dispatch);
+    try std.testing.expect(selectOperation(&parsed_pacdiff.dispatch) == .operation);
+    try std.testing.expect(parsed_pacdiff.dispatch.options[0].name.len > 0);
 }
 
 test "upgrade retains -U and update migrates to -E" {
@@ -310,6 +345,9 @@ test "utility rejects missing and conflicting operations" {
 
     const conflicting = try parseInvocation(arena.allocator(), &.{ "utility", "--docs", "--fix-permissions" });
     try std.testing.expect(selectOperation(&conflicting) == .conflicting);
+
+    const pacfile_conflict = try parseInvocation(arena.allocator(), &.{ "utility", "--docs", "--find" });
+    try std.testing.expect(selectOperation(&pacfile_conflict) == .conflicting);
 }
 
 test "docs and completion operations write generated output" {

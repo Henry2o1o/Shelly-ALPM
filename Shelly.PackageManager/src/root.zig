@@ -9,6 +9,7 @@ pub const alpm = struct {
     pub const configuration = @import("alpm/configuration.zig");
     pub const cache_manager = @import("alpm/cache_manager.zig");
     pub const archive_manager = @import("alpm/archive_manager.zig");
+    pub const pacfile_manager = @import("alpm/pacfile_manager.zig");
 
     pub const Manager = manager.Manager;
     pub const TransFlag = bindings.libalpm.TransFlag;
@@ -43,6 +44,19 @@ pub const alpm = struct {
     pub const CacheExecutionResult = cache_manager.ExecutionResult;
     pub const CacheError = cache_manager.Error;
     pub const parse_cache_package_filename = cache_manager.parsePackageFilename;
+    pub const PacfileManager = pacfile_manager.PacfileManager;
+    pub const PacfileManagerOptions = pacfile_manager.Options;
+    pub const PacfileError = pacfile_manager.Error;
+    pub const PacfileSearchMode = pacfile_manager.SearchMode;
+    pub const PacfileKind = pacfile_manager.Kind;
+    pub const PacfileState = pacfile_manager.State;
+    pub const PacfileDiffMode = pacfile_manager.DiffMode;
+    pub const ParsedPacfilePath = pacfile_manager.ParsedPath;
+    pub const Pacfile = pacfile_manager.Pacfile;
+    pub const PacfileToolResult = pacfile_manager.ToolResult;
+    pub const PacfileViewResult = pacfile_manager.ViewResult;
+    pub const PreparedPacfileMerge = pacfile_manager.PreparedMerge;
+    pub const parse_pacfile_path = pacfile_manager.parsePacfilePath;
 };
 
 pub const aur = @import("aur/manager.zig");
@@ -135,6 +149,7 @@ pub const shared = struct {
 
 pub const AlpmManager = alpm.Manager;
 pub const CacheManager = alpm.CacheManager;
+pub const PacfileManager = alpm.PacfileManager;
 pub const AlpmArchiveManager = alpm.ArchiveManager;
 pub const AurManager = aur.Manager;
 pub const FlatpakManager = flatpak.Manager;
@@ -183,6 +198,7 @@ test "public AUR module exposes the package manager" {
 test "public library surface exposes package manager APIs" {
     _ = AlpmManager;
     _ = CacheManager;
+    _ = PacfileManager;
     _ = AlpmArchiveManager;
     _ = AurManager;
     _ = FlatpakManager;
@@ -218,6 +234,18 @@ test "public library surface exposes package manager APIs" {
     _ = alpm.CacheExecutionResult;
     _ = alpm.CacheError;
     _ = alpm.parse_cache_package_filename;
+    _ = alpm.PacfileManagerOptions;
+    _ = alpm.PacfileError;
+    _ = alpm.PacfileSearchMode;
+    _ = alpm.PacfileKind;
+    _ = alpm.PacfileState;
+    _ = alpm.PacfileDiffMode;
+    _ = alpm.ParsedPacfilePath;
+    _ = alpm.Pacfile;
+    _ = alpm.PacfileToolResult;
+    _ = alpm.PacfileViewResult;
+    _ = alpm.PreparedPacfileMerge;
+    _ = alpm.parse_pacfile_path;
     _ = flatpak.RemoteManager;
     _ = flatpak.AppstreamManager;
     _ = flatpak.InstalledApplication;
@@ -408,6 +436,7 @@ test {
     _ = @import("alpm/configuration.zig");
     _ = @import("alpm/cache_manager.zig");
     _ = @import("alpm/archive_manager.zig");
+    _ = @import("alpm/pacfile_manager.zig");
     _ = @import("alpm/distribution-hooks/CachyOS/update_notice.zig");
     _ = @import("alpm/distribution-hooks/os_utilities.zig");
     _ = @import("flatpak/bindings.zig");

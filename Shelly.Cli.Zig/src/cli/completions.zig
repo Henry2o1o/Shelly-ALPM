@@ -450,6 +450,8 @@ test "renders Bash Fish and Zsh scripts from the native catalog" {
         try std.testing.expect(std.mem.indexOf(u8, script, expected.registration) != null);
         try std.testing.expect(std.mem.indexOf(u8, script, "utility") != null);
         try std.testing.expect(std.mem.indexOf(u8, script, expected.permission_option) != null);
+        try std.testing.expect(std.mem.indexOf(u8, script, "pacfiles") != null);
+        try std.testing.expect(std.mem.indexOf(u8, script, "threeway") != null);
         try std.testing.expect(std.mem.indexOf(u8, script, "bash fish zsh") != null);
     }
 }
