@@ -392,7 +392,13 @@ fn writeLeafExamples(
     const base_shortcode = try shortcodeUsage(allocator, command, null) orelse return;
     var rows: std.ArrayList(Row) = .empty;
     try rows.append(allocator, .{
-        .label = if (display_path) |path|
+        .label = if (std.mem.eql(u8, command.path, "shelly backup utility"))
+            try std.fmt.allocPrint(
+                allocator,
+                "{s} --export",
+                .{display_path orelse command.path},
+            )
+        else if (display_path) |path|
             try longInvocationAtPath(allocator, path, command.arguments)
         else
             try longInvocation(allocator, command),
@@ -438,6 +444,9 @@ fn shortcodeUsage(
     var usage: std.ArrayList(u8) = .empty;
     try usage.appendSlice(allocator, try shortcodePrefix(allocator, command, option == null) orelse return null);
     if (option) |selected_option| {
+        if (std.mem.eql(u8, command.path, "shelly backup utility") and
+            !std.mem.eql(u8, selected_option.name, "--export"))
+            try usage.append(allocator, 'e');
         const alias = shortOptionAlias(selected_option) orelse return null;
         if (modifierMustBeSeparate(command, alias[1])) {
             try usage.appendSlice(allocator, " ");

@@ -246,7 +246,16 @@ pub const variants = [_]Variant{
             .implementation = "Zigalpm.AlpmManager.get_installed_packages",
         },
     },
-    .{ .action = "export", .type_name = "utility", .action_code = 'E', .type_code = 'u' },
+    .{
+        .action = "backup",
+        .type_name = "utility",
+        .action_code = 'B',
+        .type_code = null,
+        .default_for_action = true,
+        .help = .{
+            .description = "Back up explicitly installed standard packages, AUR packages, and Flatpak applications as type-grouped TOML.",
+        },
+    },
     .{ .action = "fix-permissions", .type_name = "utility", .action_code = 'F', .type_code = 'u' },
     .{ .action = "pacfile", .type_name = "utility", .action_code = null, .type_code = 'u' },
     .{
@@ -928,9 +937,10 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--flatpak", &.{"-l"}, "Include Flatpak updates"),
         flag("--count", &.{"-c"}, "Print only the update count"),
     };
-    if (pathIs(action, type_name, "export", "utility")) return &.{
-        stringOption("--name", &.{"-a"}, "Export name", false),
-        stringOption("--output", &.{"-o"}, "Output file path", false),
+    if (pathIs(action, type_name, "backup", "utility")) return &.{
+        flag("--export", &.{"-e"}, "Export the current explicitly installed package state"),
+        stringOption("--name", &.{"-a"}, "Export file name without the .toml extension", false),
+        stringOption("--output", &.{"-o"}, "Directory in which to write the export", false),
     };
     if (pathIs(action, type_name, "purify", "standard")) return &.{
         flag("--dry-run", &.{"-d"}, "Show the cleanup plan without changing packages"),
@@ -1288,8 +1298,8 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Select and install an older version of a standard package.";
     if (std.mem.eql(u8, action, "news"))
         return "Read Arch Linux news and track viewed entries.";
-    if (std.mem.eql(u8, action, "export"))
-        return "Export installed package state as structured data.";
+    if (std.mem.eql(u8, action, "backup"))
+        return "Back up explicitly installed packages as type-grouped TOML.";
     if (std.mem.eql(u8, action, "fix-permissions"))
         return "Restore Shelly directory ownership to the invoking user.";
     if (std.mem.eql(u8, action, "mark"))

@@ -1,5 +1,6 @@
 const config = @import("config.zig");
 const downgrade = @import("downgrade.zig");
+const backup = @import("backup.zig");
 const install = @import("install.zig");
 const keyring = @import("keyring.zig");
 const list = @import("list.zig");
@@ -24,6 +25,7 @@ pub fn dispatch(
     if (try sync.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try update.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try downgrade.dispatch(context, invocation)) |exit_code| return exit_code;
+    if (try backup.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try install.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try keyring.dispatch(context, invocation)) |exit_code| return exit_code;
     if (try list.dispatch(context, invocation)) |exit_code| return exit_code;
