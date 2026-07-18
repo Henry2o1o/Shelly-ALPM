@@ -6,22 +6,20 @@ const Flatpak = @import("../models/flatpak.zig").Flatpak;
 const AppstreamApp = @import("../models/flatpak.zig").AppstreamApp;
 const FlatpakRemoteInfo = @import("../models/flatpak.zig").FlatpakRemoteInfo;
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
-
+const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const RunResult = std.process.RunResult;
-
-fn parse_appstream_apps(allocator: std.mem.Allocator, json: []const u8) !std.json.Parsed([]AppstreamApp) {
-    return std.json.parseFromSlice([]AppstreamApp, allocator, json, .{
-        .ignore_unknown_fields = true,
-        .allocate = .alloc_always,
-    });
-}
 
 pub const ShellyCli = struct {
     allocator: std.mem.Allocator,
     io: Io,
 
     fn run(self: ShellyCli, args: []const []const u8) !RunResult {
-        const result = try std.process.run(self.allocator, self.io, .{ .argv = args });
+        var argv = try self.allocator.alloc([]const u8, args.len + 1);
+        defer self.allocator.free(argv);
+        @memcpy(argv[0..args.len], args);
+        argv[args.len] = "--ui-mode";
+
+        const result = try std.process.run(self.allocator, self.io, .{ .argv = argv });
         errdefer self.allocator.free(result.stdout);
         errdefer self.allocator.free(result.stderr);
 
@@ -33,47 +31,46 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_packages(self: ShellyCli) !std.json.Parsed([]Package) {
-        const result = try self.run(&.{ "shelly", "-SQ", "--json", "--take", "30000" });
+        const result = try self.run(&.{
+            "shelly",
+            "query",
+            "--available",
+        });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return std.json.parseFromSlice([]Package, self.allocator, result.stdout, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_always,
-        });
+        return try JsonPackFrame.decode([]Package, self.allocator, result.stdout);
     }
 
     pub fn get_installed_packages(self: ShellyCli) !std.json.Parsed([]Package) {
-        const result = try self.run(&.{ "shelly", "-SQi", "--json", "--take", "30000" });
+        const result = try self.run(&.{
+            "shelly",
+            "query",
+            "--installed",
+        });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return std.json.parseFromSlice([]Package, self.allocator, result.stdout, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_always,
-        });
+        return try JsonPackFrame.decode([]Package, self.allocator, result.stdout);
     }
 
     pub fn get_remotes(self: ShellyCli) !std.json.Parsed([]Remote) {
-        const result = try self.run(&.{ "shelly", "flatpak", "list-remotes", "--json" });
+        const result = try self.run(&.{
+            "shelly",
+            "flatpak",
+            "list-remotes",
+        });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return std.json.parseFromSlice([]Remote, self.allocator, result.stdout, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_always,
-        });
+        return try JsonPackFrame.decode([]Remote, self.allocator, result.stdout);
     }
 
     pub fn get_installed_flatpaks(self: ShellyCli) !std.json.Parsed([]Flatpak) {
-        const result = try self.run(&.{ "shelly", "flatpak", "list", "--json" });
+        const result = try self.run(&.{ "shelly", "flatpak", "list" });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
-
-        return std.json.parseFromSlice([]Flatpak, self.allocator, result.stdout, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_always,
-        });
+        return try JsonPackFrame.decode([]Flatpak, self.allocator, result.stdout);
     }
 
     pub fn get_remote_appstream_apps(self: ShellyCli) !std.json.Parsed([]AppstreamApp) {
@@ -81,7 +78,7 @@ pub const ShellyCli = struct {
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return parse_appstream_apps(self.allocator, result.stdout);
+        return try JsonPackFrame.decode([]AppstreamApp, self.allocator, result.stdout);
     }
 
     pub fn get_flatpak_remote_info(self: ShellyCli, remote: []const u8, id: []const u8, branch: []const u8) !std.json.Parsed(FlatpakRemoteInfo) {
@@ -89,10 +86,7 @@ pub const ShellyCli = struct {
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return std.json.parseFromSlice(FlatpakRemoteInfo, self.allocator, result.stdout, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_always,
-        });
+        return try JsonPackFrame.decode(FlatpakRemoteInfo, self.allocator, result.stdout);
     }
 
     pub fn check_updates(self: ShellyCli) !std.json.Parsed(CheckUpdates) {
@@ -100,10 +94,7 @@ pub const ShellyCli = struct {
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return std.json.parseFromSlice(CheckUpdates, self.allocator, result.stdout, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_always,
-        });
+        return try JsonPackFrame.decode(CheckUpdates, self.allocator, result.stdout);
     }
 };
 
@@ -147,18 +138,4 @@ test "get_flatpaks" {
 
     try std.testing.expect(parsed.value.len > 0);
     std.debug.print("{s} {t}\n", .{ parsed.value[0].Name, parsed.value[0].InstallLevel });
-}
-
-test "parse remote AppStream apps" {
-    const json =
-        \\[{"Id":"org.example.App","Name":"Example","Summary":"Useful app","Icons":[{"Type":"remote","Url":"https://example.test/icon.png","Width":128,"Height":128,"Scale":1}],"Remotes":[{"Name":"flathub","Scope":0,"Url":""}]}]
-    ;
-    const parsed = try parse_appstream_apps(std.testing.allocator, json);
-    defer parsed.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), parsed.value.len);
-    try std.testing.expectEqualStrings("org.example.App", parsed.value[0].Id);
-    try std.testing.expectEqualStrings("Example", parsed.value[0].Name);
-    try std.testing.expectEqualStrings("https://example.test/icon.png", parsed.value[0].Icons[0].Url);
-    try std.testing.expectEqualStrings("flathub", parsed.value[0].Remotes[0].Name);
 }

@@ -32,4 +32,5 @@ test {
     _ = @import("helpers/custom_ui_comps/carousel.zig");
     _ = @import("helpers/custom_ui_comps/carousel_indicator_dots.zig");
     _ = @import("pages/flatpak/flatpak_install_view.zig");
+    _ = @import("helpers/ui_decode.zig");
 }
