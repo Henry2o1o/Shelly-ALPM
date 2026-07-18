@@ -727,8 +727,6 @@ fn runFlatpakStep(
             try arguments.append(context.allocator, "--no-confirm");
         if (invocation.globals.json)
             try arguments.append(context.allocator, "--json");
-        if (invocation.globals.verbose)
-            try arguments.append(context.allocator, "--verbose");
         if (try elevation.runAsInvokingUser(context, arguments.items)) |exit_code| {
             if (exit_code != 0) return UpgradeError.BackendFailed;
             return;

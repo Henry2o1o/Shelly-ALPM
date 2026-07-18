@@ -44,7 +44,6 @@ pub const root_options = [_]Option{
     globalFlag("--no-confirm", &.{"-n"}, "Use safe automatic answers instead of prompting"),
     globalFlag("--ui-mode", &.{"-U"}, "Emit framed output for the Shelly UI"),
     globalFlag("--json", &.{"-j"}, "Output structured JSON where the command supports it"),
-    globalFlag("--verbose", &.{"-v"}, "Enable verbose diagnostic output"),
 };
 
 pub const Type = struct {

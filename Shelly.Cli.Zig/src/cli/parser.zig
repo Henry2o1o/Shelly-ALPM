@@ -5,7 +5,6 @@ pub const GlobalOptions = struct {
     no_confirm: bool = false,
     ui_mode: bool = false,
     json: bool = false,
-    verbose: bool = false,
 };
 
 pub const ParsedOption = struct {
@@ -287,7 +286,6 @@ fn applyGlobal(globals: *GlobalOptions, name: []const u8, value: ?[]const u8) vo
     if (std.mem.eql(u8, name, "--no-confirm")) globals.no_confirm = enabled;
     if (std.mem.eql(u8, name, "--ui-mode")) globals.ui_mode = enabled;
     if (std.mem.eql(u8, name, "--json")) globals.json = enabled;
-    if (std.mem.eql(u8, name, "--verbose")) globals.verbose = enabled;
 }
 
 test "parses local options and recursive globals around command tokens" {
@@ -301,15 +299,26 @@ test "parses local options and recursive globals around command tokens" {
         "firefox",
         "--limit",
         "25",
-        "-v",
-        "--verbose=false",
     });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqualStrings("shelly search standard", outcome.dispatch.command.path);
     try std.testing.expectEqualStrings("firefox", outcome.dispatch.positionals[0]);
     try std.testing.expect(outcome.dispatch.globals.json);
-    try std.testing.expect(!outcome.dispatch.globals.verbose);
-    try std.testing.expectEqual(@as(usize, 4), outcome.dispatch.options.len);
+    try std.testing.expectEqual(@as(usize, 2), outcome.dispatch.options.len);
+}
+
+test "verbose options are not accepted by commands" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    const long = try parse(arena.allocator(), &manifest, &.{ "search", "standard", "firefox", "--verbose" });
+    try std.testing.expect(long == .failure);
+    try std.testing.expectEqualStrings("Unrecognized command or argument '--verbose'.", long.failure.message);
+
+    const short = try parse(arena.allocator(), &manifest, &.{ "install", "aur", "demo-git", "-v" });
+    try std.testing.expect(short == .failure);
+    try std.testing.expectEqualStrings("Unrecognized command or argument '-v'.", short.failure.message);
 }
 
 test "validates required options but help bypasses validation" {
