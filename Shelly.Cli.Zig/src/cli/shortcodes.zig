@@ -390,6 +390,12 @@ test "translates action-type shortcodes from the command manifest" {
     try expectTranslation(
         allocator,
         &manifest,
+        &.{ "-Sap", "yay" },
+        &.{ "search", "aur", "-p", "yay" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
         &.{ "-Ssv", "query" },
         &.{ "search", "standard", "-v", "query" },
     );

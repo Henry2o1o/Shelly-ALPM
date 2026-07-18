@@ -463,16 +463,22 @@ pub const variants = [_]Variant{
         .action_code = 'S',
         .type_code = 'a',
         .help = .{
-            .description = "Search the AUR RPC through the native Zig package manager; optionally append high-confidence standard repository matches.",
-            .implementation = "Zigalpm.AurManager.searchPackages; Zigalpm.AlpmManager.get_available_packages when --standard is passed",
+            .description = "Search the AUR RPC, fetch exact package PKGBUILDs, or append high-confidence standard repository matches.",
+            .implementation = "Zigalpm.AurManager.searchPackages / fetchPkgbuild; Zigalpm.AlpmManager.get_available_packages when --standard is passed",
             .arguments = &.{.{
                 .name = "query",
-                .description = "One or more words joined and passed to the AUR RPC package search",
+                .description = "Search words joined for an AUR RPC query, or exact AUR package names when --pkgbuild is passed",
             }},
-            .options = &.{.{
-                .name = "--standard",
-                .description = "Append high-confidence standard ALPM repository matches to the AUR results",
-            }},
+            .options = &.{
+                .{
+                    .name = "--standard",
+                    .description = "Append high-confidence standard ALPM repository matches to the AUR results",
+                },
+                .{
+                    .name = "--pkgbuild",
+                    .description = "Fetch and display the PKGBUILD for each exact AUR package name",
+                },
+            },
         },
     },
     .{ .action = "search-pkgbuild", .type_name = "aur", .action_code = 'B', .type_code = 'a' },
@@ -812,11 +818,18 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--detail", &.{ "--info", "-d" }, "Show complete metadata for an exact package"),
         flag("--group", &.{"-g"}, "List groups or search within a group"),
     };
-    if (pathIs(action, type_name, "search", "aur")) return &.{flag(
-        "--standard",
-        &.{"-s"},
-        "Append high-confidence standard repository matches",
-    )};
+    if (pathIs(action, type_name, "search", "aur")) return &.{
+        flag(
+            "--standard",
+            &.{"-s"},
+            "Append high-confidence standard repository matches",
+        ),
+        flag(
+            "--pkgbuild",
+            &.{"-p"},
+            "Fetch and display each exact AUR package PKGBUILD",
+        ),
+    };
     if (pathIs(action, type_name, "search", "flatpak")) return &.{
         integerOption("--limit", &.{}, "Maximum results per page"),
         integerOption("--page", &.{}, "One-based result page"),

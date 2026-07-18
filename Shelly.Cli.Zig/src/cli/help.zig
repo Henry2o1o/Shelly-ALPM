@@ -316,6 +316,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Zf             ->  purify flatpak
         \\    -Isu firefox   ->  install standard -u firefox
         \\    -Sa query      ->  search aur query
+        \\    -Sap yay       ->  search aur --pkgbuild yay
         \\    -Ssa query     ->  search standard and aur for query
         \\    -Ssafv query   ->  search standard (available), aur, and flatpak for query
         \\    -Sah           ->  search aur --help
@@ -588,6 +589,7 @@ test "help documents action targets and named subcommand shortcodes" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ifu file      ->  install flatpak --bundle file") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Search may combine standard, AUR, and Flatpak types (s/a/f)") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssa query") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Sap yay       ->  search aur --pkgbuild yay") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssafv query") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\n    s  standard\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\n    S  standard\n") == null);

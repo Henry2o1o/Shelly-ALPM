@@ -95,9 +95,15 @@ const StandardResult = struct {
     requested_local: bool = false,
 };
 
+const PackageBuild = struct {
+    name: []const u8,
+    pkgbuild: ?[]const u8,
+};
+
 const AurResult = struct {
-    packages: []const AurPackage,
+    packages: []const AurPackage = &.{},
     standard_packages: []const StandardPackage = &.{},
+    pkgbuilds: ?[]const PackageBuild = null,
 };
 
 const FlatpakResult = struct {
@@ -140,13 +146,22 @@ fn executeWithRunner(
     runner: Runner,
 ) !u8 {
     if (std.mem.eql(u8, invocation.command.path, aur_command_path)) {
-        const query = try joinedQuery(context.allocator, invocation.positionals);
-        if (std.mem.trim(u8, query, " \t\r\n").len < 2) {
-            const message = if (std.mem.trim(u8, query, " \t\r\n").len == 0)
-                "Query cannot be empty."
-            else
-                "Error: Query must be at least 2 characters long";
-            return writeFailure(context, invocation, message);
+        if (optionEnabled(invocation, "--pkgbuild")) {
+            if (optionEnabled(invocation, "--standard"))
+                return writeFailure(context, invocation, "Cannot combine --pkgbuild with --standard.");
+            for (invocation.positionals) |package| {
+                if (std.mem.trim(u8, package, " \t\r\n").len == 0)
+                    return writeFailure(context, invocation, "Package name cannot be empty.");
+            }
+        } else {
+            const query = try joinedQuery(context.allocator, invocation.positionals);
+            if (std.mem.trim(u8, query, " \t\r\n").len < 2) {
+                const message = if (std.mem.trim(u8, query, " \t\r\n").len == 0)
+                    "Query cannot be empty."
+                else
+                    "Error: Query must be at least 2 characters long";
+                return writeFailure(context, invocation, message);
+            }
         }
     }
     if (std.mem.eql(u8, invocation.command.path, flatpak_command_path) and
@@ -364,9 +379,21 @@ fn runAur(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !AurResult {
-    const query = try joinedQuery(context.allocator, invocation.positionals);
     var manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{});
     defer manager.deinit();
+
+    if (optionEnabled(invocation, "--pkgbuild")) {
+        const builds = try context.allocator.alloc(PackageBuild, invocation.positionals.len);
+        for (invocation.positionals, builds) |package, *build| {
+            build.* = .{
+                .name = try context.allocator.dupe(u8, package),
+                .pkgbuild = manager.fetchPkgbuild(package) catch null,
+            };
+        }
+        return .{ .pkgbuilds = builds };
+    }
+
+    const query = try joinedQuery(context.allocator, invocation.positionals);
 
     var standard_packages: std.ArrayList(StandardPackage) = .empty;
     if (optionEnabled(invocation, "--standard")) {
@@ -535,6 +562,7 @@ fn renderAur(
     invocation: *const parser.Invocation,
     result: AurResult,
 ) !void {
+    if (result.pkgbuilds) |builds| return renderPkgbuilds(context, invocation, builds);
     if (invocation.globals.ui_mode) {
         var payload = std.Io.Writer.Allocating.init(context.allocator);
         defer payload.deinit();
@@ -585,6 +613,41 @@ fn renderAur(
     );
     try context.stdout.writeByte('\n');
     try context.stdout.print("Total results: {d}\n", .{result.packages.len + result.standard_packages.len});
+}
+
+fn renderPkgbuilds(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    builds: []const PackageBuild,
+) !void {
+    if (invocation.globals.ui_mode or invocation.globals.json) {
+        var payload = std.Io.Writer.Allocating.init(context.allocator);
+        defer payload.deinit();
+        try writePkgbuildsJson(&payload.writer, builds);
+        if (invocation.globals.ui_mode)
+            try output.writeFrame(context, payload.writer.buffered())
+        else {
+            try context.stdout.writeAll(payload.writer.buffered());
+            try context.stdout.writeByte('\n');
+        }
+        return;
+    }
+
+    for (builds) |build| {
+        const pkgbuild = build.pkgbuild orelse {
+            if (output.supportsAnsi(context))
+                try context.stdout.print("\x1b[31mFailed to get PKGBUILD for: {s}\x1b[0m\n", .{build.name})
+            else
+                try context.stdout.print("Failed to get PKGBUILD for: {s}\n", .{build.name});
+            continue;
+        };
+        if (output.supportsAnsi(context))
+            try context.stdout.print("\x1b[33mPackage build for: {s}\x1b[0m\n", .{build.name})
+        else
+            try context.stdout.print("Package build for: {s}\n", .{build.name});
+        try context.stdout.writeAll(pkgbuild);
+        if (!std.mem.endsWith(u8, pkgbuild, "\n")) try context.stdout.writeByte('\n');
+    }
 }
 
 fn renderFlatpak(
@@ -795,6 +858,18 @@ fn writeAurPackagesJson(writer: *std.Io.Writer, packages: []const AurPackage) !v
         try field(&json, "License", package.licenses);
         try field(&json, "Keywords", package.keywords);
         try field(&json, "Explicit", package.explicit);
+        try json.endObject();
+    }
+    try json.endArray();
+}
+
+fn writePkgbuildsJson(writer: *std.Io.Writer, builds: []const PackageBuild) !void {
+    var json: std.json.Stringify = .{ .writer = writer };
+    try json.beginArray();
+    for (builds) |build| {
+        try json.beginObject();
+        try field(&json, "Name", build.name);
+        try field(&json, "PkgBuild", build.pkgbuild);
         try json.endObject();
     }
     try json.endArray();
@@ -1291,6 +1366,56 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "org.example.Editor") != null);
 }
 
+test "AUR pkgbuild search displays fetched content and structured output" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const runner: Runner = .{ .call = struct {
+        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
+            try std.testing.expect(optionEnabled(invocation, "--pkgbuild"));
+            try std.testing.expectEqual(@as(usize, 2), invocation.positionals.len);
+            return .{ .aur = .{ .pkgbuilds = &.{
+                .{ .name = "yay", .pkgbuild = "pkgname=yay\npkgver=12" },
+                .{ .name = "missing", .pkgbuild = null },
+            } } };
+        }
+    }.run };
+
+    var outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "search", "aur", "--pkgbuild", "yay", "missing" },
+    );
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    var rendered = stdout.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Package build for: yay") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgname=yay\npkgver=12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Failed to get PKGBUILD for: missing") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Total results") == null);
+
+    stdout.writer.end = 0;
+    outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "search", "aur", "-p", "yay", "missing", "--json" },
+    );
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    rendered = stdout.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"Name\":\"yay\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PkgBuild\":\"pkgname=yay\\npkgver=12\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PkgBuild\":null") != null);
+}
+
 test "search validates AUR query length and positive pagination before backend execution" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1314,6 +1439,14 @@ test "search validates AUR query length and positive pagination before backend e
     const short_aur = try parser.parse(arena.allocator(), &manifest, &.{ "search", "aur", "x" });
     try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &short_aur.dispatch, runner));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "at least 2 characters") != null);
+    stdout.writer.end = 0;
+    const conflicting_aur = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "search", "aur", "--pkgbuild", "--standard", "yay" },
+    );
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &conflicting_aur.dispatch, runner));
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --pkgbuild with --standard") != null);
     stdout.writer.end = 0;
     const bad_page = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor", "--page", "0" });
     try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &bad_page.dispatch, runner));
