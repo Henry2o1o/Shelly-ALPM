@@ -389,19 +389,19 @@ pub const variants = [_]Variant{
         .action_code = 'I',
         .type_code = 'a',
         .help = .{
-            .description = "Fetch, review, build, and install one or more AUR packages, or install only one package's build dependencies.",
-            .implementation = "Zigalpm.AurManager.installPackages / installDependenciesOnly",
+            .description = "Fetch, review, build, and install one or more AUR packages, install one package's build dependencies, or install one package at an exact Git commit.",
+            .implementation = "Zigalpm.AurManager.installPackages / installDependenciesOnly / installPackageVersion",
             .arguments = &.{.{
                 .name = "packages",
-                .description = "One or more AUR package names; dependency-only mode accepts exactly one package",
+                .description = "AUR package names; dependency-only mode accepts one package, while --version requires exactly one package followed by its Git commit",
             }},
             .options = &.{
                 .{ .name = "--chroot", .description = "Build packages in a clean chroot with makechrootpkg" },
                 .{ .name = "--check", .description = "Enable the PKGBUILD check() function during package builds" },
+                .{ .name = "--version", .description = "Install exactly one AUR package from the following Git commit operand" },
             },
         },
     },
-    .{ .action = "install-version", .type_name = "aur", .action_code = 'V', .type_code = 'a' },
     .{
         .action = "remove",
         .type_name = "aur",
@@ -775,10 +775,6 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "Maximum number of parallel downloads",
     )};
 
-    if (pathIs(action, type_name, "install-version", "aur")) return &.{
-        requiredArgument("package", "AUR package name"),
-        requiredArgument("commit", "AUR Git commit to review, build, and install"),
-    };
     if (pathIs(action, type_name, "search-pkgbuild", "aur")) return &.{repeatedArgument(
         "packages",
         1,
@@ -864,6 +860,7 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--make-deps", &.{}, "Include make dependencies"),
         flag("--chroot", &.{"-c"}, "Build in a clean chroot"),
         flag("--check", &.{}, "Run the PKGBUILD check() function"),
+        flag("--version", &.{}, "Install one package at the following Git commit"),
     };
     if (pathIs(action, type_name, "install", "flatpak")) return &.{
         flag("--user", &.{}, "Install into the user Flatpak installation"),
@@ -971,8 +968,7 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         &.{"-p"},
         "Allow prerelease AppImage updates",
     )};
-    if (pathIs(action, type_name, "install-version", "aur") or
-        pathIs(action, type_name, "update", "aur")) return &.{flag(
+    if (pathIs(action, type_name, "update", "aur")) return &.{flag(
         "--check",
         &.{},
         "Run the PKGBUILD check() function",
@@ -1321,8 +1317,6 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Reset Shelly configuration to native defaults.";
     if (std.mem.eql(u8, action, "parallel"))
         return "Set Shelly's parallel download count.";
-    if (std.mem.eql(u8, action, "install-version"))
-        return "Review, build, and install an AUR package at a specific Git commit.";
     if (std.mem.eql(u8, action, "search-pkgbuild"))
         return "Fetch and display PKGBUILDs for AUR packages.";
     if (std.mem.eql(u8, action, "init"))

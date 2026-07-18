@@ -99,7 +99,8 @@ pub fn parse(
             }
 
             if (std.mem.eql(u8, option.name, "--help")) help_requested = true;
-            if (std.mem.eql(u8, option.name, "--version")) version_requested = true;
+            if (option.builtIn and std.mem.eql(u8, option.name, "--version"))
+                version_requested = true;
             applyGlobal(&globals, option.name, value);
             try parsed_options.append(allocator, .{ .name = option.name, .value = value });
             continue;
@@ -332,6 +333,28 @@ test "maps an empty invocation to upgrade all" {
     const outcome = try parse(arena.allocator(), &manifest, &.{});
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqualStrings("shelly upgrade all", outcome.dispatch.command.path);
+}
+
+test "command-local AUR install version does not trigger program version output" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    const program_version = try parse(arena.allocator(), &manifest, &.{"--version"});
+    try std.testing.expect(program_version == .version);
+
+    const install_version = try parse(arena.allocator(), &manifest, &.{
+        "install",
+        "aur",
+        "--version",
+        "demo-git",
+        "deadbeef",
+    });
+    try std.testing.expect(install_version == .dispatch);
+    try std.testing.expectEqualStrings("shelly install aur", install_version.dispatch.command.path);
+    try std.testing.expectEqualStrings("--version", install_version.dispatch.options[0].name);
+    try std.testing.expectEqualStrings("demo-git", install_version.dispatch.positionals[0]);
+    try std.testing.expectEqualStrings("deadbeef", install_version.dispatch.positionals[1]);
 }
 
 test "maps bare sync to its catalog-defined standard type" {

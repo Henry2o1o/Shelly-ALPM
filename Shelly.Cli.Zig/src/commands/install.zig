@@ -57,6 +57,24 @@ pub fn dispatch(
 ) !?u8 {
     if (!isInstallPath(invocation.command.path)) return null;
 
+    if (isAurVersionInstall(invocation)) {
+        if (invocation.positionals.len == 0)
+            return try reportValidationFailure(context, invocation, "No package specified.");
+        if (invocation.positionals.len == 1)
+            return try reportValidationFailure(context, invocation, "No commit specified.");
+        if (invocation.positionals.len > 2)
+            return try reportValidationFailure(
+                context,
+                invocation,
+                "Install version accepts exactly one AUR package and one Git commit.",
+            );
+        if (optionEnabled(invocation, "--build-deps") or optionEnabled(invocation, "--make-deps"))
+            return try reportValidationFailure(
+                context,
+                invocation,
+                "Cannot combine --version with dependency-only installation options.",
+            );
+    }
     if (needsPackages(invocation) and invocation.positionals.len == 0)
         return try reportValidationFailure(
             context,
@@ -321,7 +339,8 @@ fn runAur(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    if (optionEnabled(invocation, "--build-deps") and invocation.positionals.len > 1)
+    if (!isAurVersionInstall(invocation) and
+        optionEnabled(invocation, "--build-deps") and invocation.positionals.len > 1)
         return error.MultipleDependencyTargets;
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
         .root = true,
@@ -332,7 +351,9 @@ fn runAur(
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
 
-    if (optionEnabled(invocation, "--build-deps")) {
+    if (isAurVersionInstall(invocation)) {
+        try manager.installPackageVersion(invocation.positionals[0], invocation.positionals[1]);
+    } else if (optionEnabled(invocation, "--build-deps")) {
         try manager.installDependenciesOnly(
             invocation.positionals[0],
             optionEnabled(invocation, "--make-deps"),
@@ -559,6 +580,12 @@ fn openingMessage(allocator: std.mem.Allocator, invocation: *const parser.Invoca
     if (std.mem.eql(u8, invocation.command.path, standard_command_path) or
         std.mem.eql(u8, invocation.command.path, aur_command_path))
     {
+        if (isAurVersionInstall(invocation))
+            return std.fmt.allocPrint(
+                allocator,
+                "Installing AUR package {s} at commit {s}",
+                .{ invocation.positionals[0], invocation.positionals[1] },
+            );
         const names = try joined(allocator, invocation.positionals);
         defer allocator.free(names);
         if (std.mem.eql(u8, invocation.command.path, standard_command_path))
@@ -679,6 +706,11 @@ fn optionValue(invocation: *const parser.Invocation, name: []const u8) ?[]const 
         if (std.mem.eql(u8, option.name, name)) return option.value;
     }
     return null;
+}
+
+fn isAurVersionInstall(invocation: *const parser.Invocation) bool {
+    return std.mem.eql(u8, invocation.command.path, aur_command_path) and
+        optionEnabled(invocation, "--version");
 }
 
 fn stringValue(configuration: *const config_model.Config, key: []const u8) ?[]const u8 {
@@ -824,6 +856,97 @@ test "install routes every action-first backend and forwards type-specific optio
     try std.testing.expectEqualStrings(flatpak_command_path, capture.paths[3]);
     try std.testing.expectEqualStrings(flatpak_ref_command_path, capture.paths[4]);
     try std.testing.expectEqualStrings(flatpak_bundle_command_path, capture.paths[5]);
+}
+
+test "AUR version install uses exact package and commit through the shared lifecycle" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "install",
+        "aur",
+        "--version",
+        "--check",
+        "demo-git",
+        "deadbeef",
+    });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(isAurVersionInstall(&outcome.dispatch));
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const Capture = struct {
+        fn run(
+            _: ?*anyopaque,
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            invocation: *const parser.Invocation,
+        ) !void {
+            try std.testing.expect(isAurVersionInstall(invocation));
+            try std.testing.expect(optionEnabled(invocation, "--check"));
+            try std.testing.expectEqualStrings("demo-git", invocation.positionals[0]);
+            try std.testing.expectEqualStrings("deadbeef", invocation.positionals[1]);
+        }
+    };
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        try executeWithRunner(&context, &outcome.dispatch, .{ .call = Capture.run }),
+    );
+    const rendered = stdout.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        rendered,
+        "Installing AUR package demo-git at commit deadbeef",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, ":: Transaction complete.") != null);
+}
+
+test "AUR version install validates package commit and incompatible dependency mode" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+
+    var outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "aur", "--version", "demo-git" },
+    );
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "No commit specified.") != null);
+
+    stdout.writer.end = 0;
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "install",
+        "aur",
+        "--version",
+        "--build-deps",
+        "demo-git",
+        "deadbeef",
+    });
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Cannot combine --version with dependency-only installation options.",
+    ) != null);
 }
 
 test "install uses the shared non-UI and UI transaction lifecycles" {

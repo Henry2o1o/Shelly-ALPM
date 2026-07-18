@@ -48,6 +48,8 @@ pub fn translate(
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (try translateAurVersionInstall(allocator, manifest, args, token)) |translation|
+        return translation;
     if (try translateFlatpakFileInstall(allocator, manifest, args, token)) |translation|
         return translation;
     if (try translateStandaloneAction(allocator, manifest, args, token)) |translation|
@@ -108,6 +110,37 @@ pub fn translate(
             allocator,
             "Unknown modifier '{c}' for '{s} {s}'. Valid modifiers: {s}",
             .{ modifier, variant.action, variant.type_name, try validModifiers(allocator, manifest, command) },
+        ) };
+    }
+    try result.appendSlice(allocator, args[1..]);
+    return .{ .translated = try result.toOwnedSlice(allocator) };
+}
+
+fn translateAurVersionInstall(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    args: []const []const u8,
+    token: []const u8,
+) !?Translation {
+    if (token.len < 4 or !std.mem.eql(u8, token[0..4], "-Iav")) return null;
+    const command = manifest.findByPath("shelly install aur") orelse return error.InvalidCatalog;
+
+    var result: std.ArrayList([]const u8) = .empty;
+    try result.appendSlice(allocator, &.{ "install", "aur", "--version" });
+    for (token[4..]) |modifier| {
+        const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
+        if (findLocalOption(command, alias)) |option| {
+            try result.append(allocator, option.name);
+            continue;
+        }
+        if (findRecursiveHelpOption(manifest, alias)) |option| {
+            try result.append(allocator, option.name);
+            continue;
+        }
+        return .{ .failure = try std.fmt.allocPrint(
+            allocator,
+            "Unknown modifier '{c}' for 'install aur --version'. Valid modifiers: {s}",
+            .{ modifier, try validModifiers(allocator, manifest, command) },
         ) };
     }
     try result.appendSlice(allocator, args[1..]);
@@ -356,6 +389,18 @@ test "translates action-type shortcodes from the command manifest" {
         &manifest,
         &.{ "-Iamb", "package" },
         &.{ "install", "aur", "-m", "-b", "package" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Iav", "demo-git", "deadbeef" },
+        &.{ "install", "aur", "--version", "demo-git", "deadbeef" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{"-Iavh"},
+        &.{ "install", "aur", "--version", "--help" },
     );
     try expectTranslation(
         allocator,

@@ -308,6 +308,7 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Mh            ->  mark --help
         \\    -Mol           ->  mark hold --list
         \\    -Ih            ->  install --help
+        \\    -Iav pkg sha   ->  install aur --version pkg sha
         \\    -Ifr file      ->  install-ref-file flatpak file
         \\    -Ifb file      ->  install-bundle flatpak file
         \\    -Zs             ->  purify standard
@@ -438,11 +439,13 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[types: standard, aur]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "aur only:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "--chroot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "--version") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Commands:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "shelly install aur <packages>") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\nTypes:\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[shortcode: -Ia]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AurManager.installPackages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "installPackageVersion") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AppImageManager.installAppImage") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "FlatpakManager.install_flatpak") != null);
 }

@@ -222,6 +222,9 @@ test "centralizes shared modifiers while retaining type-specific additions" {
     try std.testing.expect(aur.options[0].matches("-b"));
     try std.testing.expect(!aur.options[0].matches("-o"));
     try std.testing.expect(manifest.findOption(aur, "--chroot") != null);
+    try std.testing.expect(manifest.findOption(aur, "--version") != null);
+    try std.testing.expectEqualStrings("--verbose", manifest.findOption(aur, "-v").?.name);
+    try std.testing.expect(manifest.findByPath("shelly install-version aur") == null);
 
     const flatpak_remove = manifest.findByPath("shelly remove flatpak").?;
     try std.testing.expect(manifest.findOption(flatpak_remove, "--remove-config") != null);
