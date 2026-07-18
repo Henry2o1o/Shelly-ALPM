@@ -210,8 +210,6 @@ pub const variants = [_]Variant{
         },
     },
     .{ .action = "news", .type_name = "standard", .action_code = 'N', .type_code = 's' },
-    .{ .action = "cache-clean", .type_name = "utility", .action_code = 'C', .type_code = 'u' },
-    .{ .action = "check-updates", .type_name = "utility", .action_code = 'K', .type_code = 'u' },
     .{
         .action = "list-updates",
         .type_name = "all",
@@ -344,8 +342,6 @@ pub const variants = [_]Variant{
         .help = .{ .implementation = "Zigalpm.appimage.UpdateManager.get_updates" },
     },
     .{ .action = "configure-updates", .type_name = "appimage", .action_code = 'C', .type_code = 'i' },
-    .{ .action = "migrate-manager", .type_name = "appimage", .action_code = 'M', .type_code = 'i' },
-
     .{
         .action = "get",
         .type_name = "config",
@@ -481,51 +477,66 @@ pub const variants = [_]Variant{
             },
         },
     },
-    .{ .action = "search-pkgbuild", .type_name = "aur", .action_code = 'B', .type_code = 'a' },
-
     .{
-        .action = "init",
-        .type_name = "keyring",
-        .action_code = 'I',
-        .type_code = 'k',
-        .help = .{ .description = "Initialize the pacman keyring." },
+        .action = "keyring",
+        .type_name = "init",
+        .action_code = 'K',
+        .type_code = 'i',
+        .help = .{
+            .description = "Initialize the pacman keyring.",
+            .implementation = "pacman-key --init",
+        },
     },
     .{
-        .action = "list",
-        .type_name = "keyring",
-        .action_code = 'L',
-        .type_code = 'k',
-        .help = .{ .description = "List keys in the pacman keyring." },
+        .action = "keyring",
+        .type_name = "list",
+        .action_code = 'K',
+        .type_code = 'l',
+        .help = .{
+            .description = "List keys in the pacman keyring.",
+            .implementation = "pacman-key --list-keys",
+        },
     },
     .{
-        .action = "refresh",
-        .type_name = "keyring",
-        .action_code = 'R',
-        .type_code = 'k',
-        .help = .{ .description = "Refresh pacman keyring keys from the configured keyserver." },
+        .action = "keyring",
+        .type_name = "refresh",
+        .action_code = 'K',
+        .type_code = 'r',
+        .help = .{
+            .description = "Refresh pacman keyring keys from the configured keyserver.",
+            .implementation = "pacman-key --refresh-keys",
+        },
     },
     .{
-        .action = "lsign",
-        .type_name = "keyring",
-        .action_code = 'S',
-        .type_code = 'k',
-        .help = .{ .description = "Locally sign one or more keys in the pacman keyring." },
+        .action = "keyring",
+        .type_name = "lsign",
+        .action_code = 'K',
+        .type_code = 's',
+        .help = .{
+            .description = "Locally sign one or more keys in the pacman keyring.",
+            .implementation = "pacman-key --lsign-key for each requested key",
+        },
     },
     .{
-        .action = "populate",
-        .type_name = "keyring",
-        .action_code = 'P',
-        .type_code = 'k',
-        .help = .{ .description = "Populate the pacman keyring with the default distribution keys." },
+        .action = "keyring",
+        .type_name = "populate",
+        .action_code = 'K',
+        .type_code = 'p',
+        .help = .{
+            .description = "Populate the pacman keyring with default or named distribution keys.",
+            .implementation = "pacman-key --populate",
+        },
     },
     .{
-        .action = "recv",
-        .type_name = "keyring",
-        .action_code = 'V',
-        .type_code = 'k',
-        .help = .{ .description = "Receive one or more keys from the configured keyserver." },
+        .action = "keyring",
+        .type_name = "recv",
+        .action_code = 'K',
+        .type_code = 'v',
+        .help = .{
+            .description = "Receive one or more keys from the configured or requested keyserver.",
+            .implementation = "pacman-key --recv-keys [keys...] [--keyserver server]",
+        },
     },
-
     .{
         .action = "install",
         .type_name = "flatpak",
@@ -768,13 +779,13 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "AUR package names whose PKGBUILDs should be displayed",
     )};
 
-    if (pathIs(action, type_name, "lsign", "keyring") or
-        pathIs(action, type_name, "recv", "keyring")) return &.{repeatedArgument(
+    if (pathIs(action, type_name, "keyring", "lsign") or
+        pathIs(action, type_name, "keyring", "recv")) return &.{repeatedArgument(
         "keys",
         1,
         "One or more key identifiers",
     )};
-    if (pathIs(action, type_name, "populate", "keyring")) return &.{repeatedArgument(
+    if (pathIs(action, type_name, "keyring", "populate")) return &.{repeatedArgument(
         "keys",
         0,
         "Distribution keyring names; omit to populate the defaults",
@@ -977,7 +988,7 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         &.{},
         "Include hidden packages",
     )};
-    if (pathIs(action, type_name, "recv", "keyring")) return &.{stringOption(
+    if (pathIs(action, type_name, "keyring", "recv")) return &.{stringOption(
         "--keyserver",
         &.{},
         "Keyserver from which to receive keys",
@@ -1253,7 +1264,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "upgrade"))
         return "Upgrade standard, AUR, AppImage, or Flatpak packages, including all supported backends together.";
     if (std.mem.eql(u8, action, "list"))
-        return "List installed standard packages, AppImages, AUR packages, Flatpak applications, Shelly configuration values, or pacman keyring keys.";
+        return "List installed standard packages, AppImages, AUR packages, Flatpak applications, or Shelly configuration values.";
     if (std.mem.eql(u8, action, "list-updates"))
         return "List available updates for standard, AUR, AppImage, or Flatpak packages.";
     if (std.mem.eql(u8, action, "purify"))
@@ -1268,16 +1279,14 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Select and install an older version of a standard package.";
     if (std.mem.eql(u8, action, "news"))
         return "Read Arch Linux news and track viewed entries.";
-    if (std.mem.eql(u8, action, "cache-clean"))
-        return "Plan or remove package files from a package cache.";
-    if (std.mem.eql(u8, action, "check-updates"))
-        return "Check enabled package backends for available updates.";
     if (std.mem.eql(u8, action, "export"))
         return "Export installed package state as structured data.";
     if (std.mem.eql(u8, action, "fix-permissions"))
         return "Restore Shelly directory ownership to the invoking user.";
     if (std.mem.eql(u8, action, "mark"))
         return "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.";
+    if (std.mem.eql(u8, action, "keyring"))
+        return "Initialize, inspect, refresh, populate, receive, or locally sign keys in the pacman keyring.";
     if (std.mem.eql(u8, action, "pacfile"))
         return "Read stored pacnew and pacsave records.";
     if (std.mem.eql(u8, action, "docs"))
@@ -1288,8 +1297,6 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Refresh metadata for installed AppImages.";
     if (std.mem.eql(u8, action, "configure-updates"))
         return "Configure how an installed AppImage discovers updates.";
-    if (std.mem.eql(u8, action, "migrate-manager"))
-        return "Migrate installed AppImages to the current manager format.";
     if (std.mem.eql(u8, action, "get"))
         return "Read a Shelly configuration value.";
     if (std.mem.eql(u8, action, "set"))
@@ -1298,18 +1305,6 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Reset Shelly configuration to native defaults.";
     if (std.mem.eql(u8, action, "parallel"))
         return "Set Shelly's parallel download count.";
-    if (std.mem.eql(u8, action, "search-pkgbuild"))
-        return "Fetch and display PKGBUILDs for AUR packages.";
-    if (std.mem.eql(u8, action, "init"))
-        return "Initialize the pacman keyring.";
-    if (std.mem.eql(u8, action, "refresh"))
-        return "Refresh pacman keyring keys.";
-    if (std.mem.eql(u8, action, "lsign"))
-        return "Locally sign pacman keyring keys.";
-    if (std.mem.eql(u8, action, "populate"))
-        return "Populate distribution keys into the pacman keyring.";
-    if (std.mem.eql(u8, action, "recv"))
-        return "Receive keys into the pacman keyring.";
     if (std.mem.eql(u8, action, "running"))
         return "List running Flatpak applications and process identifiers.";
     if (std.mem.eql(u8, action, "repair"))
@@ -1339,8 +1334,6 @@ pub fn descriptionFor(variant: Variant) []const u8 {
         return "List installed AppImages.";
     if (pathIs(variant.action, variant.type_name, "list", "aur"))
         return "List installed foreign packages tracked as AUR packages.";
-    if (pathIs(variant.action, variant.type_name, "list", "keyring"))
-        return "List keys in the pacman keyring.";
     if (pathIs(variant.action, variant.type_name, "list", "flatpak"))
         return "List installed Flatpak applications and runtimes.";
     if (pathIs(variant.action, variant.type_name, "list-updates", "standard"))

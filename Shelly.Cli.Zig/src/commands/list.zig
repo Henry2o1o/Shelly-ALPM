@@ -905,16 +905,7 @@ test "list routes long and requested uppercase short forms to package backends o
     try std.testing.expect(std.mem.indexOf(u8, uppercase_standard.failure, "Unknown shortcode type 'S'") != null);
 
     const keyring = try parseTestArguments(arena.allocator(), &manifest, &.{ "list", "keyring" });
-    try std.testing.expect(keyring == .dispatch);
-    var stdout = std.Io.Writer.Discarding.init(&.{});
-    var stderr = std.Io.Writer.Discarding.init(&.{});
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    try std.testing.expectEqual(@as(?u8, null), try dispatchWithRunner(&context, &keyring.dispatch, real_runner));
+    try std.testing.expect(keyring == .failure);
 }
 
 test "standard install-reason filters apply to structured output" {

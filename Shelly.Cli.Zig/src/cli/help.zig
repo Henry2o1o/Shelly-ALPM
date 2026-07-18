@@ -230,7 +230,8 @@ fn isChildOf(command: *const spec.Command, parent: *const spec.Command) bool {
 }
 
 fn usesNamedSubcommands(command: *const spec.Command) bool {
-    return std.mem.eql(u8, command.name, "mark");
+    return std.mem.eql(u8, command.name, "mark") or
+        std.mem.eql(u8, command.name, "keyring");
 }
 
 fn optionTypeCount(manifest: *const spec.Manifest, action: *const spec.Command, name: []const u8) usize {
@@ -320,7 +321,14 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Ssa query     ->  search standard and aur for query
         \\    -Ssafv query   ->  search standard (available), aur, and flatpak for query
         \\    -Sah           ->  search aur --help
-        \\    -Vk ABCD       ->  recv keyring ABCD
+        \\    -K             ->  keyring --help
+        \\    -Kh            ->  keyring --help
+        \\    -Ki            ->  keyring init
+        \\    -Kl            ->  keyring list
+        \\    -Kr            ->  keyring refresh
+        \\    -Ks ABCD       ->  keyring lsign ABCD
+        \\    -Kp archlinux  ->  keyring populate archlinux
+        \\    -Kv ABCD       ->  keyring recv ABCD
         \\
         \\  In shortcode mode use --ui-mode instead of -U.
         \\
@@ -581,7 +589,8 @@ test "help documents action targets and named subcommand shortcodes" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Isu firefox") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ua") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ux") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Vk ABCD") != null);
+    for ([_][]const u8{ "-K             ->  keyring --help", "-Kh            ->  keyring --help", "-Ki", "-Kl", "-Kr", "-Ks ABCD", "-Kp archlinux", "-Kv ABCD" }) |shortcode|
+        try std.testing.expect(std.mem.indexOf(u8, rendered, shortcode) != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Me linux") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Mga linux") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Mh            ->  mark --help") != null);

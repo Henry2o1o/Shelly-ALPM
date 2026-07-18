@@ -48,6 +48,12 @@ pub fn translate(
         try result.appendSlice(allocator, args[1..]);
         return .{ .translated = try result.toOwnedSlice(allocator) };
     }
+    if (std.mem.eql(u8, token, "-K") or std.mem.eql(u8, token, "-Kh")) {
+        var result: std.ArrayList([]const u8) = .empty;
+        try result.appendSlice(allocator, &.{ "keyring", "--help" });
+        try result.appendSlice(allocator, args[1..]);
+        return .{ .translated = try result.toOwnedSlice(allocator) };
+    }
     if (try translateAurVersionInstall(allocator, manifest, args, token)) |translation|
         return translation;
     if (try translateStandaloneAction(allocator, manifest, args, token)) |translation|
@@ -436,11 +442,28 @@ test "translates action-type shortcodes from the command manifest" {
             &.{ "search", "aur", "query" },
         },
     );
+    try expectTranslation(allocator, &manifest, &.{"-K"}, &.{ "keyring", "--help" });
+    try expectTranslation(allocator, &manifest, &.{"-Kh"}, &.{ "keyring", "--help" });
+    try expectTranslation(allocator, &manifest, &.{"-Ki"}, &.{ "keyring", "init" });
+    try expectTranslation(allocator, &manifest, &.{"-Kl"}, &.{ "keyring", "list" });
+    try expectTranslation(allocator, &manifest, &.{"-Kr"}, &.{ "keyring", "refresh" });
     try expectTranslation(
         allocator,
         &manifest,
-        &.{ "-Vk", "ABCD" },
-        &.{ "recv", "keyring", "ABCD" },
+        &.{ "-Ks", "ABCD" },
+        &.{ "keyring", "lsign", "ABCD" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Kp", "archlinux" },
+        &.{ "keyring", "populate", "archlinux" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Kv", "ABCD" },
+        &.{ "keyring", "recv", "ABCD" },
     );
     try expectTranslation(
         allocator,
@@ -519,17 +542,17 @@ test "uses centralized effective modifiers and rejects invalid shortcode types" 
 
     const uppercase_standard = try translate(allocator, &manifest, &.{ "-SS", "query" });
     try std.testing.expectEqualStrings(
-        "Unknown shortcode type 'S' for action code 'S'. Valid types: s, c, a, k, f",
+        "Unknown shortcode type 'S' for action code 'S'. Valid types: s, c, a, f",
         uppercase_standard.failure,
     );
     const uppercase_aur = try translate(allocator, &manifest, &.{ "-IA", "package" });
     try std.testing.expectEqualStrings(
-        "Unknown shortcode type 'A' for action code 'I'. Valid types: s, i, a, k, f",
+        "Unknown shortcode type 'A' for action code 'I'. Valid types: s, i, a, f",
         uppercase_aur.failure,
     );
     const invalid_pair = try translate(allocator, &manifest, &.{ "-Si", "query" });
     try std.testing.expectEqualStrings(
-        "Action code 'S' is not available for type 'i'. Valid types: s, c, a, k, f",
+        "Action code 'S' is not available for type 'i'. Valid types: s, c, a, f",
         invalid_pair.failure,
     );
     const duplicate_search_type = try translate(allocator, &manifest, &.{ "-Ssas", "query" });
@@ -589,7 +612,7 @@ test "translates uppercase remove aliases and preserves lowercase compatibility"
 
     const unrelated_uppercase = try translate(allocator, &manifest, &.{ "-RC", "value" });
     try std.testing.expectEqualStrings(
-        "Unknown shortcode type 'C' for action code 'R'. Valid types: s, i, c, a, k, f",
+        "Unknown shortcode type 'C' for action code 'R'. Valid types: s, i, c, a, f",
         unrelated_uppercase.failure,
     );
 

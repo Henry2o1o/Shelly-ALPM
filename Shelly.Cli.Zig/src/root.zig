@@ -13,6 +13,7 @@ pub const sync_command = @import("commands/sync.zig");
 pub const update_command = @import("commands/update.zig");
 pub const downgrade_command = @import("commands/downgrade.zig");
 pub const install_command = @import("commands/install.zig");
+pub const keyring_command = @import("commands/keyring.zig");
 pub const search_command = @import("commands/search.zig");
 pub const upgrade_command = @import("commands/upgrade.zig");
 pub const list_command = @import("commands/list.zig");
@@ -43,6 +44,7 @@ test {
     _ = update_command;
     _ = downgrade_command;
     _ = install_command;
+    _ = keyring_command;
     _ = search_command;
     _ = upgrade_command;
     _ = list_command;
