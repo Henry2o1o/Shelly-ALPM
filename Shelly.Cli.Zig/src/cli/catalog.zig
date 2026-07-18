@@ -1258,7 +1258,7 @@ pub fn findSharedModifier(action: []const u8, type_name: []const u8, option_name
 
 pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "search"))
-        return "Search packages through the native ALPM, AUR RPC, or local Flatpak AppStream implementation.";
+        return "Search ALPM repositories, the AUR, or cached Flatpak AppStream catalogs.";
     if (std.mem.eql(u8, action, "install"))
         return "Install packages or applications from ALPM repositories, the AUR, AppImages, Flatpak remotes, or local Flatpak files.";
     if (std.mem.eql(u8, action, "upgrade"))

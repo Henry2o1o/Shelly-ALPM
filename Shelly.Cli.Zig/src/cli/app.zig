@@ -123,12 +123,13 @@ test "help and parser errors bypass dispatch" {
     stdout.writer.end = 0;
     try std.testing.expectEqual(@as(u8, 0), try run(&context, &.{"-Sah"}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shelly search aur <query>...") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AurManager.searchPackages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AurManager.searchPackages") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Implementation:") == null);
 
     stdout.writer.end = 0;
     try std.testing.expectEqual(@as(u8, 0), try run(&context, &.{"-Iah"}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shelly install aur [<packages>...]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AurManager.installPackages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AurManager.installPackages") == null);
 
     stdout.writer.end = 0;
     try std.testing.expectEqual(@as(u8, 1), try run(&context, &.{ "get", "config" }));
