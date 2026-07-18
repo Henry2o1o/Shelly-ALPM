@@ -227,6 +227,12 @@ test "centralizes shared modifiers while retaining type-specific additions" {
     try std.testing.expect(manifest.findOption(aur, "-v") == null);
     try std.testing.expect(manifest.findByPath("shelly install-version aur") == null);
 
+    const flatpak_install = manifest.findByPath("shelly install flatpak").?;
+    try std.testing.expectEqualStrings("--ref-file", manifest.findOption(flatpak_install, "-e").?.name);
+    try std.testing.expectEqualStrings("--bundle", manifest.findOption(flatpak_install, "-u").?.name);
+    try std.testing.expect(manifest.findByPath("shelly install-ref-file flatpak") == null);
+    try std.testing.expect(manifest.findByPath("shelly install-bundle flatpak") == null);
+
     const flatpak_remove = manifest.findByPath("shelly remove flatpak").?;
     try std.testing.expect(manifest.findOption(flatpak_remove, "--remove-config") != null);
     try std.testing.expect(manifest.findOption(flatpak_remove, "--config") == null);

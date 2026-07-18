@@ -526,17 +526,19 @@ pub const variants = [_]Variant{
         .action_code = 'I',
         .type_code = 'f',
         .help = .{
-            .description = "Install a Flatpak application or runtime at system or user scope, resolving omitted remotes and friendly names through cached AppStream catalogs.",
-            .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs; Zigalpm.FlatpakManager.install_flatpak",
+            .description = "Install a Flatpak application, runtime, .flatpakref file, or bundle at system or user scope.",
+            .implementation = "Zigalpm.flatpak.AppstreamManager.getAllRemoteCatalogs; Zigalpm.FlatpakManager.install_flatpak / install_from_ref_flatpak / install_from_bundle_flatpak",
             .arguments = &.{.{
                 .name = "package",
-                .description = "Flatpak application/runtime ID or a friendly-name search term resolved from local AppStream metadata",
+                .description = "Application/runtime ID, friendly AppStream name, .flatpakref path with --ref-file, or bundle path with --bundle",
             }},
             .options = &.{
                 .{ .name = "--user", .description = "Install into the invoking user's Flatpak installation instead of the system installation" },
                 .{ .name = "--remote", .description = "Install from this remote instead of resolving a remote from cached AppStream metadata" },
                 .{ .name = "--branch", .description = "Install this branch; defaults to stable" },
                 .{ .name = "--runtime", .description = "Build a runtime ref instead of an application ref" },
+                .{ .name = "--ref-file", .description = "Treat the package operand as a local .flatpakref file" },
+                .{ .name = "--bundle", .description = "Treat the package operand as a local Flatpak bundle" },
             },
         },
     },
@@ -620,26 +622,6 @@ pub const variants = [_]Variant{
     .{ .action = "list-remotes", .type_name = "flatpak", .action_code = 'M', .type_code = 'f' },
     .{ .action = "add-remotes", .type_name = "flatpak", .action_code = 'A', .type_code = 'f' },
     .{ .action = "remove-remotes", .type_name = "flatpak", .action_code = 'D', .type_code = 'f' },
-    .{
-        .action = "install-ref-file",
-        .type_name = "flatpak",
-        .action_code = null,
-        .type_code = null,
-        .help = .{
-            .description = "Install a Flatpak application from a local .flatpakref file at system or user scope.",
-            .implementation = "Zigalpm.FlatpakManager.install_from_ref_flatpak",
-        },
-    },
-    .{
-        .action = "install-bundle",
-        .type_name = "flatpak",
-        .action_code = null,
-        .type_code = null,
-        .help = .{
-            .description = "Install a local .flatpak bundle at system or user scope.",
-            .implementation = "Zigalpm.FlatpakManager.install_from_bundle_flatpak",
-        },
-    },
     .{ .action = "app-remote-info", .type_name = "flatpak", .action_code = 'O', .type_code = 'f' },
     .{
         .action = "purify",
@@ -688,7 +670,7 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
     )};
     if (pathIs(action, type_name, "install", "flatpak")) return &.{requiredArgument(
         "package",
-        "Flatpak application/runtime ID or friendly AppStream name",
+        "Flatpak application/runtime ID, friendly AppStream name, .flatpakref path, or bundle path",
     )};
 
     if (pathIs(action, type_name, "downgrade", "standard")) return &.{optionalArgument(
@@ -806,14 +788,6 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "remote",
         "Flatpak remote name",
     )};
-    if (pathIs(action, type_name, "install-ref-file", "flatpak")) return &.{requiredArgument(
-        "path",
-        "Path to a .flatpakref file",
-    )};
-    if (pathIs(action, type_name, "install-bundle", "flatpak")) return &.{requiredArgument(
-        "path",
-        "Path to a .flatpak bundle",
-    )};
     if (pathIs(action, type_name, "app-remote-info", "flatpak")) return &.{
         requiredArgument("remote", "Flatpak remote name"),
         requiredArgument("id", "Application or runtime ID"),
@@ -866,6 +840,8 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         stringOption("--remote", &.{"-r"}, "Remote to install from", false),
         stringOption("--branch", &.{"-b"}, "Branch to install; defaults to stable", false),
         flag("--runtime", &.{}, "Install a runtime instead of an application"),
+        flag("--ref-file", &.{"-e"}, "Treat the package operand as a local .flatpakref file"),
+        flag("--bundle", &.{"-u"}, "Treat the package operand as a local Flatpak bundle"),
     };
 
     if (pathIs(action, type_name, "upgrade", "standard")) return &.{flag(
@@ -1004,13 +980,6 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         "--system",
         &.{"-s"},
         "Operate on the system Flatpak installation",
-    )};
-    if (pathIs(action, type_name, "install-ref-file", "flatpak") or
-        pathIs(action, type_name, "install-bundle", "flatpak")) return &.{booleanOptionWithDefault(
-        "--system",
-        &.{"-s"},
-        "Install into the system Flatpak installation; pass false for the user installation",
-        true,
     )};
     return &.{};
 }
@@ -1267,7 +1236,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "search"))
         return "Search packages through the native ALPM, AUR RPC, or local Flatpak AppStream implementation.";
     if (std.mem.eql(u8, action, "install"))
-        return "Install packages or applications from ALPM repositories, the AUR, AppImages, or Flatpak remotes.";
+        return "Install packages or applications from ALPM repositories, the AUR, AppImages, Flatpak remotes, or local Flatpak files.";
     if (std.mem.eql(u8, action, "upgrade"))
         return "Upgrade standard, AUR, AppImage, or Flatpak packages, including all supported backends together.";
     if (std.mem.eql(u8, action, "list"))
@@ -1344,10 +1313,6 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Add a Flatpak remote.";
     if (std.mem.eql(u8, action, "remove-remotes"))
         return "Remove a Flatpak remote.";
-    if (std.mem.eql(u8, action, "install-ref-file"))
-        return "Install a Flatpak reference file.";
-    if (std.mem.eql(u8, action, "install-bundle"))
-        return "Install a Flatpak bundle file.";
     if (std.mem.eql(u8, action, "app-remote-info"))
         return "Show size and permission information for a remote Flatpak application.";
     return null;

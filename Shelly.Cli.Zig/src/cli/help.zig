@@ -309,8 +309,8 @@ fn writeShortcodeHelp(writer: *Writer) !void {
         \\    -Mol           ->  mark hold --list
         \\    -Ih            ->  install --help
         \\    -Iav pkg sha   ->  install aur --version pkg sha
-        \\    -Ifr file      ->  install-ref-file flatpak file
-        \\    -Ifb file      ->  install-bundle flatpak file
+        \\    -Ife file      ->  install flatpak --ref-file file
+        \\    -Ifu file      ->  install flatpak --bundle file
         \\    -Zs             ->  purify standard
         \\    -Zsc            ->  purify standard --cache
         \\    -Zf             ->  purify flatpak
@@ -440,6 +440,8 @@ test "action help shows shared and type-specific modifiers" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "aur only:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "--chroot") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "--version") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-e, --ref-file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-u, --bundle") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Commands:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "shelly install aur <packages>") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\nTypes:\n") == null);
@@ -582,6 +584,8 @@ test "help documents action targets and named subcommand shortcodes" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Me linux") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Mga linux") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Mh            ->  mark --help") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ife file      ->  install flatpak --ref-file file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ifu file      ->  install flatpak --bundle file") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Search may combine standard, AUR, and Flatpak types (s/a/f)") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssa query") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-Ssafv query") != null);

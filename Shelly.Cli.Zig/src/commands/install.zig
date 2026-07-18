@@ -15,8 +15,6 @@ const standard_command_path = "shelly install standard";
 const appimage_command_path = "shelly install appimage";
 const aur_command_path = "shelly install aur";
 const flatpak_command_path = "shelly install flatpak";
-const flatpak_ref_command_path = "shelly install-ref-file flatpak";
-const flatpak_bundle_command_path = "shelly install-bundle flatpak";
 
 const InstallError = error{
     BackendFailed,
@@ -73,6 +71,25 @@ pub fn dispatch(
                 context,
                 invocation,
                 "Cannot combine --version with dependency-only installation options.",
+            );
+    }
+    if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
+        const ref_file = optionEnabled(invocation, "--ref-file");
+        const bundle = optionEnabled(invocation, "--bundle");
+        if (ref_file and bundle)
+            return try reportValidationFailure(
+                context,
+                invocation,
+                "Choose exactly one of --ref-file or --bundle.",
+            );
+        if ((ref_file or bundle) and
+            (optionValue(invocation, "--remote") != null or
+                optionValue(invocation, "--branch") != null or
+                optionEnabled(invocation, "--runtime")))
+            return try reportValidationFailure(
+                context,
+                invocation,
+                "Cannot combine --ref-file or --bundle with --remote, --branch, or --runtime.",
             );
     }
     if (needsPackages(invocation) and invocation.positionals.len == 0)
@@ -182,12 +199,11 @@ fn runRealInstall(
         return runAur(context, operation_context, invocation);
     if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
         return runAppImage(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+    if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
+        if (flatpakFileKind(invocation)) |kind|
+            return runFlatpakFile(context, operation_context, invocation, kind);
         return runFlatpak(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, flatpak_ref_command_path))
-        return runFlatpakFile(context, operation_context, invocation, .ref_file);
-    if (std.mem.eql(u8, invocation.command.path, flatpak_bundle_command_path))
-        return runFlatpakFile(context, operation_context, invocation, .bundle);
+    }
     unreachable;
 }
 
@@ -498,8 +514,14 @@ fn runFlatpakFile(
 }
 
 fn flatpakFileScope(invocation: *const parser.Invocation) Zigalpm.flatpak.bindings.libflatpak.Scope {
-    const system_value = optionValue(invocation, "--system") orelse return .SYSTEM;
-    return if (std.ascii.eqlIgnoreCase(system_value, "false")) .USER else .SYSTEM;
+    return if (optionEnabled(invocation, "--user")) .USER else .SYSTEM;
+}
+
+fn flatpakFileKind(invocation: *const parser.Invocation) ?FlatpakFileKind {
+    if (!std.mem.eql(u8, invocation.command.path, flatpak_command_path)) return null;
+    if (optionEnabled(invocation, "--ref-file")) return .ref_file;
+    if (optionEnabled(invocation, "--bundle")) return .bundle;
+    return null;
 }
 
 fn firstFlatpakRemote(
@@ -594,10 +616,18 @@ fn openingMessage(allocator: std.mem.Allocator, invocation: *const parser.Invoca
     }
     if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
         return std.fmt.allocPrint(allocator, "Installing AppImage: {s}", .{invocation.positionals[0]});
-    if (std.mem.eql(u8, invocation.command.path, flatpak_ref_command_path))
-        return std.fmt.allocPrint(allocator, "Installing Flatpak ref file: {s}", .{invocation.positionals[0]});
-    if (std.mem.eql(u8, invocation.command.path, flatpak_bundle_command_path))
-        return std.fmt.allocPrint(allocator, "Installing Flatpak bundle: {s}", .{invocation.positionals[0]});
+    if (flatpakFileKind(invocation)) |kind| return switch (kind) {
+        .ref_file => std.fmt.allocPrint(
+            allocator,
+            "Installing Flatpak ref file: {s}",
+            .{invocation.positionals[0]},
+        ),
+        .bundle => std.fmt.allocPrint(
+            allocator,
+            "Installing Flatpak bundle: {s}",
+            .{invocation.positionals[0]},
+        ),
+    };
     return std.fmt.allocPrint(allocator, "Installing Flatpak: {s}", .{invocation.positionals[0]});
 }
 
@@ -727,9 +757,7 @@ fn isInstallPath(path: []const u8) bool {
     return std.mem.eql(u8, path, standard_command_path) or
         std.mem.eql(u8, path, appimage_command_path) or
         std.mem.eql(u8, path, aur_command_path) or
-        std.mem.eql(u8, path, flatpak_command_path) or
-        std.mem.eql(u8, path, flatpak_ref_command_path) or
-        std.mem.eql(u8, path, flatpak_bundle_command_path);
+        std.mem.eql(u8, path, flatpak_command_path);
 }
 
 fn needsPackages(invocation: *const parser.Invocation) bool {
@@ -753,16 +781,11 @@ fn needsElevation(invocation: *const parser.Invocation) bool {
     return std.mem.eql(u8, invocation.command.path, standard_command_path) or
         std.mem.eql(u8, invocation.command.path, aur_command_path) or
         (std.mem.eql(u8, invocation.command.path, flatpak_command_path) and
-            !optionEnabled(invocation, "--user")) or
-        ((std.mem.eql(u8, invocation.command.path, flatpak_ref_command_path) or
-            std.mem.eql(u8, invocation.command.path, flatpak_bundle_command_path)) and
-            flatpakFileScope(invocation) == .SYSTEM);
+            !optionEnabled(invocation, "--user"));
 }
 
-test "Flatpak file installs route through install with compatible scope defaults" {
-    try std.testing.expect(isInstallPath(flatpak_ref_command_path));
-    try std.testing.expect(isInstallPath(flatpak_bundle_command_path));
-
+test "Flatpak file install modifiers use the shared command and scope" {
+    try std.testing.expect(isInstallPath(flatpak_command_path));
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
@@ -770,8 +793,9 @@ test "Flatpak file installs route through install with compatible scope defaults
     var outcome = try parser.parse(
         arena.allocator(),
         &manifest,
-        &.{ "install-ref-file", "flatpak", "/tmp/demo.flatpakref" },
+        &.{ "install", "flatpak", "--ref-file", "/tmp/demo.flatpakref" },
     );
+    try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .ref_file);
     try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .SYSTEM);
     try std.testing.expect(needsElevation(&outcome.dispatch));
     try std.testing.expectEqualStrings("/tmp/demo.flatpakref", outcome.dispatch.positionals[0]);
@@ -779,18 +803,74 @@ test "Flatpak file installs route through install with compatible scope defaults
     outcome = try parser.parse(
         arena.allocator(),
         &manifest,
-        &.{ "install-ref-file", "flatpak", "--system", "false", "demo.flatpakref" },
+        &.{ "install", "flatpak", "--ref-file", "--user", "demo.flatpakref" },
     );
+    try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .ref_file);
     try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .USER);
     try std.testing.expect(!needsElevation(&outcome.dispatch));
 
     outcome = try parser.parse(
         arena.allocator(),
         &manifest,
-        &.{ "install-bundle", "flatpak", "demo.flatpak" },
+        &.{ "install", "flatpak", "--bundle", "demo.flatpak" },
     );
+    try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .bundle);
     try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .SYSTEM);
     try std.testing.expect(needsElevation(&outcome.dispatch));
+
+    const old_ref = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install-ref-file", "flatpak", "demo.flatpakref" },
+    );
+    try std.testing.expect(old_ref == .failure);
+    const old_bundle = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install-bundle", "flatpak", "demo.flatpak" },
+    );
+    try std.testing.expect(old_bundle == .failure);
+}
+
+test "Flatpak file install modifiers reject conflicting modes and repository options" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+
+    var outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "flatpak", "--ref-file", "--bundle", "demo.flatpak" },
+    );
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Choose exactly one of --ref-file or --bundle.",
+    ) != null);
+
+    stdout.writer.end = 0;
+    outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "flatpak", "--ref-file", "--remote", "flathub", "demo.flatpakref" },
+    );
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Cannot combine --ref-file or --bundle with --remote, --branch, or --runtime.",
+    ) != null);
 }
 
 test "install routes every action-first backend and forwards type-specific options" {
@@ -825,13 +905,16 @@ test "install routes every action-first backend and forwards type-specific optio
             if (std.mem.eql(u8, invocation.command.path, aur_command_path))
                 try std.testing.expect(optionEnabled(invocation, "--chroot"));
             if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
-                try std.testing.expectEqualStrings("flathub-beta", optionValue(invocation, "--remote").?);
-                try std.testing.expectEqualStrings("beta", optionValue(invocation, "--branch").?);
+                if (flatpakFileKind(invocation)) |kind| {
+                    if (kind == .ref_file)
+                        try std.testing.expect(flatpakFileScope(invocation) == .USER)
+                    else
+                        try std.testing.expect(flatpakFileScope(invocation) == .SYSTEM);
+                } else {
+                    try std.testing.expectEqualStrings("flathub-beta", optionValue(invocation, "--remote").?);
+                    try std.testing.expectEqualStrings("beta", optionValue(invocation, "--branch").?);
+                }
             }
-            if (std.mem.eql(u8, invocation.command.path, flatpak_ref_command_path))
-                try std.testing.expect(flatpakFileScope(invocation) == .USER);
-            if (std.mem.eql(u8, invocation.command.path, flatpak_bundle_command_path))
-                try std.testing.expect(flatpakFileScope(invocation) == .SYSTEM);
         }
     };
     var capture: Capture = .{};
@@ -841,8 +924,8 @@ test "install routes every action-first backend and forwards type-specific optio
         &.{ "install", "appimage", "demo.AppImage" },
         &.{ "install", "aur", "--chroot", "demo-git" },
         &.{ "install", "flatpak", "--user", "--remote", "flathub-beta", "--branch", "beta", "org.demo.App" },
-        &.{ "install-ref-file", "flatpak", "--system", "false", "demo.flatpakref" },
-        &.{ "install-bundle", "flatpak", "demo.flatpak" },
+        &.{ "install", "flatpak", "--ref-file", "--user", "demo.flatpakref" },
+        &.{ "install", "flatpak", "--bundle", "demo.flatpak" },
     };
     for (arguments) |argv| {
         const outcome = try parser.parse(arena.allocator(), &manifest, argv);
@@ -854,8 +937,8 @@ test "install routes every action-first backend and forwards type-specific optio
     try std.testing.expectEqualStrings(appimage_command_path, capture.paths[1]);
     try std.testing.expectEqualStrings(aur_command_path, capture.paths[2]);
     try std.testing.expectEqualStrings(flatpak_command_path, capture.paths[3]);
-    try std.testing.expectEqualStrings(flatpak_ref_command_path, capture.paths[4]);
-    try std.testing.expectEqualStrings(flatpak_bundle_command_path, capture.paths[5]);
+    try std.testing.expectEqualStrings(flatpak_command_path, capture.paths[4]);
+    try std.testing.expectEqualStrings(flatpak_command_path, capture.paths[5]);
 }
 
 test "AUR version install uses exact package and commit through the shared lifecycle" {
