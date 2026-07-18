@@ -721,8 +721,18 @@ pub const variants = [_]Variant{
         .action_code = 'Y',
         .type_code = 'f',
         .help = .{
-            .description = "Update cached AppStream metadata for every configured system and user Flatpak remote.",
-            .implementation = "Zigalpm.flatpak.AppstreamManager.updateAllAppstreams",
+            .description = "Update cached AppStream metadata, or add and remove configured system or user Flatpak remotes.",
+            .implementation = "Zigalpm.flatpak.AppstreamManager.updateAllAppstreams; Zigalpm.flatpak.RemoteManager.addRemote / removeRemote",
+            .arguments = &.{
+                .{ .name = "remote", .description = "Select Flatpak remote configuration" },
+                .{ .name = "operation", .description = "Add or remove a configured remote" },
+                .{ .name = "name", .description = "Flatpak remote name, such as flathub" },
+            },
+            .options = &.{
+                .{ .name = "--remote-url", .description = "Remote URL or .flatpakrepo URL; required for remote add" },
+                .{ .name = "--system", .description = "Use system scope; defaults to true" },
+                .{ .name = "--gpg-verify", .description = "Enable GPG verification when adding; defaults to true" },
+            },
         },
     },
     .{
@@ -853,6 +863,22 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
             "type",
             "Update source type for the configuration overload",
             &.{ "None", "StaticUrl", "GitHub", "GitLab", "Codeberg", "Forgejo" },
+        ),
+    };
+    if (pathIs(action, type_name, "sync", "flatpak")) return &.{
+        optionalArgumentWithChoices(
+            "mode",
+            "Use remote to configure Flatpak remotes; omit to update AppStream metadata",
+            &.{"remote"},
+        ),
+        optionalArgumentWithChoices(
+            "operation",
+            "Remote operation",
+            &.{ "add", "remove" },
+        ),
+        optionalArgument(
+            "name",
+            "Flatpak remote name, such as flathub",
         ),
     };
 
@@ -1090,6 +1116,11 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         .description = "Select the AppImage update-configuration overload",
         .hidden = true,
     } };
+    if (pathIs(action, type_name, "sync", "flatpak")) return &.{
+        stringOption("--remote-url", &.{"-u"}, "Remote URL or .flatpakrepo URL; required when adding", false),
+        booleanOptionWithDefault("--system", &.{"-s"}, "Configure the system remote instead of the user remote", true),
+        booleanOptionWithDefault("--gpg-verify", &.{"-g"}, "Enable GPG verification for an added remote", true),
+    };
 
     if (pathIs(action, type_name, "update", "aur")) return &.{flag(
         "--check",

@@ -52,7 +52,14 @@ pub fn dispatch(
     const is_flatpak = std.mem.eql(u8, invocation.command.path, flatpak_command_path);
     if (!is_standard and !is_appimage and !is_flatpak) return null;
 
-    if (is_standard and !invocation.globals.ui_mode) {
+    if (is_flatpak) {
+        if (flatpakRemoteValidationFailure(invocation)) |message|
+            return try reportValidationFailure(context, invocation, message);
+    }
+
+    const system_remote_mutation = is_flatpak and isFlatpakRemoteMutation(invocation) and
+        booleanOption(invocation, "--system", true);
+    if ((is_standard or system_remote_mutation) and !invocation.globals.ui_mode) {
         const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
             try context.stderr.print("Unable to elevate sync: {t}\n", .{err});
             return 1;
@@ -260,8 +267,11 @@ fn runRealFlatpakSync(
     _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
-    _: *const parser.Invocation,
+    invocation: *const parser.Invocation,
 ) !void {
+    if (isFlatpakRemoteMutation(invocation))
+        return runRealFlatpakRemoteMutation(context, operation_context, invocation);
+
     var manager = Zigalpm.flatpak.AppstreamManager.init(context.allocator, context.io);
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
@@ -269,8 +279,43 @@ fn runRealFlatpakSync(
     try manager.updateAllAppstreams();
 }
 
+fn runRealFlatpakRemoteMutation(
+    context: *runtime.RuntimeContext,
+    operation_context: *Zigalpm.OperationContext,
+    invocation: *const parser.Invocation,
+) !void {
+    const operation = invocation.positionals[1];
+    const name = try context.allocator.dupeZ(u8, invocation.positionals[2]);
+    defer context.allocator.free(name);
+    const scope: Zigalpm.flatpak.bindings.libflatpak.Scope =
+        if (booleanOption(invocation, "--system", true)) .SYSTEM else .USER;
+    var manager = Zigalpm.flatpak.RemoteManager{
+        .allocator = context.allocator,
+        .io = context.io,
+    };
+    manager.setOperationContext(operation_context);
+    defer manager.setOperationContext(null);
+
+    if (std.mem.eql(u8, operation, "add")) {
+        const url = try context.allocator.dupeZ(u8, optionValue(invocation, "--remote-url").?);
+        defer context.allocator.free(url);
+        if (!try manager.addRemote(
+            name,
+            url,
+            scope,
+            booleanOption(invocation, "--gpg-verify", true),
+        )) return error.FlatpakRemoteAddFailed;
+        return;
+    }
+    if (!try manager.removeRemote(name, scope)) return error.FlatpakRemoteRemoveFailed;
+}
+
 fn openingMessage(invocation: *const parser.Invocation) []const u8 {
-    return if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+    return if (isFlatpakRemoteOperation(invocation, "add"))
+        "Adding Flatpak remote..."
+    else if (isFlatpakRemoteOperation(invocation, "remove"))
+        "Removing Flatpak remote..."
+    else if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
         "Synchronizing Flatpak AppStream metadata..."
     else if (std.mem.eql(u8, invocation.command.path, appimage_command_path) and
         (invocation.positionals.len == 3 or optionEnabled(invocation, "--configure-updates")))
@@ -282,7 +327,11 @@ fn openingMessage(invocation: *const parser.Invocation) []const u8 {
 }
 
 fn successMessage(invocation: *const parser.Invocation) []const u8 {
-    return if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+    return if (isFlatpakRemoteOperation(invocation, "add"))
+        "Flatpak remote added successfully!"
+    else if (isFlatpakRemoteOperation(invocation, "remove"))
+        "Flatpak remote removed successfully!"
+    else if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
         "Flatpak AppStream metadata synchronized successfully!"
     else if (std.mem.eql(u8, invocation.command.path, appimage_command_path) and
         (invocation.positionals.len == 3 or optionEnabled(invocation, "--configure-updates")))
@@ -300,6 +349,75 @@ fn optionEnabled(invocation: *const parser.Invocation, name: []const u8) bool {
         return !std.ascii.eqlIgnoreCase(value, "false");
     }
     return false;
+}
+
+fn optionValue(invocation: *const parser.Invocation, name: []const u8) ?[]const u8 {
+    for (invocation.options) |option| {
+        if (std.mem.eql(u8, option.name, name)) return option.value;
+    }
+    return null;
+}
+
+fn hasOption(invocation: *const parser.Invocation, name: []const u8) bool {
+    for (invocation.options) |option| {
+        if (std.mem.eql(u8, option.name, name)) return true;
+    }
+    return false;
+}
+
+fn booleanOption(
+    invocation: *const parser.Invocation,
+    name: []const u8,
+    default_value: bool,
+) bool {
+    const value = optionValue(invocation, name) orelse return default_value;
+    return !std.ascii.eqlIgnoreCase(value, "false");
+}
+
+fn isFlatpakRemoteMutation(invocation: *const parser.Invocation) bool {
+    return std.mem.eql(u8, invocation.command.path, flatpak_command_path) and
+        invocation.positionals.len > 0 and
+        std.mem.eql(u8, invocation.positionals[0], "remote");
+}
+
+fn isFlatpakRemoteOperation(invocation: *const parser.Invocation, operation: []const u8) bool {
+    return isFlatpakRemoteMutation(invocation) and invocation.positionals.len > 1 and
+        std.mem.eql(u8, invocation.positionals[1], operation);
+}
+
+fn flatpakRemoteValidationFailure(invocation: *const parser.Invocation) ?[]const u8 {
+    if (invocation.positionals.len == 0) {
+        if (hasOption(invocation, "--remote-url") or
+            hasOption(invocation, "--system") or
+            hasOption(invocation, "--gpg-verify"))
+            return "Flatpak remote options require `sync flatpak remote add|remove <name>`.";
+        return null;
+    }
+    if (!isFlatpakRemoteMutation(invocation) or invocation.positionals.len != 3)
+        return "Flatpak remote configuration requires `remote add|remove <name>`.";
+    if (isFlatpakRemoteOperation(invocation, "add")) {
+        const url = optionValue(invocation, "--remote-url") orelse
+            return "Flatpak remote add requires --remote-url.";
+        if (std.mem.trim(u8, url, " \t\r\n").len == 0)
+            return "Flatpak remote add requires a non-empty --remote-url.";
+        return null;
+    }
+    if (hasOption(invocation, "--remote-url") or hasOption(invocation, "--gpg-verify"))
+        return "Flatpak remote remove cannot use --remote-url or --gpg-verify.";
+    return null;
+}
+
+fn reportValidationFailure(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    message: []const u8,
+) !u8 {
+    if (invocation.globals.ui_mode)
+        try output.writeErrorFrame(context, message)
+    else
+        try output.writeFailure(context, message);
+    try ui_operation.flush(context);
+    return 1;
 }
 
 fn stringValue(configuration: *const config_model.Config, key: []const u8) ?[]const u8 {
@@ -464,6 +582,128 @@ test "Flatpak sync uses the AppStream path and standard non-UI lifecycle" {
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Flatpak AppStream catalog updated") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+}
+
+test "Flatpak remote sync parses add and remove scopes and defaults" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    var outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync",
+        "flatpak",
+        "remote",
+        "add",
+        "flathub-user",
+        "--remote-url",
+        "https://dl.flathub.org/repo/flathub.flatpakrepo",
+        "--system",
+        "false",
+        "--gpg-verify",
+        "false",
+    });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(isFlatpakRemoteOperation(&outcome.dispatch, "add"));
+    try std.testing.expect(flatpakRemoteValidationFailure(&outcome.dispatch) == null);
+    try std.testing.expect(!booleanOption(&outcome.dispatch, "--system", true));
+    try std.testing.expect(!booleanOption(&outcome.dispatch, "--gpg-verify", true));
+    try std.testing.expectEqualStrings(
+        "https://dl.flathub.org/repo/flathub.flatpakrepo",
+        optionValue(&outcome.dispatch, "--remote-url").?,
+    );
+
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync", "flatpak", "remote", "remove", "flathub",
+    });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(isFlatpakRemoteOperation(&outcome.dispatch, "remove"));
+    try std.testing.expect(flatpakRemoteValidationFailure(&outcome.dispatch) == null);
+    try std.testing.expect(booleanOption(&outcome.dispatch, "--system", true));
+}
+
+test "Flatpak remote sync validates operation-specific options" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    var outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync", "flatpak", "remote", "add", "flathub",
+    });
+    try std.testing.expectEqualStrings(
+        "Flatpak remote add requires --remote-url.",
+        flatpakRemoteValidationFailure(&outcome.dispatch).?,
+    );
+
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync", "flatpak", "remote", "remove", "flathub", "--gpg-verify", "false",
+    });
+    try std.testing.expectEqualStrings(
+        "Flatpak remote remove cannot use --remote-url or --gpg-verify.",
+        flatpakRemoteValidationFailure(&outcome.dispatch).?,
+    );
+
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync", "flatpak", "--system", "false",
+    });
+    try std.testing.expectEqualStrings(
+        "Flatpak remote options require `sync flatpak remote add|remove <name>`.",
+        flatpakRemoteValidationFailure(&outcome.dispatch).?,
+    );
+}
+
+test "Flatpak remote sync uses the shared transaction lifecycle" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync",
+        "flatpak",
+        "remote",
+        "add",
+        "flathub-user",
+        "--remote-url",
+        "https://example.invalid/flathub.flatpakrepo",
+        "--system",
+        "false",
+    });
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const Capture = struct { called: bool = false };
+    var capture: Capture = .{};
+    const runner: Runner = .{
+        .data = &capture,
+        .call = struct {
+            fn run(
+                data: ?*anyopaque,
+                _: *runtime.RuntimeContext,
+                operation_context: *Zigalpm.OperationContext,
+                invocation: *const parser.Invocation,
+            ) !void {
+                const observed: *Capture = @ptrCast(@alignCast(data.?));
+                observed.called = true;
+                try std.testing.expect(isFlatpakRemoteOperation(invocation, "add"));
+                var operation = operation_context.begin(.{
+                    .backend = .flatpak,
+                    .kind = .configure,
+                    .subject = invocation.positionals[2],
+                });
+                defer operation.finish(.success);
+                operation.status(.success, "Flatpak remote added", "flatpak.remote.added", null);
+            }
+        }.run,
+    };
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expect(capture.called);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Adding Flatpak remote") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Flatpak remote added") != null);
 }
 
 test "AppImage sync routes long and shortcode forms with an optional package" {
