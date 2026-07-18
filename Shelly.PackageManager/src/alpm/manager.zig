@@ -524,6 +524,29 @@ pub const Manager = struct {
                 local_pkg,
                 .{ .ptr = new_version },
             ) catch return TransactionError.OutOfMemory;
+            var ignored = false;
+            for (self.config.ignore_package.items) |ign_pkg| {
+                if (std.ascii.eqlIgnoreCase(ign_pkg, owned_update.new_package.name() orelse "")) {
+                    ignored = true;
+                    break;
+                }
+            }
+            if (!ignored) {
+                for (self.config.ignore_group.items) |ign_group| {
+                    for (owned_update.new_package.groups()) |group| {
+                        if (std.ascii.eqlIgnoreCase(ign_group, group)) {
+                            ignored = true;
+
+                            break;
+                        }
+                    }
+                    if (ignored) {
+                        owned_update.deinit(self.allocator);
+                        break;
+                    }
+                }
+            }
+            if (ignored) continue;
             package_updates.append(self.allocator, owned_update) catch {
                 owned_update.deinit(self.allocator);
                 return TransactionError.OutOfMemory;
