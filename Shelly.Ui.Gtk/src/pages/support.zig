@@ -24,3 +24,8 @@ pub fn connectLifecycle(comptime Page: type, self: *Page) void {
     _ = gtk.Widget.signals.map.connect(self, ?*anyopaque, &H.mapCb, null, .{});
     _ = gtk.Widget.signals.unmap.connect(self, ?*anyopaque, &H.unmapCb, null, .{});
 }
+
+pub fn getWindow(comptime W: type, widget: anytype) ?*W {
+    const root = gtk.Widget.getRoot(widget.as(gtk.Widget)) orelse return null;
+    return gobject.ext.cast(W, root);
+}

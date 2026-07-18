@@ -8,6 +8,7 @@ const AppImagePage = @import("pages/appimage_page.zig").AppImagePage;
 const PackagePage = @import("pages/package_page.zig").PackagePage;
 const AurPage = @import("pages/aur_page.zig").AurPage;
 const UpdatePage = @import("pages/update_page.zig").UpdatePage;
+const SupportPage = @import("pages/support.zig");
 
 const NavButton = struct {
     button: *gtk.Button,
@@ -27,6 +28,8 @@ pub const ShellyWindow = extern struct {
 
     const Private = struct {
         shell_box: *gtk.Box,
+        lockout_overlay: *gtk.Box,
+        lockout_content: *gtk.Box,
         content_stack: *gtk.Stack,
         rail: ?*gtk.Box,
         chevron_img: ?*gtk.Image,
@@ -228,6 +231,28 @@ pub const ShellyWindow = extern struct {
         gtk.StackPage.setIconName(up_page, UpdatePage.icon_name);
     }
 
+    pub fn showLockout(self: *ShellyWindow, content: *gtk.Widget) void {
+        const p = self.private();
+        while (gtk.Widget.getFirstChild(p.lockout_content.as(gtk.Widget))) |c| {
+            gtk.Box.remove(p.lockout_content, c);
+        }
+        gtk.Box.append(p.lockout_content, content);
+        gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 1);
+    }
+
+    pub fn hideLockout(self: *ShellyWindow) void {
+        const p = self.private();
+        while (gtk.Widget.getFirstChild(p.lockout_content.as(gtk.Widget))) |c| {
+            gtk.Box.remove(p.lockout_content, c);
+        }
+        gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 0);
+    }
+
+    const template_children = .{
+        .{ "lockout_overlay", @offsetOf(Private, "lockout_overlay") },
+        .{ "lockout_content", @offsetOf(Private, "lockout_content") },
+    };
+
     pub const Class = extern struct {
         parent_class: Parent.Class,
         var parent: *Parent.Class = undefined;
@@ -242,6 +267,9 @@ pub const ShellyWindow = extern struct {
                 @intFromBool(false),
                 @as(c_long, @intCast(Private.offset)) + @as(c_long, @intCast(@offsetOf(Private, "shell_box"))),
             );
+            inline for (template_children) |c| {
+                SupportPage.bindChild(class, Private.offset, c[0], c[1]);
+            }
         }
 
         pub fn as(class: *Class, comptime T: type) *T {

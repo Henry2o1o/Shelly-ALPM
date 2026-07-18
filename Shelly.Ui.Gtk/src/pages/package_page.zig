@@ -6,6 +6,8 @@ const glib = bindings.glib;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
 const PackageObject = @import("../g_objects/package_object.zig").PackageObject;
+const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
+const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const IconResolver = @import("../services/icon_resolver.zig").IconResolver;
@@ -688,7 +690,7 @@ pub const PackagePage = extern struct {
             inline for (template_children) |c| {
                 support.bindChild(class, Private.offset, c[0], c[1]);
             }
-            gtk.Widget.Class.bindTemplateCallbackFull(wc, "install_local", @ptrCast(&install_local));
+
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "install_selected", @ptrCast(&install_selected));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_grid_view_toggled", @ptrCast(&on_grid_view_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_list_view_toggled", @ptrCast(&on_list_view_toggled));
@@ -696,11 +698,26 @@ pub const PackagePage = extern struct {
         }
     };
 
-    fn install_local(self: *Self) callconv(.c) void {
-        _ = self;
-    }
     fn install_selected(self: *Self) callconv(.c) void {
-        _ = self;
+        const dialog = ConfirmDialog.new(
+            "Install Packages",
+            "Install the selected packages?",
+            &on_install_response,
+            self,
+        );
+        dialog.setButtons("Install", "Cancel");
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.showLockout(dialog.as(gtk.Widget));
+        }
+    }
+
+    fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
+        const self: *PackagePage = @ptrCast(@alignCast(ctx.?));
+        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
+        if (confirmed) {
+            std.debug.print("test", .{});
+        }
     }
 
     fn on_grid_view_toggled(self: *Self) callconv(.c) void {

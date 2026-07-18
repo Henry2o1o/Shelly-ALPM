@@ -33,6 +33,7 @@ pub const ShellyCli = struct {
             std.debug.print("failed: {s}\n", .{result.stderr});
             return error.CommandFailed;
         }
+
         return result;
     }
 
@@ -68,7 +69,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_remote_appstream_apps(self: ShellyCli) !std.json.Parsed([]AppstreamApp) {
-        const result = try self.run(&.{ "shelly", "flatpak", "remote", "all" });
+        const result = try self.run(&.{ "flatpak", "remote", "all" });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
@@ -76,7 +77,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_flatpak_remote_info(self: ShellyCli, remote: []const u8, id: []const u8, branch: []const u8) !std.json.Parsed(FlatpakRemoteInfo) {
-        const result = try self.run(&.{ "shelly", "flatpak", "search", id });
+        const result = try self.run(&.{ "flatpak", "search", id });
         _ = remote;
         _ = branch;
         defer self.allocator.free(result.stdout);

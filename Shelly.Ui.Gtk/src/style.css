@@ -1,0 +1,8 @@
+.lockout-scrim {
+  background-color: alpha(black, 0.6);
+}
+
+.lockout-card {
+  background-color: @theme_bg_color;
+  border-radius: 12px;
+}

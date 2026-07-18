@@ -2,6 +2,7 @@ const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const gtk = bindings.gtk;
 const gio = bindings.gio;
+const gdk = bindings.gdk;
 const gobject = bindings.gobject;
 const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
 const runtime = @import("services/runtime.zig");
@@ -20,6 +21,15 @@ pub fn main(init: std.process.Init) void {
 }
 
 fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
+    //load custom css
+    const provider = gtk.CssProvider.new();
+    gtk.CssProvider.loadFromResource(provider, "/com/shellyorg/shelly/style.css");
+    gtk.StyleContext.addProviderForDisplay(
+        gdk.Display.getDefault().?,
+        provider.as(gtk.StyleProvider),
+        gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }
