@@ -631,12 +631,18 @@ pub const variants = [_]Variant{
         .action_code = 'X',
         .type_code = 'f',
         .help = .{
-            .description = "Launch an installed Flatpak application, or stop it with --kill.",
-            .implementation = "Zigalpm.FlatpakManager.launch_flatpak / kill_flatpak",
-            .options = &.{.{
-                .name = "--kill",
-                .description = "Stop the selected application instead of launching it",
-            }},
+            .description = "Launch an installed Flatpak application, stop it with --kill, or list running instances with `run flatpak list`.",
+            .implementation = "Zigalpm.FlatpakManager.launch_flatpak / kill_flatpak / get_running_instances_flatpak",
+            .options = &.{
+                .{
+                    .name = "--kill",
+                    .description = "Stop the selected application instead of launching it",
+                },
+                .{
+                    .name = "--list",
+                    .description = "List running Flatpak applications and process identifiers",
+                },
+            },
         },
     },
     .{
@@ -813,14 +819,14 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         "Distribution keyring names; omit to populate the defaults",
     )};
 
-    if (std.mem.eql(u8, action, "run") and
-        (std.mem.eql(u8, type_name, "flatpak") or std.mem.eql(u8, type_name, "appimage")))
+    if (pathIs(action, type_name, "run", "flatpak")) return &.{optionalArgument(
+        "package",
+        "Flatpak application ID or friendly name; use `list` to show running applications",
+    )};
+    if (pathIs(action, type_name, "run", "appimage"))
         return &.{requiredArgument(
             "package",
-            if (std.mem.eql(u8, type_name, "flatpak"))
-                "Flatpak application ID or friendly name"
-            else
-                "Installed AppImage name or path",
+            "Installed AppImage name or path",
         )};
     return &.{};
 }
@@ -856,8 +862,11 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         stringOption("--diff-program", &.{}, "Diff command, overriding DIFFPROG", false),
         stringOption("--merge-program", &.{}, "Merge command, overriding MERGEPROG", false),
     };
-    if (std.mem.eql(u8, action, "run") and
-        (std.mem.eql(u8, type_name, "flatpak") or std.mem.eql(u8, type_name, "appimage")))
+    if (pathIs(action, type_name, "run", "flatpak")) return &.{
+        flag("--kill", &.{"-k"}, "Stop the selected application instead of launching it"),
+        flag("--list", &.{"-l"}, "List running Flatpaks; equivalent to `run flatpak list`"),
+    };
+    if (pathIs(action, type_name, "run", "appimage"))
         return &.{flag("--kill", &.{"-k"}, "Stop the selected application instead of launching it")};
     if (pathIs(action, type_name, "search", "standard")) return &.{
         flag("--repos", &.{"-r"}, "List configured ALPM repositories"),

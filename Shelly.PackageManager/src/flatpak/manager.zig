@@ -40,6 +40,29 @@ pub const InstalledApplication = struct {
     }
 };
 
+/// Fully owned metadata for one currently running Flatpak instance.
+pub const RunningInstance = struct {
+    instance_id: [:0]u8,
+    application_id: [:0]u8,
+    arch: [:0]u8,
+    branch: [:0]u8,
+    pid: i32,
+    child_pid: i32,
+
+    pub fn deinit(self: *RunningInstance, allocator: std.mem.Allocator) void {
+        allocator.free(self.instance_id);
+        allocator.free(self.application_id);
+        allocator.free(self.arch);
+        allocator.free(self.branch);
+        self.* = undefined;
+    }
+
+    pub fn deinitSlice(allocator: std.mem.Allocator, instances: []RunningInstance) void {
+        for (instances) |*instance| instance.deinit(allocator);
+        allocator.free(instances);
+    }
+};
+
 /// Fully owned unused Flatpak ref returned by cleanup planning.
 pub const UnusedDependency = struct {
     reference: [:0]u8,
@@ -704,21 +727,30 @@ pub const Manager = struct {
         return list.toOwnedSlice(self.allocator);
     }
 
-    pub fn get_running_instances_flatpak(self: Manager) ![]flatpak.InstalledFlatpak {
+    pub fn get_running_instances_flatpak(self: Manager) ![]RunningInstance {
         var operation_scope = OperationScope.init(self, .search, null);
         operation_scope.attach();
         defer operation_scope.finish(.success);
         errdefer operation_scope.fail();
         try self.checkCancelled();
-        var list: std.ArrayList(flatpak.InstalledFlatpak) = .empty;
-        errdefer list.deinit(self.allocator);
+        var list: std.ArrayList(RunningInstance) = .empty;
+        errdefer {
+            for (list.items) |*instance| instance.deinit(self.allocator);
+            list.deinit(self.allocator);
+        }
 
         const instances_ptr = rawflatpak.flatpak_instance_get_all();
+        if (instances_ptr == null) return list.toOwnedSlice(self.allocator);
+        defer rawflatpak.g_ptr_array_unref(instances_ptr);
         var j: usize = 0;
         while (j < instances_ptr.*.len) : (j += 1) {
-            const raw: *rawflatpak.FlatpakRef = @ptrCast(@alignCast(instances_ptr.*.pdata[j]));
-            const flatpak_ref = flatpak.InstalledFlatpak.new(raw, flatpak.Scope.UNKNOWN);
-            try list.append(self.allocator, flatpak_ref);
+            const raw: *rawflatpak.FlatpakInstance = @ptrCast(@alignCast(instances_ptr.*.pdata[j]));
+            if (rawflatpak.flatpak_instance_is_running(raw) == 0) continue;
+            var instance = try runningInstanceFromRaw(self.allocator, raw);
+            list.append(self.allocator, instance) catch |err| {
+                instance.deinit(self.allocator);
+                return err;
+            };
         }
 
         return list.toOwnedSlice(self.allocator);
@@ -731,6 +763,8 @@ pub const Manager = struct {
         errdefer operation_scope.fail();
         try self.checkCancelled();
         const instances_ptr = rawflatpak.flatpak_instance_get_all();
+        if (instances_ptr == null) return error.InvalidPid;
+        defer rawflatpak.g_ptr_array_unref(instances_ptr);
         var pid: ?i32 = null;
         var j: usize = 0;
         while (j < instances_ptr.*.len) : (j += 1) {
@@ -1707,6 +1741,32 @@ const CancellationBridge = struct {
 
 fn spanOrEmpty(pointer: [*c]const u8) []const u8 {
     return if (pointer == null) "" else std.mem.span(pointer);
+}
+
+fn duplicateNativeString(allocator: std.mem.Allocator, pointer: [*c]const u8) ![:0]u8 {
+    return allocator.dupeSentinel(u8, spanOrEmpty(pointer), 0);
+}
+
+fn runningInstanceFromRaw(
+    allocator: std.mem.Allocator,
+    raw: *rawflatpak.FlatpakInstance,
+) !RunningInstance {
+    const instance_id = try duplicateNativeString(allocator, rawflatpak.flatpak_instance_get_id(raw));
+    errdefer allocator.free(instance_id);
+    const application_id = try duplicateNativeString(allocator, rawflatpak.flatpak_instance_get_app(raw));
+    errdefer allocator.free(application_id);
+    const arch = try duplicateNativeString(allocator, rawflatpak.flatpak_instance_get_arch(raw));
+    errdefer allocator.free(arch);
+    const branch = try duplicateNativeString(allocator, rawflatpak.flatpak_instance_get_branch(raw));
+    errdefer allocator.free(branch);
+    return .{
+        .instance_id = instance_id,
+        .application_id = application_id,
+        .arch = arch,
+        .branch = branch,
+        .pid = rawflatpak.flatpak_instance_get_pid(raw),
+        .child_pid = rawflatpak.flatpak_instance_get_child_pid(raw),
+    };
 }
 
 fn matchesInstalled(id: []const u8, name: []const u8, query: []const u8) bool {

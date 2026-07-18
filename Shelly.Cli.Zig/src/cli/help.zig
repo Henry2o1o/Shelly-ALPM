@@ -470,6 +470,15 @@ fn shortcodeUsage(
     }
 
     if (option) |selected_option| {
+        if (std.mem.eql(u8, command.path, "shelly run flatpak") and
+            std.mem.eql(u8, selected_option.name, "--list"))
+        {
+            const result: []const u8 = try usage.toOwnedSlice(allocator);
+            return result;
+        }
+    }
+
+    if (option) |selected_option| {
         if (std.mem.eql(u8, command.path, "shelly install aur") and
             std.mem.eql(u8, selected_option.name, "--version"))
         {
