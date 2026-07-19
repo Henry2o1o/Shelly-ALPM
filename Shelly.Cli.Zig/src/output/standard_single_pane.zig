@@ -444,8 +444,8 @@ pub const Renderer = struct {
             defer self.context.allocator.free(lines);
             for (lines) |line| switch (line.kind) {
                 .unchanged => try self.writeColoredLine(.white, "{s}", .{line.text}),
-                .added => try self.writeColoredLine(.green, "{s}", .{line.text}),
-                .removed => try self.writeColoredLine(.red, "{s}", .{line.text}),
+                .added => try self.writeColoredLine(.green, "+ {s}", .{line.text}),
+                .removed => try self.writeColoredLine(.red, "- {s}", .{line.text}),
             };
         }
 
