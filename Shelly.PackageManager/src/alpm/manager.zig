@@ -500,6 +500,34 @@ pub const Manager = struct {
         return packages.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
     }
 
+    pub fn get_available_packages_from_group(self: *Manager, groupName: [:0]const u8) TransactionError![]libalpm.OwnedPackage {
+        if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, groupName);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
+        var packages: std.ArrayList(libalpm.OwnedPackage) = .empty;
+        errdefer {
+            libalpm.OwnedPackage.deinitItems(self.allocator, packages.items);
+            packages.deinit(self.allocator);
+        }
+
+        var sync_database: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
+        while (sync_database != null) : (sync_database = sync_database.?.*.next) {
+            const db = sync_database.?.*.data orelse continue;
+            const database = libalpm.Database.from(db) orelse continue;
+            const group = database.getGroup(groupName) orelse continue;
+            var package_list = group.packages();
+            while (package_list.next()) |pkg| {
+                const owned_pkg = try libalpm.OwnedPackage.init(self.allocator, pkg);
+                packages.append(self.allocator, owned_pkg) catch return TransactionError.OutOfMemory;
+            }
+            break;
+        }
+        return packages.toOwnedSlice(self.allocator) catch TransactionError.OutOfMemory;
+    }
+
     pub fn get_updates_available(self: *Manager) TransactionError![]libalpm.OwnedPackageWithUpdate {
         if (self.handle == null) return TransactionError.NoHandle;
         var operation_scope = OperationScope.init(self, .search, null);

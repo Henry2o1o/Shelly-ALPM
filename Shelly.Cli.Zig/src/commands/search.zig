@@ -286,6 +286,17 @@ fn runStandard(
             if (!show_hidden and ignoredPackage(manager, name)) continue;
             try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
         }
+
+        const query_null: [:0]u8 = try context.allocator.dupeZ(u8, query.?);
+        defer context.allocator.free(query_null);
+        const values_group = try manager.get_available_packages_from_group(query_null);
+        for (values_group) |value| {
+            const name = value.name() orelse continue;
+            if (seen.contains(name)) continue;
+            try seen.put(name, {});
+            if (!show_hidden and ignoredPackage(manager, name)) continue;
+            try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
+        }
     }
 
     if (detail and !group) {
