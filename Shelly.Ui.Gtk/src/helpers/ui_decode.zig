@@ -48,6 +48,33 @@ pub const JsonPackFrame = struct {
             .allocate = .alloc_always,
         });
     }
+
+    pub fn nextFrame(buf: []const u8) ?struct { payload: []const u8, consumed: usize } {
+        const pref = std.mem.indexOf(u8, buf, prefix) orelse return null;
+        const start = pref + prefix.len;
+        const suff = std.mem.indexOfPos(u8, buf, start, suffix) orelse return null;
+        return .{
+            .payload = buf[start..suff],
+            .consumed = suff + suffix.len,
+        };
+    }
+
+    pub const FrameIterator = struct {
+        buf: []const u8,
+        pos: usize = 0,
+
+        pub fn next(self: *FrameIterator) ?[]const u8 {
+            const rel = std.mem.indexOfPos(u8, self.buf, self.pos, prefix) orelse return null;
+            const start = rel + prefix.len;
+            const suff = std.mem.indexOfPos(u8, self.buf, start, suffix) orelse return null;
+            self.pos = suff + suffix.len;
+            return self.buf[start..suff];
+        }
+    };
+
+    pub fn frames(buf: []const u8) FrameIterator {
+        return .{ .buf = buf };
+    }
 };
 
 const testing = std.testing;

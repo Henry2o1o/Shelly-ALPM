@@ -5,6 +5,8 @@ const glib = bindings.glib;
 const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
+const size_helper = @import("../helpers/size_converts.zig").SizeConverter;
+
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const UpdateObject = @import("../g_objects/update_object.zig").UpdateObject;
@@ -194,16 +196,17 @@ pub const UpdatePage = extern struct {
     fn flatten_updates(allocator: std.mem.Allocator, response: CheckUpdates) ![]UpdateItem {
         const updates = try allocator.alloc(UpdateItem, response.count());
         var index: usize = 0;
+        var buf: [32]u8 = undefined;
         for (response.Packages) |package| {
-            updates[index] = .{ .source = .package, .name = package.Name, .description = "System package update", .old_version = package.OldVersion, .new_version = package.Version, .size = package.DownloadSize };
+            updates[index] = .{ .source = .package, .name = package.Name, .description = "System package update", .old_version = package.CurrentVersion, .new_version = package.NewVersion, .size = size_helper.convert_null_term(&buf, package.DownloadSize) };
             index += 1;
         }
         for (response.Aur) |package| {
-            updates[index] = .{ .source = .aur, .name = package.Name, .description = "AUR package update", .old_version = package.OldVersion, .new_version = package.Version, .size = package.DownloadSize };
+            updates[index] = .{ .source = .aur, .name = package.Name, .description = "AUR package update", .old_version = package.Version, .new_version = package.NewVersion, .size = size_helper.convert_null_term(&buf, package.DownloadSize) };
             index += 1;
         }
         for (response.Flatpak) |package| {
-            updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = "Installed", .new_version = package.Version, .size = "—" };
+            updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = package.Version, .new_version = "Installed", .size = "-" };
             index += 1;
         }
         return updates;

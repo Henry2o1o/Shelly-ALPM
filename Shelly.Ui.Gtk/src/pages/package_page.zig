@@ -14,6 +14,8 @@ const IconResolver = @import("../services/icon_resolver.zig").IconResolver;
 const Package = @import("../models/packages.zig").Package;
 const runtime = @import("../services/runtime.zig");
 const c_string = @import("../helpers/c_string.zig");
+const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
+const Event = @import("../services/shelly_operation.zig").Event;
 
 pub const PackagePage = extern struct {
     parent_instance: Parent,
@@ -55,6 +57,7 @@ pub const PackagePage = extern struct {
         resolver: IconResolver,
         search_text: [256]u8,
         search_len: usize,
+        operation: ?*ShellyOperation,
         var offset: c_int = 0;
     };
 
@@ -94,6 +97,7 @@ pub const PackagePage = extern struct {
         p.arena = null;
         p.generation = 0;
         p.show_installed_only = false;
+        p.operation = null;
 
         p.list_store = gio.ListStore.new(PackageObject.getGObjectType());
         p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
@@ -104,7 +108,6 @@ pub const PackagePage = extern struct {
         p.selection = gtk.SingleSelection.new(p.filter_model.as(gio.ListModel));
         gtk.ColumnView.setModel(p.column_view, p.selection.as(gtk.SelectionModel));
 
-        // same selection — both views show the same filtered model
         gtk.GridView.setModel(p.grid_view, p.selection.as(gtk.SelectionModel));
         gtk.GridView.setMaxColumns(p.grid_view, 4);
         gtk.GridView.setMinColumns(p.grid_view, 1);
@@ -279,6 +282,7 @@ pub const PackagePage = extern struct {
         pkg.setSelected(gtk.CheckButton.getActive(check) != 0);
         // TODO: update cart / install button sensitivity
     }
+
     fn setup_grid_factory(self: *Self, view: *gtk.GridView) void {
         const c = struct {
             fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: *Self) callconv(.c) void {
@@ -712,20 +716,10 @@ pub const PackagePage = extern struct {
         }
     }
 
-    fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
-        const self: *PackagePage = @ptrCast(@alignCast(ctx.?));
-        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
-        if (confirmed) {
-            std.debug.print("test", .{});
-        }
-    }
-
     fn on_grid_view_toggled(self: *Self) callconv(.c) void {
         const p = self.priv();
         gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), 1);
         gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), 0);
-
-        // TODO: save to config
     }
 
     fn on_list_view_toggled(self: *Self) callconv(.c) void {
@@ -739,4 +733,68 @@ pub const PackagePage = extern struct {
         p.show_installed_only = gtk.CheckButton.getActive(check) != 0;
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
+
+    fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
+        const self: *PackagePage = @ptrCast(@alignCast(ctx.?));
+        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
+        if (!confirmed) return;
+
+        //     const p = self.priv();
+
+        //     var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        //     defer names.deinit(std.heap.c_allocator);
+        //     const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        //     var i: u32 = 0;
+        //     while (i < n) : (i += 1) {
+        //         const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
+        //         const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
+        //         if (pkg.isSelected()) names.append(std.heap.c_allocator, pkg.getName()) catch continue;
+        //     }
+        //     if (names.items.len == 0) return;
+
+        //     const op = std.heap.c_allocator.create(ShellyOperation) catch return;
+        //     op.* = ShellyOperation.init(std.heap.c_allocator, &on_op_event, &on_op_done, self);
+        //     op.io = op.threaded.io();
+        //     p.operation = op;
+
+        //     op.install(names.items) catch {
+        //         std.debug.print("failed to start install\n", .{});
+        //         std.heap.c_allocator.destroy(op);
+        //         p.operation = null;
+        //     };
+    }
+
+    // fn on_op_event(ctx: *anyopaque, events: Event) void {
+    //     const self: *PackagePage = @ptrCast(@alignCast(ctx));
+    //     self.handleOperationEvent(events);
+    // }
+
+    // fn on_op_done(ctx: *anyopaque, exit_code: u8) void {
+    //     const self: *PackagePage = @ptrCast(@alignCast(ctx));
+    //     self.handleOperationDone(exit_code);
+    // }
+
+    // fn handleOperationEvent(self: *Self, events: Event) void {
+    //     _ = self;
+    //     switch (events) {
+    //         .info => |i| {
+    //             std.debug.print("[info] {s}: {s}\n", .{ i.event_type, i.message });
+    //         },
+    //         .err => |e| {
+    //             std.debug.print("[error] {s}\n", .{e.message});
+    //         },
+    //         .unknown => {},
+    //     }
+    // }
+
+    // fn handleOperationDone(self: *Self, exit_code: u8) void {
+    //     const p = self.priv();
+    //     std.debug.print("[done] exit={d}\n", .{exit_code});
+    //     if (p.operation) |op| {
+    //         if (op.reader) |t| t.join(); // wait for reader to fully exit
+    //         op.threaded.deinit();
+    //         std.heap.c_allocator.destroy(op);
+    //         p.operation = null;
+    //     }
+    // }
 };

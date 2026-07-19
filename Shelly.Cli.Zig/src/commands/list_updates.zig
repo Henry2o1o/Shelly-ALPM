@@ -314,9 +314,52 @@ fn writeAllJson(
     results: []const Result,
 ) !void {
     var json: std.json.Stringify = .{ .writer = writer };
+
+    try json.beginObject();
+
+    try json.objectField("Packages");
     try json.beginArray();
-    for (results) |*result| try writeJsonItems(allocator, &json, result);
+    for (results) |*result| {
+        if (result.* == .standard) {
+            const sorted = try sortedStandard(allocator, result.standard.items);
+            defer allocator.free(sorted);
+            for (sorted) |update| try writeStandardJson(&json, update);
+        }
+    }
     try json.endArray();
+
+    try json.objectField("Aur");
+    try json.beginArray();
+    for (results) |*result| {
+        if (result.* == .aur) {
+            const sorted = try sortedAur(allocator, result.aur.items);
+            defer allocator.free(sorted);
+            for (sorted) |update| try writeAurJson(&json, update);
+        }
+    }
+    try json.endArray();
+
+    try json.objectField("AppImage");
+    try json.beginArray();
+    for (results) |*result| {
+        if (result.* == .appimage) {
+            for (result.appimage.items) |update| try writeAppImageJson(&json, update);
+        }
+    }
+    try json.endArray();
+
+    try json.objectField("Flatpak");
+    try json.beginArray();
+    for (results) |*result| {
+        if (result.* == .flatpak) {
+            const sorted = try sortedFlatpak(allocator, result.flatpak.items);
+            defer allocator.free(sorted);
+            for (sorted) |update| try writeFlatpakJson(&json, update);
+        }
+    }
+    try json.endArray();
+
+    try json.endObject();
 }
 
 fn writeJsonItems(

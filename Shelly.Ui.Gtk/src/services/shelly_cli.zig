@@ -8,6 +8,7 @@ const FlatpakRemoteInfo = @import("../models/flatpak.zig").FlatpakRemoteInfo;
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const RunResult = std.process.RunResult;
+const runtime = @import("runtime.zig");
 const builtin = @import("builtin");
 
 pub const ShellyCli = struct {
@@ -26,11 +27,16 @@ pub const ShellyCli = struct {
         @memcpy(argv[1 .. 1 + args.len], args);
         argv[argv.len - 1] = "--ui-mode";
 
-        const result = try std.process.run(self.allocator, self.io, .{ .argv = argv });
+        const result = try std.process.run(self.allocator, self.io, .{
+            .argv = argv,
+            .environ_map = runtime.environ_map,
+        });
         errdefer self.allocator.free(result.stdout);
         errdefer self.allocator.free(result.stderr);
         if (result.term != .exited or result.term.exited != 0) {
-            std.debug.print("failed: {s}\n", .{result.stderr});
+            std.debug.print("failed: term={any} stderr='{s}' stdout='{s}'\n", .{
+                result.term, result.stderr, result.stdout[0..@min(500, result.stdout.len)],
+            });
             return error.CommandFailed;
         }
 
@@ -69,7 +75,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_remote_appstream_apps(self: ShellyCli) !std.json.Parsed([]AppstreamApp) {
-        const result = try self.run(&.{ "flatpak", "remote", "all" });
+        const result = try self.run(&.{ "list", "flatpak", "remote", "all" });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
@@ -91,7 +97,20 @@ pub const ShellyCli = struct {
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return try JsonPackFrame.decode(CheckUpdates, self.allocator, result.stdout);
+        var it = JsonPackFrame.frames(result.stdout);
+        while (it.next()) |payload| {
+            const json = JsonPackFrame.decodeBase64(self.allocator, payload) catch continue;
+            defer self.allocator.free(json);
+
+            if (std.mem.indexOf(u8, json, "\"$kind\"") != null) continue;
+
+            return std.json.parseFromSlice(CheckUpdates, self.allocator, json, .{
+                .ignore_unknown_fields = true,
+                .allocate = .alloc_always,
+            });
+        }
+
+        return error.NoDataFrame;
     }
 };
 
