@@ -49,6 +49,97 @@ const RunnerAdapter = struct {
 
 const real_runner: Runner = .{ .call = runRealInstall };
 
+pub const Backend = enum {
+    standard,
+    aur,
+    appimage,
+    flatpak,
+};
+
+pub const CallOptions = struct {
+    no_confirm: bool = false,
+    ui_mode: bool = false,
+};
+
+pub const Caller = struct {
+    context: *runtime.RuntimeContext,
+    manifest: spec.Manifest,
+
+    pub fn init(context: *runtime.RuntimeContext) !Caller {
+        return .{
+            .context = context,
+            .manifest = try spec.Manifest.load(context.allocator),
+        };
+    }
+
+    pub fn call(
+        self: *Caller,
+        backend: Backend,
+        targets: []const []const u8,
+        options: CallOptions,
+    ) !u8 {
+        const arguments = try callArguments(self.context.allocator, backend, targets, options);
+        defer self.context.allocator.free(arguments);
+
+        var outcome = try parser.parse(self.context.allocator, &self.manifest, arguments);
+        if (outcome != .dispatch) return error.InvalidInstallInvocation;
+        return (try dispatch(self.context, &outcome.dispatch)) orelse error.InvalidInstallInvocation;
+    }
+};
+
+/// Runs the regular install command path for an internal caller. This keeps
+/// validation, elevation, output, question defaults, and backend resolution
+/// identical to a user-entered `shelly install <backend> ...` invocation.
+pub fn call(
+    context: *runtime.RuntimeContext,
+    backend: Backend,
+    targets: []const []const u8,
+    options: CallOptions,
+) !u8 {
+    var caller = try Caller.init(context);
+    return caller.call(backend, targets, options);
+}
+
+fn callArguments(
+    allocator: std.mem.Allocator,
+    backend: Backend,
+    targets: []const []const u8,
+    options: CallOptions,
+) ![]const []const u8 {
+    var arguments: std.ArrayList([]const u8) = .empty;
+    errdefer arguments.deinit(allocator);
+
+    try arguments.append(allocator, "install");
+    try arguments.append(allocator, @tagName(backend));
+    if (options.no_confirm) try arguments.append(allocator, "--no-confirm");
+    if (options.ui_mode) try arguments.append(allocator, "--ui-mode");
+    try arguments.appendSlice(allocator, targets);
+    return arguments.toOwnedSlice(allocator);
+}
+
+test "internal install calls preserve targets and automatic-answer globals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const arguments = try callArguments(
+        allocator,
+        .standard,
+        &.{ "base", "linux" },
+        .{ .no_confirm = true, .ui_mode = true },
+    );
+    const manifest = try spec.Manifest.load(allocator);
+    const outcome = try parser.parse(allocator, &manifest, arguments);
+
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings(standard_command_path, outcome.dispatch.command.path);
+    try std.testing.expect(outcome.dispatch.globals.no_confirm);
+    try std.testing.expect(outcome.dispatch.globals.ui_mode);
+    try std.testing.expectEqual(@as(usize, 2), outcome.dispatch.positionals.len);
+    try std.testing.expectEqualStrings("base", outcome.dispatch.positionals[0]);
+    try std.testing.expectEqualStrings("linux", outcome.dispatch.positionals[1]);
+}
+
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,

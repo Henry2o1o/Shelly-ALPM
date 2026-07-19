@@ -253,6 +253,10 @@ pub const variants = [_]Variant{
         .default_for_action = true,
         .help = .{
             .description = "Back up explicitly installed standard packages, AUR packages, and Flatpak applications as type-grouped TOML.",
+            .options = &.{
+                .{ .name = "--export", .description = "Exports a declaritive list of explicitly installed standard packages, AUR packages, and Flatpak applications" },
+                .{ .name = "--import", .description = "Imports a previously exported backup and installs the latest versions of all items listed" },
+            },
         },
     },
     .{
@@ -1098,8 +1102,9 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
     };
     if (pathIs(action, type_name, "backup", "utility")) return &.{
         flag("--export", &.{"-e"}, "Export the current explicitly installed package state"),
-        stringOption("--name", &.{"-a"}, "Export file name without the .toml extension", false),
-        stringOption("--output", &.{"-o"}, "Directory in which to write the export", false),
+        flag("--import", &.{"-i"}, "Import a previously existing backup toml and install the latest versions of the package."),
+        stringOption("--name", &.{"-a"}, "File name without the .toml extension", false),
+        stringOption("--directory", &.{"-d"}, "Directory in which to write/read the backup", false),
     };
     if (pathIs(action, type_name, "purify", "standard")) return &.{
         flag("--dry-run", &.{"-d"}, "Show the cleanup plan without changing packages"),
