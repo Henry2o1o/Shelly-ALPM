@@ -355,6 +355,16 @@ fn runStandard(
         }
     }
 
+    if (invocation.globals.ui_mode) {
+        return .{
+            .mode = .packages,
+            .packages = selected.items,
+            .local_packages = local_packages.items,
+            .requested_packages = available or installed,
+            .requested_local = local,
+        };
+    }
+
     const limit: usize = @intCast(optionInteger(invocation, "--limit", 100));
     const page: usize = @intCast(optionInteger(invocation, "--page", 1));
     return .{
