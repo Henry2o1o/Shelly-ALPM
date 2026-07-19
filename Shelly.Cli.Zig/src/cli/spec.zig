@@ -205,6 +205,16 @@ test "builds the complete action-first manifest from native Zig metadata" {
     try std.testing.expect(manifest.findByPath("shelly sync flatpak") != null);
     try std.testing.expect(manifest.findByPath("shelly flatpak search") == null);
     try std.testing.expect(manifest.findByPath("shelly query") == null);
+    try std.testing.expect(manifest.findByPath("shelly config get") != null);
+    try std.testing.expect(manifest.findByPath("shelly config set") != null);
+    try std.testing.expect(manifest.findByPath("shelly config list") != null);
+    try std.testing.expect(manifest.findByPath("shelly config reset") != null);
+    try std.testing.expect(manifest.findByPath("shelly config parallel") != null);
+    try std.testing.expect(manifest.findByPath("shelly get config") == null);
+    try std.testing.expectEqualStrings(
+        "shelly config list",
+        manifest.findDefaultChild(manifest.findByPath("shelly config").?).?.path,
+    );
     try std.testing.expectEqualStrings(
         "shelly sync standard",
         manifest.findDefaultChild(manifest.findByPath("shelly sync").?).?.path,

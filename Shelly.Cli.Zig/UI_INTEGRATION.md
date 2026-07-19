@@ -398,11 +398,11 @@ Configuration values belong to the invoking user.
 
 | Command | Capability and result |
 | --- | --- |
-| `shelly list config` | Return the complete configuration as a key/value object. Values are display strings in the compatibility payload. |
-| `shelly get config <key>` | Return `{ "<key>": "<value>" }`. Key matching follows the configuration manager's registered properties. |
-| `shelly set config <key> <value>` | Parse and store one value, then emit success or error information. |
-| `shelly reset config` | Restore configuration defaults. The UI should require confirmation at its own settings layer before invoking it. |
-| `shelly parallel config <downloadCount>` | Set `ParallelDownloadCount`; use a positive integer control. |
+| `shelly config` or `shelly config list` | Return the complete configuration as a key/value object. Values are display strings in the compatibility payload. |
+| `shelly config get <key>` | Return `{ "<key>": "<value>" }`. Key matching follows the configuration manager's registered properties. |
+| `shelly config set <key> <value>` | Parse and store one value, then emit success or error information. |
+| `shelly config reset` | Restore configuration defaults. The UI should require confirmation at its own settings layer before invoking it. |
+| `shelly config parallel <downloadCount>` | Set `ParallelDownloadCount`; use a positive integer control. |
 
 For configuration mutations, inspect error frames in addition to the exit code. Read the value back after a successful set/reset so the UI reflects canonical parsing and defaults.
 
@@ -472,7 +472,7 @@ Interactive pacfile management offers pacdiff-style review actions such as view,
 | Updates dashboard | `list-updates all` | `upgrade all` with backend skip flags |
 | System cleanup | dry-run/list queries | `purify standard`, `purify flatpak`, removal commands |
 | Package policy | `mark ignore/hold --list` | mark add/remove/clear and reason changes |
-| Settings | `list/get config` | `set/reset/parallel config` |
+| Settings | `config [list]` / `config get` | `config set/reset/parallel` |
 
 ## UI implementation checklist
 

@@ -58,7 +58,6 @@ pub const types = [_]Type{
     .{ .name = "flatpak", .code = 'f', .description = "Flatpak applications and runtimes" },
     .{ .name = "appimage", .code = 'i', .description = "AppImage applications" },
     .{ .name = "utility", .code = 'u', .description = "System and Shelly utility operations" },
-    .{ .name = "config", .code = 'c', .description = "Shelly configuration" },
     .{ .name = "keyring", .code = 'k', .description = "Pacman keyring operations" },
     .{ .name = "all", .code = 'x', .description = "All supported package backends" },
 };
@@ -399,39 +398,55 @@ pub const variants = [_]Variant{
         .help = .{ .implementation = "Zigalpm.appimage.UpdateManager.get_updates" },
     },
     .{
-        .action = "get",
-        .type_name = "config",
-        .action_code = 'G',
-        .type_code = 'c',
-        .help = .{ .implementation = "config_manager.Manager.get" },
+        .action = "config",
+        .type_name = "list",
+        .action_code = 'C',
+        .type_code = null,
+        .default_for_action = true,
+        .help = .{
+            .description = "List every Shelly configuration value.",
+            .implementation = "config_manager.Manager.read",
+        },
     },
     .{
-        .action = "set",
-        .type_name = "config",
-        .action_code = 'S',
-        .type_code = 'c',
-        .help = .{ .implementation = "config_manager.Manager.update" },
+        .action = "config",
+        .type_name = "get",
+        .action_code = 'C',
+        .type_code = 'g',
+        .help = .{
+            .description = "Read a Shelly configuration value.",
+            .implementation = "config_manager.Manager.get",
+        },
     },
     .{
-        .action = "list",
-        .type_name = "config",
-        .action_code = 'L',
-        .type_code = 'c',
-        .help = .{ .implementation = "config_manager.Manager.read" },
+        .action = "config",
+        .type_name = "set",
+        .action_code = 'C',
+        .type_code = 's',
+        .help = .{
+            .description = "Set a Shelly configuration value.",
+            .implementation = "config_manager.Manager.update",
+        },
     },
     .{
-        .action = "reset",
-        .type_name = "config",
-        .action_code = 'R',
-        .type_code = 'c',
-        .help = .{ .implementation = "config_manager.Manager.reset" },
+        .action = "config",
+        .type_name = "reset",
+        .action_code = 'C',
+        .type_code = 'r',
+        .help = .{
+            .description = "Reset Shelly configuration to native defaults.",
+            .implementation = "config_manager.Manager.reset",
+        },
     },
     .{
-        .action = "parallel",
-        .type_name = "config",
-        .action_code = 'P',
-        .type_code = 'c',
-        .help = .{ .implementation = "config_manager.Manager.update(\"ParallelDownloadCount\", value)" },
+        .action = "config",
+        .type_name = "parallel",
+        .action_code = 'C',
+        .type_code = 'p',
+        .help = .{
+            .description = "Set Shelly's parallel download count.",
+            .implementation = "config_manager.Manager.update(\"ParallelDownloadCount\", value)",
+        },
     },
 
     .{
@@ -882,15 +897,15 @@ fn argumentDefinitions(comptime action: []const u8, comptime type_name: []const 
         ),
     };
 
-    if (pathIs(action, type_name, "get", "config")) return &.{requiredArgument(
+    if (pathIs(action, type_name, "config", "get")) return &.{requiredArgument(
         "key",
         "Configuration property name",
     )};
-    if (pathIs(action, type_name, "set", "config")) return &.{
+    if (pathIs(action, type_name, "config", "set")) return &.{
         requiredArgument("key", "Configuration property name"),
         requiredArgument("value", "New configuration value"),
     };
-    if (pathIs(action, type_name, "parallel", "config")) return &.{integerArgument(
+    if (pathIs(action, type_name, "config", "parallel")) return &.{integerArgument(
         "downloadCount",
         "Maximum number of parallel downloads",
     )};
@@ -1409,7 +1424,7 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, action, "upgrade"))
         return "Upgrade standard, AUR, AppImage, or Flatpak packages, including all supported backends together.";
     if (std.mem.eql(u8, action, "list"))
-        return "List installed standard packages, AppImages, AUR packages, Flatpak applications, or Shelly configuration values.";
+        return "List installed standard packages, AppImages, AUR packages, or Flatpak applications.";
     if (std.mem.eql(u8, action, "list-updates"))
         return "List available updates for standard, AUR, AppImage, or Flatpak packages.";
     if (std.mem.eql(u8, action, "purify"))
@@ -1432,14 +1447,8 @@ pub fn actionDescription(action: []const u8) ?[]const u8 {
         return "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.";
     if (std.mem.eql(u8, action, "keyring"))
         return "Initialize, inspect, refresh, populate, receive, or locally sign keys in the pacman keyring.";
-    if (std.mem.eql(u8, action, "get"))
-        return "Read a Shelly configuration value.";
-    if (std.mem.eql(u8, action, "set"))
-        return "Set a Shelly configuration value.";
-    if (std.mem.eql(u8, action, "reset"))
-        return "Reset Shelly configuration to native defaults.";
-    if (std.mem.eql(u8, action, "parallel"))
-        return "Set Shelly's parallel download count.";
+    if (std.mem.eql(u8, action, "config"))
+        return "Read and modify Shelly configuration.";
     if (std.mem.eql(u8, action, "run"))
         return "Launch or stop a Flatpak or AppImage application.";
     return null;

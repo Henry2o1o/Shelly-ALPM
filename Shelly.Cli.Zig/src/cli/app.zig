@@ -132,7 +132,7 @@ test "help and parser errors bypass dispatch" {
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AurManager.installPackages") == null);
 
     stdout.writer.end = 0;
-    try std.testing.expectEqual(@as(u8, 1), try run(&context, &.{ "get", "config" }));
+    try std.testing.expectEqual(@as(u8, 1), try run(&context, &.{ "config", "get" }));
     try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "Required argument 'key' missing") != null);
 }
 

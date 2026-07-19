@@ -486,6 +486,22 @@ test "translates action-type shortcodes from the command manifest" {
         &.{ "-Kv", "ABCD" },
         &.{ "keyring", "recv", "ABCD" },
     );
+    try expectTranslation(allocator, &manifest, &.{"-C"}, &.{"config"});
+    try expectTranslation(allocator, &manifest, &.{"-Ch"}, &.{ "config", "--help" });
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Cg", "ParallelDownloadCount" },
+        &.{ "config", "get", "ParallelDownloadCount" },
+    );
+    try expectTranslation(
+        allocator,
+        &manifest,
+        &.{ "-Cs", "ParallelDownloadCount", "12" },
+        &.{ "config", "set", "ParallelDownloadCount", "12" },
+    );
+    try expectTranslation(allocator, &manifest, &.{"-Cr"}, &.{ "config", "reset" });
+    try expectTranslation(allocator, &manifest, &.{ "-Cp", "12" }, &.{ "config", "parallel", "12" });
     try expectTranslation(
         allocator,
         &manifest,
@@ -564,7 +580,7 @@ test "uses centralized effective modifiers and rejects invalid shortcode types" 
 
     const uppercase_standard = try translate(allocator, &manifest, &.{ "-SS", "query" });
     try std.testing.expectEqualStrings(
-        "Unknown shortcode type 'S' for action code 'S'. Valid types: s, c, a, f",
+        "Unknown shortcode type 'S' for action code 'S'. Valid types: s, a, f",
         uppercase_standard.failure,
     );
     const uppercase_aur = try translate(allocator, &manifest, &.{ "-IA", "package" });
@@ -574,7 +590,7 @@ test "uses centralized effective modifiers and rejects invalid shortcode types" 
     );
     const invalid_pair = try translate(allocator, &manifest, &.{ "-Si", "query" });
     try std.testing.expectEqualStrings(
-        "Action code 'S' is not available for type 'i'. Valid types: s, c, a, f",
+        "Action code 'S' is not available for type 'i'. Valid types: s, a, f",
         invalid_pair.failure,
     );
     const duplicate_search_type = try translate(allocator, &manifest, &.{ "-Ssas", "query" });
@@ -634,7 +650,7 @@ test "translates uppercase remove aliases and preserves lowercase compatibility"
 
     const unrelated_uppercase = try translate(allocator, &manifest, &.{ "-RC", "value" });
     try std.testing.expectEqualStrings(
-        "Unknown shortcode type 'C' for action code 'R'. Valid types: s, i, c, a, f",
+        "Unknown shortcode type 'C' for action code 'R'. Valid types: s, i, a, f",
         unrelated_uppercase.failure,
     );
 

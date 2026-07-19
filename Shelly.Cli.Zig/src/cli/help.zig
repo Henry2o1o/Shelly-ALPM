@@ -225,7 +225,8 @@ fn isChildOf(command: *const spec.Command, parent: *const spec.Command) bool {
 
 fn usesNamedSubcommands(command: *const spec.Command) bool {
     return std.mem.eql(u8, command.name, "mark") or
-        std.mem.eql(u8, command.name, "keyring");
+        std.mem.eql(u8, command.name, "keyring") or
+        std.mem.eql(u8, command.name, "config");
 }
 
 fn optionTypeCount(manifest: *const spec.Manifest, action: *const spec.Command, name: []const u8) usize {
@@ -442,6 +443,7 @@ fn actionHelpShortcode(action: *const spec.Command) ?[]const u8 {
     if (std.mem.eql(u8, action.name, "upgrade")) return "-Uh";
     if (std.mem.eql(u8, action.name, "mark")) return "-Mh";
     if (std.mem.eql(u8, action.name, "keyring")) return "-K / -Kh";
+    if (std.mem.eql(u8, action.name, "config")) return "-Ch";
     return null;
 }
 
@@ -831,7 +833,7 @@ test "root help combines shortcodes with implemented top-level command examples"
     try std.testing.expect(std.mem.indexOf(u8, rendered, "-<UppercaseAction><lowercaseTypeOrCommand><modifiers...>") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Shortcodes and top-level examples:") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\n  Top-level examples:") == null);
-    for ([_][]const u8{ "-Ss [<package>]", "-Ih", "-U", "-D [<package>]", "-Mh", "-P", "-Ls", "-K / -Kh" }) |shortcode|
+    for ([_][]const u8{ "-Ss [<package>]", "-Ih", "-U", "-D [<package>]", "-Mh", "-P", "-Ls", "-C", "-K / -Kh" }) |shortcode|
         try std.testing.expect(std.mem.indexOf(u8, rendered, shortcode) != null);
     for ([_][]const u8{ "-Ife", "-Ifu", "-Iav", "-Mga", "-Ki", "-Ks", "-Sap", "-Ssa", "-Ssafv" }) |nested_example|
         try std.testing.expect(std.mem.indexOf(u8, rendered, nested_example) == null);
