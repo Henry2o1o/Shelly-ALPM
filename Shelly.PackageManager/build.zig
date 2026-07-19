@@ -344,6 +344,9 @@ pub fn build(b: *std.Build) void {
         .root_module = mod,
         .filters = &.{
             "Flatpak dispatcher forwards typed status and progress",
+            "parseStream parses a full component with description, icons, screenshots, releases, urls and verification",
+            "parseComponent falls back to <developer><name> when developer_name is absent",
+            "streaming parser skips localized payloads and associates addons by id",
             "parseFile reads gzip-compressed AppStream catalogs",
             "AppStream manager returns an owned typed catalog",
             "installed Flatpak resolution matches IDs and friendly names",
