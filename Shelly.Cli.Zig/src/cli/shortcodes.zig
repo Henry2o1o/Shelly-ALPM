@@ -24,6 +24,8 @@ pub fn translate(
 ) !Translation {
     if (args.len == 0) return .{ .unchanged = args };
     const token = args[0];
+    if (try translateTopLevelHelp(allocator, manifest, args, token)) |translation|
+        return translation;
     if (std.mem.eql(u8, token, "-U")) {
         var result: std.ArrayList([]const u8) = .empty;
         try result.appendSlice(allocator, &.{ "upgrade", "all" });
@@ -358,6 +360,45 @@ fn appendModifierAliases(
             try result.append(allocator, alias[1]);
         }
     }
+}
+
+fn translateTopLevelHelp(
+    allocator: std.mem.Allocator,
+    manifest: *const spec.Manifest,
+    args: []const []const u8,
+    token: []const u8,
+) !?Translation {
+    // A bare action shortcode must be exactly "-X".
+    if (token.len != 2 or token[0] != '-')
+        return null;
+
+    if (args.len < 2)
+        return null;
+
+    // Recognizes --help, -h, -?, /h, and /?.
+    const help_option =
+        findRecursiveHelpOption(manifest, args[1]) orelse return null;
+
+    const action =
+        catalog.findActionByCode(token[1]) orelse return null;
+
+    // Ensure the corresponding top-level command exists.
+    const path = try std.fmt.allocPrint(
+        allocator,
+        "shelly {s}",
+        .{action},
+    );
+    if (manifest.findByPath(path) == null)
+        return error.InvalidCatalog;
+
+    var result: std.ArrayList([]const u8) = .empty;
+    try result.append(allocator, action);
+    try result.append(allocator, help_option.name);
+    try result.appendSlice(allocator, args[2..]);
+
+    return .{
+        .translated = try result.toOwnedSlice(allocator),
+    };
 }
 
 test "translates action-type shortcodes from the command manifest" {

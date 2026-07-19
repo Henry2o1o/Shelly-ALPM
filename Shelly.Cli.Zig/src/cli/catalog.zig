@@ -944,6 +944,23 @@ pub fn optionsFor(comptime action: []const u8, comptime type_name: []const u8) [
     return staticSlice(Option, optionDefinitions(action, type_name));
 }
 
+pub fn findActionByCode(action_code: u8) ?[]const u8 {
+    var result: ?[]const u8 = null;
+
+    for (variants) |variant| {
+        if (variant.action_code != action_code) continue;
+
+        if (result) |existing| {
+            if (!std.mem.eql(u8, existing, variant.action))
+                return null;
+        } else {
+            result = variant.action;
+        }
+    }
+
+    return result;
+}
+
 fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Option {
     if (pathIs(action, type_name, "utility", "utility")) return &.{
         flag("--fix-permissions", &.{"-f"}, "Restore ownership of Shelly's user directories"),
