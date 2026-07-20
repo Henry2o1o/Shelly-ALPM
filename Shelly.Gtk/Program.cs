@@ -217,17 +217,14 @@ sealed class Program
         application.AddAction(quitAction);
         application.SetAccelsForAction("app.quit", ["<Ctrl>Q"]);
 
+        // Fired when another process (e.g. shelly-notifications) calls
+        // org.freedesktop.Application.Activate on our bus name.
+        application.OnActivate += (_, _) => _window?.Present();
+
         application.OnStartup += (_, _) =>
         {
             if (initialConfig.TrayEnabled)
                 TrayStartService.Start();
-
-            var existingWindow = application.GetActiveWindow();
-            if (existingWindow != null)
-            {
-                existingWindow.Present();
-                return;
-            }
 
             var cssProvider = CssProvider.New();
             cssProvider.LoadFromString(ResourceHelper.LoadAsset("Assets/style.css"));
@@ -359,7 +356,7 @@ sealed class Program
                 var w2 = serviceProvider.GetRequiredService<AurUpdate>();
                 nb.AppendPage(w2.CreateWindow(), Label.New(T("Updates")));
                 var w3 = serviceProvider.GetRequiredService<AurRemove>();
-                nb.AppendPage(w3.CreateWindow(), Label.New(T("Remove")));
+                nb.AppendPage(w3.CreateWindow(), Label.New(T("Manage")));
                 aurPageBox.Append(nb);
                 currentAurWindows = [w1, w2, w3];
             }
@@ -827,15 +824,16 @@ sealed class Program
             var updatesListBox = (ListBox)mainBuilder.GetObject("updates_list_box")!;
             var updatesPopoverTitle = (Label)mainBuilder.GetObject("updates_popover_title")!;
             var packageUpdateNotifier = serviceProvider.GetRequiredService<IPackageUpdateNotifier>();
+            var upgradeAllButton = (Button)mainBuilder.GetObject("upgrade_all_button")!;
 
             BottomBarExtensions.SetupUpdatesButton(
                 updatesMenuButton,
                 updatesListBox,
                 updatesPopoverTitle,
+                upgradeAllButton,
                 serviceProvider,
                 packageUpdateNotifier);
 
-            var upgradeAllButton = (Button)mainBuilder.GetObject("upgrade_all_button")!;
             upgradeAllButton.OnClicked += async (_, _) => { await UpgradeAllAsync(); };
             return;
 

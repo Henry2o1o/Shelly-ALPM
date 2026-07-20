@@ -45,7 +45,7 @@ public class AlpmManager(string configPath = "/etc/pacman.conf") : IDisposable, 
 
     private bool? _isCachyOs;
 
-    public bool IsCachyOs =>
+    public bool  IsCachyOs =>
         _isCachyOs ??= DistributionHooks.OsRelease.PrettyName?
             .Contains("cachyos", StringComparison.OrdinalIgnoreCase) ?? false;
 

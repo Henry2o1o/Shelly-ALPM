@@ -49,8 +49,8 @@ package() {
   # Install Shelly.Cli binary
   install -Dm755 "$srcdir/shelly" "$pkgdir/usr/bin/shelly"
 
-  # Install Shelly.Keys binary
-  install -Dm755 "$srcdir/shelly-keys" "$pkgdir/usr/bin/shelly-keys"
+  # Install Shelly.Key binary
+  install -Dm755 "$srcdir/shelly-key" "$pkgdir/usr/bin/shelly-key"
 
   # Install desktop entry
   cat <<'EOF' | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/com.shellyorg.shelly.desktop"
@@ -64,6 +64,7 @@ Categories=System;Utility;
 Keywords=program;software;store;repository;package;add;install;uninstall;remove;update;apps;applications;flatpak;pacman;aur;appimage;
 MimeType=x-scheme-handler/appstream;x-scheme-handler/flatpak+https;
 Terminal=false
+X-GNOME-UsesNotifications=true
 Actions=FlatpakInstall;FlatpakUpdate;FlatpakRemove;
 
 [Desktop Action FlatpakInstall]
