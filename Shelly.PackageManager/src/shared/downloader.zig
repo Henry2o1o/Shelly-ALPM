@@ -78,8 +78,9 @@ pub const CoreDownloader = struct {
     operation_context: ?*operations.OperationContext = null,
     parent_operation: ?*const operations.Operation = null,
     active_operation: ?*operations.Operation = null,
-    /// When true, error-level logging is suppressed for best-effort downloads
-    /// (e.g. optional database signatures that may legitimately be absent).
+    /// When true, candidate failures are suppressed from logs, callbacks, and
+    /// operation events. Used for mirrors that can still fail over and for
+    /// optional signatures that may legitimately be absent.
     quiet: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, config: DownloadConfiguration) CoreDownloader {
@@ -87,7 +88,11 @@ pub const CoreDownloader = struct {
             .allocator = allocator,
             .io = io,
             .configuration = config,
-            .http_client = .{ .allocator = allocator, .io = io },
+            .http_client = .{
+                .allocator = allocator,
+                .io = io,
+                .connect_timeout = connectTimeout(config.timeout_in_seconds),
+            },
         };
     }
 
@@ -116,6 +121,7 @@ pub const CoreDownloader = struct {
         self.http_client = .{
             .allocator = self.allocator,
             .io = self.io,
+            .connect_timeout = connectTimeout(self.configuration.timeout_in_seconds),
         };
     }
 
@@ -126,7 +132,7 @@ pub const CoreDownloader = struct {
         force: bool,
     ) DownloadResult {
         var operation_storage: operations.Operation = undefined;
-        const has_operation = if (self.parent_operation) |parent| blk: {
+        const has_operation = if (self.quiet) false else if (self.parent_operation) |parent| blk: {
             operation_storage = parent.child(.{
                 .backend = .download,
                 .kind = .download,
@@ -223,10 +229,13 @@ pub const CoreDownloader = struct {
             .{ .override = agent }
         else
             .default;
-        var req = self.http_client.request(
+        var req = requestWithSetupTimeout(
+            &self.http_client,
+            self.io,
             .GET,
             uri,
             downloadRequestOptions(user_agent, extra_headers),
+            connectTimeout(self.configuration.timeout_in_seconds),
         ) catch |err| {
             self.logErr("HTTP request setup failed for {s}: {}", .{ url, err });
             return mapRequestError(err);
@@ -358,6 +367,7 @@ pub const CoreDownloader = struct {
     }
 
     fn emitEvent(self: *const CoreDownloader, event: DownloadEvent) void {
+        if (self.quiet and event.event_type == .Error) return;
         if (self.event_callback) |callback| callback(self.event_context, event);
         const operation = self.active_operation orelse return;
         switch (event.event_type) {
@@ -396,6 +406,70 @@ pub const CoreDownloader = struct {
         if (!self.quiet) std.log.err(fmt, args);
     }
 };
+
+const RequestSetupRace = union(enum) {
+    request: HttpClient.RequestError!HttpClient.Request,
+    timeout: std.Io.Cancelable!void,
+};
+
+/// Bounds DNS, TCP, and TLS initialization together. The response body is not
+/// part of this deadline, so a mirror that successfully starts responding can
+/// finish at normal transfer speed.
+fn requestWithSetupTimeout(
+    client: *HttpClient,
+    io: std.Io,
+    method: std.http.Method,
+    uri: std.Uri,
+    options: HttpClient.RequestOptions,
+    timeout: std.Io.Timeout,
+) HttpClient.RequestError!HttpClient.Request {
+    if (timeout == .none) return client.request(method, uri, options);
+
+    var result_buffer: [2]RequestSetupRace = undefined;
+    var select = std.Io.Select(RequestSetupRace).init(io, &result_buffer);
+    select.async(.request, beginRequest, .{ client, method, uri, options });
+    select.async(.timeout, waitForRequestSetupTimeout, .{ io, timeout });
+    defer while (select.cancel()) |remaining| closeRequestSetupRace(remaining);
+
+    return switch (try select.await()) {
+        .request => |result| result,
+        .timeout => |result| {
+            try result;
+            return error.Timeout;
+        },
+    };
+}
+
+fn beginRequest(
+    client: *HttpClient,
+    method: std.http.Method,
+    uri: std.Uri,
+    options: HttpClient.RequestOptions,
+) HttpClient.RequestError!HttpClient.Request {
+    return client.request(method, uri, options);
+}
+
+fn waitForRequestSetupTimeout(io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!void {
+    return timeout.sleep(io);
+}
+
+fn closeRequestSetupRace(completed: RequestSetupRace) void {
+    switch (completed) {
+        .request => |result| if (result) |request| {
+            var loser = request;
+            loser.deinit();
+        } else |_| {},
+        .timeout => {},
+    }
+}
+
+fn connectTimeout(seconds: u32) std.Io.Timeout {
+    if (seconds == 0) return .none;
+    return .{ .duration = .{
+        .clock = .awake,
+        .raw = .fromSeconds(seconds),
+    } };
+}
 
 fn downloadRequestOptions(
     user_agent: HttpClient.Request.Headers.Value,
@@ -513,6 +587,18 @@ test "DownloadConfiguration.default() returns correct default values" {
     try std.testing.expectEqual(@as(u8, 10), config.parallel_downloads);
 }
 
+test "connect timeout uses the configured duration" {
+    const timeout = connectTimeout(30);
+    switch (timeout) {
+        .duration => |duration| {
+            try std.testing.expectEqual(std.Io.Clock.awake, duration.clock);
+            try std.testing.expectEqual(std.Io.Duration.fromSeconds(30), duration.raw);
+        },
+        else => return error.TestExpectedDuration,
+    }
+    try std.testing.expect(connectTimeout(0) == .none);
+}
+
 test "download requests disable connection reuse for bodyless conditional responses" {
     const options = downloadRequestOptions(.default, &.{});
     try std.testing.expect(!options.keep_alive);
@@ -606,6 +692,25 @@ test "mapReceiveHeadError distinguishes TLS initialization from certificate bund
 
 test "mapReceiveHeadError maps other errors to NetworkError" {
     try std.testing.expectEqual(DownloadError.NetworkError, mapReceiveHeadError(error.ConnectionRefused));
+}
+
+test "quiet mirror candidates suppress error callbacks" {
+    var callback_called = false;
+    var downloader = CoreDownloader.init(std.testing.allocator, std.testing.io, .{});
+    defer downloader.deinit();
+    downloader.quiet = true;
+    downloader.setEventCallback(struct {
+        fn callback(context: ?*anyopaque, _: DownloadEvent) void {
+            const called: *bool = @ptrCast(@alignCast(context.?));
+            called.* = true;
+        }
+    }.callback, &callback_called);
+
+    downloader.emitEvent(.{
+        .event_type = .Error,
+        .download_error = DownloadError.NetworkError,
+    });
+    try std.testing.expect(!callback_called);
 }
 
 test "shouldEmitProgress emits on percentage change when total is known" {

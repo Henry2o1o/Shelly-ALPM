@@ -12,6 +12,7 @@ const operation_api = @import("operation_context");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
+const mirror_failover_timeout_seconds: u32 = 1;
 
 pub const ConfigError = error{
     InitFailed,
@@ -1907,9 +1908,10 @@ pub const Manager = struct {
         force_download: bool,
         signature_required: bool,
     ) downloader.DownloadError!void {
-        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
+        const download_config = mirrorDownloadConfiguration();
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
+        downloader_instance.quiet = true;
         if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
         downloader_instance.setEventCallback(onDownloadEvent, self);
         const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ sync_directory, database_name }) catch return;
@@ -1917,6 +1919,7 @@ pub const Manager = struct {
         const sig_dest = std.fmt.allocPrint(self.allocator, "{s}.sig", .{dest}) catch return;
         defer self.allocator.free(sig_dest);
 
+        var last_failure: ?downloader.DownloadError = null;
         for (urls.items) |url_base| {
             const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name }) catch continue;
             defer self.allocator.free(db_url);
@@ -1948,10 +1951,16 @@ pub const Manager = struct {
                     downloader_instance.quiet = false;
                     return;
                 },
-                .failure => continue,
+                .failure => |err| {
+                    if (err == downloader.DownloadError.Cancelled) return err;
+                    last_failure = err;
+                    continue;
+                },
             }
         }
-        return downloader.DownloadError.FailedDownload;
+        const final_error = last_failure orelse downloader.DownloadError.FailedDownload;
+        self.reportAllMirrorsFailed(database_name, final_error);
+        return final_error;
     }
 
     fn databaseSignatureRequired(level: i32) bool {
@@ -2011,9 +2020,10 @@ pub const Manager = struct {
     }
 
     fn download_package(self: *Manager, package: libalpm.Package, database: libalpm.Database) downloader.DownloadError!void {
-        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
+        const download_config = mirrorDownloadConfiguration();
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
+        downloader_instance.quiet = true;
         if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
         downloader_instance.setEventCallback(onDownloadEvent, self);
         const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.config.cache_directory, package.file_name() }) catch return;
@@ -2021,6 +2031,7 @@ pub const Manager = struct {
         const sig_dest = std.fmt.allocPrint(self.allocator, "{s}.sig", .{dest}) catch return;
         defer self.allocator.free(sig_dest);
 
+        var last_failure: ?downloader.DownloadError = null;
         var urls = database.servers();
         while (urls.next()) |url| {
             const file_url = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ url, package.file_name() }) catch return downloader.DownloadError.InvalidUrl;
@@ -2035,10 +2046,30 @@ pub const Manager = struct {
                     downloader_instance.quiet = false;
                     return;
                 },
-                .failure, .skipped => continue,
+                .failure => |err| {
+                    if (err == downloader.DownloadError.Cancelled) return err;
+                    last_failure = err;
+                    continue;
+                },
+                .skipped => continue,
             }
         }
-        return downloader.DownloadError.FailedDownload;
+        const final_error = last_failure orelse downloader.DownloadError.FailedDownload;
+        self.reportAllMirrorsFailed(package.file_name(), final_error);
+        return final_error;
+    }
+
+    fn reportAllMirrorsFailed(self: *Manager, subject: []const u8, err: downloader.DownloadError) void {
+        const message = std.fmt.allocPrint(
+            self.allocator,
+            "All mirrors failed for {s}: {s}",
+            .{ subject, @errorName(err) },
+        ) catch {
+            self.dispatcher.raiseError(.{ .message = "All configured mirrors failed" });
+            return;
+        };
+        defer self.allocator.free(message);
+        self.dispatcher.raiseError(.{ .message = message });
     }
 
     pub fn io(self: *Manager) std.Io {
@@ -2672,6 +2703,23 @@ pub const Manager = struct {
         return std.mem.span(ptr);
     }
 };
+
+fn mirrorDownloadConfiguration() downloader.DownloadConfiguration {
+    return .{
+        .user_agent = "Shelly-ALPM/3",
+        .timeout_in_seconds = mirror_failover_timeout_seconds,
+        // A failed candidate should immediately advance to the next mirror.
+        .max_retries = 0,
+        .retry_delay_secs = 0,
+    };
+}
+
+test "mirror discovery advances after a three second single attempt" {
+    const config = mirrorDownloadConfiguration();
+    try std.testing.expectEqual(@as(u32, 3), config.timeout_in_seconds);
+    try std.testing.expectEqual(@as(u8, 0), config.max_retries);
+    try std.testing.expectEqual(@as(u32, 0), config.retry_delay_secs);
+}
 
 const OperationScope = struct {
     manager: *Manager,

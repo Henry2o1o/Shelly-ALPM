@@ -11,8 +11,8 @@ const Client = @This();
 const builtin = @import("builtin");
 
 // Vendored from Zig 0.16.0's std.http.Client. TLS is intentionally injected
-// from the local compatibility client; HTTP behavior remains otherwise equal
-// to the Zig 0.16.0 standard-library implementation.
+// from the local compatibility client, and hostname connection uses separate
+// A/AAAA lookups so either address family can succeed independently.
 const std = @import("std");
 const TlsClient = @import("tls_client.zig");
 const Io = std.Io;
@@ -25,6 +25,8 @@ const assert = std.debug.assert;
 const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const HostName = std.Io.net.HostName;
+const IpAddress = std.Io.net.IpAddress;
+const Stream = std.Io.net.Stream;
 
 pub const disable_tls = std.options.http_disable_tls;
 
@@ -32,6 +34,10 @@ pub const disable_tls = std.options.http_disable_tls;
 allocator: Allocator,
 /// Used for opening TCP connections.
 io: Io,
+
+/// Applied to every individual IP connection attempt. DNS resolution has its
+/// own resolver timeout. A duration is restarted for each candidate address.
+connect_timeout: Io.Timeout = .none,
 
 ca_bundle_lock: if (disable_tls) void else Io.RwLock = if (disable_tls) {} else .init,
 ca_bundle: if (disable_tls) void else std.crypto.Certificate.Bundle = if (disable_tls) {} else .empty,
@@ -1433,7 +1439,11 @@ pub fn connectTcp(
     port: u16,
     protocol: Protocol,
 ) ConnectTcpError!*Connection {
-    return connectTcpOptions(client, .{ .host = host, .port = port, .protocol = protocol });
+    return connectTcpOptions(client, .{
+        .host = host,
+        .port = port,
+        .protocol = protocol,
+    });
 }
 
 pub const ConnectTcpOptions = struct {
@@ -1443,7 +1453,8 @@ pub const ConnectTcpOptions = struct {
 
     proxied_host: ?HostName = null,
     proxied_port: ?u16 = null,
-    timeout: Io.Timeout = .none,
+    /// Overrides `Client.connect_timeout` for this connection.
+    timeout: ?Io.Timeout = null,
 };
 
 pub fn connectTcpOptions(client: *Client, options: ConnectTcpOptions) ConnectTcpError!*Connection {
@@ -1461,7 +1472,10 @@ pub fn connectTcpOptions(client: *Client, options: ConnectTcpOptions) ConnectTcp
         .protocol = protocol,
     })) |conn| return conn;
 
-    var stream = try host.connect(io, port, .{ .mode = .stream });
+    var stream = try connectPreferIp4(host, io, port, .{
+        .mode = .stream,
+        .timeout = options.timeout orelse client.connect_timeout,
+    });
     errdefer stream.close(io);
 
     switch (protocol) {
@@ -1482,6 +1496,195 @@ pub fn connectTcpOptions(client: *Client, options: ConnectTcpOptions) ConnectTcp
             return &pc.connection;
         },
     }
+}
+
+const FamilyResult = HostName.ConnectError!Stream;
+
+const FamilyRace = union(enum) {
+    ip4: FamilyResult,
+    ip6: FamilyResult,
+    timeout: Io.Cancelable!void,
+};
+
+/// Resolves A and AAAA independently so failure of one DNS family does not
+/// discard a valid result from the other. IPv4 receives a small head start,
+/// matching Shelly's C# client's preference while retaining IPv6 fallback.
+fn connectPreferIp4(
+    host: HostName,
+    io: Io,
+    port: u16,
+    options: IpAddress.ConnectOptions,
+) HostName.ConnectError!Stream {
+    var result_buffer: [3]FamilyRace = undefined;
+    var select = Io.Select(FamilyRace).init(io, &result_buffer);
+
+    // The threaded POSIX backend does not implement native connect timeouts.
+    // Keep the socket options timeout-free and apply one deadline to the
+    // complete DNS + address-family race instead.
+    var connect_options = options;
+    connect_options.timeout = .none;
+    select.async(.ip4, connectFamily, .{ host, io, port, IpAddress.Family.ip4, connect_options });
+    select.async(.ip6, connectFamilyDelayed, .{ host, io, port, IpAddress.Family.ip6, connect_options });
+    const has_timeout = options.timeout != .none;
+    if (has_timeout) select.async(.timeout, waitForConnectTimeout, .{ io, options.timeout });
+
+    // Cancel the losing lookup/connection and close any stream it completed
+    // before cancelation reached it.
+    defer while (select.cancel()) |remaining| closeFamilyRace(io, remaining);
+
+    var last_error: ?HostName.ConnectError = null;
+    for (0..if (has_timeout) 3 else 2) |_| {
+        const completed = try select.await();
+        const result = switch (completed) {
+            .ip4 => |value| value,
+            .ip6 => |value| value,
+            .timeout => |value| {
+                try value;
+                return error.Timeout;
+            },
+        };
+        if (result) |stream| {
+            return stream;
+        } else |err| {
+            if (err == error.Canceled) return err;
+            last_error = err;
+        }
+    }
+    return last_error orelse error.UnknownHostName;
+}
+
+fn connectFamilyDelayed(
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: IpAddress.Family,
+    options: IpAddress.ConnectOptions,
+) FamilyResult {
+    io.sleep(Io.Duration.fromMilliseconds(200), .awake) catch |err| return err;
+    return connectFamily(host, io, port, family, options);
+}
+
+fn closeFamilyRace(io: Io, completed: FamilyRace) void {
+    const result = switch (completed) {
+        .ip4 => |value| value,
+        .ip6 => |value| value,
+        .timeout => return,
+    };
+    if (result) |stream| stream.close(io) else |_| {}
+}
+
+fn waitForConnectTimeout(io: Io, timeout: Io.Timeout) Io.Cancelable!void {
+    return timeout.sleep(io);
+}
+
+/// Family-specific counterpart of `HostName.connect`. The standard helper
+/// performs one combined A+AAAA lookup, which makes a failure from either DNS
+/// family fatal even when the other family returned usable addresses.
+fn connectFamily(
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: IpAddress.Family,
+    options: IpAddress.ConnectOptions,
+) HostName.ConnectError!Stream {
+    var connect_many_buffer: [32]IpAddress.ConnectError!Stream = undefined;
+    var connect_many_queue: Io.Queue(IpAddress.ConnectError!Stream) = .init(&connect_many_buffer);
+
+    var connect_many = io.async(connectManyFamily, .{
+        host,
+        io,
+        port,
+        family,
+        &connect_many_queue,
+        options,
+    });
+    defer {
+        connect_many.cancel(io) catch {};
+        while (connect_many_queue.getOneUncancelable(io)) |loser| {
+            if (loser) |stream| stream.close(io) else |_| {}
+        } else |err| switch (err) {
+            error.Closed => {},
+        }
+    }
+
+    var ip_connect_error: ?IpAddress.ConnectError = null;
+    while (connect_many_queue.getOne(io)) |result| {
+        if (result) |stream| {
+            return stream;
+        } else |err| switch (err) {
+            error.Canceled => unreachable,
+            error.SystemResources,
+            error.OptionUnsupported,
+            error.ProcessFdQuotaExceeded,
+            error.SystemFdQuotaExceeded,
+            => |fatal| return fatal,
+            error.WouldBlock => return error.Unexpected,
+            else => |connection_error| ip_connect_error = connection_error,
+        }
+    } else |err| switch (err) {
+        error.Canceled => |canceled| return canceled,
+        error.Closed => {
+            try connect_many.await(io);
+            return ip_connect_error orelse error.UnknownHostName;
+        },
+    }
+}
+
+fn connectManyFamily(
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: IpAddress.Family,
+    results: *Io.Queue(IpAddress.ConnectError!Stream),
+    options: IpAddress.ConnectOptions,
+) HostName.LookupError!void {
+    defer results.close(io);
+
+    var canonical_name_buffer: [HostName.max_len]u8 = undefined;
+    var lookup_buffer: [32]HostName.LookupResult = undefined;
+    var lookup_queue: Io.Queue(HostName.LookupResult) = .init(&lookup_buffer);
+    var lookup_future = io.async(HostName.lookup, .{ host, io, &lookup_queue, .{
+        .port = port,
+        .canonical_name_buffer = &canonical_name_buffer,
+        .family = family,
+    } });
+    defer lookup_future.cancel(io) catch {};
+
+    var group: Io.Group = .init;
+    defer group.cancel(io);
+
+    while (lookup_queue.getOne(io)) |dns_result| switch (dns_result) {
+        .address => |address| group.async(io, enqueueFamilyConnection, .{
+            address,
+            io,
+            results,
+            options,
+        }),
+        .canonical_name => continue,
+    } else |err| switch (err) {
+        error.Canceled => |canceled| return canceled,
+        error.Closed => {
+            try group.await(io);
+            return lookup_future.await(io);
+        },
+    }
+}
+
+fn enqueueFamilyConnection(
+    address: IpAddress,
+    io: Io,
+    queue: *Io.Queue(IpAddress.ConnectError!Stream),
+    options: IpAddress.ConnectOptions,
+) Io.Cancelable!void {
+    const result = address.connect(io, options) catch |err| switch (err) {
+        error.Canceled => |canceled| return canceled,
+        else => |connection_error| connection_error,
+    };
+    errdefer if (result) |stream| stream.close(io) else |_| {};
+    queue.putOne(io, result) catch |err| switch (err) {
+        error.Canceled => |canceled| return canceled,
+        error.Closed => unreachable,
+    };
 }
 
 pub const ConnectUnixError = Allocator.Error || std.posix.SocketError || error{NameTooLong} || std.posix.ConnectError;
