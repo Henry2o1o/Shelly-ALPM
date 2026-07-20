@@ -1,5 +1,6 @@
 const std = @import("std");
 const operations = @import("operation_context");
+const HttpClient = @import("http_client.zig");
 
 pub const DownloadEventType = enum {
     Start,
@@ -71,7 +72,7 @@ pub const CoreDownloader = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     configuration: DownloadConfiguration,
-    http_client: std.http.Client,
+    http_client: HttpClient,
     event_callback: ?DownloadEventCallback = null,
     event_context: ?*anyopaque = null,
     operation_context: ?*operations.OperationContext = null,
@@ -218,7 +219,7 @@ pub const CoreDownloader = struct {
             } else |_| {}
         }
 
-        const user_agent: std.http.Client.Request.Headers.Value = if (self.configuration.user_agent) |agent|
+        const user_agent: HttpClient.Request.Headers.Value = if (self.configuration.user_agent) |agent|
             .{ .override = agent }
         else
             .default;
@@ -397,9 +398,9 @@ pub const CoreDownloader = struct {
 };
 
 fn downloadRequestOptions(
-    user_agent: std.http.Client.Request.Headers.Value,
+    user_agent: HttpClient.Request.Headers.Value,
     extra_headers: []const std.http.Header,
-) std.http.Client.RequestOptions {
+) HttpClient.RequestOptions {
     return .{
         .headers = .{ .user_agent = user_agent, .accept_encoding = .{ .override = "identity" } },
         .extra_headers = extra_headers,
@@ -472,7 +473,7 @@ fn retryAction(err: DownloadError, attempt: u8, max_retries: u8, tls_reset_used:
     return .stop;
 }
 
-fn mapRequestError(err: std.http.Client.RequestError) DownloadError {
+fn mapRequestError(err: HttpClient.RequestError) DownloadError {
     return switch (err) {
         error.UnsupportedUriScheme, error.UriMissingHost => DownloadError.InvalidUrl,
         error.TlsInitializationFailed => DownloadError.SslError,
@@ -481,7 +482,7 @@ fn mapRequestError(err: std.http.Client.RequestError) DownloadError {
     };
 }
 
-fn mapReceiveHeadError(err: std.http.Client.Request.ReceiveHeadError) DownloadError {
+fn mapReceiveHeadError(err: HttpClient.Request.ReceiveHeadError) DownloadError {
     return switch (err) {
         error.TooManyHttpRedirects,
         error.RedirectRequiresResend,
