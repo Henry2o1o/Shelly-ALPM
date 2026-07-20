@@ -3,7 +3,7 @@ const std = @import("std");
 pub const binary = "shelly";
 pub const version = "2.4.1+4";
 pub const informational_version = version;
-pub const root_description = "Shelly — a native, unified package manager for Arch Linux repository packages, the AUR, Flatpaks, and AppImages.";
+pub const root_description = "Shelly — a native, unified package manager for Arch Linux repository packages, the AUR, Flatpaks, and AppImages. A bare value searches standard repositories and the AUR, then prompts for a package to install.";
 
 pub const Argument = struct {
     name: []const u8,
@@ -45,6 +45,13 @@ pub const root_options = [_]Option{
     globalFlag("--ui-mode", &.{"-U"}, "Emit framed output for the Shelly UI"),
     globalFlag("--json", &.{"-j"}, "Output structured JSON where the command supports it"),
 };
+
+pub const root_arguments = [_]Argument{.{
+    .name = "query",
+    .minimumArity = 1,
+    .maximumArity = null,
+    .description = "Package search words used by the interactive standard/AUR install fallback",
+}};
 
 pub const Type = struct {
     name: []const u8,

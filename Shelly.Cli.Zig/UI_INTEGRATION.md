@@ -4,6 +4,8 @@ This document is the implementation contract for a future graphical or text UI t
 
 Use canonical long-form commands from UI code. Shortcodes are convenient for people, but are intentionally omitted here because they are compact parser aliases rather than a stable application interface.
 
+The bare-value fallback (`shelly firefox`) is a terminal-only SearchInstall convenience: it searches standard repositories and the AUR, presents reverse-numbered choices with the closest match last as option `1`, and then enters the normal install command. UI clients must use explicit `search` and `install` commands; the fallback rejects `--ui-mode` and `--json`.
+
 ## Starting a command
 
 Start `shelly` as a child process with an argument array, not a shell-built command string:
