@@ -792,8 +792,8 @@ pub const Manager = struct {
                 var optional_deps = package.optional_depends();
                 while (optional_deps.next()) |deps| {
                     const dep_name = deps.name() orelse continue;
-                    // looks for local package continues on if failes to find.
-                    const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, dep_name.ptr) orelse {
+                    // looks for local package, then the satisfier, continues on if failes to find.
+                    const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, dep_name.ptr) orelse rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(local_db), dep_name.ptr) orelse {
                         const message = try std.fmt.allocPrint(self.allocator, "Failed to find {s} in local database. Skipping...", .{dep_name});
                         defer self.allocator.free(message);
                         self.dispatcher.raiseInformational(.{
