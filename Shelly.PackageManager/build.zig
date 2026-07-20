@@ -378,6 +378,7 @@ pub fn build(b: *std.Build) void {
             "AUR update projection compares remote and installed versions",
             "AUR git remote and VCS suffix parsing mirror the C# manager",
             "helper cache identity recognizes installed split-package members",
+            "all requested PKGBUILDs are reviewed before the first build",
             "AUR operation-hooked public APIs compile",
             "build progress parser recognizes makepkg percentage lines",
             "streaming process execution forwards stdout stderr and a final unterminated line",
