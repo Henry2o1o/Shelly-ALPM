@@ -291,8 +291,11 @@ fn runStandard(
     if (detail and !group) {
         const wanted = query orelse return error.NoPackageSpecified;
         for (packages.items) |package| {
-            if (std.ascii.eqlIgnoreCase(package.name, wanted))
-                return .{ .mode = .detail, .detail = package };
+            var pkg = package;
+            if (std.ascii.eqlIgnoreCase(package.name, wanted)) {
+                pkg.required_by = try manager.get_required_packages(package.name, package.repository);
+                return .{ .mode = .detail, .detail = pkg };
+            }
         }
         return error.PackageNotFound;
     }
