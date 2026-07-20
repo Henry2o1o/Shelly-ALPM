@@ -106,6 +106,8 @@ pub const variants = [_]Variant{
                 .{ .name = "--show-hidden", .description = "Include packages hidden by pacman IgnorePkg configuration" },
                 .{ .name = "--detail", .description = "Show complete metadata for one exact ALPM package name" },
                 .{ .name = "--group", .description = "List package groups or restrict available packages to the requested group" },
+                .{ .name = "--explicit", .description = "Shows only explicitly installed pacakges" },
+                .{ .name = "--depends", .description = "Shows only dependency packages" },
             },
         },
     },
@@ -1008,6 +1010,8 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--show-hidden", &.{"-w"}, "Include packages hidden through IgnorePkg"),
         flag("--detail", &.{ "--info", "-d" }, "Show complete metadata for an exact package"),
         flag("--group", &.{"-g"}, "List groups or search within a group"),
+        flag("--explicit", &.{"-e"}, "Returns only explicitly installed packages"),
+        flag("--depends", &.{"-D"}, "Returns only dependency packages"),
     };
     if (pathIs(action, type_name, "search", "aur")) return &.{
         flag(

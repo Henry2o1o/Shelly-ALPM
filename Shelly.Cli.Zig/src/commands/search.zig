@@ -239,6 +239,8 @@ fn runStandard(
     const group = optionEnabled(invocation, "--group");
     const show_hidden = optionEnabled(invocation, "--show-hidden");
     const query: ?[]const u8 = if (invocation.positionals.len == 0) null else invocation.positionals[0];
+    const depends = optionEnabled(invocation, "--depends");
+    const explicit = optionEnabled(invocation, "--explicit");
 
     if (!repositories and !available and !installed and !local and !detail) {
         installed = true;
@@ -271,7 +273,15 @@ fn runStandard(
         for (values) |value| {
             const name = value.name() orelse continue;
             if (!show_hidden and ignoredPackage(manager, name)) continue;
-            try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
+            if (depends and value.reason_value == .Dependency) {
+                try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
+                continue;
+            }
+            if (explicit and value.reason_value == .Explicit) {
+                try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
+                continue;
+            }
+            if (!explicit and !depends) try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
         }
     }
     if (available) {
@@ -370,6 +380,7 @@ fn runStandard(
 
     const limit: usize = @intCast(optionInteger(invocation, "--limit", 100));
     const page: usize = @intCast(optionInteger(invocation, "--page", 1));
+
     return .{
         .mode = .packages,
         .packages = try pageSlice(StandardPackage, context.allocator, selected.items, page, limit),
