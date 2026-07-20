@@ -77,14 +77,14 @@ pub const PackageDetail = extern struct {
         var buf: [256]u8 = undefined;
         gtk.Label.setLabel(p.name_label, c_string.cstr(&buf, name));
         gtk.Label.setLabel(p.description_label, "Loading...");
-        clearBox(p.spec_box);
-        clearBox(p.sections_box);
+        clear_box(p.spec_box);
+        clear_box(p.sections_box);
 
         if (p.debounce_source != 0) {
             _ = glib.Source.remove(p.debounce_source);
             p.debounce_source = 0;
         }
-        p.debounce_source = glib.timeoutAdd(150, &onDebounce, self);
+        p.debounce_source = glib.timeoutAdd(150, &on_debounce, self);
     }
 
     fn on_debounce(data: ?*anyopaque) callconv(.c) c_int {
@@ -173,7 +173,7 @@ pub const PackageDetail = extern struct {
         clear_box(p.spec_box);
         add_spec_row(p.spec_box, "Version", package.Version);
         add_spec_row(p.spec_box, "Repository", package.Repository);
-        add_spec_row(p.spec_box, "Installed Size", package.InstalledSize);
+        add_spec_row(p.spec_box, "Installed Size", SizeConverter.convert_null_term(&sbuf, package.InstalledSize));
         if (package.DownloadSize > 0) add_spec_size(p.spec_box, "Download Size", package.DownloadSize);
         if (package.BuildDate.len > 0) add_spec_row(p.spec_box, "Build Date", package.BuildDate);
         if (package.InstallReason.len > 0) add_spec_row(p.spec_box, "Install Reason", package.InstallReason);
@@ -182,7 +182,7 @@ pub const PackageDetail = extern struct {
         const alloc = (p.arena orelse return).allocator();
 
         add_spec_list(p.spec_box, alloc, "Licenses", package.Licenses);
-        add_list_section(p.spec_box, alloc, "Provides", package.Provides);
+        add_spec_list(p.spec_box, alloc, "Provides", package.Provides);
         add_spec_list(p.spec_box, alloc, "Conflicts", package.Conflicts);
 
         add_list_section(p.sections_box, "Depends", package.Depends);
