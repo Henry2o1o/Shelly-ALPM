@@ -945,7 +945,7 @@ test "list-updates routes long and short forms to each backend" {
     }
 }
 
-test "bare list-updates shortcode queries every backend in order and emits one JSON array" {
+test "bare list-updates shortcode queries every backend in order and emits grouped JSON" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
@@ -1011,7 +1011,7 @@ test "bare list-updates shortcode queries every backend in order and emits one J
         try std.testing.expect(show_hidden);
     }
     try std.testing.expectEqualStrings(
-        "[{\"Name\":\"Widget\",\"Version\":\"2.0\",\"DownloadUrl\":\"https://example.test/widget\",\"IsUpdateAvailable\":true}]\n",
+        "{\"Packages\":[],\"Aur\":[],\"AppImage\":[{\"Name\":\"Widget\",\"Version\":\"2.0\",\"DownloadUrl\":\"https://example.test/widget\",\"IsUpdateAvailable\":true}],\"Flatpak\":[]}\n",
         stdout.writer.buffered(),
     );
     try std.testing.expectEqualStrings("", stderr.writer.buffered());
@@ -1079,7 +1079,10 @@ test "bare list-updates shortcode renders empty plain and UI output" {
     );
     const decoded = try decodeFirstTestFrame(std.testing.allocator, ui_stdout.writer.buffered());
     defer std.testing.allocator.free(decoded);
-    try std.testing.expectEqualStrings("[]", decoded);
+    try std.testing.expectEqualStrings(
+        "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}",
+        decoded,
+    );
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ui_stdout.writer.buffered(), "[JSON]"));
 }
 
@@ -1127,7 +1130,10 @@ test "bare list-updates shortcode continues after a backend failure" {
         try dispatchWithRunner(&context, &outcome.dispatch, runner),
     );
     try std.testing.expectEqual(@as(usize, 4), capture.calls);
-    try std.testing.expectEqualStrings("[]\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings(
+        "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}\n",
+        stdout.writer.buffered(),
+    );
     try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "Unable to query appimage updates") != null);
 }
 

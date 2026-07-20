@@ -17,6 +17,7 @@ pub const DownloadError = error{
     Timeout,
     RetryExceeded,
     SslError,
+    CertificateBundleError,
     NotModified,
     FailedDownload,
     Cancelled,
@@ -109,6 +110,14 @@ pub const CoreDownloader = struct {
         self.http_client.deinit();
     }
 
+    fn resetHttpClient(self: *CoreDownloader) void {
+        self.http_client.deinit();
+        self.http_client = .{
+            .allocator = self.allocator,
+            .io = self.io,
+        };
+    }
+
     pub fn downloadToFile(
         self: *CoreDownloader,
         url: []const u8,
@@ -151,6 +160,7 @@ pub const CoreDownloader = struct {
         force: bool,
     ) DownloadResult {
         var attempt: u8 = 0;
+        var tls_reset_used = false;
         while (true) : (attempt += 1) {
             if (self.isCancelled()) {
                 self.emitEvent(.{ .event_type = .Error, .download_error = DownloadError.Cancelled, .destination_path = destination_path });
@@ -170,15 +180,23 @@ pub const CoreDownloader = struct {
                     self.emitEvent(.{ .event_type = .Skipped, .destination_path = destination_path });
                     return .{ .skipped = .{ .destination_path = destination_path, .reason = .NotModified } };
                 }
-                const can_retry = isRetryable(err) and attempt < self.configuration.max_retries;
-                if (!can_retry) {
-                    const final_err = if (isRetryable(err)) DownloadError.RetryExceeded else err;
-                    self.emitEvent(.{
-                        .event_type = .Error,
-                        .download_error = final_err,
-                        .destination_path = destination_path,
-                    });
-                    return .{ .failure = final_err };
+                switch (retryAction(err, attempt, self.configuration.max_retries, tls_reset_used)) {
+                    .retry => {},
+                    .reset_tls_and_retry => {
+                        // Recreate the client once so the next attempt gets a fresh
+                        // connection pool, CA bundle, and cached realtime value.
+                        tls_reset_used = true;
+                        self.resetHttpClient();
+                    },
+                    .stop => {
+                        const final_err = if (isRetryable(err)) DownloadError.RetryExceeded else err;
+                        self.emitEvent(.{
+                            .event_type = .Error,
+                            .download_error = final_err,
+                            .destination_path = destination_path,
+                        });
+                        return .{ .failure = final_err };
+                    },
                 }
             }
         }
@@ -441,10 +459,24 @@ fn isRetryable(err: DownloadError) bool {
     };
 }
 
+const RetryAction = enum {
+    stop,
+    retry,
+    reset_tls_and_retry,
+};
+
+fn retryAction(err: DownloadError, attempt: u8, max_retries: u8, tls_reset_used: bool) RetryAction {
+    if (attempt >= max_retries) return .stop;
+    if (err == DownloadError.SslError and !tls_reset_used) return .reset_tls_and_retry;
+    if (isRetryable(err)) return .retry;
+    return .stop;
+}
+
 fn mapRequestError(err: std.http.Client.RequestError) DownloadError {
     return switch (err) {
         error.UnsupportedUriScheme, error.UriMissingHost => DownloadError.InvalidUrl,
-        error.TlsInitializationFailed, error.CertificateBundleLoadFailure => DownloadError.SslError,
+        error.TlsInitializationFailed => DownloadError.SslError,
+        error.CertificateBundleLoadFailure => DownloadError.CertificateBundleError,
         else => DownloadError.NetworkError,
     };
 }
@@ -463,7 +495,8 @@ fn mapReceiveHeadError(err: std.http.Client.Request.ReceiveHeadError) DownloadEr
         error.HttpChunkTruncated,
         => DownloadError.HttpError,
         error.UnsupportedUriScheme => DownloadError.InvalidUrl,
-        error.TlsInitializationFailed, error.CertificateBundleLoadFailure => DownloadError.SslError,
+        error.TlsInitializationFailed => DownloadError.SslError,
+        error.CertificateBundleLoadFailure => DownloadError.CertificateBundleError,
         else => DownloadError.NetworkError,
     };
 }
@@ -517,6 +550,26 @@ test "isRetryable returns false for other errors" {
     try std.testing.expect(!isRetryable(DownloadError.InvalidUrl));
     try std.testing.expect(!isRetryable(DownloadError.RetryExceeded));
     try std.testing.expect(!isRetryable(DownloadError.SslError));
+    try std.testing.expect(!isRetryable(DownloadError.CertificateBundleError));
+}
+
+test "retryAction resets TLS once before stopping" {
+    try std.testing.expectEqual(RetryAction.reset_tls_and_retry, retryAction(DownloadError.SslError, 0, 3, false));
+    try std.testing.expectEqual(RetryAction.stop, retryAction(DownloadError.SslError, 1, 3, true));
+    try std.testing.expectEqual(RetryAction.stop, retryAction(DownloadError.SslError, 0, 0, false));
+}
+
+test "retryAction retries transient errors without resetting TLS" {
+    try std.testing.expectEqual(RetryAction.retry, retryAction(DownloadError.NetworkError, 0, 3, false));
+    try std.testing.expectEqual(RetryAction.retry, retryAction(DownloadError.Timeout, 2, 3, false));
+    try std.testing.expectEqual(RetryAction.stop, retryAction(DownloadError.NetworkError, 3, 3, false));
+}
+
+test "retryAction does not retry certificate bundle failures" {
+    try std.testing.expectEqual(
+        RetryAction.stop,
+        retryAction(DownloadError.CertificateBundleError, 0, 3, false),
+    );
 }
 
 test "mapRequestError maps UnsupportedUriScheme and UriMissingHost to InvalidUrl" {
@@ -524,9 +577,9 @@ test "mapRequestError maps UnsupportedUriScheme and UriMissingHost to InvalidUrl
     try std.testing.expectEqual(DownloadError.InvalidUrl, mapRequestError(error.UriMissingHost));
 }
 
-test "mapRequestError maps TLS errors to SslError" {
+test "mapRequestError distinguishes TLS initialization from certificate bundle failures" {
     try std.testing.expectEqual(DownloadError.SslError, mapRequestError(error.TlsInitializationFailed));
-    try std.testing.expectEqual(DownloadError.SslError, mapRequestError(error.CertificateBundleLoadFailure));
+    try std.testing.expectEqual(DownloadError.CertificateBundleError, mapRequestError(error.CertificateBundleLoadFailure));
 }
 
 test "mapRequestError maps other errors to NetworkError" {
@@ -545,9 +598,9 @@ test "mapReceiveHeadError maps UnsupportedUriScheme to InvalidUrl" {
     try std.testing.expectEqual(DownloadError.InvalidUrl, mapReceiveHeadError(error.UnsupportedUriScheme));
 }
 
-test "mapReceiveHeadError maps TLS errors to SslError" {
+test "mapReceiveHeadError distinguishes TLS initialization from certificate bundle failures" {
     try std.testing.expectEqual(DownloadError.SslError, mapReceiveHeadError(error.TlsInitializationFailed));
-    try std.testing.expectEqual(DownloadError.SslError, mapReceiveHeadError(error.CertificateBundleLoadFailure));
+    try std.testing.expectEqual(DownloadError.CertificateBundleError, mapReceiveHeadError(error.CertificateBundleLoadFailure));
 }
 
 test "mapReceiveHeadError maps other errors to NetworkError" {
