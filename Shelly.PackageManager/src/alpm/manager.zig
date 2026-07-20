@@ -13,6 +13,7 @@ const operation_api = @import("operation_context");
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
 const mirror_failover_timeout_seconds: u32 = 1;
+const single_server_timeout_seconds: u32 = 30;
 
 pub const ConfigError = error{
     InitFailed,
@@ -1958,7 +1959,7 @@ pub const Manager = struct {
         force_download: bool,
         signature_required: bool,
     ) downloader.DownloadError!void {
-        const download_config = mirrorDownloadConfiguration();
+        const download_config = mirrorDownloadConfiguration(urls.items.len);
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
         downloader_instance.quiet = true;
@@ -2082,7 +2083,7 @@ pub const Manager = struct {
     }
 
     fn download_package(self: *Manager, package: libalpm.Package, database: libalpm.Database) downloader.DownloadError!void {
-        const download_config = mirrorDownloadConfiguration();
+        const download_config = mirrorDownloadConfiguration(databaseServerCount(database));
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
         downloader_instance.quiet = true;
@@ -2772,10 +2773,20 @@ pub const Manager = struct {
     }
 };
 
-fn mirrorDownloadConfiguration() downloader.DownloadConfiguration {
+fn databaseServerCount(database: libalpm.Database) usize {
+    var count: usize = 0;
+    var servers = database.servers();
+    while (servers.next() != null) count += 1;
+    return count;
+}
+
+fn mirrorDownloadConfiguration(configured_server_count: usize) downloader.DownloadConfiguration {
     return .{
         .user_agent = "Shelly-ALPM/3",
-        .timeout_in_seconds = mirror_failover_timeout_seconds,
+        .timeout_in_seconds = if (configured_server_count == 1)
+            single_server_timeout_seconds
+        else
+            mirror_failover_timeout_seconds,
         // A failed candidate should immediately advance to the next mirror.
         .max_retries = 0,
         .retry_delay_secs = 0,
@@ -2789,11 +2800,20 @@ fn propagateSignatureCancellation(result: downloader.DownloadResult) downloader.
     }
 }
 
-test "mirror discovery advances after a three second single attempt" {
-    const config = mirrorDownloadConfiguration();
-    try std.testing.expectEqual(@as(u32, 1), config.timeout_in_seconds);
+test "single-server repositories receive a thirty second setup timeout" {
+    const config = mirrorDownloadConfiguration(1);
+    try std.testing.expectEqual(single_server_timeout_seconds, config.timeout_in_seconds);
     try std.testing.expectEqual(@as(u8, 0), config.max_retries);
     try std.testing.expectEqual(@as(u32, 0), config.retry_delay_secs);
+}
+
+test "zero-server and multi-mirror repositories retain fast failover" {
+    for ([_]usize{ 0, 2, 8 }) |server_count| {
+        const config = mirrorDownloadConfiguration(server_count);
+        try std.testing.expectEqual(mirror_failover_timeout_seconds, config.timeout_in_seconds);
+        try std.testing.expectEqual(@as(u8, 0), config.max_retries);
+        try std.testing.expectEqual(@as(u32, 0), config.retry_delay_secs);
+    }
 }
 
 /// Tracks one logical package or database download across all mirror attempts.
