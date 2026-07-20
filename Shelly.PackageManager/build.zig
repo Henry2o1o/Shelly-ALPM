@@ -315,6 +315,8 @@ pub fn build(b: *std.Build) void {
             "install_local_packages installs multiple archives in a DB-only transaction",
             "Manager.init applies configured libalpm options and callback contexts",
             "ALPM queries honor shared cancellation",
+            "single-server repositories receive a thirty second setup timeout",
+            "zero-server and multi-mirror repositories retain fast failover",
         },
     });
     const run_alpm_query_tests = b.addRunArtifact(alpm_query_tests);
