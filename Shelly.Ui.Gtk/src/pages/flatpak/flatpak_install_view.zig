@@ -18,6 +18,7 @@ const SizeConverter = @import("../../helpers/size_converts.zig").SizeConverter;
 const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 const Category = @import("../../models/flatpak.zig").Category;
+const FlatHubApiService = @import("../../services/flathub_api.zig").FlatHubApiService;
 
 extern fn g_get_user_data_dir() [*:0]const u8;
 extern fn g_file_test(filename: [*:0]const u8, flags: c_uint) c_int;
@@ -82,9 +83,12 @@ pub const FlatpakInstallView = extern struct {
         arena: ?*std.heap.ArenaAllocator = null,
         parsed: ?std.json.Parsed([]flatpak.AppstreamApp) = null,
         next_index: usize = 0,
+        trending_set: std.StringHashMapUnmanaged(void) = .empty,
+        popular_set: std.StringHashMapUnmanaged(void) = .empty,
+        recently_updated_set: std.StringHashMapUnmanaged(void) = .empty,
+        recently_added_set: std.StringHashMapUnmanaged(void) = .empty,
         failed: bool = false,
     };
-
     const ScreenshotLoad = struct {
         page: *Self,
         picture: *gtk.Picture,
@@ -759,22 +763,28 @@ pub const FlatpakInstallView = extern struct {
         const p = self.priv();
         const app = gobject.ext.cast(AppstreamAppObject, item) orelse return 0;
 
-        if (p.category != .@"All Applications") {
-            const categories = app.getCategories();
-            var found_match = false;
+        switch (p.category) {
+            .@"All Applications" => {},
 
-            for (categories) |cat| {
-                if (std.mem.indexOf(u8, cat, p.category.toString()) != null) {
-                    found_match = true;
-                    break;
+            .@"Most Wanted" => if (!app.getMembership().contains(.trending)) return 0,
+            .Recommended => if (!app.getMembership().contains(.popular)) return 0,
+            .@"Recently Updated" => if (!app.getMembership().contains(.recently_updated)) return 0,
+            .@"Recently Added" => if (!app.getMembership().contains(.recently_added)) return 0,
+
+            else => {
+                const categories = app.getCategories();
+                var found_match = false;
+                for (categories) |cat| {
+                    if (std.mem.indexOf(u8, cat, p.category.toString()) != null) {
+                        found_match = true;
+                        break;
+                    }
                 }
-            }
-
-            if (!found_match) return 0;
+                if (!found_match) return 0;
+            },
         }
 
         const query = p.search_text[0..p.search_len];
-
         return @intFromBool(search.matchesAnyIgnoreCase(query, &.{ app.getName(), app.getId(), app.getSummary() }));
     }
 
@@ -847,16 +857,42 @@ pub const FlatpakInstallView = extern struct {
         };
         arena.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
         result.arena = arena;
+        const alloc = arena.allocator();
 
-        var threaded: std.Io.Threaded = .init(arena.allocator(), .{});
+        var threaded: std.Io.Threaded = .init(alloc, .{});
         defer threaded.deinit();
-        const cli: ShellyCli = .{ .allocator = arena.allocator(), .io = threaded.io() };
+        const io = threaded.io();
+
+        const cli: ShellyCli = .{ .allocator = alloc, .io = io };
         result.parsed = cli.get_remote_appstream_apps() catch {
             result.failed = true;
             _ = glib.idleAdd(&load_complete, result);
             return;
         };
+
+        var flathub = FlatHubApiService.init(alloc, io);
+        defer flathub.deinit();
+
+        result.trending_set = collectionSet(alloc, &flathub, .trending);
+        result.popular_set = collectionSet(alloc, &flathub, .popular);
+        result.recently_updated_set = collectionSet(alloc, &flathub, .recently_updated);
+        result.recently_added_set = collectionSet(alloc, &flathub, .recently_added);
+
         _ = glib.idleAdd(&load_complete, result);
+    }
+
+    fn collectionSet(alloc: std.mem.Allocator, flathub: *FlatHubApiService, which: AppstreamAppObject.Collection) std.StringHashMapUnmanaged(void) {
+        const ids = switch (which) {
+            .trending => flathub.getCollectionTrending(1, 20),
+            .popular => flathub.getCollectionPopular(1, 20),
+            .recently_updated => flathub.getCollectionRecentlyUpdated(1, 20),
+            .recently_added => flathub.getCollectionRecentlyAdded(1, 20),
+        } catch return .empty;
+
+        var set: std.StringHashMapUnmanaged(void) = .empty;
+        set.ensureTotalCapacity(alloc, @intCast(ids.len)) catch return .empty;
+        for (ids) |id| set.putAssumeCapacity(id, {});
+        return set;
     }
 
     fn load_complete(data: ?*anyopaque) callconv(.c) c_int {
@@ -881,6 +917,14 @@ pub const FlatpakInstallView = extern struct {
         };
         for (apps[result.next_index..end]) |app| {
             const object = AppstreamAppObject.new(app) catch continue;
+
+            var membership: AppstreamAppObject.Membership = .{};
+            if (result.trending_set.contains(app.Id)) membership.insert(.trending);
+            if (result.popular_set.contains(app.Id)) membership.insert(.popular);
+            if (result.recently_updated_set.contains(app.Id)) membership.insert(.recently_updated);
+            if (result.recently_added_set.contains(app.Id)) membership.insert(.recently_added);
+            object.setMembership(membership);
+
             gio.ListStore.append(model, object.as(gobject.Object));
             object.as(gobject.Object).unref();
         }

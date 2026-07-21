@@ -82,6 +82,8 @@ pub const FlatpakPage = extern struct {
         gtk.ListBox.selectRow(p.section_nav_list, p.nav_install_row);
         gtk.Stack.setVisibleChildName(p.main_content_stack, "install");
 
+        gtk.ListBox.setHeaderFunc(p.category_list, &category_header, null, null);
+
         support.connectLifecycle(Self, self);
     }
 
@@ -110,6 +112,33 @@ pub const FlatpakPage = extern struct {
         gtk.Stack.setVisibleChildName(p.main_content_stack, name);
     }
 
+    fn category_header(row: *gtk.ListBoxRow, before: ?*gtk.ListBoxRow, _: ?*anyopaque) callconv(.c) void {
+        const raw = gobject.Object.getData(row.as(gobject.Object), "category-index");
+        if (raw == null) return;
+        const index = @intFromPtr(raw) - 1;
+        const category: Category = @enumFromInt(index);
+
+        const header_text: ?[:0]const u8 = switch (category) {
+            .@"All Applications" => "Discover",
+            .@"Audio & Video" => "Categories",
+            else => null,
+        };
+
+        if (header_text) |text| {
+            const label = gtk.Label.new(text);
+            gtk.Widget.setHalign(label.as(gtk.Widget), .start);
+            gtk.Label.setXalign(label, 0);
+            gtk.Widget.setMarginStart(label.as(gtk.Widget), 6);
+            gtk.Widget.setMarginTop(label.as(gtk.Widget), if (before == null) 2 else 10);
+            gtk.Widget.setMarginBottom(label.as(gtk.Widget), 4);
+            gtk.Widget.addCssClass(label.as(gtk.Widget), "dim-label");
+            gtk.Widget.addCssClass(label.as(gtk.Widget), "caption-heading");
+            gtk.ListBoxRow.setHeader(row, label.as(gtk.Widget));
+        } else {
+            gtk.ListBoxRow.setHeader(row, null);
+        }
+    }
+
     fn onCategoryRowSelected(_: *gtk.ListBox, row: ?*gtk.ListBoxRow, self: *Self) callconv(.c) void {
         if (row) |r| {
             const raw = gobject.Object.getData(r.as(gobject.Object), "category-index");
@@ -135,23 +164,59 @@ pub const FlatpakPage = extern struct {
         const p = self.priv();
         if (p.loaded) return;
 
+        p.category_list.removeAll();
+
         for (std.enums.values(Category)) |app| {
             const row = gtk.ListBoxRow.new();
-
             const enum_num = @intFromEnum(app);
-
             gobject.Object.setData(
                 row.as(gobject.Object),
                 "category-index",
                 @ptrFromInt(enum_num + 1),
             );
 
+            const box = gtk.Box.new(.horizontal, 10);
+            gtk.Widget.setMarginStart(box.as(gtk.Widget), 6);
+            gtk.Widget.setMarginEnd(box.as(gtk.Widget), 6);
+            gtk.Widget.setMarginTop(box.as(gtk.Widget), 2);
+            gtk.Widget.setMarginBottom(box.as(gtk.Widget), 2);
+
+            const icon = gtk.Image.newFromIconName(icon_for_cat(app));
+            gtk.Image.setPixelSize(icon, 16);
+            gtk.Widget.setValign(icon.as(gtk.Widget), .center);
+            gtk.Box.append(box, icon.as(gtk.Widget));
+
             const label = gtk.Label.new(app.toDisplayString());
-            gtk.ListBoxRow.setChild(row, label.as(gtk.Widget));
+            gtk.Widget.setHalign(label.as(gtk.Widget), .start);
+            gtk.Widget.setHexpand(label.as(gtk.Widget), 1);
+            gtk.Label.setXalign(label, 0);
+            gtk.Box.append(box, label.as(gtk.Widget));
+
+            gtk.ListBoxRow.setChild(row, box.as(gtk.Widget));
             gtk.ListBox.append(p.category_list, row.as(gtk.Widget));
         }
 
         p.loaded = true;
+    }
+
+    fn icon_for_cat(category: Category) [:0]const u8 {
+        return switch (category) {
+            .@"All Applications" => "view-grid-symbolic",
+            .Recommended => "starred-symbolic",
+            .@"Most Wanted" => "user-bookmarks-symbolic",
+            .@"Recently Added" => "list-add-symbolic",
+            .@"Recently Updated" => "view-refresh-symbolic",
+            .@"Audio & Video" => "applications-multimedia-symbolic",
+            .Development => "applications-engineering-symbolic",
+            .Education => "applications-science-symbolic",
+            .Game => "applications-games-symbolic",
+            .Graphics => "applications-graphics-symbolic",
+            .Network => "network-workgroup-symbolic",
+            .Office => "x-office-document-symbolic",
+            .Science => "applications-science-symbolic",
+            .System => "applications-system-symbolic",
+            .Utility => "applications-utilities-symbolic",
+        };
     }
 
     pub fn onUnmap(self: *Self) void {

@@ -49,4 +49,5 @@ test {
     _ = @import("pages/flatpak/flatpak_install_view.zig");
     _ = @import("helpers/ui_decode.zig");
     _ = @import("helpers/datetime.zig");
+    _ = @import("services/flathub_api.zig");
 }

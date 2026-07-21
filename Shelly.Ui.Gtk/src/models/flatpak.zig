@@ -167,15 +167,3 @@ test "AppStream app metadata defaults missing optional fields" {
     try std.testing.expect(!parsed.value.IsVerified);
     try std.testing.expect(parsed.value.Extends == null);
 }
-
-test "parse Flatpak remote info metadata" {
-    const json =
-        \\{"DownloadSize":150997939,"InstalledSize":470429696,"Permissions":["Context=shared:network","Context=sockets:wayland"]}
-    ;
-    const parsed = try std.json.parseFromSlice(FlatpakSearchResponse, std.testing.allocator, json, .{});
-    defer parsed.deinit();
-
-    try std.testing.expectEqual(@as(i64, 150997939), parsed.value.DownloadSize);
-    try std.testing.expectEqual(@as(i64, 470429696), parsed.value.InstalledSize);
-    try std.testing.expectEqual(@as(usize, 2), parsed.value.Permissions.len);
-}
