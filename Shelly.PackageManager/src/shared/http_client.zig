@@ -806,6 +806,9 @@ pub const Request = struct {
     client: *Client,
     /// This is null when the connection is released.
     connection: ?*Connection,
+    /// Protects connection replacement during redirects from a concurrent
+    /// timeout interrupt. Individual requests are otherwise single-threaded.
+    connection_mutex: Io.Mutex = .init,
     reader: http.Reader,
     keep_alive: bool,
 
@@ -916,6 +919,25 @@ pub const Request = struct {
             r.client.connection_pool.release(connection, io);
         }
         r.* = undefined;
+    }
+
+    /// Interrupts any blocking socket I/O associated with this request.
+    ///
+    /// Timeout callers must still wait for their in-flight task to finish
+    /// before deinitializing the request. The mutex only protects the
+    /// connection pointer while redirects replace and release it.
+    pub fn interrupt(r: *Request) void {
+        const io = r.client.io;
+        r.connection_mutex.lockUncancelable(io);
+        defer r.connection_mutex.unlock(io);
+        const connection = r.connection orelse return;
+        connection.getStream().shutdown(io, .both) catch {};
+    }
+
+    /// Marks the current connection unusable after an interrupted task has
+    /// stopped touching it.
+    pub fn markConnectionClosing(r: *Request) void {
+        if (r.connection) |connection| connection.closing = true;
     }
 
     /// Sends and flushes a complete request as only HTTP head, no body.
@@ -1241,16 +1263,16 @@ pub const Request = struct {
         };
 
         const protocol = Protocol.fromUri(new_uri) orelse return error.UnsupportedUriScheme;
-        const old_connection = r.connection.?;
-        const old_host = old_connection.host();
         var new_host_name_buffer: [HostName.max_len]u8 = undefined;
         const new_host = try new_uri.getHost(&new_host_name_buffer);
+        r.connection_mutex.lockUncancelable(io);
+        const old_connection = r.connection.?;
         const keep_privileged_headers =
             std.ascii.eqlIgnoreCase(r.uri.scheme, new_uri.scheme) and
-            old_host.sameParentDomain(new_host);
-
-        r.client.connection_pool.release(old_connection, io);
+            old_connection.host().sameParentDomain(new_host);
         r.connection = null;
+        r.connection_mutex.unlock(io);
+        r.client.connection_pool.release(old_connection, io);
 
         if (!keep_privileged_headers) {
             // When redirecting to a different domain, strip privileged headers.
@@ -1277,7 +1299,9 @@ pub const Request = struct {
 
         const new_connection = try r.client.connect(new_host, uriPort(new_uri, protocol), protocol);
         r.uri = new_uri;
+        r.connection_mutex.lockUncancelable(io);
         r.connection = new_connection;
+        r.connection_mutex.unlock(io);
         r.reader = .{
             .in = new_connection.reader(),
             .state = .ready,

@@ -2811,16 +2811,20 @@ fn propagateSignatureCancellation(result: downloader.DownloadResult) downloader.
 test "single-server repositories receive a thirty second setup timeout" {
     const config = mirrorDownloadConfiguration(1);
     try std.testing.expectEqual(single_server_timeout_seconds, config.timeout_in_seconds);
-    try std.testing.expectEqual(@as(u8, 0), config.max_retries);
-    try std.testing.expectEqual(@as(u32, 0), config.retry_delay_secs);
+    try std.testing.expectEqual(single_server_timeout_seconds, config.response_header_timeout_in_seconds);
+    try std.testing.expectEqual(single_server_timeout_seconds, config.body_idle_timeout_in_seconds);
+    try std.testing.expectEqual(@as(u8, 2), config.max_retries);
+    try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
 }
 
 test "zero-server and multi-mirror repositories retain fast failover" {
     for ([_]usize{ 0, 2, 8 }) |server_count| {
         const config = mirrorDownloadConfiguration(server_count);
         try std.testing.expectEqual(mirror_failover_timeout_seconds, config.timeout_in_seconds);
+        try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
+        try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
         try std.testing.expectEqual(@as(u8, 0), config.max_retries);
-        try std.testing.expectEqual(@as(u32, 0), config.retry_delay_secs);
+        try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     }
 }
 

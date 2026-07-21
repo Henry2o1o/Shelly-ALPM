@@ -16,6 +16,9 @@ pub const DownloadError = error{
     FileError,
     InvalidUrl,
     Timeout,
+    ConnectTimeout,
+    HeaderTimeout,
+    BodyIdleTimeout,
     RetryExceeded,
     SslError,
     CertificateBundleError,
@@ -39,7 +42,13 @@ pub const DownloadProgress = struct {
 
 pub const DownloadConfiguration = struct {
     user_agent: ?[:0]const u8 = null,
+    /// Bounds DNS, TCP, and TLS request setup.
     timeout_in_seconds: u32 = 30,
+    /// Bounds sending the request and receiving the final response headers,
+    /// including redirects.
+    response_header_timeout_in_seconds: u32 = 30,
+    /// Bounds each individual body read. Receiving bytes resets the deadline.
+    body_idle_timeout_in_seconds: u32 = 30,
     max_retries: u8 = 3,
     retry_delay_secs: u32 = 1,
     verify_ssl: bool = true,
@@ -196,7 +205,9 @@ pub const CoreDownloader = struct {
                         self.resetHttpClient();
                     },
                     .stop => {
-                        const final_err = if (isRetryable(err)) DownloadError.RetryExceeded else err;
+                        // Preserve the final phase-specific error so callers
+                        // can distinguish setup, header, and body stalls.
+                        const final_err = err;
                         self.emitEvent(.{
                             .event_type = .Error,
                             .download_error = final_err,
@@ -245,15 +256,20 @@ pub const CoreDownloader = struct {
         req.accept_encoding[@intFromEnum(std.http.ContentEncoding.gzip)] = false;
         req.accept_encoding[@intFromEnum(std.http.ContentEncoding.deflate)] = false;
 
-        req.sendBodiless() catch |err| {
-            self.logErr("Failed to send request for {s}: {}", .{ url, err });
-            return DownloadError.NetworkError;
-        };
-
         var redirect_buffer: [8 * 1024]u8 = undefined;
-        var response = req.receiveHead(&redirect_buffer) catch |err| {
-            self.logErr("Failed to receive response head for {s}: {}", .{ url, err });
-            return mapReceiveHeadError(err);
+        var response = sendAndReceiveHeadWithTimeout(
+            &req,
+            self.io,
+            &redirect_buffer,
+            timeoutFromSeconds(self.configuration.response_header_timeout_in_seconds),
+        ) catch |err| {
+            const mapped = mapHeaderExchangeError(err);
+            if (mapped == DownloadError.HeaderTimeout) {
+                self.logErr("Timed out waiting for response headers from {s}", .{url});
+            } else {
+                self.logErr("Failed to receive response head for {s}: {}", .{ url, err });
+            }
+            return mapped;
         };
 
         const status = response.head.status;
@@ -283,11 +299,19 @@ pub const CoreDownloader = struct {
             },
         });
 
-        var file = std.Io.Dir.cwd().createFile(self.io, destination_path, .{}) catch |err| {
-            self.logErr("Failed to create file {s}: {}", .{ destination_path, err });
+        const part_path = makePartPath(self.allocator, self.io, destination_path) catch return DownloadError.FileError;
+        defer self.allocator.free(part_path);
+        var part_exists = false;
+        var file = std.Io.Dir.cwd().createFile(self.io, part_path, .{ .exclusive = true }) catch |err| {
+            self.logErr("Failed to create temporary file {s}: {}", .{ part_path, err });
             return DownloadError.FileError;
         };
-        defer file.close(self.io);
+        part_exists = true;
+        var file_open = true;
+        defer {
+            if (file_open) file.close(self.io);
+            if (part_exists) std.Io.Dir.cwd().deleteFile(self.io, part_path) catch {};
+        }
 
         const copy_buffer = self.allocator.alloc(u8, copy_buffer_size) catch return DownloadError.FileError;
         defer self.allocator.free(copy_buffer);
@@ -302,9 +326,20 @@ pub const CoreDownloader = struct {
 
         while (true) {
             if (self.isCancelled()) return DownloadError.Cancelled;
-            const n = body_reader.readSliceShort(copy_buffer) catch {
-                self.logErr("Read failed while downloading {s}: {?}", .{ url, response.bodyErr() });
-                return DownloadError.NetworkError;
+            const n = readBodyWithIdleTimeout(
+                &req,
+                self.io,
+                body_reader,
+                copy_buffer,
+                timeoutFromSeconds(self.configuration.body_idle_timeout_in_seconds),
+            ) catch |err| {
+                const mapped = mapBodyReadError(err);
+                if (mapped == DownloadError.BodyIdleTimeout) {
+                    self.logErr("Timed out waiting for body data from {s}", .{url});
+                } else {
+                    self.logErr("Read failed while downloading {s}: {?}", .{ url, response.bodyErr() });
+                }
+                return mapped;
             };
             if (n == 0) break;
 
@@ -323,6 +358,28 @@ pub const CoreDownloader = struct {
                 });
             }
         }
+
+        if (total) |expected| {
+            if (downloaded != expected) {
+                self.logErr(
+                    "Content-Length mismatch for {s}: expected {d} bytes, received {d}",
+                    .{ url, expected, downloaded },
+                );
+                return DownloadError.NetworkError;
+            }
+        }
+
+        file.sync(self.io) catch |err| {
+            self.logErr("Failed to sync temporary file {s}: {}", .{ part_path, err });
+            return DownloadError.FileError;
+        };
+        file.close(self.io);
+        file_open = false;
+        std.Io.Dir.cwd().rename(part_path, std.Io.Dir.cwd(), destination_path, self.io) catch |err| {
+            self.logErr("Failed to replace {s} with completed download: {}", .{ destination_path, err });
+            return DownloadError.FileError;
+        };
+        part_exists = false;
 
         self.emitEvent(.{
             .event_type = .Complete,
@@ -413,6 +470,97 @@ const RequestSetupRace = union(enum) {
     timeout: std.Io.Cancelable!void,
 };
 
+const HeaderExchangeError = HttpClient.Request.ReceiveHeadError || error{HeaderTimeout};
+
+const HeaderExchangeRace = union(enum) {
+    response: HttpClient.Request.ReceiveHeadError!HttpClient.Response,
+    timeout: std.Io.Cancelable!void,
+};
+
+fn sendAndReceiveHeadWithTimeout(
+    req: *HttpClient.Request,
+    io: std.Io,
+    redirect_buffer: []u8,
+    timeout: std.Io.Timeout,
+) HeaderExchangeError!HttpClient.Response {
+    if (timeout == .none) return sendAndReceiveHead(req, redirect_buffer);
+
+    var result_buffer: [2]HeaderExchangeRace = undefined;
+    var select = std.Io.Select(HeaderExchangeRace).init(io, &result_buffer);
+    select.async(.response, sendAndReceiveHead, .{ req, redirect_buffer });
+    select.async(.timeout, waitForRequestSetupTimeout, .{ io, timeout });
+
+    var interrupt_on_cleanup = false;
+    defer {
+        if (interrupt_on_cleanup) req.interrupt();
+        while (select.cancel()) |_| {}
+        if (interrupt_on_cleanup) req.markConnectionClosing();
+    }
+
+    return switch (try select.await()) {
+        .response => |result| result,
+        .timeout => |result| {
+            try result;
+            interrupt_on_cleanup = true;
+            return error.HeaderTimeout;
+        },
+    };
+}
+
+fn sendAndReceiveHead(
+    req: *HttpClient.Request,
+    redirect_buffer: []u8,
+) HttpClient.Request.ReceiveHeadError!HttpClient.Response {
+    try req.sendBodiless();
+    return req.receiveHead(redirect_buffer);
+}
+
+const BodyReadError = std.Io.Reader.ShortError || std.Io.Cancelable || error{BodyIdleTimeout};
+
+const BodyReadRace = union(enum) {
+    read: std.Io.Reader.ShortError!usize,
+    timeout: std.Io.Cancelable!void,
+};
+
+fn readBodyWithIdleTimeout(
+    req: *HttpClient.Request,
+    io: std.Io,
+    reader: *std.Io.Reader,
+    buffer: []u8,
+    timeout: std.Io.Timeout,
+) BodyReadError!usize {
+    if (timeout == .none) return reader.readSliceShort(buffer);
+
+    var result_buffer: [2]BodyReadRace = undefined;
+    var select = std.Io.Select(BodyReadRace).init(io, &result_buffer);
+    select.async(.read, readBody, .{ reader, buffer });
+    select.async(.timeout, waitForRequestSetupTimeout, .{ io, timeout });
+
+    var interrupt_on_cleanup = false;
+    defer {
+        if (interrupt_on_cleanup) req.interrupt();
+        while (select.cancel()) |_| {}
+        if (interrupt_on_cleanup) req.markConnectionClosing();
+    }
+
+    return switch (try select.await()) {
+        .read => |result| result,
+        .timeout => |result| {
+            try result;
+            interrupt_on_cleanup = true;
+            return error.BodyIdleTimeout;
+        },
+    };
+}
+
+fn readBody(reader: *std.Io.Reader, buffer: []u8) std.Io.Reader.ShortError!usize {
+    var vectors: [1][]u8 = .{buffer};
+    return reader.readVec(&vectors) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        error.ReadFailed => error.ReadFailed,
+    };
+}
+
 /// Bounds DNS, TCP, and TLS initialization together. The response body is not
 /// part of this deadline, so a mirror that successfully starts responding can
 /// finish at normal transfer speed.
@@ -464,12 +612,23 @@ fn closeRequestSetupRace(completed: RequestSetupRace) void {
     }
 }
 
-fn connectTimeout(seconds: u32) std.Io.Timeout {
+fn timeoutFromSeconds(seconds: u32) std.Io.Timeout {
     if (seconds == 0) return .none;
     return .{ .duration = .{
         .clock = .awake,
         .raw = .fromSeconds(seconds),
     } };
+}
+
+fn connectTimeout(seconds: u32) std.Io.Timeout {
+    return timeoutFromSeconds(seconds);
+}
+
+fn makePartPath(allocator: std.mem.Allocator, io: std.Io, destination_path: []const u8) ![]u8 {
+    var random_bytes: [8]u8 = undefined;
+    io.random(&random_bytes);
+    const nonce = std.mem.readInt(u64, &random_bytes, .little);
+    return std.fmt.allocPrint(allocator, "{s}.part.{x}", .{ destination_path, nonce });
 }
 
 fn downloadRequestOptions(
@@ -530,7 +689,12 @@ fn formatHttpDate(buf: []u8, mtime_ns: i128) ?[]const u8 {
 
 fn isRetryable(err: DownloadError) bool {
     return switch (err) {
-        error.NetworkError, error.Timeout => true,
+        error.NetworkError,
+        error.Timeout,
+        error.ConnectTimeout,
+        error.HeaderTimeout,
+        error.BodyIdleTimeout,
+        => true,
         else => false,
     };
 }
@@ -551,6 +715,8 @@ fn retryAction(err: DownloadError, attempt: u8, max_retries: u8, tls_reset_used:
 fn mapRequestError(err: HttpClient.RequestError) DownloadError {
     return switch (err) {
         error.UnsupportedUriScheme, error.UriMissingHost => DownloadError.InvalidUrl,
+        error.Canceled => DownloadError.Cancelled,
+        error.Timeout => DownloadError.ConnectTimeout,
         error.TlsInitializationFailed => DownloadError.SslError,
         error.CertificateBundleLoadFailure => DownloadError.CertificateBundleError,
         else => DownloadError.NetworkError,
@@ -571,8 +737,24 @@ fn mapReceiveHeadError(err: HttpClient.Request.ReceiveHeadError) DownloadError {
         error.HttpChunkTruncated,
         => DownloadError.HttpError,
         error.UnsupportedUriScheme => DownloadError.InvalidUrl,
+        error.Canceled => DownloadError.Cancelled,
         error.TlsInitializationFailed => DownloadError.SslError,
         error.CertificateBundleLoadFailure => DownloadError.CertificateBundleError,
+        else => DownloadError.NetworkError,
+    };
+}
+
+fn mapHeaderExchangeError(err: HeaderExchangeError) DownloadError {
+    return switch (err) {
+        error.HeaderTimeout => DownloadError.HeaderTimeout,
+        else => mapReceiveHeadError(@errorCast(err)),
+    };
+}
+
+fn mapBodyReadError(err: BodyReadError) DownloadError {
+    return switch (err) {
+        error.BodyIdleTimeout => DownloadError.BodyIdleTimeout,
+        error.Canceled => DownloadError.Cancelled,
         else => DownloadError.NetworkError,
     };
 }
@@ -582,6 +764,8 @@ test "DownloadConfiguration.default() returns correct default values" {
     const config = DownloadConfiguration.default();
     try std.testing.expectEqualStrings("ShellyPackageManager/2.0", config.user_agent.?);
     try std.testing.expectEqual(@as(u32, 30), config.timeout_in_seconds);
+    try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
+    try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
     try std.testing.expectEqual(@as(u8, 3), config.max_retries);
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     try std.testing.expectEqual(true, config.verify_ssl);
@@ -630,6 +814,9 @@ test "makeProgress calculates progress correctly without total size" {
 test "isRetryable returns true for NetworkError and Timeout" {
     try std.testing.expect(isRetryable(DownloadError.NetworkError));
     try std.testing.expect(isRetryable(DownloadError.Timeout));
+    try std.testing.expect(isRetryable(DownloadError.ConnectTimeout));
+    try std.testing.expect(isRetryable(DownloadError.HeaderTimeout));
+    try std.testing.expect(isRetryable(DownloadError.BodyIdleTimeout));
 }
 
 test "isRetryable returns false for other errors" {
@@ -674,6 +861,11 @@ test "mapRequestError maps other errors to NetworkError" {
     try std.testing.expectEqual(DownloadError.NetworkError, mapRequestError(error.ConnectionRefused));
 }
 
+test "mapRequestError preserves setup timeouts and cancellation" {
+    try std.testing.expectEqual(DownloadError.ConnectTimeout, mapRequestError(error.Timeout));
+    try std.testing.expectEqual(DownloadError.Cancelled, mapRequestError(error.Canceled));
+}
+
 test "mapReceiveHeadError maps redirect and header errors to HttpError" {
     try std.testing.expectEqual(DownloadError.HttpError, mapReceiveHeadError(error.TooManyHttpRedirects));
     try std.testing.expectEqual(DownloadError.HttpError, mapReceiveHeadError(error.RedirectRequiresResend));
@@ -693,6 +885,193 @@ test "mapReceiveHeadError distinguishes TLS initialization from certificate bund
 
 test "mapReceiveHeadError maps other errors to NetworkError" {
     try std.testing.expectEqual(DownloadError.NetworkError, mapReceiveHeadError(error.ConnectionRefused));
+}
+
+const TestServerMode = enum {
+    stall_headers,
+    stall_body,
+    drip_body,
+};
+
+const TestHttpServer = struct {
+    io: std.Io,
+    server: std.Io.net.Server,
+    mode: TestServerMode,
+
+    fn init(io: std.Io, mode: TestServerMode) !TestHttpServer {
+        var address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+        return .{
+            .io = io,
+            .server = try address.listen(io, .{ .reuse_address = true }),
+            .mode = mode,
+        };
+    }
+
+    fn deinit(self: *TestHttpServer) void {
+        self.server.deinit(self.io);
+    }
+
+    fn url(self: *const TestHttpServer, allocator: std.mem.Allocator) ![]u8 {
+        return std.fmt.allocPrint(
+            allocator,
+            "http://127.0.0.1:{d}/repository.db",
+            .{self.server.socket.address.getPort()},
+        );
+    }
+
+    fn serve(self: *TestHttpServer) !void {
+        var stream = try self.server.accept(self.io);
+        defer stream.close(self.io);
+
+        var write_buffer: [512]u8 = undefined;
+        var stream_writer = stream.writer(self.io, &write_buffer);
+        const writer = &stream_writer.interface;
+
+        switch (self.mode) {
+            .stall_headers => try self.io.sleep(std.Io.Duration.fromSeconds(10), .awake),
+            .stall_body => {
+                try writer.writeAll(
+                    "HTTP/1.1 200 OK\r\n" ++
+                        "Content-Length: 6\r\n" ++
+                        "Connection: close\r\n\r\n" ++
+                        "ab",
+                );
+                try writer.flush();
+                try self.io.sleep(std.Io.Duration.fromSeconds(10), .awake);
+            },
+            .drip_body => {
+                try writer.writeAll(
+                    "HTTP/1.1 200 OK\r\n" ++
+                        "Content-Length: 6\r\n" ++
+                        "Connection: close\r\n\r\n" ++
+                        "ab",
+                );
+                try writer.flush();
+                try self.io.sleep(std.Io.Duration.fromMilliseconds(600), .awake);
+                try writer.writeAll("cd");
+                try writer.flush();
+                try self.io.sleep(std.Io.Duration.fromMilliseconds(600), .awake);
+                try writer.writeAll("ef");
+                try writer.flush();
+            },
+        }
+    }
+};
+
+fn testDestinationPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    temporary: *std.testing.TmpDir,
+) ![]u8 {
+    var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const absolute_length = try temporary.dir.realPath(io, &absolute_buffer);
+    return std.fs.path.join(allocator, &.{ absolute_buffer[0..absolute_length], "repository.db" });
+}
+
+fn timeoutTestConfiguration() DownloadConfiguration {
+    return .{
+        .timeout_in_seconds = 2,
+        .response_header_timeout_in_seconds = 1,
+        .body_idle_timeout_in_seconds = 1,
+        .max_retries = 0,
+        .retry_delay_secs = 0,
+    };
+}
+
+test "response header timeout interrupts a server that never responds" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = try TestHttpServer.init(io, .stall_headers);
+    defer server.deinit();
+    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
+    defer _ = server_future.cancel(io) catch {};
+
+    const url = try server.url(std.testing.allocator);
+    defer std.testing.allocator.free(url);
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
+    defer std.testing.allocator.free(destination);
+
+    var downloader = CoreDownloader.init(std.testing.allocator, io, timeoutTestConfiguration());
+    defer downloader.deinit();
+    downloader.quiet = true;
+    const started = std.Io.Timestamp.now(io, .awake);
+    const result = downloader.downloadToFile(url, destination, true);
+    const elapsed = started.durationTo(std.Io.Timestamp.now(io, .awake));
+
+    switch (result) {
+        .failure => |err| try std.testing.expectEqual(DownloadError.HeaderTimeout, err),
+        else => return error.ExpectedHeaderTimeout,
+    }
+    try std.testing.expect(elapsed.nanoseconds < std.Io.Duration.fromSeconds(3).nanoseconds);
+}
+
+test "body idle timeout preserves the previous destination" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = try TestHttpServer.init(io, .stall_body);
+    defer server.deinit();
+    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
+    defer _ = server_future.cancel(io) catch {};
+
+    const url = try server.url(std.testing.allocator);
+    defer std.testing.allocator.free(url);
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
+    defer std.testing.allocator.free(destination);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = "previous" });
+
+    var downloader = CoreDownloader.init(std.testing.allocator, io, timeoutTestConfiguration());
+    defer downloader.deinit();
+    downloader.quiet = true;
+    const result = downloader.downloadToFile(url, destination, true);
+    switch (result) {
+        .failure => |err| try std.testing.expectEqual(DownloadError.BodyIdleTimeout, err),
+        else => return error.ExpectedBodyIdleTimeout,
+    }
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(io, destination, std.testing.allocator, .limited(64));
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("previous", contents);
+}
+
+test "body idle deadline resets whenever progress arrives" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = try TestHttpServer.init(io, .drip_body);
+    defer server.deinit();
+    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
+    defer _ = server_future.cancel(io) catch {};
+
+    const url = try server.url(std.testing.allocator);
+    defer std.testing.allocator.free(url);
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
+    defer std.testing.allocator.free(destination);
+
+    var downloader = CoreDownloader.init(std.testing.allocator, io, timeoutTestConfiguration());
+    defer downloader.deinit();
+    const started = std.Io.Timestamp.now(io, .awake);
+    const result = downloader.downloadToFile(url, destination, true);
+    const elapsed = started.durationTo(std.Io.Timestamp.now(io, .awake));
+    switch (result) {
+        .succes => {},
+        else => return error.ExpectedSuccessfulDownload,
+    }
+    try std.testing.expect(elapsed.nanoseconds > std.Io.Duration.fromSeconds(1).nanoseconds);
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(io, destination, std.testing.allocator, .limited(64));
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("abcdef", contents);
 }
 
 test "quiet mirror candidates suppress error callbacks" {
