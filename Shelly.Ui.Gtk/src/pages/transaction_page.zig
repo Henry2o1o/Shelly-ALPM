@@ -11,6 +11,7 @@ const Event = @import("../services/shelly_operation.zig").Event;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const PendingQuestion = @import("../services/shelly_operation.zig").PendingQuestion;
+const MultiSelectDialog = @import("../dialog/page/multiselect.zig").MultiSelectDialog;
 
 pub const TransactionRequest = struct {
     title: []const u8,
@@ -355,7 +356,6 @@ pub const TransactionPage = extern struct {
                 const dialog = ConfirmDialog.new("Confirm", text_z, &on_yesno_response, pending);
                 dialog.setButtons("Yes", "No");
 
-              
                 gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
                 gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
                 gtk.Widget.setVisible(dialog.as(gtk.Widget), 1);
@@ -363,13 +363,52 @@ pub const TransactionPage = extern struct {
                 gtk.Widget.setValign(p.question_layer.as(gtk.Widget), .center);
                 std.debug.print("dialog widget: {*}, visible={}\n", .{ dialog, gtk.Widget.getVisible(dialog.as(gtk.Widget)) });
             },
+            .select_many => |q| {
+                pending.on_dismiss = &dismiss_question;
+                pending.dismiss_ctx = self;
+
+                const dialog = MultiSelectDialog.new(
+                    pending.arena.allocator(),
+                    q.prompt,
+                    q.options,
+                    &on_multiselect_response,
+                    pending,
+                );
+
+                gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
+                gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
+            },
+            .select_one => |q| {
+                _ = q; 
+            },
         }
+    }
+
+    fn on_multiselect_response(ctx: ?*anyopaque, confirmed: bool, selected: []const usize) void {
+        const pending: *PendingQuestion = @ptrCast(@alignCast(ctx.?));
+        if (pending.completed) return;
+        pending.completed = true;
+
+        if (confirmed) {
+            pending.operation.answerOptDeps(pending.questionId(), selected) catch {
+                pending.operation.cancel();
+            };
+        } else {
+            pending.operation.answerOptDeps(pending.questionId(), &.{}) catch {
+                pending.operation.cancel();
+            };
+        }
+
+        if (pending.on_dismiss) |cb| {
+            if (pending.dismiss_ctx) |c| cb(c);
+        }
+        pending.destroy();
     }
 
     fn dismiss_question(ctx: *anyopaque) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
         const p = self.priv();
-     
+
         while (gtk.Widget.getFirstChild(p.question_layer.as(gtk.Widget))) |c| {
             gtk.Box.remove(p.question_layer, c);
         }

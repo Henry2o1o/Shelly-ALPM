@@ -70,6 +70,40 @@ pub const Question = union(enum) {
         question_kind: []const u8,
         question_text: []const u8,
     },
+    select_many: struct {
+        question_id: []const u8,
+        prompt: []const u8,
+        options: []Option,
+    },
+    select_one: struct {
+        question_id: []const u8,
+        prompt: []const u8,
+        options: []Option,
+    },
+};
+
+pub const Option = struct {
+    index: usize,
+    name: []const u8,
+    description: []const u8,
+    is_installed: bool,
+    is_selected: bool,
+};
+
+const SelectionRequest = struct {
+    @"$kind": []const u8 = "",
+    QuestionId: []const u8 = "",
+    DependencyName: []const u8 = "",
+    QuestionText: []const u8 = "",
+    Options: []OptionWire = &.{},
+};
+
+const OptionWire = struct {
+    Index: usize = 0,
+    Name: []const u8 = "",
+    Description: []const u8 = "",
+    IsInstalled: bool = false,
+    IsSelected: bool = false,
 };
 
 const YesNoRequest = struct {
@@ -90,6 +124,8 @@ pub const PendingQuestion = struct {
     pub fn questionId(self: *const PendingQuestion) []const u8 {
         return switch (self.request) {
             .yes_no => |q| q.question_id,
+            .select_many => |q| q.question_id,
+            .select_one => |q| q.question_id,
         };
     }
 
@@ -260,17 +296,53 @@ pub const ShellyOperation = struct {
     pub fn answerYesNo(self: *ShellyOperation, question_id: []const u8, accept: bool) !void {
         var json_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer json_buf.deinit(self.allocator);
-
         try json_buf.appendSlice(self.allocator, "{\"$kind\":\"a.yesno\",\"QuestionId\":\"");
         try json_buf.appendSlice(self.allocator, question_id);
         try json_buf.appendSlice(self.allocator, "\",\"Accept\":");
         try json_buf.appendSlice(self.allocator, if (accept) "true" else "false");
         try json_buf.appendSlice(self.allocator, "}");
+        try self.writeAnswerFrame(json_buf.items);
+    }
 
-        const b64_len = std.base64.standard.Encoder.calcSize(json_buf.items.len);
+    pub fn answerOptDeps(self: *ShellyOperation, question_id: []const u8, selected: []const usize) !void {
+        var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+
+        try json_buf.appendSlice(self.allocator, "{\"$kind\":\"a.optdeps\",\"QuestionId\":\"");
+        try json_buf.appendSlice(self.allocator, question_id);
+        try json_buf.appendSlice(self.allocator, "\",\"SelectedIndices\":[");
+        for (selected, 0..) |idx, i| {
+            if (i > 0) try json_buf.append(self.allocator, ',');
+            var numbuf: [20]u8 = undefined;
+            const s = std.fmt.bufPrint(&numbuf, "{d}", .{idx}) catch continue;
+            try json_buf.appendSlice(self.allocator, s);
+        }
+        try json_buf.appendSlice(self.allocator, "]}");
+
+        try self.writeAnswerFrame(json_buf.items);
+    }
+
+    pub fn answerProvider(self: *ShellyOperation, question_id: []const u8, selected: usize) !void {
+        var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+
+        var numbuf: [20]u8 = undefined;
+        const s = std.fmt.bufPrint(&numbuf, "{d}", .{selected}) catch "0";
+
+        try json_buf.appendSlice(self.allocator, "{\"$kind\":\"a.provider\",\"QuestionId\":\"");
+        try json_buf.appendSlice(self.allocator, question_id);
+        try json_buf.appendSlice(self.allocator, "\",\"SelectedIndex\":");
+        try json_buf.appendSlice(self.allocator, s);
+        try json_buf.appendSlice(self.allocator, "}");
+
+        try self.writeAnswerFrame(json_buf.items);
+    }
+
+    fn writeAnswerFrame(self: *ShellyOperation, json: []const u8) !void {
+        const b64_len = std.base64.standard.Encoder.calcSize(json.len);
         const b64 = try self.allocator.alloc(u8, b64_len);
         defer self.allocator.free(b64);
-        _ = std.base64.standard.Encoder.encode(b64, json_buf.items);
+        _ = std.base64.standard.Encoder.encode(b64, json);
 
         var frame: std.ArrayListUnmanaged(u8) = .empty;
         defer frame.deinit(self.allocator);
@@ -325,6 +397,49 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
                 return 0;
             },
         } };
+
+        op.on_question(op.ctx, pending);
+        return 0;
+    }
+
+    if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
+        const e = std.json.parseFromSlice(SelectionRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        defer e.deinit();
+
+        const pending = op.allocator.create(PendingQuestion) catch return 0;
+        pending.* = .{
+            .arena = std.heap.ArenaAllocator.init(op.allocator),
+            .operation = op,
+            .request = undefined,
+        };
+        const qa = pending.arena.allocator();
+
+        const opts = qa.alloc(Option, e.value.Options.len) catch {
+            pending.destroy();
+            return 0;
+        };
+        for (e.value.Options, 0..) |o, i| {
+            opts[i] = .{
+                .index = o.Index,
+                .name = qa.dupe(u8, o.Name) catch "",
+                .description = qa.dupe(u8, o.Description) catch "",
+                .is_installed = o.IsInstalled,
+                .is_selected = o.IsSelected,
+            };
+        }
+
+        const qid = qa.dupe(u8, e.value.QuestionId) catch {
+            pending.destroy();
+            return 0;
+        };
+
+        if (std.mem.eql(u8, kind, "q.optdeps")) {
+            const prompt = qa.dupe(u8, e.value.QuestionText) catch "";
+            pending.request = .{ .select_many = .{ .question_id = qid, .prompt = prompt, .options = opts } };
+        } else {
+            const prompt = qa.dupe(u8, e.value.DependencyName) catch "";
+            pending.request = .{ .select_one = .{ .question_id = qid, .prompt = prompt, .options = opts } };
+        }
 
         op.on_question(op.ctx, pending);
         return 0;

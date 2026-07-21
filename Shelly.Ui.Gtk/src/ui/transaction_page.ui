@@ -9,15 +9,12 @@
       <object class="GtkOverlay" id="root_overlay">
         <property name="hexpand">true</property>
         <property name="vexpand">true</property>
-
-        <!-- base content -->
+        <style><class name="lockout-scrim"/></style>
         <child>
           <object class="GtkBox">
             <property name="orientation">vertical</property>
             <property name="hexpand">true</property>
             <property name="vexpand">true</property>
-
-            <!-- header -->
             <child>
               <object class="GtkBox">
                 <property name="orientation">horizontal</property>
@@ -53,8 +50,6 @@
                 </child>
               </object>
             </child>
-
-            <!-- paned: rows / terminal -->
             <child>
               <object class="GtkPaned" id="paned">
                 <property name="orientation">vertical</property>
@@ -98,8 +93,6 @@
             </child>
           </object>
         </child>
-
-        <!-- question overlay layer -->
         <child type="overlay">
           <object class="GtkBox" id="question_layer">
             <property name="visible">false</property>
