@@ -222,6 +222,67 @@ pub fn writeYesNoQuestionFrame(
     try writeFrame(context, payload.writer.buffered());
 }
 
+pub fn writeOptionalDependenciesQuestionFrame(
+    context: *runtime.RuntimeContext,
+    question: Zigalpm.OperationQuestion,
+) !void {
+    try writeSelectionQuestionFrame(context, question, "q.optdeps", true);
+}
+
+pub fn writeProviderQuestionFrame(
+    context: *runtime.RuntimeContext,
+    question: Zigalpm.OperationQuestion,
+) !void {
+    try writeSelectionQuestionFrame(context, question, "q.provider", false);
+}
+
+fn writeSelectionQuestionFrame(
+    context: *runtime.RuntimeContext,
+    question: Zigalpm.OperationQuestion,
+    wire_kind: []const u8,
+    include_question_text: bool,
+) !void {
+    const question_id = try std.fmt.allocPrint(context.allocator, "{d}", .{question.question_id});
+    defer context.allocator.free(question_id);
+
+    var payload = std.Io.Writer.Allocating.init(context.allocator);
+    defer payload.deinit();
+    var json: std.json.Stringify = .{ .writer = &payload.writer };
+    try json.beginObject();
+    try json.objectField("$kind");
+    try json.write(wire_kind);
+    try json.objectField("QuestionId");
+    try json.write(question_id);
+    try json.objectField("DependencyName");
+    try json.write(question.dependency_name orelse switch (question.kind) {
+        .select_one, .select_many => question.prompt,
+        else => "",
+    });
+    if (include_question_text) {
+        try json.objectField("QuestionText");
+        try json.write(question.prompt);
+    }
+    try json.objectField("Options");
+    try json.beginArray();
+    for (question.options, 0..) |option, index| {
+        try json.beginObject();
+        try json.objectField("Index");
+        try json.write(index);
+        try json.objectField("Name");
+        try json.write(option.label);
+        try json.objectField("Description");
+        try json.write(option.description);
+        try json.objectField("IsInstalled");
+        try json.write(option.is_installed);
+        try json.objectField("IsSelected");
+        try json.write(option.is_selected);
+        try json.endObject();
+    }
+    try json.endArray();
+    try json.endObject();
+    try writeFrame(context, payload.writer.buffered());
+}
+
 fn questionKindName(question: Zigalpm.OperationQuestion) []const u8 {
     return switch (question.envelope.kind) {
         .remove => "RemovePkgs",
