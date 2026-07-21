@@ -60,7 +60,7 @@ pub const ShellyCli = struct {
     }
 
     pub fn get_remotes(self: ShellyCli) !std.json.Parsed([]Remote) {
-        const result = try self.run(&.{ "flatpak", "list", "remote" });
+        const result = try self.run(&.{ "list", "flatpak", "remote" });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 

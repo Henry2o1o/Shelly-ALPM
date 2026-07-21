@@ -62,7 +62,6 @@ pub const FlatpakRemotesView = extern struct {
         const p = self.priv();
         p.loaded = false;
 
-        // name the inner stack pages so we can switch by name
         const list_page = gtk.Stack.getPage(p.remotes_stack, p.remotes_list_page.as(gtk.Widget));
         gtk.StackPage.setName(list_page, "list");
         const add_page = gtk.Stack.getPage(p.remotes_stack, p.add_remote_page.as(gtk.Widget));
@@ -125,7 +124,6 @@ pub const FlatpakRemotesView = extern struct {
             return 0;
         }
 
-        // take ownership of the arena — the DTOs live here now
         if (p.arena) |old| {
             old.deinit();
             std.heap.c_allocator.destroy(old);
