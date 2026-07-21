@@ -42,7 +42,7 @@
 .spec-value { font-weight: 600; }
 
 .nav-rail {
-  padding: 8px 4px;
+  padding: 8px 4px;}
 
 .nav-btn {
   padding: 10px 8px;
@@ -54,10 +54,49 @@
   background-color: alpha(@theme_fg_color, 0.06);
 }
 
-.nav-selected {
-  background-color: alpha(@theme_fg_color, 0.10);
+.nav-selected label {
+  font-weight: bold;
 }
 
-.nav-selected label {
+.transaction-page {
+  background-color: @window_bg_color;
+}
+
+.trans-header {
+  font-size: 1.05em;
+  font-weight: bold;
+}
+
+.pkg-card {
+  background-color: alpha(@theme_fg_color, 0.04);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.pkg-name {
+  font-size: 1.0em;
   font-weight: 600;
+}
+
+.pkg-status {
+  font-size: 0.85em;
+  font-weight: 500;
+  color: alpha(@theme_fg_color, 0.6);
+  padding: 4px 12px;
+  border-radius: 6px;
+  background-color: alpha(@theme_fg_color, 0.06);
+}
+
+.pkg-status.status-done {
+  color: @success_color;
+  background-color: alpha(@success_color, 0.1);
+}
+
+.pkg-status.status-failed {
+  color: @error_bg_color;
+  background-color: alpha(@error_bg_color, 0.1);
+}
+
+#question_layer, .question-layer {
+  background-color: alpha(black, 0.5);
 }

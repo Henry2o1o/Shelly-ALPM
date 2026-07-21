@@ -523,6 +523,8 @@ pub const PackagePage = extern struct {
         arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
         p.arena = arena_ptr;
 
+        _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
+
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
         thread.detach();
     }
@@ -611,7 +613,6 @@ pub const PackagePage = extern struct {
     fn onLoadComplete(data: ?*anyopaque) callconv(.c) c_int {
         const result: *LoadResult = @ptrCast(@alignCast(data.?));
         const p = result.page.priv();
-
         if (result.generation != p.generation) {
             result.arena.deinit();
             std.heap.c_allocator.destroy(result.arena);
@@ -619,14 +620,19 @@ pub const PackagePage = extern struct {
             return 0;
         }
 
-        const page_alloc = (p.arena orelse {
-            result.arena.deinit();
-            std.heap.c_allocator.destroy(result.arena);
-            std.heap.c_allocator.destroy(result);
-            return 0;
-        }).allocator();
-
         if (result.index == 0) {
+            gio.ListStore.removeAll(p.list_store);
+            if (p.arena) |old| {
+                old.deinit();
+                std.heap.c_allocator.destroy(old);
+            }
+            const na = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch {
+                p.arena = null;
+                return 0;
+            };
+            na.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+            p.arena = na;
+
             const strings = gtk.StringList.new(null);
             gtk.StringList.append(strings, "Any");
             for (result.groups) |g| {
@@ -637,10 +643,16 @@ pub const PackagePage = extern struct {
             gtk.DropDown.setSelected(p.grouping_selection, 0);
         }
 
+        const page_alloc = (p.arena orelse {
+            result.arena.deinit();
+            std.heap.c_allocator.destroy(result.arena);
+            std.heap.c_allocator.destroy(result);
+            return 0;
+        }).allocator();
+
         const batch_size = 500;
         const end = @min(result.index + batch_size, result.packages.len);
         const n = end - result.index;
-
         var batch: [500]*gobject.Object = undefined;
         var i: usize = 0;
         for (result.packages[result.index..end]) |d| {
@@ -648,14 +660,10 @@ pub const PackagePage = extern struct {
             batch[i] = pkg.as(gobject.Object);
             i += 1;
         }
-
         const pos = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
         gio.ListStore.splice(p.list_store, pos, 0, &batch, @intCast(n));
-
         for (batch[0..n]) |o| o.unref();
-
         result.index = end;
-
         if (result.index < result.packages.len) return 1;
 
         const page = result.page;
@@ -757,62 +765,50 @@ pub const PackagePage = extern struct {
         if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
         if (!confirmed) return;
 
-        //     const p = self.priv();
+        const p = self.priv();
 
-        //     var names: std.ArrayListUnmanaged([]const u8) = .empty;
-        //     defer names.deinit(std.heap.c_allocator);
-        //     const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
-        //     var i: u32 = 0;
-        //     while (i < n) : (i += 1) {
-        //         const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
-        //         const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
-        //         if (pkg.isSelected()) names.append(std.heap.c_allocator, pkg.getName()) catch continue;
-        //     }
-        //     if (names.items.len == 0) return;
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
 
-        //     const op = std.heap.c_allocator.create(ShellyOperation) catch return;
-        //     op.* = ShellyOperation.init(std.heap.c_allocator, &on_op_event, &on_op_done, self);
-        //     op.io = op.threaded.io();
-        //     p.operation = op;
+        const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
+            const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
+            if (pkg.isSelected()) {
+                names.append(std.heap.c_allocator, pkg.getName()) catch continue;
+            }
+        }
+        if (names.items.len == 0) return;
 
-        //     op.install(names.items) catch {
-        //         std.debug.print("failed to start install\n", .{});
-        //         std.heap.c_allocator.destroy(op);
-        //         p.operation = null;
-        //     };
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "install") catch return;
+        argv.append(std.heap.c_allocator, "standard") catch return;
+        for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Installing packages",
+                .argv = argv.items,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
     }
 
-    // fn on_op_event(ctx: *anyopaque, events: Event) void {
-    //     const self: *PackagePage = @ptrCast(@alignCast(ctx));
-    //     self.handleOperationEvent(events);
-    // }
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *PackagePage = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+        self.reload();
+    }
 
-    // fn on_op_done(ctx: *anyopaque, exit_code: u8) void {
-    //     const self: *PackagePage = @ptrCast(@alignCast(ctx));
-    //     self.handleOperationDone(exit_code);
-    // }
-
-    // fn handleOperationEvent(self: *Self, events: Event) void {
-    //     _ = self;
-    //     switch (events) {
-    //         .info => |i| {
-    //             std.debug.print("[info] {s}: {s}\n", .{ i.event_type, i.message });
-    //         },
-    //         .err => |e| {
-    //             std.debug.print("[error] {s}\n", .{e.message});
-    //         },
-    //         .unknown => {},
-    //     }
-    // }
-
-    // fn handleOperationDone(self: *Self, exit_code: u8) void {
-    //     const p = self.priv();
-    //     std.debug.print("[done] exit={d}\n", .{exit_code});
-    //     if (p.operation) |op| {
-    //         if (op.reader) |t| t.join(); // wait for reader to fully exit
-    //         op.threaded.deinit();
-    //         std.heap.c_allocator.destroy(op);
-    //         p.operation = null;
-    //     }
-    // }
+    fn reload(self: *Self) void {
+        const p = self.priv();
+        p.generation += 1;
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        thread.detach();
+    }
 };

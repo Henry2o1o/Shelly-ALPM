@@ -10,6 +10,8 @@ const AurPage = @import("pages/aur_page.zig").AurPage;
 const UpdatePage = @import("pages/update_page.zig").UpdatePage;
 const SupportPage = @import("pages/support.zig");
 const SettingsPage = @import("pages/settings_page.zig").SettingsPage;
+const TransactionPage = @import("pages/transaction_page.zig").TransactionPage;
+const TransactionRequest = @import("pages/transaction_page.zig").TransactionRequest;
 
 const NavButton = struct {
     button: *gtk.Button,
@@ -36,6 +38,7 @@ pub const ShellyWindow = extern struct {
         rail: ?*gtk.Box,
         chevron_img: ?*gtk.Image,
         nav_buttons: std.ArrayListUnmanaged(*NavButton),
+
         collapsed: bool,
         var offset: c_int = 0;
     };
@@ -277,6 +280,11 @@ pub const ShellyWindow = extern struct {
             gtk.Box.remove(p.lockout_content, c);
         }
         gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 0);
+    }
+    pub fn startTransaction(self: *ShellyWindow, request: TransactionRequest) void {
+        const tp = TransactionPage.new();
+        self.showLockout(tp.as(gtk.Widget));
+        tp.run(request);
     }
 
     const template_children = .{

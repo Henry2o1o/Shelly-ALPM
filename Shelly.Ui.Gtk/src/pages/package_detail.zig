@@ -165,6 +165,7 @@ pub const PackageDetail = extern struct {
         var buf: [512]u8 = undefined;
 
         gtk.Label.setLabel(p.name_label, c_string.cstr(&buf, package.Name));
+        p.name_label.setSelectable(1);
         gtk.Label.setLabel(p.description_label, c_string.cstr(&buf, package.Description));
 
         var sbuf: [32]u8 = undefined;

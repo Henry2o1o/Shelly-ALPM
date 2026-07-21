@@ -8,13 +8,29 @@ pub const Event = union(enum) {
     info: struct {
         event_type: []const u8,
         message: []const u8,
+        package_name: ?[]const u8,
         current: ?i64,
         total: ?i64,
     },
     err: struct {
         message: []const u8,
     },
-    //stub of others for now
+    alpm_progress: struct {
+        package_name: []const u8,
+        current_download: i64,
+        total_download: i64,
+        progress_type: []const u8,
+        percent: i64,
+        message: ?[]const u8,
+    },
+    flatpak_progress: struct {
+        status: ?[]const u8,
+        percentage: i64,
+    },
+    appimage_progress: struct {
+        status: ?[]const u8,
+        percentage: i64,
+    },
     unknown: void,
 };
 
@@ -32,8 +48,81 @@ const AlpmError = struct {
     ErrorMessage: []const u8 = "",
 };
 
+const AlpmProgress = struct {
+    @"$kind": []const u8 = "",
+    PackageName: []const u8 = "",
+    CurrentDownload: i64 = 0,
+    TotalDownload: i64 = 0,
+    ProgressType: []const u8 = "",
+    Percent: i64 = 0,
+    Message: ?[]const u8 = null,
+};
+
+const SimpleProgress = struct {
+    @"$kind": []const u8 = "",
+    Status: ?[]const u8 = null,
+    Percentage: i64 = 0,
+};
+
+pub const Question = union(enum) {
+    yes_no: struct {
+        question_id: []const u8,
+        question_kind: []const u8,
+        question_text: []const u8,
+    },
+};
+
+const YesNoRequest = struct {
+    @"$kind": []const u8 = "",
+    QuestionId: []const u8 = "",
+    QuestionKind: []const u8 = "",
+    QuestionText: []const u8 = "",
+};
+
+pub const PendingQuestion = struct {
+    arena: std.heap.ArenaAllocator,
+    operation: *ShellyOperation,
+    request: Question,
+    completed: bool = false,
+    on_dismiss: ?*const fn (ctx: *anyopaque) void = null,
+    dismiss_ctx: ?*anyopaque = null,
+
+    pub fn questionId(self: *const PendingQuestion) []const u8 {
+        return switch (self.request) {
+            .yes_no => |q| q.question_id,
+        };
+    }
+
+    pub fn destroy(self: *PendingQuestion) void {
+        const backing = self.arena.child_allocator;
+        self.arena.deinit();
+        backing.destroy(self);
+    }
+};
+
 const Envelope = struct {
     @"$kind": []const u8 = "",
+};
+
+pub const ShellyCommands = struct {
+    pub fn install(alloc: std.mem.Allocator, names: []const []const u8) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "install");
+        try argv.append(alloc, "standard");
+        for (names) |n| try argv.append(alloc, n);
+        return argv.toOwnedSlice(alloc);
+    }
+
+    pub fn upgrade(alloc: std.mem.Allocator, flatpak: bool, aur: bool, standard: bool) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+
+        try argv.append(alloc, "upgrade");
+        try argv.append(alloc, "all");
+        if (!flatpak) try argv.append(alloc, "--no-flatpak");
+        if (!aur) try argv.append(alloc, "--no-aur");
+        if (!standard) try argv.append(alloc, "--no-repo");
+        return argv.toOwnedSlice(alloc);
+    }
 };
 
 pub const ShellyOperation = struct {
@@ -41,14 +130,19 @@ pub const ShellyOperation = struct {
     threaded: std.Io.Threaded,
     io: std.Io,
     child: std.process.Child,
-
     reader: ?std.Thread = null,
-
     on_event: *const fn (ctx: *anyopaque, event: Event) void,
+    on_question: *const fn (ctx: *anyopaque, pending: *PendingQuestion) void,
     ctx: *anyopaque,
     on_done: *const fn (ctx: *anyopaque, exit_code: u8) void,
 
-    pub fn init(allocator: std.mem.Allocator, on_event: *const fn (ctx: *anyopaque, event: Event) void, on_done: *const fn (ctx: *anyopaque, exit_code: u8) void, ctx: *anyopaque) ShellyOperation {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        on_event: *const fn (ctx: *anyopaque, event: Event) void,
+        on_done: *const fn (ctx: *anyopaque, exit_code: u8) void,
+        on_question: *const fn (ctx: *anyopaque, pending: *PendingQuestion) void,
+        ctx: *anyopaque,
+    ) ShellyOperation {
         return .{
             .allocator = allocator,
             .threaded = std.Io.Threaded.init(allocator, .{}),
@@ -56,35 +150,42 @@ pub const ShellyOperation = struct {
             .child = undefined,
             .on_event = on_event,
             .on_done = on_done,
+            .on_question = on_question,
             .ctx = ctx,
         };
     }
 
-    pub fn install(self: *ShellyOperation, names: []const []const u8) !void {
+    fn build_full_argv(self: *ShellyOperation, args: []const []const u8) ![]const []const u8 {
         const shelly_bin = if (builtin.mode == .Debug)
-            "../Shelly.Cli.Zig/zig-out/bin/shelly"
+            "/home/caro/RiderProjects/Shelly-ALPM/Shelly.Cli.Zig/zig-out/bin/shelly"
         else
             "shelly";
+        var full = try self.allocator.alloc([]const u8, args.len + 2);
+        full[0] = shelly_bin;
+        @memcpy(full[1 .. 1 + args.len], args);
+        full[full.len - 1] = "--ui-mode";
 
-        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer argv.deinit(self.allocator);
-        try argv.append(self.allocator, shelly_bin);
-        try argv.append(self.allocator, "-Is");
-        for (names) |n| try argv.append(self.allocator, n);
-        try argv.append(self.allocator, "--ui-mode");
-        try self.startPrivileged(argv.items);
+        for (full) |arg| {
+            std.debug.print("{s}\n", .{arg});
+        }
+
+        return full;
     }
 
-    fn start(self: *ShellyOperation, argv: []const []const u8) !void {
-        try self.spawn_and_read(argv);
-    }
-
-    fn startPrivileged(self: *ShellyOperation, argv: []const []const u8) !void {
-        var full = try self.allocator.alloc([]const u8, argv.len + 1);
+    pub fn start(self: *ShellyOperation, args: []const []const u8) !void {
+        const full = try self.build_full_argv(args);
         defer self.allocator.free(full);
-        full[0] = "pkexec";
-        @memcpy(full[1..], argv);
         try self.spawn_and_read(full);
+    }
+
+    pub fn startPrivileged(self: *ShellyOperation, args: []const []const u8) !void {
+        const full = try self.build_full_argv(args);
+        defer self.allocator.free(full);
+        var withpk = try self.allocator.alloc([]const u8, full.len + 1);
+        defer self.allocator.free(withpk);
+        withpk[0] = "pkexec";
+        @memcpy(withpk[1..], full);
+        try self.spawn_and_read(withpk);
     }
 
     fn spawn_and_read(self: *ShellyOperation, argv: []const []const u8) !void {
@@ -103,7 +204,7 @@ pub const ShellyOperation = struct {
         try stdin.writeStreamingAll(self.io, "\n");
     }
 
-    fn cancel(self: *ShellyOperation) void {
+    pub fn cancel(self: *ShellyOperation) void {
         self.child.kill(self.io);
     }
 
@@ -155,6 +256,31 @@ pub const ShellyOperation = struct {
         msg.* = .{ .op = self, .exit_code = exit_code };
         _ = glib.idleAdd(&onDoneIdle, msg);
     }
+
+    pub fn answerYesNo(self: *ShellyOperation, question_id: []const u8, accept: bool) !void {
+        var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+
+        try json_buf.appendSlice(self.allocator, "{\"$kind\":\"a.yesno\",\"QuestionId\":\"");
+        try json_buf.appendSlice(self.allocator, question_id);
+        try json_buf.appendSlice(self.allocator, "\",\"Accept\":");
+        try json_buf.appendSlice(self.allocator, if (accept) "true" else "false");
+        try json_buf.appendSlice(self.allocator, "}");
+
+        const b64_len = std.base64.standard.Encoder.calcSize(json_buf.items.len);
+        const b64 = try self.allocator.alloc(u8, b64_len);
+        defer self.allocator.free(b64);
+        _ = std.base64.standard.Encoder.encode(b64, json_buf.items);
+
+        var frame: std.ArrayListUnmanaged(u8) = .empty;
+        defer frame.deinit(self.allocator);
+        try frame.appendSlice(self.allocator, "[JSON]");
+        try frame.appendSlice(self.allocator, b64);
+        try frame.appendSlice(self.allocator, "[/JSON]\n");
+
+        const stdin = self.child.stdin orelse return error.NoStdin;
+        try stdin.writeStreamingAll(self.io, frame.items);
+    }
 };
 
 const EventMsg = struct { op: *ShellyOperation, json: []u8 };
@@ -167,28 +293,93 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
         msg.op.allocator.free(msg.json);
         msg.op.allocator.destroy(msg);
     }
-
     const op = msg.op;
     const alloc = op.allocator;
 
     const env = std.json.parseFromSlice(Envelope, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
     defer env.deinit();
-
     const kind = env.value.@"$kind";
+
+    if (std.mem.eql(u8, kind, "q.yesno")) {
+        const e = std.json.parseFromSlice(YesNoRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        defer e.deinit();
+
+        const pending = op.allocator.create(PendingQuestion) catch return 0;
+        pending.* = .{
+            .arena = std.heap.ArenaAllocator.init(op.allocator),
+            .operation = op,
+            .request = undefined,
+        };
+        const qa = pending.arena.allocator();
+        pending.request = .{ .yes_no = .{
+            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
+                pending.destroy();
+                return 0;
+            },
+            .question_kind = qa.dupe(u8, e.value.QuestionKind) catch {
+                pending.destroy();
+                return 0;
+            },
+            .question_text = qa.dupe(u8, e.value.QuestionText) catch {
+                pending.destroy();
+                return 0;
+            },
+        } };
+
+        op.on_question(op.ctx, pending);
+        return 0;
+    }
 
     if (std.mem.eql(u8, kind, "alpm.info")) {
         const e = std.json.parseFromSlice(AlpmInfo, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
         defer e.deinit();
-        op.on_event(op.ctx, .{ .info = .{ .event_type = e.value.EventType, .message = e.value.Message, .current = e.value.CurrentIndex, .total = e.value.TotalCount } });
+        op.on_event(op.ctx, .{ .info = .{
+            .event_type = e.value.EventType,
+            .message = e.value.Message,
+            .package_name = e.value.PackageName,
+            .current = e.value.CurrentIndex,
+            .total = e.value.TotalCount,
+        } });
     } else if (std.mem.eql(u8, kind, "alpm.error")) {
         const e = std.json.parseFromSlice(AlpmError, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
         defer e.deinit();
         op.on_event(op.ctx, .{ .err = .{ .message = e.value.ErrorMessage } });
+    } else if (std.mem.eql(u8, kind, "alpm.progress")) {
+        const e = std.json.parseFromSlice(AlpmProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        defer e.deinit();
+        op.on_event(op.ctx, .{ .alpm_progress = .{
+            .package_name = e.value.PackageName,
+            .current_download = e.value.CurrentDownload,
+            .total_download = e.value.TotalDownload,
+            .progress_type = e.value.ProgressType,
+            .percent = clampPercent(e.value.Percent),
+            .message = e.value.Message,
+        } });
+    } else if (std.mem.eql(u8, kind, "flatpak.progress")) {
+        const e = std.json.parseFromSlice(SimpleProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        defer e.deinit();
+        op.on_event(op.ctx, .{ .flatpak_progress = .{
+            .status = e.value.Status,
+            .percentage = clampPercent(e.value.Percentage),
+        } });
+    } else if (std.mem.eql(u8, kind, "appimage.progress")) {
+        const e = std.json.parseFromSlice(SimpleProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        defer e.deinit();
+        op.on_event(op.ctx, .{ .appimage_progress = .{
+            .status = e.value.Status,
+            .percentage = clampPercent(e.value.Percentage),
+        } });
     } else {
         op.on_event(op.ctx, .unknown);
     }
 
     return 0;
+}
+
+fn clampPercent(p: i64) i64 {
+    if (p < 0) return 0;
+    if (p > 100) return 100;
+    return p;
 }
 
 fn onDoneIdle(data: ?*anyopaque) callconv(.c) c_int {
