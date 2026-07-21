@@ -87,7 +87,18 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("zigzag", zigzag.module("zigzag"));
+    const zigzag_module = zigzag.module("zigzag");
+
+    mod.addImport("zigzag", zigzag_module);
+    exe.root_module.addImport("zigzag", zigzag_module);
+
+    const zigalpm_dependency = b.dependency("zigalpm", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zigalpm = zigalpm_dependency.module("Zigalpm");
+    mod.addImport("Zigalpm", zigalpm);
+    exe.root_module.addImport("Zigalpm", zigalpm);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
