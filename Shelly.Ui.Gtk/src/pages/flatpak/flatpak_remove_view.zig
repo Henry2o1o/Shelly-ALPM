@@ -6,11 +6,14 @@ const glib = bindings.glib;
 const runtime = @import("../../services/runtime.zig");
 const gobject = bindings.gobject;
 const support = @import("../support.zig");
+const sizeconverter = @import("../../helpers/size_converts.zig");
+const search = @import("../../helpers/search.zig");
+
 const Flatpak = @import("../../models/flatpak.zig").Flatpak;
 const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const FlatpakObject = @import("../../g_objects/flatpak_object.zig").FlatpakObject;
-const sizeconverter = @import("../../helpers/size_converts.zig");
-const search = @import("../../helpers/search.zig");
+const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
+const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 
 pub const FlatpakRemoveView = extern struct {
     parent_instance: Parent,
@@ -85,7 +88,7 @@ pub const FlatpakRemoveView = extern struct {
         gtk.ListView.setModel(p.installed_flatpaks, p.selection.as(gtk.SelectionModel));
 
         const factory = gtk.SignalListItemFactory.new();
-        _ = gtk.SignalListItemFactory.signals.setup.connect(factory, ?*anyopaque, &on_setup, null, .{});
+        _ = gtk.SignalListItemFactory.signals.setup.connect(factory, *FlatpakRemoveView, &on_setup, self, .{});
         _ = gtk.SignalListItemFactory.signals.bind.connect(factory, ?*anyopaque, &on_bind, null, .{});
         gtk.ListView.setFactory(p.installed_flatpaks, factory.as(gtk.ListItemFactory));
 
@@ -114,7 +117,7 @@ pub const FlatpakRemoveView = extern struct {
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 
-    fn on_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+    fn on_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, self: *FlatpakRemoveView) callconv(.c) void {
         const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
 
         const grid = gtk.Grid.new();
@@ -149,7 +152,7 @@ pub const FlatpakRemoveView = extern struct {
 
         // stash the list item so the handler can find the current package
         gobject.Object.setData(remove_button.as(gobject.Object), "list-item", list_item);
-        _ = gtk.Button.signals.clicked.connect(remove_button, ?*anyopaque, &on_remove_clicked, null, .{});
+        _ = gtk.Button.signals.clicked.connect(remove_button, *FlatpakRemoveView, &on_remove_clicked, self, .{});
 
         gtk.Grid.attach(grid, remove_button.as(gtk.Widget), 3, 0, 1, 2);
 
@@ -198,14 +201,42 @@ pub const FlatpakRemoveView = extern struct {
         }
     }
 
-    fn on_remove_clicked(button: *gtk.Button, _: ?*anyopaque) callconv(.c) void {
+    fn on_remove_clicked(button: *gtk.Button, self: *FlatpakRemoveView) callconv(.c) void {
         const raw = gobject.Object.getData(button.as(gobject.Object), "list-item") orelse return;
         const list_item: *gtk.ListItem = @ptrCast(@alignCast(raw));
         const obj = gtk.ListItem.getItem(list_item) orelse return;
         const pkg = gobject.ext.cast(FlatpakObject, obj) orelse return;
 
-        std.debug.print("remove: {s}\n", .{pkg.getName()});
-        // TODO: actually remove
+        const argv = ShellyCommands.remove_flatpak(std.heap.c_allocator, pkg.getId(), false) catch return;
+        defer std.heap.c_allocator.free(argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+        names.append(std.heap.c_allocator, pkg.getName()) catch {};
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Removing flatpak",
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = false,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *FlatpakRemoveView = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+        self.reload();
+    }
+
+    fn reload(self: *Self) void {
+        const p = self.priv();
+        p.generation += 1;
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        thread.detach();
     }
 
     pub fn onMap(self: *Self) void {
@@ -269,12 +300,28 @@ pub const FlatpakRemoveView = extern struct {
     fn onLoadComplete(data: ?*anyopaque) callconv(.c) c_int {
         const result: *LoadResult = @ptrCast(@alignCast(data.?));
         const p = result.page.priv();
-
         if (result.generation != p.generation) {
             result.arena.deinit();
             std.heap.c_allocator.destroy(result.arena);
             std.heap.c_allocator.destroy(result);
             return 0;
+        }
+
+        if (result.index == 0) {
+            gio.ListStore.removeAll(p.list_store);
+            if (p.arena) |old| {
+                old.deinit();
+                std.heap.c_allocator.destroy(old);
+            }
+            const na = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch {
+                p.arena = null;
+                result.arena.deinit();
+                std.heap.c_allocator.destroy(result.arena);
+                std.heap.c_allocator.destroy(result);
+                return 0;
+            };
+            na.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+            p.arena = na;
         }
 
         const page_alloc = (p.arena orelse {
@@ -286,20 +333,17 @@ pub const FlatpakRemoveView = extern struct {
 
         const batch_size = 250;
         const end = @min(result.index + batch_size, result.packages.len);
-
         for (result.packages[result.index..end]) |d| {
             const pkg = FlatpakObject.new(page_alloc, d);
             gio.ListStore.append(p.list_store, pkg.as(gobject.Object));
             pkg.as(gobject.Object).unref();
         }
         result.index = end;
-
         if (result.index < result.packages.len) return 1;
 
         result.arena.deinit();
         std.heap.c_allocator.destroy(result.arena);
         std.heap.c_allocator.destroy(result);
-
         return 0;
     }
 

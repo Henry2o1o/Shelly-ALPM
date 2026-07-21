@@ -169,6 +169,16 @@ pub const ShellyCommands = struct {
         if (remote == .user) try argv.append(alloc, "--user");
         return argv.toOwnedSlice(alloc);
     }
+
+    pub fn remove_flatpak(alloc: std.mem.Allocator, names: []const u8, config_removal: bool) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "remove");
+        try argv.append(alloc, "flatpak");
+        if (names.len > 0) try argv.append(alloc, names);
+        if (config_removal) try argv.append(alloc, "--remove-config");
+        try argv.append(alloc, "--remove-unused");
+        return argv.toOwnedSlice(alloc);
+    }
 };
 
 pub const ShellyOperation = struct {

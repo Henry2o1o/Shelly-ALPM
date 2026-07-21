@@ -7,12 +7,13 @@ const gtk = bindings.gtk;
 const gdk = bindings.gdk;
 const gobject = bindings.gobject;
 const support = @import("../support.zig");
-const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const flatpak = @import("../../models/flatpak.zig");
+const search = @import("../../helpers/search.zig");
+
+const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const AppstreamAppObject = @import("../../g_objects/appstream_app_object.zig").AppstreamAppObject;
 const Carousel = @import("../../helpers/custom_ui_comps/carousel.zig").Carousel;
 const CarouselIndicatorDots = @import("../../helpers/custom_ui_comps/carousel_indicator_dots.zig").CarouselIndicatorDots;
-const search = @import("../../helpers/search.zig");
 const SizeConverter = @import("../../helpers/size_converts.zig").SizeConverter;
 const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
@@ -326,11 +327,11 @@ pub const FlatpakInstallView = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Installing packages",
+                .title = "Installing flatpak",
                 .argv = argv,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,
-                .privileged = true,
+                .privileged = false,
                 .ctx = self,
             });
         }
