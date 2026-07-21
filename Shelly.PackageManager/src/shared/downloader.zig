@@ -555,10 +555,16 @@ fn readBodyWithIdleTimeout(
 
 fn readBody(reader: *std.Io.Reader, buffer: []u8) std.Io.Reader.ShortError!usize {
     var vectors: [1][]u8 = .{buffer};
-    return reader.readVec(&vectors) catch |err| switch (err) {
-        error.EndOfStream => 0,
-        error.ReadFailed => error.ReadFailed,
-    };
+    while (true) {
+        const read = reader.readVec(&vectors) catch |err| switch (err) {
+            error.EndOfStream => return 0,
+            error.ReadFailed => return error.ReadFailed,
+        };
+        // Reader.readVec documents that zero does not indicate EOF. HTTP
+        // framing can make an internal state transition without yielding body
+        // bytes, so keep reading until data or EndOfStream is observed.
+        if (read != 0) return read;
+    }
 }
 
 /// Bounds DNS, TCP, and TLS initialization together. The response body is not
