@@ -191,6 +191,19 @@ pub const ShellyCommands = struct {
         try argv.append(alloc, if (remote == .system) "true" else "false");
         return argv.toOwnedSlice(alloc);
     }
+
+    pub fn add_remote(alloc: std.mem.Allocator, name: []const u8, url: []const u8, scope: [:0]const u8) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "sync");
+        try argv.append(alloc, "flatpak");
+        try argv.append(alloc, "remote");
+        try argv.append(alloc, "add");
+        if (name.len > 0) try argv.append(alloc, name);
+        try argv.append(alloc, "--remote-url");
+        try argv.append(alloc, url);
+        if (std.mem.eql(u8, scope, "system")) try argv.append(alloc, "--system");
+        return argv.toOwnedSlice(alloc);
+    }
 };
 
 pub const ShellyOperation = struct {
