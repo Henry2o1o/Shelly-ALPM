@@ -2,6 +2,7 @@ const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const glib = bindings.glib;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
+const Scope = @import("../models/flatpak.zig").InstallLevel;
 const builtin = @import("builtin");
 
 pub const Event = union(enum) {
@@ -157,6 +158,15 @@ pub const ShellyCommands = struct {
         if (!flatpak) try argv.append(alloc, "--no-flatpak");
         if (!aur) try argv.append(alloc, "--no-aur");
         if (!standard) try argv.append(alloc, "--no-repo");
+        return argv.toOwnedSlice(alloc);
+    }
+
+    pub fn install_flatpak(alloc: std.mem.Allocator, names: []const u8, remote: Scope) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "install");
+        try argv.append(alloc, "flatpak");
+        if (names.len > 0) try argv.append(alloc, names);
+        if (remote == .user) try argv.append(alloc, "--user");
         return argv.toOwnedSlice(alloc);
     }
 };

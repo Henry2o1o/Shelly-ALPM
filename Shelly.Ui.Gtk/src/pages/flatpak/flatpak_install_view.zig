@@ -14,6 +14,8 @@ const Carousel = @import("../../helpers/custom_ui_comps/carousel.zig").Carousel;
 const CarouselIndicatorDots = @import("../../helpers/custom_ui_comps/carousel_indicator_dots.zig").CarouselIndicatorDots;
 const search = @import("../../helpers/search.zig");
 const SizeConverter = @import("../../helpers/size_converts.zig").SizeConverter;
+const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
+const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 
 extern fn g_get_user_data_dir() [*:0]const u8;
 extern fn g_file_test(filename: [*:0]const u8, flags: c_uint) c_int;
@@ -313,6 +315,32 @@ pub const FlatpakInstallView = extern struct {
             remote.Name,
             if (remote.Scope == .user) "user" else "system",
         });
+
+        const argv = ShellyCommands.install_flatpak(std.heap.c_allocator, app.getId(), remote.Scope) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+
+        names.append(std.heap.c_allocator, app.getName()) catch {};
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Installing packages",
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+
+        gtk.Widget.setSensitive(self.priv().overlay_install_button.as(gtk.Widget), 1);
     }
 
     fn on_remote_selected(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
