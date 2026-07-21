@@ -204,6 +204,26 @@ pub const ShellyCommands = struct {
         if (std.mem.eql(u8, scope, "system")) try argv.append(alloc, "--system");
         return argv.toOwnedSlice(alloc);
     }
+
+    pub fn install_local_flatpak_ref(alloc: std.mem.Allocator, path: []const u8, user: bool) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "install");
+        try argv.append(alloc, "flatpak");
+        if (path.len > 0) try argv.append(alloc, path);
+        try argv.append(alloc, "--ref-file");
+        if (user) try argv.append(alloc, "--user");
+        return argv.toOwnedSlice(alloc);
+    }
+
+    pub fn install_local_flatpak_bundle(alloc: std.mem.Allocator, path: []const u8, user: bool) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "install");
+        try argv.append(alloc, "flatpak");
+        if (path.len > 0) try argv.append(alloc, path);
+        try argv.append(alloc, "--bundle");
+        if (user) try argv.append(alloc, "--user");
+        return argv.toOwnedSlice(alloc);
+    }
 };
 
 pub const ShellyOperation = struct {

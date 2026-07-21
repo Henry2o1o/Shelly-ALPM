@@ -14,7 +14,7 @@ const IconResolver = @import("../services/icon_resolver.zig").IconResolver;
 const Package = @import("../models/packages.zig").Package;
 const runtime = @import("../services/runtime.zig");
 const c_string = @import("../helpers/c_string.zig");
-const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
+
 const Event = @import("../services/shelly_operation.zig").Event;
 const PackageDetail = @import("package_detail.zig").PackageDetail;
 
@@ -58,7 +58,7 @@ pub const PackagePage = extern struct {
         resolver: IconResolver,
         search_text: [256]u8,
         search_len: usize,
-        operation: ?*ShellyOperation,
+
         detail_revealer: *gtk.Revealer,
         detail: *PackageDetail,
         var offset: c_int = 0;
@@ -100,12 +100,10 @@ pub const PackagePage = extern struct {
         p.arena = null;
         p.generation = 0;
         p.show_installed_only = false;
-        p.operation = null;
 
         const detail = PackageDetail.new();
         p.detail = detail;
         gtk.Revealer.setChild(p.detail_revealer, detail.as(gtk.Widget));
-        // or gtk.Box.append(p.detail_hbox, detail.as(gtk.Widget)) — whatever your slot is
 
         p.list_store = gio.ListStore.new(PackageObject.getGObjectType());
 

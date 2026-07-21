@@ -6,10 +6,11 @@ const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("../support.zig");
 const cstr = @import("../../helpers/c_string.zig").cstr;
+
 const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const Remote = @import("../../models/flatpak.zig").Remote;
-const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
+const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 
 pub const FlatpakInstallLocalView = extern struct {
     parent_instance: Parent,
@@ -75,11 +76,13 @@ pub const FlatpakInstallLocalView = extern struct {
 
     fn on_choose_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const dialog = gtk.FileDialog.new();
-        gtk.FileDialog.setTitle(dialog, "Choose a Flatpak bundle");
+        gtk.FileDialog.setTitle(dialog, "Choose a Flatpak file");
 
         const filter = gtk.FileFilter.new();
-        gtk.FileFilter.setName(filter, "Flatpak bundles");
-        gtk.FileFilter.addPattern(filter, "*.flatpak");
+        gtk.FileFilter.setName(filter, "Flatpak files");
+        gtk.FileFilter.addSuffix(filter, "flatpak");
+        gtk.FileFilter.addSuffix(filter, "flatpakref");
+
         const filters = gio.ListStore.new(gtk.FileFilter.getGObjectType());
         gio.ListStore.append(filters, filter.as(gobject.Object));
         gtk.FileDialog.setFilters(dialog, filters.as(gio.ListModel));
@@ -129,15 +132,24 @@ pub const FlatpakInstallLocalView = extern struct {
     fn on_install_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const p = self.priv();
         const path = p.selected_path orelse return;
-
         const selected: usize = @intCast(gtk.DropDown.getSelected(p.scope_dropdown));
-
         const user_scope = selected == 1;
 
-        const argv = buildInstallArgv(std.heap.c_allocator, path, user_scope) catch {
-            self.show_status("Unable to prepare the installation.");
+        const kind: BundleKind = if (std.ascii.endsWithIgnoreCase(path, ".flatpakref"))
+            .ref
+        else if (std.ascii.endsWithIgnoreCase(path, ".flatpak"))
+            .bundle
+        else {
+            self.show_status("Unsupported file type. Choose a .flatpak or .flatpakref file.");
             return;
         };
+
+        var argv: []const []const u8 = undefined;
+        if (kind == .ref) {
+            argv = ShellyCommands.install_local_flatpak_ref(std.heap.c_allocator, path, user_scope) catch return;
+        } else {
+            argv = ShellyCommands.install_local_flatpak_bundle(std.heap.c_allocator, path, user_scope) catch return;
+        }
         defer std.mem.Allocator.free(std.heap.c_allocator, argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -156,12 +168,7 @@ pub const FlatpakInstallLocalView = extern struct {
         }
     }
 
-    fn buildInstallArgv(allocator: std.mem.Allocator, path: [:0]const u8, user_scope: bool) ![][]const u8 {
-        _ = allocator;
-        _ = path;
-        _ = user_scope;
-        return error.NotImplemented;
-    }
+    const BundleKind = enum { bundle, ref };
 
     fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
         const self: *FlatpakInstallLocalView = @ptrCast(@alignCast(ctx));
@@ -176,7 +183,7 @@ pub const FlatpakInstallLocalView = extern struct {
             std.heap.c_allocator.free(old);
             p.selected_path = null;
         }
-        gtk.Label.setLabel(p.chosen_file_label, "Choose file…");
+        gtk.Label.setLabel(p.chosen_file_label, "Choose file...");
         gtk.Widget.setSensitive(p.install_button.as(gtk.Widget), 0);
     }
 
