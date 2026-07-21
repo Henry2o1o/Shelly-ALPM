@@ -317,6 +317,7 @@ pub fn build(b: *std.Build) void {
             "ALPM queries honor shared cancellation",
             "single-server repositories receive a thirty second setup timeout",
             "zero-server and multi-mirror repositories retain fast failover",
+            "onDownloadEvent does not duplicate progress when a common operation is attached",
         },
     });
     const run_alpm_query_tests = b.addRunArtifact(alpm_query_tests);

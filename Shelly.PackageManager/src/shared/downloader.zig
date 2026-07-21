@@ -78,9 +78,9 @@ pub const CoreDownloader = struct {
     operation_context: ?*operations.OperationContext = null,
     parent_operation: ?*const operations.Operation = null,
     active_operation: ?*operations.Operation = null,
-    /// When true, candidate failures are suppressed from logs, callbacks, and
-    /// operation events. Used for mirrors that can still fail over and for
-    /// optional signatures that may legitimately be absent.
+    /// When true, candidate failures and per-attempt operation lifecycle events
+    /// are suppressed. Progress may still flow to a logical parent download.
+    /// Used for mirrors that can fail over and optional signatures.
     quiet: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, config: DownloadConfiguration) CoreDownloader {
@@ -369,7 +369,8 @@ pub const CoreDownloader = struct {
     fn emitEvent(self: *const CoreDownloader, event: DownloadEvent) void {
         if (self.quiet and event.event_type == .Error) return;
         if (self.event_callback) |callback| callback(self.event_context, event);
-        const operation = self.active_operation orelse return;
+        const operation = self.active_operation orelse
+            (if (event.event_type == .Progress) self.parent_operation else null) orelse return;
         switch (event.event_type) {
             .Start => operation.status(.information, "Download started", "download.start", null),
             .Progress => if (event.progress) |progress| operation.progress(.{
@@ -786,6 +787,61 @@ test "DownloadResult union variants are correctly defined" {
         },
         else => try std.testing.expect(false),
     }
+}
+
+test "quiet downloader forwards rich progress to its logical parent" {
+    const Capture = struct {
+        progress: ?operations.ProgressEvent = null,
+        statuses: usize = 0,
+        failures: usize = 0,
+
+        fn receive(data: ?*anyopaque, event: operations.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (event) {
+                .progress => |progress| self.progress = progress,
+                .status => self.statuses += 1,
+                .failure => self.failures += 1,
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operations.OperationContext.init(std.testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    _ = try context.subscribe(.{ .function = Capture.receive, .data = &capture });
+    var parent = context.begin(.{ .backend = .download, .kind = .download, .subject = "demo.pkg.tar.zst" });
+    defer parent.finish(.success);
+
+    var downloader = CoreDownloader.init(std.testing.allocator, threaded.io(), .{});
+    defer downloader.deinit();
+    downloader.quiet = true;
+    downloader.setParentOperation(&parent);
+    downloader.emitEvent(.{ .event_type = .Start, .destination_path = "demo.pkg.tar.zst" });
+    downloader.emitEvent(.{
+        .event_type = .Progress,
+        .destination_path = "demo.pkg.tar.zst",
+        .progress = .{
+            .bytes_downloaded = 512,
+            .bytes_total = 1024,
+            .percent = 50,
+            .speed_bytes_per_sec = 256,
+        },
+    });
+    downloader.emitEvent(.{ .event_type = .Complete, .destination_path = "demo.pkg.tar.zst" });
+    downloader.emitEvent(.{ .event_type = .Error, .download_error = DownloadError.NetworkError });
+
+    const progress = capture.progress orelse return error.MissingProgress;
+    try std.testing.expectEqual(operations.Backend.download, progress.envelope.backend);
+    try std.testing.expectEqualStrings("download", progress.update.stage orelse return error.MissingStage);
+    try std.testing.expectEqual(@as(u64, 512), progress.update.bytes_completed.?);
+    try std.testing.expectEqual(@as(u64, 1024), progress.update.bytes_total.?);
+    try std.testing.expectEqual(@as(u64, 256), progress.update.bytes_per_second.?);
+    try std.testing.expectEqual(@as(f64, 50), progress.update.percentage.?);
+    try std.testing.expectEqual(@as(usize, 0), capture.statuses);
+    try std.testing.expectEqual(@as(usize, 0), capture.failures);
 }
 
 test "shared cancellation stops downloads before network access" {

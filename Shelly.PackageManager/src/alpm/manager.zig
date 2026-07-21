@@ -2400,13 +2400,18 @@ pub const Manager = struct {
                 .event_type = .pkg_retrieve_start,
                 .message = path,
             }),
-            .Progress => if (event.progress) |p| self.dispatcher.raiseProgress(.{
-                .progress_type = @intCast(rawLibalpm.ALPM_PROGRESS_ADD_START), // pick an appropriate alpm_progress_t
-                .pkg_name = std.fs.path.basename(path),
-                .percent = p.percent,
-                .howmany = 1,
-                .current = 1,
-            }),
+            .Progress => if (event.progress) |p| {
+                // CoreDownloader forwards rich byte progress to the logical
+                // download operation. Retain this fallback only for legacy
+                // callers that do not attach a common operation.
+                if (self.dispatcher.operation == null) self.dispatcher.raiseProgress(.{
+                    .progress_type = @intCast(rawLibalpm.ALPM_PROGRESS_ADD_START),
+                    .pkg_name = std.fs.path.basename(path),
+                    .percent = p.percent,
+                    .howmany = 1,
+                    .current = 1,
+                });
+            },
             .Complete => self.dispatcher.raiseInformational(.{
                 .event_type = .pkg_retrieve_done,
                 .message = path,
@@ -3763,6 +3768,38 @@ test "onDownloadEvent translates start progress and completion events" {
     info = info_cap.args orelse return error.TestFailed;
     try testing.expectEqual(libalpm.EventType.pkg_retrieve_done, info.event_type);
     try testing.expectEqualStrings("/tmp/example.pkg.tar.zst", info.message);
+}
+
+test "onDownloadEvent does not duplicate progress when a common operation is attached" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var operation = context.begin(.{ .backend = .alpm, .kind = .update });
+    defer operation.finish(.success);
+    mgr.dispatcher.setOperation(&operation);
+
+    var progress_cap = ProgressCapture{};
+    _ = try mgr.dispatcher.addProgressHandler(.{
+        .function = captureProgress,
+        .data = @ptrCast(&progress_cap),
+    });
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Progress,
+        .destination_path = "/tmp/example.pkg.tar.zst",
+        .progress = .{
+            .bytes_downloaded = 50,
+            .bytes_total = 100,
+            .percent = 50,
+            .speed_bytes_per_sec = 25,
+        },
+    });
+
+    try testing.expect(progress_cap.args == null);
 }
 
 test "onDownloadEvent reports concrete and fallback errors and ignores skipped events" {
