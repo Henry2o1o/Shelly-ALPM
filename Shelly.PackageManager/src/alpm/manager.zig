@@ -2793,8 +2793,11 @@ fn mirrorDownloadConfiguration(configured_server_count: usize) downloader.Downlo
         else
             mirror_failover_timeout_seconds,
         // A failed candidate should immediately advance to the next mirror.
-        .max_retries = 0,
-        .retry_delay_secs = 0,
+        .max_retries = if (configured_server_count == 1)
+            2
+        else
+            0,
+        .retry_delay_secs = 1,
     };
 }
 
