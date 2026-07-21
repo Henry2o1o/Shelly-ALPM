@@ -4,7 +4,7 @@ const Package = @import("../models/packages.zig").Package;
 const Remote = @import("../models/flatpak.zig").Remote;
 const Flatpak = @import("../models/flatpak.zig").Flatpak;
 const AppstreamApp = @import("../models/flatpak.zig").AppstreamApp;
-const FlatpakRemoteInfo = @import("../models/flatpak.zig").FlatpakRemoteInfo;
+const FlatpakSearchResponse = @import("../models/flatpak.zig").FlatpakSearchResponse;
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const RunResult = std.process.RunResult;
@@ -82,14 +82,14 @@ pub const ShellyCli = struct {
         return try JsonPackFrame.decode([]AppstreamApp, self.allocator, result.stdout);
     }
 
-    pub fn get_flatpak_remote_info(self: ShellyCli, remote: []const u8, id: []const u8, branch: []const u8) !std.json.Parsed(FlatpakRemoteInfo) {
-        const result = try self.run(&.{ "flatpak", "search", id });
+    pub fn get_flatpak_remote_info(self: ShellyCli, remote: []const u8, id: []const u8, branch: []const u8) !std.json.Parsed(FlatpakSearchResponse) {
+        const result = try self.run(&.{ "search", "flatpak", id });
         _ = remote;
         _ = branch;
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        return try JsonPackFrame.decode(FlatpakRemoteInfo, self.allocator, result.stdout);
+        return try JsonPackFrame.decode(FlatpakSearchResponse, self.allocator, result.stdout);
     }
 
     pub fn get_package_details(self: ShellyCli, name: []const u8) !std.json.Parsed(Package) {

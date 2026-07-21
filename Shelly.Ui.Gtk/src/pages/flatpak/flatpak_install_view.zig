@@ -390,6 +390,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.Widget.setSensitive(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len > 0));
         gtk.Widget.setSensitive(p.overlay_install_button.as(gtk.Widget), @intFromBool(remotes.len > 0));
         if (remotes.len > 0) self.request_remote_info(remotes[0].Name, app.getId());
+        gtk.Widget.setVisible(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len == 0));
     }
 
     fn request_selected_remote_info(self: *Self) void {
@@ -447,9 +448,10 @@ pub const FlatpakInstallView = extern struct {
             _ = glib.idleAdd(&remote_info_complete, load);
             return;
         };
+
         defer parsed.deinit();
-        load.download_size = parsed.value.DownloadSize;
-        load.installed_size = parsed.value.InstalledSize;
+        load.download_size = parsed.value.hits[0].download_size;
+        load.installed_size = parsed.value.hits[0].installed_size;
         _ = glib.idleAdd(&remote_info_complete, load);
     }
 

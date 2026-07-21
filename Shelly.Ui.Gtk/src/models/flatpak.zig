@@ -26,10 +26,32 @@ pub const Flatpak = struct {
     InstallLevel: InstallLevel = .system,
 };
 
-pub const FlatpakRemoteInfo = struct {
-    DownloadSize: i64 = 0,
-    InstalledSize: i64 = 0,
-    Permissions: []const []const u8 = &.{},
+pub const FlatpakSearchResponse = struct {
+    hits: []Hit = &.{},
+    query: []const u8 = "",
+    hitsPerPage: u32 = 0,
+    page: u32 = 0,
+    totalPages: u32 = 0,
+    totalHits: u32 = 0,
+};
+
+pub const Hit = struct {
+    name: []const u8 = "",
+    keywords: []const []const u8 = &.{},
+    summary: []const u8 = "",
+    description: []const u8 = "",
+    id: []const u8 = "",
+    type: []const u8 = "",
+    project_license: []const u8 = "",
+    app_id: []const u8 = "",
+    main_categories: []const []const u8 = &.{},
+    developer_name: []const u8 = "",
+    verification_verified: bool = false,
+    verification_method: ?[]const u8 = null,
+    remote: []const u8 = "",
+    download_size: i64 = 0,
+    installed_size: i64 = 0,
+    permissions: []const []const u8 = &.{},
 };
 
 pub const AppstreamIcon = struct {
@@ -119,7 +141,7 @@ test "parse Flatpak remote info metadata" {
     const json =
         \\{"DownloadSize":150997939,"InstalledSize":470429696,"Permissions":["Context=shared:network","Context=sockets:wayland"]}
     ;
-    const parsed = try std.json.parseFromSlice(FlatpakRemoteInfo, std.testing.allocator, json, .{});
+    const parsed = try std.json.parseFromSlice(FlatpakSearchResponse, std.testing.allocator, json, .{});
     defer parsed.deinit();
 
     try std.testing.expectEqual(@as(i64, 150997939), parsed.value.DownloadSize);
