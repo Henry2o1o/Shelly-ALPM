@@ -545,6 +545,9 @@ pub const PackagePage = extern struct {
             p.arena = null;
         }
 
+        p.resolver.deinit();
+        p.resolver = IconResolver.init(std.heap.c_allocator);
+
         _ = malloc_trim(0);
     }
 

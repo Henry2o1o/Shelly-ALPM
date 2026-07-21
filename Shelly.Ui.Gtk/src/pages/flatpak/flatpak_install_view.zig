@@ -17,6 +17,7 @@ const CarouselIndicatorDots = @import("../../helpers/custom_ui_comps/carousel_in
 const SizeConverter = @import("../../helpers/size_converts.zig").SizeConverter;
 const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
+const Category = @import("../../models/flatpak.zig").Category;
 
 extern fn g_get_user_data_dir() [*:0]const u8;
 extern fn g_file_test(filename: [*:0]const u8, flags: c_uint) c_int;
@@ -70,6 +71,7 @@ pub const FlatpakInstallView = extern struct {
         remote_info_generation: u64,
         suppress_remote_notify: bool,
         search_text: [256]u8,
+        category: Category,
         search_len: usize,
         var offset: c_int = 0;
     };
@@ -756,6 +758,21 @@ pub const FlatpakInstallView = extern struct {
         const self: *Self = @ptrCast(@alignCast(data orelse return 0));
         const p = self.priv();
         const app = gobject.ext.cast(AppstreamAppObject, item) orelse return 0;
+
+        if (p.category != .@"All Applications") {
+            const categories = app.getCategories();
+            var found_match = false;
+
+            for (categories) |cat| {
+                if (std.mem.indexOf(u8, cat, p.category.toString()) != null) {
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if (!found_match) return 0;
+        }
+
         const query = p.search_text[0..p.search_len];
 
         return @intFromBool(search.matchesAnyIgnoreCase(query, &.{ app.getName(), app.getId(), app.getSummary() }));
@@ -766,6 +783,12 @@ pub const FlatpakInstallView = extern struct {
         const len = @min(text.len, p.search_text.len);
         @memcpy(p.search_text[0..len], text[0..len]);
         p.search_len = len;
+        if (p.filter) |filter| gtk.Filter.changed(filter.as(gtk.Filter), .different);
+    }
+
+    pub fn apply_category(self: *Self, category: Category) void {
+        const p = self.priv();
+        p.category = category;
         if (p.filter) |filter| gtk.Filter.changed(filter.as(gtk.Filter), .different);
     }
 

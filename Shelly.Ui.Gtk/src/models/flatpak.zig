@@ -1,5 +1,36 @@
 const std = @import("std");
 
+pub const Category = enum {
+    @"All Applications",
+    Recommended,
+    @"Most Wanted",
+    @"Recently Added",
+    @"Recently Updated",
+    @"Audio & Video",
+    Development,
+    Education,
+    Game,
+    Graphics,
+    Network,
+    Office,
+    Science,
+    System,
+    Utility,
+
+    pub fn toString(self: Category) []const u8 {
+        return switch (self) {
+            .@"Audio & Video" => "AudioVideo",
+            else => @tagName(self),
+        };
+    }
+
+    pub fn toDisplayString(self: Category) [:0]const u8 {
+        return switch (self) {
+            else => @tagName(self),
+        };
+    }
+};
+
 pub const InstallLevel = enum(u8) {
     system = 0,
     user = 1,

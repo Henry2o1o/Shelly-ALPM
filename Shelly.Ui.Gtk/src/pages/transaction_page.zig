@@ -199,6 +199,7 @@ pub const TransactionPage = extern struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         self.handle_done(exit_code);
     }
+
     fn handle_event(self: *Self, event: Event) void {
         std.debug.print("EVENT: {any}\n", .{event});
         switch (event) {
@@ -379,7 +380,7 @@ pub const TransactionPage = extern struct {
                 gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
             },
             .select_one => |q| {
-                _ = q; 
+                _ = q;
             },
         }
     }

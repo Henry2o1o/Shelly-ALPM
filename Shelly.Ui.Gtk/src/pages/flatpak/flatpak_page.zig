@@ -7,6 +7,7 @@ const support = @import("../support.zig");
 const FlatpakInstallView = @import("flatpak_install_view.zig").FlatpakInstallView;
 const FlatpakRemoveView = @import("flatpak_remove_view.zig").FlatpakRemoveView;
 const FlatpakRemotesView = @import("flatpak_remotes_view.zig").FlatpakRemotesView;
+const Category = @import("../../models/flatpak.zig").Category;
 
 pub const FlatpakPage = extern struct {
     parent_instance: Parent,
@@ -24,6 +25,7 @@ pub const FlatpakPage = extern struct {
         nav_install_row: *gtk.ListBoxRow,
         nav_remove_row: *gtk.ListBoxRow,
         nav_remote_row: *gtk.ListBoxRow,
+        category_list: *gtk.ListBox,
         search_entry: *gtk.SearchEntry,
         install_view: *FlatpakInstallView,
         remove_view: *FlatpakRemoveView,
@@ -68,6 +70,14 @@ pub const FlatpakPage = extern struct {
             .{},
         );
 
+        _ = gtk.ListBox.signals.row_selected.connect(
+            p.category_list,
+            *Self,
+            &onCategoryRowSelected,
+            self,
+            .{},
+        );
+
         // start on Install
         gtk.ListBox.selectRow(p.section_nav_list, p.nav_install_row);
         gtk.Stack.setVisibleChildName(p.main_content_stack, "install");
@@ -100,6 +110,20 @@ pub const FlatpakPage = extern struct {
         gtk.Stack.setVisibleChildName(p.main_content_stack, name);
     }
 
+    fn onCategoryRowSelected(_: *gtk.ListBox, row: ?*gtk.ListBoxRow, self: *Self) callconv(.c) void {
+        if (row) |r| {
+            const raw = gobject.Object.getData(r.as(gobject.Object), "category-index");
+            if (raw == null) return;
+            const index = @intFromPtr(raw) - 1;
+
+            std.debug.print("index: {d}\n", .{index});
+
+            const app: Category = @enumFromInt(index);
+            const p = self.priv();
+            p.install_view.apply_category(app);
+        }
+    }
+
     fn onSearchChanged(entry: *gtk.SearchEntry, self: *Self) callconv(.c) void {
         const text = std.mem.span(gtk.Editable.getText(entry.as(gtk.Editable)));
         const p = self.priv();
@@ -110,6 +134,23 @@ pub const FlatpakPage = extern struct {
     pub fn onMap(self: *Self) void {
         const p = self.priv();
         if (p.loaded) return;
+
+        for (std.enums.values(Category)) |app| {
+            const row = gtk.ListBoxRow.new();
+
+            const enum_num = @intFromEnum(app);
+
+            gobject.Object.setData(
+                row.as(gobject.Object),
+                "category-index",
+                @ptrFromInt(enum_num + 1),
+            );
+
+            const label = gtk.Label.new(app.toDisplayString());
+            gtk.ListBoxRow.setChild(row, label.as(gtk.Widget));
+            gtk.ListBox.append(p.category_list, row.as(gtk.Widget));
+        }
+
         p.loaded = true;
     }
 
@@ -126,6 +167,7 @@ pub const FlatpakPage = extern struct {
         .{ "nav_remove_row", @offsetOf(Private, "nav_remove_row") },
         .{ "nav_remote_row", @offsetOf(Private, "nav_remote_row") },
         .{ "search_entry", @offsetOf(Private, "search_entry") },
+        .{ "category_list", @offsetOf(Private, "category_list") },
     };
 
     pub const Class = extern struct {
