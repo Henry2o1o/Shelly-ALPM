@@ -238,7 +238,7 @@ pub const ShellyOperation = struct {
 
     fn build_full_argv(self: *ShellyOperation, args: []const []const u8) ![]const []const u8 {
         const shelly_bin = if (builtin.mode == .Debug)
-            "/home/caro/RiderProjects/Shelly-ALPM/Shelly.Cli.Zig/zig-out/bin/shelly"
+            "../Shelly.Cli.Zig/zig-out/bin/shelly"
         else
             "shelly";
         var full = try self.allocator.alloc([]const u8, args.len + 2);
