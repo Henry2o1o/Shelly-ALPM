@@ -179,6 +179,18 @@ pub const ShellyCommands = struct {
         try argv.append(alloc, "--remove-unused");
         return argv.toOwnedSlice(alloc);
     }
+
+    pub fn remove_remote(alloc: std.mem.Allocator, name: []const u8, remote: Scope) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "sync");
+        try argv.append(alloc, "flatpak");
+        try argv.append(alloc, "remote");
+        try argv.append(alloc, "remove");
+        if (name.len > 0) try argv.append(alloc, name);
+        try argv.append(alloc, "--system");
+        try argv.append(alloc, if (remote == .system) "true" else "false");
+        return argv.toOwnedSlice(alloc);
+    }
 };
 
 pub const ShellyOperation = struct {

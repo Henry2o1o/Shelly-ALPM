@@ -216,7 +216,7 @@ pub const FlatpakRemoveView = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Removing flatpak",
+                .title = "Removing remote",
                 .argv = argv,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,

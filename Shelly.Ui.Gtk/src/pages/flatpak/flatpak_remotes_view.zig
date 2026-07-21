@@ -4,9 +4,12 @@ const gtk = bindings.gtk;
 const glib = bindings.glib;
 const gobject = bindings.gobject;
 const support = @import("../support.zig");
+const cstr = @import("../../helpers/c_string.zig").cstr;
+
 const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const Remote = @import("../../models/flatpak.zig").Remote;
-const cstr = @import("../../helpers/c_string.zig").cstr;
+const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
+const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 
 pub const FlatpakRemotesView = extern struct {
     parent_instance: Parent,
@@ -115,15 +118,12 @@ pub const FlatpakRemotesView = extern struct {
     fn on_load_complete(data: ?*anyopaque) callconv(.c) c_int {
         const result: *LoadResult = @ptrCast(@alignCast(data.?));
         defer std.heap.c_allocator.destroy(result);
-
         const p = result.page.priv();
-
         if (result.generation != p.generation) {
             result.arena.deinit();
             std.heap.c_allocator.destroy(result.arena);
             return 0;
         }
-
         if (p.arena) |old| {
             old.deinit();
             std.heap.c_allocator.destroy(old);
@@ -131,10 +131,13 @@ pub const FlatpakRemotesView = extern struct {
         p.arena = result.arena;
         p.remotes = result.remotes;
 
+        while (gtk.Widget.getFirstChild(p.list_remotes.as(gtk.Widget))) |child| {
+            gtk.ListBox.remove(p.list_remotes, child);
+        }
+
         for (result.remotes, 0..) |r, i| {
             gtk.ListBox.append(p.list_remotes, make_remote_row(r, i));
         }
-
         return 0;
     }
 
@@ -188,7 +191,38 @@ pub const FlatpakRemotesView = extern struct {
         if (index >= p.remotes.len) return;
         const remote = p.remotes[index];
         std.debug.print("remove: {s}\n", .{remote.Name});
-        // remove through cli after
+
+        const argv = ShellyCommands.remove_remote(std.heap.c_allocator, remote.Name, remote.Scope) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+
+        names.append(std.heap.c_allocator, remote.Name) catch {};
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Removing Remote",
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = false,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *FlatpakRemotesView = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+        self.reload();
+    }
+
+    fn reload(self: *Self) void {
+        const p = self.priv();
+        p.generation += 1;
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        thread.detach();
     }
 
     fn add_remote(self: *Self) callconv(.c) void {
