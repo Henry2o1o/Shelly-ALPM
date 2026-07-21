@@ -7,6 +7,7 @@ const support = @import("../support.zig");
 const FlatpakInstallView = @import("flatpak_install_view.zig").FlatpakInstallView;
 const FlatpakRemoveView = @import("flatpak_remove_view.zig").FlatpakRemoveView;
 const FlatpakRemotesView = @import("flatpak_remotes_view.zig").FlatpakRemotesView;
+const FlatpakInstallLocalView = @import("flatpak_install_local_view.zig").FlatpakInstallLocalView;
 const Category = @import("../../models/flatpak.zig").Category;
 
 pub const FlatpakPage = extern struct {
@@ -25,6 +26,7 @@ pub const FlatpakPage = extern struct {
         nav_install_row: *gtk.ListBoxRow,
         nav_remove_row: *gtk.ListBoxRow,
         nav_remote_row: *gtk.ListBoxRow,
+        nav_install_local: *gtk.ListBoxRow,
         category_list: *gtk.ListBox,
         search_entry: *gtk.SearchEntry,
         install_view: *FlatpakInstallView,
@@ -100,6 +102,9 @@ pub const FlatpakPage = extern struct {
 
         const remotes = FlatpakRemotesView.new();
         _ = gtk.Stack.addNamed(p.main_content_stack, remotes.as(gtk.Widget), "remotes");
+
+        const local = FlatpakInstallLocalView.new();
+        _ = gtk.Stack.addNamed(p.main_content_stack, local.as(gtk.Widget), "local");
     }
 
     fn onNavRowSelected(_: *gtk.ListBox, row: ?*gtk.ListBoxRow, self: *Self) callconv(.c) void {
@@ -107,7 +112,7 @@ pub const FlatpakPage = extern struct {
         const r = row orelse return;
 
         const name: [:0]const u8 =
-            if (r == p.nav_install_row) "install" else if (r == p.nav_remove_row) "remove" else if (r == p.nav_remote_row) "remotes" else return;
+            if (r == p.nav_install_row) "install" else if (r == p.nav_remove_row) "remove" else if (r == p.nav_remote_row) "remotes" else if (r == p.nav_install_local) "local" else return;
 
         gtk.Stack.setVisibleChildName(p.main_content_stack, name);
     }
@@ -231,6 +236,8 @@ pub const FlatpakPage = extern struct {
         .{ "nav_install_row", @offsetOf(Private, "nav_install_row") },
         .{ "nav_remove_row", @offsetOf(Private, "nav_remove_row") },
         .{ "nav_remote_row", @offsetOf(Private, "nav_remote_row") },
+        .{ "nav_install_local", @offsetOf(Private, "nav_install_local") },
+
         .{ "search_entry", @offsetOf(Private, "search_entry") },
         .{ "category_list", @offsetOf(Private, "category_list") },
     };

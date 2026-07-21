@@ -22,8 +22,6 @@
             <property name="margin-start">20</property>
             <property name="margin-end">20</property>
             <style><class name="detail-content"/></style>
-
-            <!-- Icon -->
             <child>
               <object class="GtkImage" id="icon">
                 <property name="pixel-size">64</property>
@@ -31,8 +29,6 @@
                 <property name="margin-bottom">8</property>
               </object>
             </child>
-
-            <!-- Name -->
             <child>
               <object class="GtkLabel" id="name_label">
                 <property name="halign">start</property>
@@ -41,8 +37,6 @@
                 <style><class name="detail-title"/></style>
               </object>
             </child>
-
-            <!-- Description directly under name -->
             <child>
               <object class="GtkLabel" id="description_label">
                 <property name="halign">start</property>
@@ -52,18 +46,6 @@
                 <style><class name="dim-label"/></style>
               </object>
             </child>
-
-            <!-- Subtitle (size) -->
-            <child>
-              <object class="GtkLabel" id="subtitle_label">
-                <property name="halign">start</property>
-                <property name="xalign">0</property>
-                <property name="margin-bottom">12</property>
-                <style><class name="dim-label"/></style>
-              </object>
-            </child>
-
-            <!-- Information header -->
             <child>
               <object class="GtkLabel">
                 <property name="label">Information</property>
@@ -73,15 +55,11 @@
                 <style><class name="detail-section-header"/></style>
               </object>
             </child>
-
-            <!-- Spec rows -->
             <child>
               <object class="GtkBox" id="spec_box">
                 <property name="orientation">vertical</property>
               </object>
             </child>
-
-            <!-- Sections (expanders) -->
             <child>
               <object class="GtkBox" id="sections_box">
                 <property name="orientation">vertical</property>

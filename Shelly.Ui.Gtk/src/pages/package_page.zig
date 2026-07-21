@@ -108,8 +108,6 @@ pub const PackagePage = extern struct {
         // or gtk.Box.append(p.detail_hbox, detail.as(gtk.Widget)) — whatever your slot is
 
         p.list_store = gio.ListStore.new(PackageObject.getGObjectType());
-        p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
-        gtk.ColumnView.setModel(p.column_view, p.selection.as(gtk.SelectionModel));
 
         p.filter = gtk.CustomFilter.new(&filter_func, self, null);
         p.filter_model = gtk.FilterListModel.new(p.list_store.as(gio.ListModel), p.filter.as(gtk.Filter));
@@ -516,15 +514,8 @@ pub const PackagePage = extern struct {
         if (p.loaded) return;
         p.loaded = true;
         p.generation += 1;
-
         show_loading(self);
-
-        const arena_ptr = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
-        arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-        p.arena = arena_ptr;
-
         _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
-
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
         thread.detach();
     }
@@ -571,6 +562,8 @@ pub const PackagePage = extern struct {
         const cli = ShellyCli{ .allocator = alloc, .io = threaded.io() };
         const parsed = cli.get_packages() catch |err| {
             std.debug.print("get_packages failed: {t}\n", .{err});
+            arena_ptr.deinit();
+            std.heap.c_allocator.destroy(arena_ptr);
             return;
         };
 
@@ -625,16 +618,6 @@ pub const PackagePage = extern struct {
 
         if (result.index == 0) {
             gio.ListStore.removeAll(p.list_store);
-            if (p.arena) |old| {
-                old.deinit();
-                std.heap.c_allocator.destroy(old);
-            }
-            const na = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch {
-                p.arena = null;
-                return 0;
-            };
-            na.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-            p.arena = na;
 
             const strings = gtk.StringList.new(null);
             gtk.StringList.append(strings, "Any");
@@ -643,15 +626,9 @@ pub const PackagePage = extern struct {
                 gtk.StringList.append(strings, c_string.cstr(&buf, g));
             }
             gtk.DropDown.setModel(p.grouping_selection, strings.as(gio.ListModel));
+            strings.as(gobject.Object).unref();
             gtk.DropDown.setSelected(p.grouping_selection, 0);
         }
-
-        const page_alloc = (p.arena orelse {
-            result.arena.deinit();
-            std.heap.c_allocator.destroy(result.arena);
-            std.heap.c_allocator.destroy(result);
-            return 0;
-        }).allocator();
 
         const batch_size = 500;
         const end = @min(result.index + batch_size, result.packages.len);
@@ -659,7 +636,7 @@ pub const PackagePage = extern struct {
         var batch: [500]*gobject.Object = undefined;
         var i: usize = 0;
         for (result.packages[result.index..end]) |d| {
-            const pkg = PackageObject.new(page_alloc, d);
+            const pkg = PackageObject.new(d);
             batch[i] = pkg.as(gobject.Object);
             i += 1;
         }
