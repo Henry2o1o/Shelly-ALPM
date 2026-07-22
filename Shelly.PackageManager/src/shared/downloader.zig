@@ -27,7 +27,6 @@ pub const DownloadError = error{
     Timeout,
     ConnectTimeout,
     HeaderTimeout,
-    BodyIdleTimeout,
     RetryExceeded,
     SslError,
     CertificateBundleError,
@@ -56,8 +55,6 @@ pub const DownloadConfiguration = struct {
     /// Bounds sending the request and receiving the final response headers,
     /// including redirects.
     response_header_timeout_in_seconds: u32 = 30,
-    /// Bounds each individual body read. Receiving bytes resets the deadline.
-    body_idle_timeout_in_seconds: u32 = 30,
     /// Defaults to IPv4-first Happy Eyeballs without disabling IPv6 fallback.
     /// `ipv4_only` remains an explicit escape hatch for networks or VPNs that
     /// advertise but blackhole IPv6.
@@ -444,20 +441,9 @@ pub const CoreDownloader = struct {
 
         while (true) {
             if (self.isCancelled()) return DownloadError.Cancelled;
-            const n = readBodyWithIdleTimeout(
-                &req,
-                self.io,
-                body_reader,
-                copy_buffer,
-                timeoutFromSeconds(self.configuration.body_idle_timeout_in_seconds),
-            ) catch |err| {
-                const mapped = mapBodyReadError(err);
-                if (mapped == DownloadError.BodyIdleTimeout) {
-                    self.logErr("Timed out waiting for body data from {s}", .{url});
-                } else {
-                    self.logErr("Read failed while downloading {s}: {?}", .{ url, response.bodyErr() });
-                }
-                return mapped;
+            const n = readBody(body_reader, copy_buffer) catch {
+                self.logErr("Read failed while downloading {s}: {?}", .{ url, response.bodyErr() });
+                return DownloadError.NetworkError;
             };
             if (n == 0) break;
 
@@ -635,44 +621,6 @@ fn sendAndReceiveHead(
     return req.receiveHead(redirect_buffer);
 }
 
-const BodyReadError = std.Io.Reader.ShortError || std.Io.Cancelable || error{BodyIdleTimeout};
-
-const BodyReadRace = union(enum) {
-    read: std.Io.Reader.ShortError!usize,
-    timeout: std.Io.Cancelable!void,
-};
-
-fn readBodyWithIdleTimeout(
-    req: *HttpClient.Request,
-    io: std.Io,
-    reader: *std.Io.Reader,
-    buffer: []u8,
-    timeout: std.Io.Timeout,
-) BodyReadError!usize {
-    if (timeout == .none) return reader.readSliceShort(buffer);
-
-    var result_buffer: [2]BodyReadRace = undefined;
-    var select = std.Io.Select(BodyReadRace).init(io, &result_buffer);
-    select.async(.read, readBody, .{ reader, buffer });
-    select.async(.timeout, waitForRequestSetupTimeout, .{ io, timeout });
-
-    var interrupt_on_cleanup = false;
-    defer {
-        if (interrupt_on_cleanup) req.interrupt();
-        while (select.cancel()) |_| {}
-        if (interrupt_on_cleanup) req.markConnectionClosing();
-    }
-
-    return switch (try select.await()) {
-        .read => |result| result,
-        .timeout => |result| {
-            try result;
-            interrupt_on_cleanup = true;
-            return error.BodyIdleTimeout;
-        },
-    };
-}
-
 fn readBody(reader: *std.Io.Reader, buffer: []u8) std.Io.Reader.ShortError!usize {
     var vectors: [1][]u8 = .{buffer};
     while (true) {
@@ -817,7 +765,6 @@ fn isRetryable(err: DownloadError) bool {
         error.Timeout,
         error.ConnectTimeout,
         error.HeaderTimeout,
-        error.BodyIdleTimeout,
         => true,
         else => false,
     };
@@ -875,21 +822,12 @@ fn mapHeaderExchangeError(err: HeaderExchangeError) DownloadError {
     };
 }
 
-fn mapBodyReadError(err: BodyReadError) DownloadError {
-    return switch (err) {
-        error.BodyIdleTimeout => DownloadError.BodyIdleTimeout,
-        error.Canceled => DownloadError.Cancelled,
-        else => DownloadError.NetworkError,
-    };
-}
-
 // Unit tests for downloader.zig
 test "DownloadConfiguration.default() returns correct default values" {
     const config = DownloadConfiguration.default();
     try std.testing.expectEqualStrings("ShellyPackageManager/2.0", config.user_agent.?);
     try std.testing.expectEqual(@as(u32, 30), config.timeout_in_seconds);
     try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
-    try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
     try std.testing.expectEqual(AddressFamilyPolicy.prefer_ipv4, config.address_family_policy);
     try std.testing.expectEqual(@as(u8, 3), config.max_retries);
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
@@ -969,7 +907,6 @@ test "isRetryable returns true for NetworkError and Timeout" {
     try std.testing.expect(isRetryable(DownloadError.Timeout));
     try std.testing.expect(isRetryable(DownloadError.ConnectTimeout));
     try std.testing.expect(isRetryable(DownloadError.HeaderTimeout));
-    try std.testing.expect(isRetryable(DownloadError.BodyIdleTimeout));
 }
 
 test "isRetryable returns false for other errors" {
@@ -1042,8 +979,6 @@ test "mapReceiveHeadError maps other errors to NetworkError" {
 
 const TestServerMode = enum {
     stall_headers,
-    stall_body,
-    drip_body,
     reuse_with_not_modified,
 };
 
@@ -1083,31 +1018,6 @@ const TestHttpServer = struct {
 
         switch (self.mode) {
             .stall_headers => try self.io.sleep(std.Io.Duration.fromSeconds(10), .awake),
-            .stall_body => {
-                try writer.writeAll(
-                    "HTTP/1.1 200 OK\r\n" ++
-                        "Content-Length: 6\r\n" ++
-                        "Connection: close\r\n\r\n" ++
-                        "ab",
-                );
-                try writer.flush();
-                try self.io.sleep(std.Io.Duration.fromSeconds(10), .awake);
-            },
-            .drip_body => {
-                try writer.writeAll(
-                    "HTTP/1.1 200 OK\r\n" ++
-                        "Content-Length: 6\r\n" ++
-                        "Connection: close\r\n\r\n" ++
-                        "ab",
-                );
-                try writer.flush();
-                try self.io.sleep(std.Io.Duration.fromMilliseconds(600), .awake);
-                try writer.writeAll("cd");
-                try writer.flush();
-                try self.io.sleep(std.Io.Duration.fromMilliseconds(600), .awake);
-                try writer.writeAll("ef");
-                try writer.flush();
-            },
             .reuse_with_not_modified => {
                 var read_buffer: [2048]u8 = undefined;
                 var stream_reader = stream.reader(self.io, &read_buffer);
@@ -1166,7 +1076,6 @@ fn timeoutTestConfiguration() DownloadConfiguration {
     return .{
         .timeout_in_seconds = 2,
         .response_header_timeout_in_seconds = 1,
-        .body_idle_timeout_in_seconds = 1,
         .max_retries = 0,
         .retry_delay_secs = 0,
     };
@@ -1201,71 +1110,6 @@ test "response header timeout interrupts a server that never responds" {
         else => return error.ExpectedHeaderTimeout,
     }
     try std.testing.expect(elapsed.nanoseconds < std.Io.Duration.fromSeconds(3).nanoseconds);
-}
-
-test "body idle timeout preserves the previous destination" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    var server = try TestHttpServer.init(io, .stall_body);
-    defer server.deinit();
-    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
-    defer _ = server_future.cancel(io) catch {};
-
-    const url = try server.url(std.testing.allocator);
-    defer std.testing.allocator.free(url);
-    var temporary = std.testing.tmpDir(.{});
-    defer temporary.cleanup();
-    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
-    defer std.testing.allocator.free(destination);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = "previous" });
-
-    var downloader = CoreDownloader.init(std.testing.allocator, io, timeoutTestConfiguration());
-    defer downloader.deinit();
-    downloader.quiet = true;
-    const result = downloader.downloadToFile(url, destination, true);
-    switch (result) {
-        .failure => |err| try std.testing.expectEqual(DownloadError.BodyIdleTimeout, err),
-        else => return error.ExpectedBodyIdleTimeout,
-    }
-
-    const contents = try std.Io.Dir.cwd().readFileAlloc(io, destination, std.testing.allocator, .limited(64));
-    defer std.testing.allocator.free(contents);
-    try std.testing.expectEqualStrings("previous", contents);
-}
-
-test "body idle deadline resets whenever progress arrives" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    var server = try TestHttpServer.init(io, .drip_body);
-    defer server.deinit();
-    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
-    defer _ = server_future.cancel(io) catch {};
-
-    const url = try server.url(std.testing.allocator);
-    defer std.testing.allocator.free(url);
-    var temporary = std.testing.tmpDir(.{});
-    defer temporary.cleanup();
-    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
-    defer std.testing.allocator.free(destination);
-
-    var downloader = CoreDownloader.init(std.testing.allocator, io, timeoutTestConfiguration());
-    defer downloader.deinit();
-    const started = std.Io.Timestamp.now(io, .awake);
-    const result = downloader.downloadToFile(url, destination, true);
-    const elapsed = started.durationTo(std.Io.Timestamp.now(io, .awake));
-    switch (result) {
-        .succes => {},
-        else => return error.ExpectedSuccessfulDownload,
-    }
-    try std.testing.expect(elapsed.nanoseconds > std.Io.Duration.fromSeconds(1).nanoseconds);
-
-    const contents = try std.Io.Dir.cwd().readFileAlloc(io, destination, std.testing.allocator, .limited(64));
-    defer std.testing.allocator.free(contents);
-    try std.testing.expectEqualStrings("abcdef", contents);
 }
 
 test "shared session reuses one connection across a bodyless 304 response" {

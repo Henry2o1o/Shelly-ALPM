@@ -2888,7 +2888,6 @@ test "single-server repositories receive a three second setup timeout" {
     const config = mirrorDownloadConfiguration(1, .prefer_ipv4);
     try std.testing.expectEqual(single_server_setup_timeout_seconds, config.timeout_in_seconds);
     try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
-    try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
     try std.testing.expectEqual(@as(u8, 2), config.max_retries);
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     try std.testing.expectEqual(downloader.AddressFamilyPolicy.prefer_ipv4, config.address_family_policy);
@@ -2900,7 +2899,6 @@ test "multi-mirror repositories receive a one second setup timeout" {
         const config = mirrorDownloadConfiguration(server_count, .ipv4_only);
         try std.testing.expectEqual(multi_server_setup_timeout_seconds, config.timeout_in_seconds);
         try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
-        try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
         try std.testing.expectEqual(@as(u8, 0), config.max_retries);
         try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
         try std.testing.expectEqual(downloader.AddressFamilyPolicy.ipv4_only, config.address_family_policy);
