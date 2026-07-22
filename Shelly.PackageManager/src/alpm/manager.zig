@@ -14,6 +14,9 @@ const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ..
 const rawLibalpm = bindings.libalpm.alpm;
 const single_server_setup_timeout_seconds: u32 = 3;
 const multi_server_setup_timeout_seconds: u32 = 1;
+var default_download_address_family_policy = std.atomic.Value(u8).init(
+    @intFromEnum(downloader.AddressFamilyPolicy.prefer_ipv4),
+);
 
 pub const ConfigError = error{
     InitFailed,
@@ -170,6 +173,16 @@ pub const Manager = struct {
     operation_context: ?*operation_api.OperationContext = null,
     unexpected_fetch_reported: std.atomic.Value(bool) = .init(false),
 
+    /// Sets the address-family policy inherited by managers created afterwards.
+    pub fn setDefaultDownloadAddressFamilyPolicy(policy: downloader.AddressFamilyPolicy) void {
+        default_download_address_family_policy.store(@intFromEnum(policy), .release);
+    }
+
+    /// Returns the current process-wide policy for newly created managers.
+    pub fn defaultDownloadAddressFamilyPolicy() downloader.AddressFamilyPolicy {
+        return @enumFromInt(default_download_address_family_policy.load(.acquire));
+    }
+
     /// If null is passed for config it will use the default /etc/pacman.conf.
     /// The caller owns the returned manager and must call deinit when finished.
     pub fn init(
@@ -195,6 +208,7 @@ pub const Manager = struct {
             .config = undefined,
             .is_root = use_root,
             .temp_root_path = temp_root_path orelse "",
+            .download_address_family_policy = defaultDownloadAddressFamilyPolicy(),
         };
         errdefer self.threaded.deinit();
         errdefer self.dispatcher.deinit();
@@ -2842,6 +2856,17 @@ test "multi-mirror repositories receive a one second setup timeout" {
         try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
         try std.testing.expectEqual(downloader.AddressFamilyPolicy.ipv4_only, config.address_family_policy);
     }
+}
+
+test "process-wide address-family default is configurable" {
+    const previous = Manager.defaultDownloadAddressFamilyPolicy();
+    defer Manager.setDefaultDownloadAddressFamilyPolicy(previous);
+
+    Manager.setDefaultDownloadAddressFamilyPolicy(.ipv6_only);
+    try std.testing.expectEqual(
+        downloader.AddressFamilyPolicy.ipv6_only,
+        Manager.defaultDownloadAddressFamilyPolicy(),
+    );
 }
 
 /// Tracks one logical package or database download across all mirror attempts.

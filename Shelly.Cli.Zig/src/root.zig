@@ -31,6 +31,7 @@ pub const utility_command = @import("commands/utility.zig");
 pub const pacfiles_command = @import("commands/pacfiles.zig");
 pub const config = @import("config/manager.zig");
 pub const config_model = @import("config/model.zig");
+pub const download_policy = @import("config/download_policy.zig");
 pub const config_output = @import("output/config.zig");
 pub const standard_single_pane = @import("output/standard_single_pane.zig");
 pub const ui_operation_output = @import("output/ui_operation.zig");
@@ -70,6 +71,7 @@ test {
     _ = pacfiles_command;
     _ = config;
     _ = config_model;
+    _ = download_policy;
     _ = config_output;
     _ = standard_single_pane;
     _ = ui_operation_output;

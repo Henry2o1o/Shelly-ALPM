@@ -35,6 +35,7 @@ pub fn main(init: std.process.Init) !void {
         .stdout_is_tty = Io.File.stdout().isTty(io) catch false,
         .dispatcher = .{ .call = Shelly_Cli_Zig.commands.dispatch },
     };
+    Shelly_Cli_Zig.download_policy.applyProcessDefault(&context);
     const exit_code = Shelly_Cli_Zig.app.run(&context, arguments) catch |err| code: {
         stderr_writer.print("shelly: {t}\n", .{err}) catch {};
         break :code 1;
