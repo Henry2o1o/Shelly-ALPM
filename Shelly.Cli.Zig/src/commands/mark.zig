@@ -129,6 +129,7 @@ fn executeList(
     runner: Runner,
 ) !u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     var packages = runner.list(runner.data, context, &operation_context, kind) catch |err| {
         const message = try std.fmt.allocPrint(
@@ -173,6 +174,7 @@ fn executeMutation(
     runner: Runner,
 ) !u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     runner.mutate(
         runner.data,
@@ -210,6 +212,7 @@ fn executeReason(
 ) !u8 {
     const package = invocation.positionals[0];
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
 
     if (invocation.globals.ui_mode) {

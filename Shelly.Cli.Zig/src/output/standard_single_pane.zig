@@ -66,6 +66,7 @@ pub fn output(
     command_operation: CommandOperation,
 ) !bool {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     var renderer = try Renderer.init(context, no_confirm);
     defer renderer.deinit();

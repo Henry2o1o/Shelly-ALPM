@@ -22,6 +22,10 @@ pub fn main(init: std.process.Init) !void {
     var session_log = Shelly_Cli_Zig.log.SessionLog.tryOpen(io);
     defer if (session_log) |*log| log.close();
     if (session_log) |*log| log.writeSessionHeader(arena, arguments);
+    var transaction_log: ?Shelly_Cli_Zig.log.TransactionLog = if (session_log) |*log|
+        .init(log, arena)
+    else
+        null;
 
     var context: Shelly_Cli_Zig.runtime.RuntimeContext = .{
         .allocator = arena,
@@ -34,6 +38,7 @@ pub fn main(init: std.process.Init) !void {
         .stdin_is_tty = Io.File.stdin().isTty(io) catch false,
         .stdout_is_tty = Io.File.stdout().isTty(io) catch false,
         .dispatcher = .{ .call = Shelly_Cli_Zig.commands.dispatch },
+        .transaction_log = if (transaction_log) |*log| log else null,
     };
     Shelly_Cli_Zig.download_policy.applyProcessDefault(&context);
     const exit_code = Shelly_Cli_Zig.app.run(&context, arguments) catch |err| code: {
