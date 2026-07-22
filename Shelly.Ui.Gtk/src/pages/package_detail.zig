@@ -23,7 +23,7 @@ pub const PackageDetail = extern struct {
         name_label: *gtk.Label,
         description_label: *gtk.Label,
         spec_box: *gtk.Box,
-        subtitle_label: *gtk.Label,
+
         sections_box: *gtk.Box,
         debounce_source: c_uint,
         pending_name: [256]u8,
@@ -169,7 +169,6 @@ pub const PackageDetail = extern struct {
         gtk.Label.setLabel(p.description_label, c_string.cstr(&buf, package.Description));
 
         var sbuf: [32]u8 = undefined;
-        gtk.Label.setLabel(p.subtitle_label, SizeConverter.convert_null_term(&sbuf, package.InstalledSize));
 
         clear_box(p.spec_box);
         add_spec_row(p.spec_box, "Version", package.Version);
@@ -306,7 +305,7 @@ pub const PackageDetail = extern struct {
     const template_children = .{
         .{ "icon", @offsetOf(Private, "icon") },
         .{ "name_label", @offsetOf(Private, "name_label") },
-        .{ "subtitle_label", @offsetOf(Private, "subtitle_label") },
+
         .{ "description_label", @offsetOf(Private, "description_label") },
         .{ "spec_box", @offsetOf(Private, "spec_box") },
         .{ "sections_box", @offsetOf(Private, "sections_box") },
