@@ -5,10 +5,15 @@ const glib = bindings.glib;
 const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
+const size_helper = @import("../helpers/size_converts.zig").SizeConverter;
+
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
+const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
+const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const UpdateObject = @import("../g_objects/update_object.zig").UpdateObject;
 const UpdateSource = @import("../g_objects/update_object.zig").UpdateSource;
+const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 
 pub const UpdatePage = extern struct {
     parent_instance: Parent,
@@ -50,7 +55,7 @@ pub const UpdatePage = extern struct {
         description: []const u8,
         old_version: []const u8,
         new_version: []const u8,
-        size: []const u8,
+        size: i64,
     };
 
     const LoadResult = struct {
@@ -194,16 +199,17 @@ pub const UpdatePage = extern struct {
     fn flatten_updates(allocator: std.mem.Allocator, response: CheckUpdates) ![]UpdateItem {
         const updates = try allocator.alloc(UpdateItem, response.count());
         var index: usize = 0;
+
         for (response.Packages) |package| {
-            updates[index] = .{ .source = .package, .name = package.Name, .description = "System package update", .old_version = package.OldVersion, .new_version = package.Version, .size = package.DownloadSize };
+            updates[index] = .{ .source = .package, .name = package.Name, .description = "System package update", .old_version = package.CurrentVersion, .new_version = package.NewVersion, .size = package.DownloadSize };
             index += 1;
         }
         for (response.Aur) |package| {
-            updates[index] = .{ .source = .aur, .name = package.Name, .description = "AUR package update", .old_version = package.OldVersion, .new_version = package.Version, .size = package.DownloadSize };
+            updates[index] = .{ .source = .aur, .name = package.Name, .description = "AUR package update", .old_version = package.Version, .new_version = package.NewVersion, .size = package.DownloadSize };
             index += 1;
         }
         for (response.Flatpak) |package| {
-            updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = "Installed", .new_version = package.Version, .size = "—" };
+            updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = package.Version, .new_version = "Installed", .size = 0 };
             index += 1;
         }
         return updates;
@@ -247,8 +253,9 @@ pub const UpdatePage = extern struct {
 
         const end = @min(result.index + 100, result.updates.len);
         const allocator = result.arena.allocator();
+        var buf: [32]u8 = undefined;
         for (result.updates[result.index..end]) |update| {
-            const object = UpdateObject.new(allocator, update.source, update.name, update.description, update.old_version, update.new_version, update.size);
+            const object = UpdateObject.new(allocator, update.source, update.name, update.description, update.old_version, update.new_version, size_helper.convert_null_term(&buf, update.size));
             gio.ListStore.append(p.list_store, object.as(gobject.Object));
             object.as(gobject.Object).unref();
         }
@@ -421,6 +428,64 @@ pub const UpdatePage = extern struct {
         if (self.priv().loaded) start_load(self);
     }
 
+    fn upgrade(self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const flatpak = gtk.ToggleButton.getActive(p.flatpak_toggle) != 0;
+        const aur = gtk.ToggleButton.getActive(p.aur_toggle) != 0;
+        const standard = gtk.ToggleButton.getActive(p.native_toggle) != 0;
+
+        const argv = ShellyCommands.upgrade(std.heap.c_allocator, flatpak, aur, standard) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+
+        const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
+            const pkg = gobject.ext.cast(UpdateObject, obj) orelse continue;
+            if (standard) {
+                names.append(std.heap.c_allocator, pkg.getName()) catch continue;
+                continue;
+            }
+
+            if (flatpak) {
+                names.append(std.heap.c_allocator, pkg.getName()) catch continue;
+                continue;
+            }
+            if (aur) {
+                names.append(std.heap.c_allocator, pkg.getName()) catch continue;
+                continue;
+            }
+        }
+        if (names.items.len == 0) return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Upgrading packages",
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *UpdatePage = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+        self.reload();
+    }
+
+    fn reload(self: *Self) void {
+        const p = self.priv();
+        p.generation += 1;
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        thread.detach();
+    }
+
     const template_children = .{
         .{ "content_list", @offsetOf(Private, "content_list") },
         .{ "selected_label", @offsetOf(Private, "selected_label") },
@@ -449,6 +514,7 @@ pub const UpdatePage = extern struct {
                 support.bindChild(class, Private.offset, child[0], child[1]);
             }
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "refresh_updates", @ptrCast(&refresh_updates));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "upgrade_button", @ptrCast(&upgrade));
         }
     };
 };

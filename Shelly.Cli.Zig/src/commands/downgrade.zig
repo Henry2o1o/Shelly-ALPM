@@ -121,6 +121,7 @@ fn runWithRunner(
     }
 
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     var candidates = runner.discover(
         runner.data,
@@ -356,6 +357,7 @@ fn executeUi(
     runner: Runner,
 ) !u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     var question_responder: ui_operation.QuestionResponder = .{
         .context = context,
@@ -415,6 +417,7 @@ fn executeIgnore(
     runner: Runner,
 ) !bool {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     runner.ignore(runner.data, context, &operation_context, package_name) catch |err| {
         const message = try std.fmt.allocPrint(

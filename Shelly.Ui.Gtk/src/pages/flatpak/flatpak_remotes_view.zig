@@ -2,11 +2,15 @@ const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const gtk = bindings.gtk;
 const glib = bindings.glib;
+const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("../support.zig");
+const cstr = @import("../../helpers/c_string.zig").cstr;
+
 const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const Remote = @import("../../models/flatpak.zig").Remote;
-const cstr = @import("../../helpers/c_string.zig").cstr;
+const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
+const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 
 pub const FlatpakRemotesView = extern struct {
     parent_instance: Parent,
@@ -21,6 +25,9 @@ pub const FlatpakRemotesView = extern struct {
         remotes_list_page: *gtk.Box,
         add_remote_page: *gtk.Box,
         list_remotes: *gtk.ListBox,
+        overlay_add_remote_name_entry: *gtk.Entry,
+        overlay_add_remote_url_entry: *gtk.Entry,
+        overlay_add_remote_scope_dropdown: *gtk.DropDown,
         arena: ?*std.heap.ArenaAllocator,
         remotes: []Remote,
         selected_index: usize,
@@ -62,7 +69,6 @@ pub const FlatpakRemotesView = extern struct {
         const p = self.priv();
         p.loaded = false;
 
-        // name the inner stack pages so we can switch by name
         const list_page = gtk.Stack.getPage(p.remotes_stack, p.remotes_list_page.as(gtk.Widget));
         gtk.StackPage.setName(list_page, "list");
         const add_page = gtk.Stack.getPage(p.remotes_stack, p.add_remote_page.as(gtk.Widget));
@@ -116,16 +122,12 @@ pub const FlatpakRemotesView = extern struct {
     fn on_load_complete(data: ?*anyopaque) callconv(.c) c_int {
         const result: *LoadResult = @ptrCast(@alignCast(data.?));
         defer std.heap.c_allocator.destroy(result);
-
         const p = result.page.priv();
-
         if (result.generation != p.generation) {
             result.arena.deinit();
             std.heap.c_allocator.destroy(result.arena);
             return 0;
         }
-
-        // take ownership of the arena — the DTOs live here now
         if (p.arena) |old| {
             old.deinit();
             std.heap.c_allocator.destroy(old);
@@ -133,10 +135,13 @@ pub const FlatpakRemotesView = extern struct {
         p.arena = result.arena;
         p.remotes = result.remotes;
 
+        while (gtk.Widget.getFirstChild(p.list_remotes.as(gtk.Widget))) |child| {
+            gtk.ListBox.remove(p.list_remotes, child);
+        }
+
         for (result.remotes, 0..) |r, i| {
             gtk.ListBox.append(p.list_remotes, make_remote_row(r, i));
         }
-
         return 0;
     }
 
@@ -161,6 +166,9 @@ pub const FlatpakRemotesView = extern struct {
         .{ "remotes_list_page", @offsetOf(Private, "remotes_list_page") },
         .{ "add_remote_page", @offsetOf(Private, "add_remote_page") },
         .{ "list_remotes", @offsetOf(Private, "list_remotes") },
+        .{ "overlay_add_remote_name_entry", @offsetOf(Private, "overlay_add_remote_name_entry") },
+        .{ "overlay_add_remote_url_entry", @offsetOf(Private, "overlay_add_remote_url_entry") },
+        .{ "overlay_add_remote_scope_dropdown", @offsetOf(Private, "overlay_add_remote_scope_dropdown") },
     };
 
     pub const Class = extern struct {
@@ -177,6 +185,7 @@ pub const FlatpakRemotesView = extern struct {
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "remove_selected_remote", @ptrCast(&remove_remote));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "add_remote", @ptrCast(&add_remote));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "back_to_list", @ptrCast(&back_to_list));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "add_remote_confirm", @ptrCast(&add_remote_confirm));
         }
     };
 
@@ -190,7 +199,77 @@ pub const FlatpakRemotesView = extern struct {
         if (index >= p.remotes.len) return;
         const remote = p.remotes[index];
         std.debug.print("remove: {s}\n", .{remote.Name});
-        // remove through cli after
+
+        const argv = ShellyCommands.remove_remote(std.heap.c_allocator, remote.Name, remote.Scope) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+
+        names.append(std.heap.c_allocator, remote.Name) catch {};
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Removing Remote",
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = false,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn add_remote_confirm(self: *Self) callconv(.c) void {
+        std.debug.print("test", .{});
+        const p = self.priv();
+
+        const name = std.mem.span(gtk.Editable.getText(p.overlay_add_remote_name_entry.as(gtk.Editable)));
+        const url = std.mem.span(gtk.Editable.getText(p.overlay_add_remote_url_entry.as(gtk.Editable)));
+
+        const selected = gtk.DropDown.getSelected(p.overlay_add_remote_scope_dropdown);
+        const model = gtk.DropDown.getModel(p.overlay_add_remote_scope_dropdown) orelse return;
+        const item = gio.ListModel.getObject(model, selected) orelse return;
+        const string_obj = gobject.ext.cast(gtk.StringObject, item) orelse return;
+        const scope = std.mem.span(gtk.StringObject.getString(string_obj));
+
+        std.debug.print("name: {s}, url: {s}, scope: {s}\n", .{ name, url, scope });
+
+        const argv = ShellyCommands.add_remote(std.heap.c_allocator, name, url, scope) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+
+        names.append(std.heap.c_allocator, name) catch {};
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Adding Remote",
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = false,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *FlatpakRemotesView = @ptrCast(@alignCast(ctx));
+        const p = self.priv();
+        if (!success) return;
+        self.reload();
+        gtk.Editable.setText(p.overlay_add_remote_name_entry.as(gtk.Editable), "");
+        gtk.Editable.setText(p.overlay_add_remote_url_entry.as(gtk.Editable), "");
+        self.back_to_list();
+    }
+
+    fn reload(self: *Self) void {
+        const p = self.priv();
+        p.generation += 1;
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        thread.detach();
     }
 
     fn add_remote(self: *Self) callconv(.c) void {

@@ -12,8 +12,12 @@ pub const AppstreamAppObject = extern struct {
     const Private = struct {
         arena: ?*std.heap.ArenaAllocator,
         app: flatpak.AppstreamApp,
+        membership: Membership = .{},
         var offset: c_int = 0;
     };
+
+    pub const Collection = enum { trending, popular, recently_updated, recently_added };
+    pub const Membership = std.EnumSet(Collection);
 
     pub const getGObjectType = gobject.ext.defineClass(Self, .{
         .name = "ShellyAppstreamAppObject",
@@ -30,6 +34,7 @@ pub const AppstreamAppObject = extern struct {
     fn init(self: *Self, _: *Class) callconv(.c) void {
         const p = self.priv();
         p.arena = null;
+        p.membership = .{};
         p.app = .{};
     }
 
@@ -122,6 +127,14 @@ pub const AppstreamAppObject = extern struct {
 
     pub fn getAddons(self: *const Self) []const flatpak.AppstreamApp {
         return self.getApp().Addons;
+    }
+
+    pub fn getMembership(self: *const Self) Membership {
+        return @constCast(self).priv().membership;
+    }
+
+    pub fn setMembership(self: *Self, membership: Membership) void {
+        self.priv().membership = membership;
     }
 
     pub fn as(self: *Self, comptime T: type) *T {

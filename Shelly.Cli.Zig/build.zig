@@ -1,4 +1,5 @@
 const std = @import("std");
+const package_manifest = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -10,12 +11,16 @@ pub fn build(b: *std.Build) void {
     });
     const zigalpm = zigalpm_dependency.module("Zigalpm");
 
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", package_manifest.version);
+
     const cli = b.addModule("Shelly_Cli_Zig", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     cli.addImport("Zigalpm", zigalpm);
+    cli.addOptions("build_options", build_options);
 
     const executable_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

@@ -221,13 +221,4 @@ pub const AppImagePage = extern struct {
     fn back_to_list(self: *Self) callconv(.c) void {
         show_list(self);
     }
-
-    //
-    // fn onDownloadClicked(_: *gtk.Button, page: *AppImagePage) callconv(.c) void {
-    // const root = gtk.Widget.getRoot(page.as(gtk.Widget));
-    // const window = gobject.ext.cast(ShellyWindow, root) orelse return;
-    // window.showProgress("Downloading AppImage…");
-    // // kick off the download; drive window.setProgress(...) as it proceeds;
-    // // window.hideProgress() when done.
-    // }
 };

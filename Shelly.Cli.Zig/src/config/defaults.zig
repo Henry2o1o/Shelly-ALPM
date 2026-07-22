@@ -5,6 +5,7 @@ pub const json =
     \\  "FileSizeDisplay": "Megabytes",
     \\  "DefaultExecution": "UpgradeAll",
     \\  "ParallelDownloadCount": 10,
+    \\  "DownloadAddressFamilyPolicy": "PreferIPv4",
     \\  "Culture": null,
     \\  "AurEnabled": false,
     \\  "ShellySearchEnabled": false,
@@ -65,4 +66,8 @@ test "native defaults remain valid JSON" {
     defer parsed.deinit();
     try std.testing.expect(parsed.value == .object);
     try std.testing.expectEqual(@as(i64, 10), parsed.value.object.get("ParallelDownloadCount").?.integer);
+    try std.testing.expectEqualStrings(
+        "PreferIPv4",
+        parsed.value.object.get("DownloadAddressFamilyPolicy").?.string,
+    );
 }

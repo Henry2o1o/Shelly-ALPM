@@ -59,6 +59,28 @@
             </child>
           </object>
         </child>
+        <child>
+          <object class="GtkButton" id="upgrade_button">
+            <property name="valign">center</property>
+            <property name="tooltip-text" translatable="yes">Upgrade</property>
+            <signal name="clicked" handler="upgrade_button" swapped="true"/>
+            <child>
+              <object class="GtkBox">
+                <property name="spacing">6</property>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">view-refresh-symbolic</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel">
+                    <property name="label" translatable="yes">Upgrade</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
       </object>
     </child>
     <child>

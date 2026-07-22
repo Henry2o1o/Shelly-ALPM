@@ -66,6 +66,7 @@ pub fn output(
     command_operation: CommandOperation,
 ) !bool {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     var renderer = try Renderer.init(context, no_confirm);
     defer renderer.deinit();
@@ -747,6 +748,17 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
     operation.progress(.{ .completed = 50, .total = 100, .percentage = 50, .stage = "download" });
     operation.progress(.{ .completed = 100, .total = 100, .percentage = 100, .stage = "download" });
     operation.status(.success, "Download completed", "download.complete", null);
+    var package_download = operation_context.begin(.{ .backend = .download, .kind = .download, .subject = "demo.pkg.tar.zst" });
+    package_download.progress(.{
+        .stage = "download",
+        .completed = 1024,
+        .total = 1024,
+        .percentage = 100,
+        .bytes_completed = 1024,
+        .bytes_total = 1024,
+        .bytes_per_second = 512,
+    });
+    package_download.finish(.success);
     operation.status(.information, "post-install output", "alpm.scriptlet", null);
     operation.progress(.{ .stage = "hook", .message = "Refreshing system state" });
     operation.status(.warning, "/etc/demo.conf", "alpm.pacnew", null);
@@ -769,6 +781,7 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
     try std.testing.expect(std.mem.indexOf(u8, rendered, ":: Synchronizing package databases...") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, ":: Retrieving packages...") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "DatabaseDownload extra.db"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "PackageDownload demo.pkg.tar.zst"));
     try std.testing.expect(std.mem.indexOf(u8, rendered, "100%") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Download started") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Download completed") == null);

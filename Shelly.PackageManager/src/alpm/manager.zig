@@ -12,6 +12,11 @@ const operation_api = @import("operation_context");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
+const single_server_setup_timeout_seconds: u32 = 3;
+const multi_server_setup_timeout_seconds: u32 = 1;
+var default_download_address_family_policy = std.atomic.Value(u8).init(
+    @intFromEnum(downloader.AddressFamilyPolicy.prefer_ipv4),
+);
 
 pub const ConfigError = error{
     InitFailed,
@@ -164,8 +169,19 @@ pub const Manager = struct {
     is_root: bool = false,
     temp_root_path: []const u8,
     show_hidden_packages: bool = false,
+    download_address_family_policy: downloader.AddressFamilyPolicy = .prefer_ipv4,
     operation_context: ?*operation_api.OperationContext = null,
     unexpected_fetch_reported: std.atomic.Value(bool) = .init(false),
+
+    /// Sets the address-family policy inherited by managers created afterwards.
+    pub fn setDefaultDownloadAddressFamilyPolicy(policy: downloader.AddressFamilyPolicy) void {
+        default_download_address_family_policy.store(@intFromEnum(policy), .release);
+    }
+
+    /// Returns the current process-wide policy for newly created managers.
+    pub fn defaultDownloadAddressFamilyPolicy() downloader.AddressFamilyPolicy {
+        return @enumFromInt(default_download_address_family_policy.load(.acquire));
+    }
 
     /// If null is passed for config it will use the default /etc/pacman.conf.
     /// The caller owns the returned manager and must call deinit when finished.
@@ -192,6 +208,7 @@ pub const Manager = struct {
             .config = undefined,
             .is_root = use_root,
             .temp_root_path = temp_root_path orelse "",
+            .download_address_family_policy = defaultDownloadAddressFamilyPolicy(),
         };
         errdefer self.threaded.deinit();
         errdefer self.dispatcher.deinit();
@@ -270,6 +287,12 @@ pub const Manager = struct {
         self.operation_context = context;
     }
 
+    /// Changes the address-family policy for subsequent repository database and
+    /// package downloads. Existing connections are unaffected.
+    pub fn setDownloadAddressFamilyPolicy(self: *Manager, policy: downloader.AddressFamilyPolicy) void {
+        self.download_address_family_policy = policy;
+    }
+
     pub fn sync(self: *Manager, force: bool) TransactionError!void {
         return self.syncDatabases(force, true);
     }
@@ -327,14 +350,26 @@ pub const Manager = struct {
         var futures: std.ArrayList(database_future) = .empty;
         defer futures.deinit(self.allocator);
 
+        // All repositories in this synchronization share one certificate
+        // bundle and HTTP connection pool. Per-repository setup deadlines are
+        // still enforced by each lightweight downloader; the session carries
+        // the largest permitted address-race deadline.
+        var download_session = downloader.DownloadSession.init(
+            self.allocator,
+            self.io(),
+            single_server_setup_timeout_seconds,
+            self.download_address_family_policy,
+        );
+        defer download_session.deinit();
+
         var failed = false;
         var dict_iterator = dict.map.iterator();
         while (dict_iterator.next()) |entry| {
             const database_name = entry.key_ptr.*;
             const urls = entry.value_ptr.*;
             const signature_required = required_signatures.get(database_name) orelse false;
-            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory, force, signature_required }) catch {
-                self.download_database(database_name, urls, syncDirectory, force, signature_required) catch {
+            const future = self.io().concurrent(download_database, .{ self, &download_session, database_name, urls, syncDirectory, force, signature_required }) catch {
+                self.download_database(&download_session, database_name, urls, syncDirectory, force, signature_required) catch {
                     failed = true;
                 };
                 continue;
@@ -353,6 +388,14 @@ pub const Manager = struct {
                 failed = true;
             };
         }
+
+        // Database downloads close and atomically rename their temporary files
+        // without individually forcing a filesystem transaction. Commit the
+        // directory entries once after every worker has finished instead.
+        syncDatabaseDirectory(self.io(), syncDirectory) catch |err| {
+            std.log.err("failed to synchronize database directory {s}: {}", .{ syncDirectory, err });
+            failed = true;
+        };
 
         if (failed) return TransactionError.UpdateFetchFailed;
 
@@ -498,6 +541,34 @@ pub const Manager = struct {
             }
         }
         return packages.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
+    }
+
+    pub fn get_available_packages_from_group(self: *Manager, groupName: [:0]const u8) TransactionError![]libalpm.OwnedPackage {
+        if (self.handle == null) return TransactionError.NoHandle;
+        var operation_scope = OperationScope.init(self, .search, groupName);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkOperationCancelled();
+        var packages: std.ArrayList(libalpm.OwnedPackage) = .empty;
+        errdefer {
+            libalpm.OwnedPackage.deinitItems(self.allocator, packages.items);
+            packages.deinit(self.allocator);
+        }
+
+        var sync_database: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
+        while (sync_database != null) : (sync_database = sync_database.?.*.next) {
+            const db = sync_database.?.*.data orelse continue;
+            const database = libalpm.Database.from(db) orelse continue;
+            const group = database.getGroup(groupName) orelse continue;
+            var package_list = group.packages();
+            while (package_list.next()) |pkg| {
+                const owned_pkg = try libalpm.OwnedPackage.init(self.allocator, pkg);
+                packages.append(self.allocator, owned_pkg) catch return TransactionError.OutOfMemory;
+            }
+            break;
+        }
+        return packages.toOwnedSlice(self.allocator) catch TransactionError.OutOfMemory;
     }
 
     pub fn get_updates_available(self: *Manager) TransactionError![]libalpm.OwnedPackageWithUpdate {
@@ -763,8 +834,8 @@ pub const Manager = struct {
                 var optional_deps = package.optional_depends();
                 while (optional_deps.next()) |deps| {
                     const dep_name = deps.name() orelse continue;
-                    // looks for local package continues on if failes to find.
-                    const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, dep_name.ptr) orelse {
+                    // looks for local package, then the satisfier, continues on if failes to find.
+                    const local_ptr = rawLibalpm.alpm_db_get_pkg(local_db, dep_name.ptr) orelse rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(local_db), dep_name.ptr) orelse {
                         const message = try std.fmt.allocPrint(self.allocator, "Failed to find {s} in local database. Skipping...", .{dep_name});
                         defer self.allocator.free(message);
                         self.dispatcher.raiseInformational(.{
@@ -1871,17 +1942,72 @@ pub const Manager = struct {
         self.setupCallbacks();
     }
 
+    /// Returns owned names of packages that require `packageName` in the named
+    /// database. The caller owns both the returned slice and every name in it.
+    pub fn get_required_packages(self: *Manager, packageName: []const u8, databaseName: []const u8) TransactionError![][]const u8 {
+        if (self.handle == null) return TransactionError.NoHandle;
+        if (databaseName.len == 0 or packageName.len == 0) return TransactionError.NoPackageFound;
+        var required_names: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (required_names.items) |item| self.allocator.free(item);
+            required_names.deinit(self.allocator);
+        }
+
+        const db: libalpm.Database = if (std.ascii.eqlIgnoreCase(databaseName, "local")) blk: {
+            const local_db = rawLibalpm.alpm_get_localdb(self.handle) orelse return TransactionError.DatabaseReadFailed;
+            break :blk .{ .ptr = local_db };
+        } else blk: {
+            var dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
+            while (dbs != null) : (dbs = dbs.*.next) {
+                const data = dbs.*.data orelse continue;
+                const sync_db = libalpm.Database.from(data) orelse continue;
+                const name = sync_db.name() orelse continue;
+                if (std.ascii.eqlIgnoreCase(databaseName, name)) break :blk sync_db;
+            }
+            return TransactionError.DatabaseReadFailed;
+        };
+
+        var pkgs = db.packages();
+        while (pkgs.next()) |pkg| {
+            const pkg_name = pkg.name() orelse continue;
+            if (std.ascii.eqlIgnoreCase(pkg_name, packageName)) {
+                const required_by = rawLibalpm.alpm_pkg_compute_requiredby(pkg.ptr);
+                defer {
+                    rawLibalpm.alpm_list_free_inner(required_by, rawLibalpm.free);
+                    rawLibalpm.alpm_list_free(required_by);
+                }
+                var node = required_by;
+                while (node != null) : (node = node.*.next) {
+                    const data = node.*.data orelse continue;
+                    const req_by = std.mem.span(@as([*c]const u8, @ptrCast(data)));
+                    const owned_name = self.allocator.dupe(u8, req_by) catch return TransactionError.OutOfMemory;
+                    required_names.append(self.allocator, owned_name) catch {
+                        self.allocator.free(owned_name);
+                        return TransactionError.OutOfMemory;
+                    };
+                }
+                break;
+            }
+        }
+        return required_names.toOwnedSlice(self.allocator) catch return TransactionError.OutOfMemory;
+    }
+
     fn download_database(
         self: *Manager,
+        download_session: *downloader.DownloadSession,
         database_name: []const u8,
         urls: std.ArrayList([]const u8),
         sync_directory: []const u8,
         force_download: bool,
         signature_required: bool,
     ) downloader.DownloadError!void {
-        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
-        var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
+        const download_config = databaseDownloadConfiguration(
+            urls.items.len,
+            self.download_address_family_policy,
+        );
+        var downloader_instance = download_session.downloader(download_config);
         defer downloader_instance.deinit();
+        downloader_instance.quiet = true;
         if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
         downloader_instance.setEventCallback(onDownloadEvent, self);
         const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ sync_directory, database_name }) catch return;
@@ -1889,6 +2015,11 @@ pub const Manager = struct {
         const sig_dest = std.fmt.allocPrint(self.allocator, "{s}.sig", .{dest}) catch return;
         defer self.allocator.free(sig_dest);
 
+        var download_scope = MirrorDownloadScope.init(self, dest);
+        defer download_scope.finish();
+        download_scope.attach(&downloader_instance);
+
+        var last_failure: ?downloader.DownloadError = null;
         for (urls.items) |url_base| {
             const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name }) catch continue;
             defer self.allocator.free(db_url);
@@ -1900,6 +2031,7 @@ pub const Manager = struct {
                         // sync alive. Remove any signature belonging to an older
                         // database so libalpm cannot validate mismatched files.
                         std.Io.Dir.cwd().deleteFile(self.io(), sig_dest) catch {};
+                        download_scope.succeed();
                         return;
                     }
                     const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
@@ -1907,23 +2039,36 @@ pub const Manager = struct {
                     // Required database signatures are fetched here and
                     // validated by the sync verification pass below.
                     downloader_instance.quiet = true;
-                    _ = downloader_instance.downloadToFile(sig_url, sig_dest, force_download);
+                    const signature_result = downloader_instance.downloadToFile(sig_url, sig_dest, force_download);
                     downloader_instance.quiet = false;
+                    try propagateSignatureCancellation(signature_result);
+                    download_scope.succeed();
                     return;
                 },
                 .skipped => {
-                    if (!signature_required) return;
+                    if (!signature_required) {
+                        download_scope.succeed();
+                        return;
+                    }
                     const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
                     defer self.allocator.free(sig_url);
                     downloader_instance.quiet = true;
-                    _ = downloader_instance.downloadToFile(sig_url, sig_dest, false);
+                    const signature_result = downloader_instance.downloadToFile(sig_url, sig_dest, false);
                     downloader_instance.quiet = false;
+                    try propagateSignatureCancellation(signature_result);
+                    download_scope.succeed();
                     return;
                 },
-                .failure => continue,
+                .failure => |err| {
+                    if (err == downloader.DownloadError.Cancelled) return err;
+                    last_failure = err;
+                    continue;
+                },
             }
         }
-        return downloader.DownloadError.FailedDownload;
+        const final_error = last_failure orelse downloader.DownloadError.FailedDownload;
+        self.reportAllMirrorsFailed(database_name, final_error);
+        return final_error;
     }
 
     fn databaseSignatureRequired(level: i32) bool {
@@ -1983,9 +2128,13 @@ pub const Manager = struct {
     }
 
     fn download_package(self: *Manager, package: libalpm.Package, database: libalpm.Database) downloader.DownloadError!void {
-        const download_config: downloader.DownloadConfiguration = .{ .user_agent = "Shelly-ALPM/3" };
+        const download_config = mirrorDownloadConfiguration(
+            databaseServerCount(database),
+            self.download_address_family_policy,
+        );
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
+        downloader_instance.quiet = true;
         if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
         downloader_instance.setEventCallback(onDownloadEvent, self);
         const dest = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.config.cache_directory, package.file_name() }) catch return;
@@ -1993,6 +2142,11 @@ pub const Manager = struct {
         const sig_dest = std.fmt.allocPrint(self.allocator, "{s}.sig", .{dest}) catch return;
         defer self.allocator.free(sig_dest);
 
+        var download_scope = MirrorDownloadScope.init(self, dest);
+        defer download_scope.finish();
+        download_scope.attach(&downloader_instance);
+
+        var last_failure: ?downloader.DownloadError = null;
         var urls = database.servers();
         while (urls.next()) |url| {
             const file_url = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ url, package.file_name() }) catch return downloader.DownloadError.InvalidUrl;
@@ -2003,14 +2157,36 @@ pub const Manager = struct {
                     const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{file_url}) catch return downloader.DownloadError.InvalidUrl;
                     defer self.allocator.free(sig_url);
                     downloader_instance.quiet = true;
-                    _ = downloader_instance.downloadToFile(sig_url, sig_dest, true);
+                    const signature_result = downloader_instance.downloadToFile(sig_url, sig_dest, true);
                     downloader_instance.quiet = false;
+                    try propagateSignatureCancellation(signature_result);
+                    download_scope.succeed();
                     return;
                 },
-                .failure, .skipped => continue,
+                .failure => |err| {
+                    if (err == downloader.DownloadError.Cancelled) return err;
+                    last_failure = err;
+                    continue;
+                },
+                .skipped => continue,
             }
         }
-        return downloader.DownloadError.FailedDownload;
+        const final_error = last_failure orelse downloader.DownloadError.FailedDownload;
+        self.reportAllMirrorsFailed(package.file_name(), final_error);
+        return final_error;
+    }
+
+    fn reportAllMirrorsFailed(self: *Manager, subject: []const u8, err: downloader.DownloadError) void {
+        const message = std.fmt.allocPrint(
+            self.allocator,
+            "All mirrors failed for {s}: {s}",
+            .{ subject, @errorName(err) },
+        ) catch {
+            self.dispatcher.raiseError(.{ .message = "All configured mirrors failed" });
+            return;
+        };
+        defer self.allocator.free(message);
+        self.dispatcher.raiseError(.{ .message = message });
     }
 
     pub fn io(self: *Manager) std.Io {
@@ -2272,13 +2448,18 @@ pub const Manager = struct {
                 .event_type = .pkg_retrieve_start,
                 .message = path,
             }),
-            .Progress => if (event.progress) |p| self.dispatcher.raiseProgress(.{
-                .progress_type = @intCast(rawLibalpm.ALPM_PROGRESS_ADD_START), // pick an appropriate alpm_progress_t
-                .pkg_name = std.fs.path.basename(path),
-                .percent = p.percent,
-                .howmany = 1,
-                .current = 1,
-            }),
+            .Progress => if (event.progress) |p| {
+                // CoreDownloader forwards rich byte progress to the logical
+                // download operation. Retain this fallback only for legacy
+                // callers that do not attach a common operation.
+                if (self.dispatcher.operation == null) self.dispatcher.raiseProgress(.{
+                    .progress_type = @intCast(rawLibalpm.ALPM_PROGRESS_ADD_START),
+                    .pkg_name = std.fs.path.basename(path),
+                    .percent = p.percent,
+                    .howmany = 1,
+                    .current = 1,
+                });
+            },
             .Complete => self.dispatcher.raiseInformational(.{
                 .event_type = .pkg_retrieve_done,
                 .message = path,
@@ -2642,6 +2823,160 @@ pub const Manager = struct {
     fn spanC(ptr: [*c]const u8) ?[]const u8 {
         if (ptr == null) return null;
         return std.mem.span(ptr);
+    }
+};
+
+fn databaseServerCount(database: libalpm.Database) usize {
+    var count: usize = 0;
+    var servers = database.servers();
+    while (servers.next() != null) count += 1;
+    return count;
+}
+
+fn syncDatabaseDirectory(io: std.Io, path: []const u8) !void {
+    // Zig uses O_PATH for non-iterable directory handles on Linux, and fsync
+    // rejects those descriptors. Request a normal readable directory handle.
+    var directory = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
+    defer directory.close(io);
+
+    // File and directory handles share the same native representation. Borrow
+    // the directory descriptor for one fsync without transferring ownership.
+    const directory_file: std.Io.File = .{
+        .handle = directory.handle,
+        .flags = .{ .nonblocking = false },
+    };
+    try directory_file.sync(io);
+}
+
+fn mirrorDownloadConfiguration(
+    configured_server_count: usize,
+    address_family_policy: downloader.AddressFamilyPolicy,
+) downloader.DownloadConfiguration {
+    return .{
+        .user_agent = "Shelly-ALPM/3",
+        .timeout_in_seconds = if (configured_server_count == 1)
+            single_server_setup_timeout_seconds
+        else
+            multi_server_setup_timeout_seconds,
+        .address_family_policy = address_family_policy,
+        // A failed candidate should immediately advance to the next mirror.
+        .max_retries = if (configured_server_count == 1)
+            2
+        else
+            0,
+        .retry_delay_secs = 1,
+    };
+}
+
+fn databaseDownloadConfiguration(
+    configured_server_count: usize,
+    address_family_policy: downloader.AddressFamilyPolicy,
+) downloader.DownloadConfiguration {
+    var config = mirrorDownloadConfiguration(configured_server_count, address_family_policy);
+    config.file_durability = .caller_managed;
+    return config;
+}
+
+fn propagateSignatureCancellation(result: downloader.DownloadResult) downloader.DownloadError!void {
+    switch (result) {
+        .failure => |err| if (err == downloader.DownloadError.Cancelled) return err,
+        else => {},
+    }
+}
+
+test "single-server repositories receive a three second setup timeout" {
+    const config = mirrorDownloadConfiguration(1, .prefer_ipv4);
+    try std.testing.expectEqual(single_server_setup_timeout_seconds, config.timeout_in_seconds);
+    try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
+    try std.testing.expectEqual(@as(u8, 2), config.max_retries);
+    try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
+    try std.testing.expectEqual(downloader.AddressFamilyPolicy.prefer_ipv4, config.address_family_policy);
+    try std.testing.expectEqual(downloader.FileDurability.sync_before_rename, config.file_durability);
+}
+
+test "multi-mirror repositories receive a one second setup timeout" {
+    for ([_]usize{ 0, 2, 8 }) |server_count| {
+        const config = mirrorDownloadConfiguration(server_count, .ipv4_only);
+        try std.testing.expectEqual(multi_server_setup_timeout_seconds, config.timeout_in_seconds);
+        try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
+        try std.testing.expectEqual(@as(u8, 0), config.max_retries);
+        try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
+        try std.testing.expectEqual(downloader.AddressFamilyPolicy.ipv4_only, config.address_family_policy);
+        try std.testing.expectEqual(downloader.FileDurability.sync_before_rename, config.file_durability);
+    }
+}
+
+test "database downloads defer file durability to the batch barrier" {
+    const config = databaseDownloadConfiguration(4, .prefer_ipv4);
+    try std.testing.expectEqual(downloader.FileDurability.caller_managed, config.file_durability);
+}
+
+test "database batch barrier synchronizes its directory" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path_length = try temporary.dir.realPath(io, &path_buffer);
+    try syncDatabaseDirectory(io, path_buffer[0..path_length]);
+}
+
+test "process-wide address-family default is configurable" {
+    const previous = Manager.defaultDownloadAddressFamilyPolicy();
+    defer Manager.setDefaultDownloadAddressFamilyPolicy(previous);
+
+    Manager.setDefaultDownloadAddressFamilyPolicy(.ipv6_only);
+    try std.testing.expectEqual(
+        downloader.AddressFamilyPolicy.ipv6_only,
+        Manager.defaultDownloadAddressFamilyPolicy(),
+    );
+}
+
+/// Tracks one logical package or database download across all mirror attempts.
+/// Individual attempts remain quiet, while callers still receive a correlated
+/// download lifecycle and can cancel before any network work begins.
+const MirrorDownloadScope = struct {
+    operation: ?operation_api.Operation = null,
+    successful: bool = false,
+
+    fn init(manager: *Manager, subject: []const u8) MirrorDownloadScope {
+        if (manager.dispatcher.operation) |parent| {
+            return .{ .operation = parent.child(.{
+                .backend = .download,
+                .kind = .download,
+                .subject = subject,
+            }) };
+        }
+        if (manager.operation_context) |context| {
+            return .{ .operation = context.begin(.{
+                .backend = .download,
+                .kind = .download,
+                .subject = subject,
+            }) };
+        }
+        return .{};
+    }
+
+    fn attach(self: *MirrorDownloadScope, downloader_instance: *downloader.CoreDownloader) void {
+        if (self.operation) |*operation| downloader_instance.setParentOperation(operation);
+    }
+
+    fn succeed(self: *MirrorDownloadScope) void {
+        self.successful = true;
+    }
+
+    fn finish(self: *MirrorDownloadScope) void {
+        if (self.operation) |*operation| {
+            const status: operation_api.CompletionStatus = if (operation.isCancelled())
+                .cancelled
+            else if (self.successful)
+                .success
+            else
+                .failed;
+            operation.finish(status);
+        }
     }
 };
 
@@ -3546,6 +3881,38 @@ test "onDownloadEvent translates start progress and completion events" {
     info = info_cap.args orelse return error.TestFailed;
     try testing.expectEqual(libalpm.EventType.pkg_retrieve_done, info.event_type);
     try testing.expectEqualStrings("/tmp/example.pkg.tar.zst", info.message);
+}
+
+test "onDownloadEvent does not duplicate progress when a common operation is attached" {
+    var mgr: Manager = undefined;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var operation = context.begin(.{ .backend = .alpm, .kind = .update });
+    defer operation.finish(.success);
+    mgr.dispatcher.setOperation(&operation);
+
+    var progress_cap = ProgressCapture{};
+    _ = try mgr.dispatcher.addProgressHandler(.{
+        .function = captureProgress,
+        .data = @ptrCast(&progress_cap),
+    });
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Progress,
+        .destination_path = "/tmp/example.pkg.tar.zst",
+        .progress = .{
+            .bytes_downloaded = 50,
+            .bytes_total = 100,
+            .percent = 50,
+            .speed_bytes_per_sec = 25,
+        },
+    });
+
+    try testing.expect(progress_cap.args == null);
 }
 
 test "onDownloadEvent reports concrete and fallback errors and ignores skipped events" {

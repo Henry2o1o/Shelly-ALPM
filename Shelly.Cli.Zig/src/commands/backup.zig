@@ -5,6 +5,7 @@ const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const spec = @import("../cli/spec.zig");
 const xdg = @import("../runtime/xdg.zig");
+const install = @import("install.zig");
 
 const command_path = "shelly backup utility";
 
@@ -34,6 +35,28 @@ const Runner = struct {
 
 const real_runner: Runner = .{ .call = collectState };
 
+const InstallCaller = struct {
+    data: ?*anyopaque = null,
+    call: *const fn (
+        data: ?*anyopaque,
+        context: *runtime.RuntimeContext,
+        backend: install.Backend,
+        targets: []const []const u8,
+        options: install.CallOptions,
+    ) anyerror!u8,
+};
+
+fn callInstall(
+    data: ?*anyopaque,
+    _: *runtime.RuntimeContext,
+    backend: install.Backend,
+    targets: []const []const u8,
+    options: install.CallOptions,
+) !u8 {
+    const caller: *install.Caller = @ptrCast(@alignCast(data.?));
+    return caller.call(backend, targets, options);
+}
+
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
@@ -47,10 +70,18 @@ fn executeWithRunner(
     invocation: *const parser.Invocation,
     runner: Runner,
 ) !u8 {
-    if (!optionEnabled(invocation, "--export")) {
+    const export_requested = optionEnabled(invocation, "--export");
+    const import_requested = optionEnabled(invocation, "--import");
+    if (!export_requested and !import_requested) {
         try writeOperationRequired(context, invocation);
         return 1;
     }
+    if (export_requested and import_requested) {
+        try writeOperationConflict(context, invocation);
+        return 1;
+    }
+    if (import_requested) return executeImport(context, invocation);
+
     const state = runner.call(runner.data, context) catch |err| {
         try writeFailure(context, invocation, err);
         return 1;
@@ -67,7 +98,7 @@ fn executeWithRunner(
         try writeFailure(context, invocation, err);
         return 1;
     };
-    const path = exportPath(context, optionValue(invocation, "--output"), file_name) catch |err| {
+    const path = exportPath(context, optionValue(invocation, "--directory"), file_name) catch |err| {
         try writeFailure(context, invocation, err);
         return 1;
     };
@@ -81,6 +112,89 @@ fn executeWithRunner(
         try context.stdout.writeByte('\n');
     try writeSuccess(context, path);
     return 0;
+}
+
+fn executeImport(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) !u8 {
+    const requested_name = optionValue(invocation, "--name") orelse {
+        try writeImportFailure(context, invocation, error.BackupImportNameRequired);
+        return 1;
+    };
+    if (std.mem.trim(u8, requested_name, " \t\r\n").len == 0) {
+        try writeImportFailure(context, invocation, error.BackupImportNameRequired);
+        return 1;
+    }
+    const file_name = exportFileName(context, requested_name) catch |err| {
+        try writeImportFailure(context, invocation, err);
+        return 1;
+    };
+    const path = exportPath(context, optionValue(invocation, "--directory"), file_name) catch |err| {
+        try writeImportFailure(context, invocation, err);
+        return 1;
+    };
+    const source = std.Io.Dir.cwd().readFileAlloc(
+        context.io,
+        path,
+        context.allocator,
+        .limited(4 * 1024 * 1024),
+    ) catch |err| {
+        try writeImportFailure(context, invocation, err);
+        return 1;
+    };
+    defer context.allocator.free(source);
+
+    importState(context, invocation, source) catch |err| {
+        try writeImportFailure(context, invocation, err);
+        return 1;
+    };
+    try writeImportSuccess(context, path);
+    return 0;
+}
+
+fn importState(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    source: []const u8,
+) !void {
+    var caller = try install.Caller.init(context);
+    return importStateWithCaller(
+        context,
+        invocation,
+        source,
+        .{ .data = &caller, .call = callInstall },
+    );
+}
+
+fn importStateWithCaller(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    source: []const u8,
+    caller: InstallCaller,
+) !void {
+    const state = try parseBackupToml(context.allocator, source);
+    const options: install.CallOptions = .{
+        .no_confirm = invocation.globals.no_confirm,
+        .ui_mode = invocation.globals.ui_mode,
+    };
+
+    try installTargets(context, caller, .standard, state.standard, options);
+    try installTargets(context, caller, .aur, state.aur, options);
+    for (state.flatpak) |application_id|
+        try installTargets(context, caller, .flatpak, &.{application_id}, options);
+}
+
+fn installTargets(
+    context: *runtime.RuntimeContext,
+    caller: InstallCaller,
+    backend: install.Backend,
+    targets: []const []const u8,
+    options: install.CallOptions,
+) !void {
+    if (targets.len == 0) return;
+    if (try caller.call(caller.data, context, backend, targets, options) != 0)
+        return error.BackupPackageInstallFailed;
 }
 
 fn collectState(_: ?*anyopaque, context: *runtime.RuntimeContext) !State {
@@ -323,6 +437,13 @@ fn writeSuccess(context: *runtime.RuntimeContext, path: []const u8) !void {
         try context.stdout.print("Backup exported to: {s}\n", .{path});
 }
 
+fn writeImportSuccess(context: *runtime.RuntimeContext, path: []const u8) !void {
+    if (output.supportsAnsi(context))
+        try context.stdout.print("\x1b[34mBackup imported from: {s}\x1b[0m\n", .{path})
+    else
+        try context.stdout.print("Backup imported from: {s}\n", .{path});
+}
+
 fn writeFailure(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
@@ -339,11 +460,38 @@ fn writeFailure(
         try context.stderr.print("{s}\n", .{message});
 }
 
+fn writeImportFailure(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    err: anyerror,
+) !void {
+    const message = try std.fmt.allocPrint(
+        context.allocator,
+        "Unable to import backup: {t}",
+        .{err},
+    );
+    if (invocation.globals.ui_mode)
+        try output.writeErrorFrame(context, message)
+    else
+        try context.stderr.print("{s}\n", .{message});
+}
+
 fn writeOperationRequired(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !void {
-    const message = "No backup operation selected. Use --export.";
+    const message = "No backup operation selected. Use --export or --import.";
+    if (invocation.globals.ui_mode)
+        try output.writeErrorFrame(context, message)
+    else
+        try context.stderr.print("{s}\n", .{message});
+}
+
+fn writeOperationConflict(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) !void {
+    const message = "Choose exactly one backup operation: --export or --import.";
     if (invocation.globals.ui_mode)
         try output.writeErrorFrame(context, message)
     else
@@ -386,6 +534,351 @@ fn sampleRunner(_: ?*anyopaque, _: *runtime.RuntimeContext) !State {
     return sample_state;
 }
 
+const ImportState = struct {
+    standard: []const []const u8 = &.{},
+    aur: []const []const u8 = &.{},
+    flatpak: []const []const u8 = &.{},
+};
+
+const Section = enum {
+    standard,
+    aur,
+    flatpak,
+};
+
+fn parseBackupToml(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+) !ImportState {
+    var standard: std.ArrayList([]const u8) = .empty;
+    var aur: std.ArrayList([]const u8) = .empty;
+    var flatpak: std.ArrayList([]const u8) = .empty;
+
+    var current: ?Section = null;
+    var seen_standard = false;
+    var seen_aur = false;
+    var seen_flatpak = false;
+
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+
+        if (line.len == 0 or line[0] == '#') continue;
+
+        if (current == null) {
+            // Parse exactly: standard = [, aur = [, or flatpak = [
+            current = try parseSectionStart(
+                line,
+                &seen_standard,
+                &seen_aur,
+                &seen_flatpak,
+            );
+            continue;
+        }
+
+        if (std.mem.eql(u8, line, "]")) {
+            current = null;
+            continue;
+        }
+
+        const value = try parseArrayString(allocator, line);
+
+        switch (current.?) {
+            .standard => try standard.append(allocator, value),
+            .aur => try aur.append(allocator, value),
+            .flatpak => try flatpak.append(allocator, value),
+        }
+    }
+
+    if (current != null) return error.UnterminatedArray;
+    if (!seen_standard or !seen_aur or !seen_flatpak)
+        return error.MissingBackupSection;
+
+    return .{
+        .standard = try standard.toOwnedSlice(allocator),
+        .aur = try aur.toOwnedSlice(allocator),
+        .flatpak = try flatpak.toOwnedSlice(allocator),
+    };
+}
+
+fn parseArrayString(
+    allocator: std.mem.Allocator,
+    line: []const u8,
+) ![]const u8 {
+    var token = std.mem.trim(u8, line, " \t\r");
+
+    // A trailing comma is optional for the final array entry.
+    if (std.mem.endsWith(u8, token, ","))
+        token = std.mem.trim(
+            u8,
+            token[0 .. token.len - 1],
+            " \t\r",
+        );
+
+    if (token.len < 2 or
+        token[0] != '"' or
+        token[token.len - 1] != '"')
+    {
+        return error.InvalidBackupString;
+    }
+
+    const body = token[1 .. token.len - 1];
+
+    var decoded: std.ArrayList(u8) = .empty;
+    errdefer decoded.deinit(allocator);
+
+    var index: usize = 0;
+    while (index < body.len) : (index += 1) {
+        const byte = body[index];
+
+        // Quotes must be escaped. Raw TOML control characters are invalid.
+        if (byte == '"' or byte < 0x20 or byte == 0x7f)
+            return error.InvalidBackupString;
+
+        if (byte != '\\') {
+            try decoded.append(allocator, byte);
+            continue;
+        }
+
+        if (index + 1 >= body.len)
+            return error.InvalidBackupEscape;
+
+        index += 1;
+
+        switch (body[index]) {
+            '"' => try decoded.append(allocator, '"'),
+            '\\' => try decoded.append(allocator, '\\'),
+            'b' => try decoded.append(allocator, 0x08),
+            't' => try decoded.append(allocator, '\t'),
+            'n' => try decoded.append(allocator, '\n'),
+            'f' => try decoded.append(allocator, 0x0c),
+            'r' => try decoded.append(allocator, '\r'),
+
+            'u' => {
+                if (index + 4 >= body.len)
+                    return error.InvalidBackupEscape;
+
+                const digits = body[index + 1 .. index + 5];
+                for (digits) |digit| {
+                    if (!std.ascii.isHex(digit))
+                        return error.InvalidBackupEscape;
+                }
+
+                const codepoint = std.fmt.parseInt(
+                    u21,
+                    digits,
+                    16,
+                ) catch return error.InvalidBackupEscape;
+
+                var encoded: [4]u8 = undefined;
+                const encoded_len = std.unicode.utf8Encode(
+                    codepoint,
+                    &encoded,
+                ) catch return error.InvalidBackupEscape;
+
+                try decoded.appendSlice(
+                    allocator,
+                    encoded[0..encoded_len],
+                );
+
+                index += 4;
+            },
+
+            else => return error.InvalidBackupEscape,
+        }
+    }
+
+    if (!std.unicode.utf8ValidateSlice(decoded.items))
+        return error.InvalidBackupString;
+
+    return decoded.toOwnedSlice(allocator);
+}
+
+fn parseSectionStart(
+    line: []const u8,
+    seen_standard: *bool,
+    seen_aur: *bool,
+    seen_flatpak: *bool,
+) !Section {
+    const equals_index = std.mem.indexOfScalar(u8, line, '=') orelse
+        return error.InvalidBackupSection;
+
+    const key = std.mem.trim(u8, line[0..equals_index], " \t\r");
+    const value = std.mem.trim(u8, line[equals_index + 1 ..], " \t\r");
+
+    // This schema only supports multiline arrays beginning with `[`.
+    if (!std.mem.eql(u8, value, "["))
+        return error.InvalidBackupSection;
+
+    if (std.mem.eql(u8, key, "standard")) {
+        if (seen_standard.*) return error.DuplicateBackupSection;
+        seen_standard.* = true;
+        return .standard;
+    }
+
+    if (std.mem.eql(u8, key, "aur")) {
+        if (seen_aur.*) return error.DuplicateBackupSection;
+        seen_aur.* = true;
+        return .aur;
+    }
+
+    if (std.mem.eql(u8, key, "flatpak")) {
+        if (seen_flatpak.*) return error.DuplicateBackupSection;
+        seen_flatpak.* = true;
+        return .flatpak;
+    }
+
+    return error.UnknownBackupSection;
+}
+
+test "parseArrayString decodes TOML strings" {
+    const parsed = try parseArrayString(
+        std.testing.allocator,
+        "  \"quoted\\\"package\\n\\u0041\", ",
+    );
+    defer std.testing.allocator.free(parsed);
+
+    try std.testing.expectEqualStrings(
+        "quoted\"package\nA",
+        parsed,
+    );
+}
+
+test "parseSectionStart recognizes sections and rejects duplicates" {
+    var seen_standard = false;
+    var seen_aur = false;
+    var seen_flatpak = false;
+
+    try std.testing.expectEqual(
+        Section.standard,
+        try parseSectionStart(
+            "standard = [",
+            &seen_standard,
+            &seen_aur,
+            &seen_flatpak,
+        ),
+    );
+
+    try std.testing.expectError(
+        error.DuplicateBackupSection,
+        parseSectionStart(
+            "standard = [",
+            &seen_standard,
+            &seen_aur,
+            &seen_flatpak,
+        ),
+    );
+
+    try std.testing.expectError(
+        error.UnknownBackupSection,
+        parseSectionStart(
+            "unknown = [",
+            &seen_standard,
+            &seen_aur,
+            &seen_flatpak,
+        ),
+    );
+}
+
+test "parses exported backup TOML" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var rendered = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer rendered.deinit();
+
+    try writeToml(allocator, &rendered.writer, sample_state);
+
+    const imported = try parseBackupToml(
+        allocator,
+        rendered.writer.buffered(),
+    );
+
+    try std.testing.expectEqualStrings("base", imported.standard[0]);
+    try std.testing.expectEqualStrings("linux", imported.standard[1]);
+    try std.testing.expectEqualStrings("yay", imported.aur[0]);
+    try std.testing.expectEqualStrings(
+        "org.mozilla.firefox",
+        imported.flatpak[0],
+    );
+}
+
+test "backup import delegates every backend to install with inherited globals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const manifest = try spec.Manifest.load(allocator);
+    const outcome = try parser.parse(allocator, &manifest, &.{
+        "backup",
+        "--import",
+        "--name",
+        "snapshot",
+        "--no-confirm",
+        "--ui-mode",
+    });
+    try std.testing.expect(outcome == .dispatch);
+
+    var stdout = std.Io.Writer.Discarding.init(&.{});
+    var stderr = std.Io.Writer.Discarding.init(&.{});
+    var context: runtime.RuntimeContext = .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const Capture = struct {
+        calls: usize = 0,
+
+        fn run(
+            data: ?*anyopaque,
+            _: *runtime.RuntimeContext,
+            backend: install.Backend,
+            targets: []const []const u8,
+            options: install.CallOptions,
+        ) !u8 {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            try std.testing.expect(options.no_confirm);
+            try std.testing.expect(options.ui_mode);
+            switch (self.calls) {
+                0 => {
+                    try std.testing.expectEqual(install.Backend.standard, backend);
+                    try expectArguments(&.{ "base", "linux" }, targets);
+                },
+                1 => {
+                    try std.testing.expectEqual(install.Backend.aur, backend);
+                    try expectArguments(&.{"yay"}, targets);
+                },
+                2 => {
+                    try std.testing.expectEqual(install.Backend.flatpak, backend);
+                    try expectArguments(&.{"org.mozilla.firefox"}, targets);
+                },
+                else => return error.UnexpectedInstallCall,
+            }
+            self.calls += 1;
+            return 0;
+        }
+    };
+    var capture: Capture = .{};
+    try importStateWithCaller(
+        &context,
+        &outcome.dispatch,
+        \\standard = [
+        \\  "base",
+        \\  "linux",
+        \\]
+        \\aur = [
+        \\  "yay",
+        \\]
+        \\flatpak = [
+        \\  "org.mozilla.firefox",
+        \\]
+    ,
+        .{ .data = &capture, .call = Capture.run },
+    );
+    try std.testing.expectEqual(@as(usize, 3), capture.calls);
+}
+
 test "backup is a standalone -B command with export and local modifiers" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -417,11 +910,8 @@ test "backup is a standalone -B command with export and local modifiers" {
     try std.testing.expectEqualStrings(command_path, long_form.dispatch.command.path);
 
     const removed_export_command = try parser.parse(allocator, &manifest, &.{"export"});
-    try std.testing.expect(removed_export_command == .failure);
-    try std.testing.expectEqualStrings(
-        "Unrecognized command or argument 'export'.",
-        removed_export_command.failure.message,
-    );
+    try std.testing.expect(removed_export_command == .dispatch);
+    try std.testing.expectEqualStrings("shelly", removed_export_command.dispatch.command.path);
 
     const removed_export_shortcode = try @import("../cli/shortcodes.zig").translate(
         allocator,
@@ -459,7 +949,7 @@ test "backup requires an operation before collecting package state" {
     try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
     try std.testing.expect(!called);
     try std.testing.expectEqualStrings(
-        "No backup operation selected. Use --export.\n",
+        "No backup operation selected. Use --export or --import.\n",
         stderr.writer.buffered(),
     );
 }
@@ -505,7 +995,7 @@ test "backup export writes named TOML files to the requested directory" {
         "--export",
         "--name",
         "machine",
-        "--output",
+        "--directory",
         absolute_buffer[0..absolute_length],
     });
     try std.testing.expect(outcome == .dispatch);

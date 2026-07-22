@@ -17,6 +17,7 @@ pub fn main(init: std.process.Init) void {
     _ = gio.Application.signals.activate.connect(app, ?*anyopaque, &activate, null, .{});
 
     const status = gio.Application.run(gobject.ext.as(gio.Application, app), 0, null);
+    runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
 }
 
@@ -30,17 +31,23 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
         gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
+    _ = runtime.setupConfig(std.heap.c_allocator) catch |err| {
+        std.log.warn("settings: failed to load config service: {t}", .{err});
+    };
+
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }
 
 test {
     // _ = @import("services/icon_resolver.zig");
-    _ = @import("services/config.zig");
+    _ = @import("services/config_resolver.zig");
     _ = @import("services/shelly_cli.zig");
     _ = @import("g_objects/appstream_app_object.zig");
     _ = @import("helpers/custom_ui_comps/carousel.zig");
     _ = @import("helpers/custom_ui_comps/carousel_indicator_dots.zig");
     _ = @import("pages/flatpak/flatpak_install_view.zig");
     _ = @import("helpers/ui_decode.zig");
+    _ = @import("helpers/datetime.zig");
+    _ = @import("services/flathub_api.zig");
 }

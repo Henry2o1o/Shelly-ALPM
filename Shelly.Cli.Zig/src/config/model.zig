@@ -211,6 +211,12 @@ fn enumChoices(key: []const u8) ?[]const []const u8 {
         "ListInstalled",
     };
     if (std.mem.eql(u8, key, "ProgressBarStyle")) return &.{ "Blocks", "Pacman" };
+    if (std.mem.eql(u8, key, "DownloadAddressFamilyPolicy")) return &.{
+        "PreferIPv4",
+        "PreferIPv6",
+        "IPv4Only",
+        "IPv6Only",
+    };
     if (std.mem.eql(u8, key, "DefaultPageDropDown")) return &.{
         "Packages",
         "Aur",
@@ -240,7 +246,7 @@ test "defaults preserve reflection order and display conventions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const config = try Config.defaults(arena.allocator());
-    try std.testing.expectEqual(@as(usize, 54), config.values.count());
+    try std.testing.expectEqual(@as(usize, 55), config.values.count());
     try std.testing.expectEqualStrings("FileSizeDisplay", config.values.keys()[0]);
     try std.testing.expectEqualStrings("False", (try config.getDisplay(arena.allocator(), "aurenabled")).?);
     try std.testing.expectEqualStrings("", (try config.getDisplay(arena.allocator(), "DaysOfWeek")).?);
@@ -256,6 +262,12 @@ test "updates typed and enumerated values case-insensitively" {
     try std.testing.expect(try config.set(arena.allocator(), "ProgressBarStyle", "pacman"));
     try std.testing.expectEqualStrings("Pacman", (try config.getDisplay(arena.allocator(), "ProgressBarStyle")).?);
     try std.testing.expect(!try config.set(arena.allocator(), "ProgressBarStyle", "dots"));
+    try std.testing.expect(try config.set(arena.allocator(), "DownloadAddressFamilyPolicy", "preferipv6"));
+    try std.testing.expectEqualStrings(
+        "PreferIPv6",
+        (try config.getDisplay(arena.allocator(), "DownloadAddressFamilyPolicy")).?,
+    );
+    try std.testing.expect(!try config.set(arena.allocator(), "DownloadAddressFamilyPolicy", "automatic"));
     try std.testing.expect(try config.set(arena.allocator(), "DaysOfWeek", "monday, Friday"));
     try std.testing.expectEqualStrings("Monday,Friday", (try config.getDisplay(arena.allocator(), "DaysOfWeek")).?);
 }
