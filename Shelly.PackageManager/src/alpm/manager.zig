@@ -350,14 +350,26 @@ pub const Manager = struct {
         var futures: std.ArrayList(database_future) = .empty;
         defer futures.deinit(self.allocator);
 
+        // All repositories in this synchronization share one certificate
+        // bundle and HTTP connection pool. Per-repository setup deadlines are
+        // still enforced by each lightweight downloader; the session carries
+        // the largest permitted address-race deadline.
+        var download_session = downloader.DownloadSession.init(
+            self.allocator,
+            self.io(),
+            single_server_setup_timeout_seconds,
+            self.download_address_family_policy,
+        );
+        defer download_session.deinit();
+
         var failed = false;
         var dict_iterator = dict.map.iterator();
         while (dict_iterator.next()) |entry| {
             const database_name = entry.key_ptr.*;
             const urls = entry.value_ptr.*;
             const signature_required = required_signatures.get(database_name) orelse false;
-            const future = self.io().concurrent(download_database, .{ self, database_name, urls, syncDirectory, force, signature_required }) catch {
-                self.download_database(database_name, urls, syncDirectory, force, signature_required) catch {
+            const future = self.io().concurrent(download_database, .{ self, &download_session, database_name, urls, syncDirectory, force, signature_required }) catch {
+                self.download_database(&download_session, database_name, urls, syncDirectory, force, signature_required) catch {
                     failed = true;
                 };
                 continue;
@@ -376,6 +388,14 @@ pub const Manager = struct {
                 failed = true;
             };
         }
+
+        // Database downloads close and atomically rename their temporary files
+        // without individually forcing a filesystem transaction. Commit the
+        // directory entries once after every worker has finished instead.
+        syncDatabaseDirectory(self.io(), syncDirectory) catch |err| {
+            std.log.err("failed to synchronize database directory {s}: {}", .{ syncDirectory, err });
+            failed = true;
+        };
 
         if (failed) return TransactionError.UpdateFetchFailed;
 
@@ -1974,14 +1994,18 @@ pub const Manager = struct {
 
     fn download_database(
         self: *Manager,
+        download_session: *downloader.DownloadSession,
         database_name: []const u8,
         urls: std.ArrayList([]const u8),
         sync_directory: []const u8,
         force_download: bool,
         signature_required: bool,
     ) downloader.DownloadError!void {
-        const download_config = mirrorDownloadConfiguration(urls.items.len, self.download_address_family_policy);
-        var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
+        const download_config = databaseDownloadConfiguration(
+            urls.items.len,
+            self.download_address_family_policy,
+        );
+        var downloader_instance = download_session.downloader(download_config);
         defer downloader_instance.deinit();
         downloader_instance.quiet = true;
         if (self.dispatcher.operation) |operation| downloader_instance.setParentOperation(operation) else downloader_instance.setOperationContext(self.operation_context);
@@ -2809,6 +2833,21 @@ fn databaseServerCount(database: libalpm.Database) usize {
     return count;
 }
 
+fn syncDatabaseDirectory(io: std.Io, path: []const u8) !void {
+    // Zig uses O_PATH for non-iterable directory handles on Linux, and fsync
+    // rejects those descriptors. Request a normal readable directory handle.
+    var directory = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
+    defer directory.close(io);
+
+    // File and directory handles share the same native representation. Borrow
+    // the directory descriptor for one fsync without transferring ownership.
+    const directory_file: std.Io.File = .{
+        .handle = directory.handle,
+        .flags = .{ .nonblocking = false },
+    };
+    try directory_file.sync(io);
+}
+
 fn mirrorDownloadConfiguration(
     configured_server_count: usize,
     address_family_policy: downloader.AddressFamilyPolicy,
@@ -2829,6 +2868,15 @@ fn mirrorDownloadConfiguration(
     };
 }
 
+fn databaseDownloadConfiguration(
+    configured_server_count: usize,
+    address_family_policy: downloader.AddressFamilyPolicy,
+) downloader.DownloadConfiguration {
+    var config = mirrorDownloadConfiguration(configured_server_count, address_family_policy);
+    config.file_durability = .caller_managed;
+    return config;
+}
+
 fn propagateSignatureCancellation(result: downloader.DownloadResult) downloader.DownloadError!void {
     switch (result) {
         .failure => |err| if (err == downloader.DownloadError.Cancelled) return err,
@@ -2844,6 +2892,7 @@ test "single-server repositories receive a three second setup timeout" {
     try std.testing.expectEqual(@as(u8, 2), config.max_retries);
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     try std.testing.expectEqual(downloader.AddressFamilyPolicy.prefer_ipv4, config.address_family_policy);
+    try std.testing.expectEqual(downloader.FileDurability.sync_before_rename, config.file_durability);
 }
 
 test "multi-mirror repositories receive a one second setup timeout" {
@@ -2855,7 +2904,25 @@ test "multi-mirror repositories receive a one second setup timeout" {
         try std.testing.expectEqual(@as(u8, 0), config.max_retries);
         try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
         try std.testing.expectEqual(downloader.AddressFamilyPolicy.ipv4_only, config.address_family_policy);
+        try std.testing.expectEqual(downloader.FileDurability.sync_before_rename, config.file_durability);
     }
+}
+
+test "database downloads defer file durability to the batch barrier" {
+    const config = databaseDownloadConfiguration(4, .prefer_ipv4);
+    try std.testing.expectEqual(downloader.FileDurability.caller_managed, config.file_durability);
+}
+
+test "database batch barrier synchronizes its directory" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path_length = try temporary.dir.realPath(io, &path_buffer);
+    try syncDatabaseDirectory(io, path_buffer[0..path_length]);
 }
 
 test "process-wide address-family default is configurable" {

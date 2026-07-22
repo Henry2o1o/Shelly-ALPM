@@ -917,19 +917,25 @@ pub const Request = struct {
     pub fn deinit(r: *Request) void {
         const io = r.client.io;
         if (r.connection) |connection| {
-            connection.closing = connection.closing or switch (r.reader.state) {
-                .ready => false,
-                .received_head => c: {
-                    if (r.method.requestHasBody()) break :c true;
-                    if (!r.method.responseHasBody()) break :c false;
-                    const reader = r.reader.bodyReader(&.{}, r.response_transfer_encoding, r.response_content_length);
-                    _ = reader.discardRemaining() catch |err| switch (err) {
-                        error.ReadFailed => break :c true,
-                    };
-                    break :c r.reader.state != .ready;
-                },
-                else => true,
-            };
+            // Once an interrupted or explicitly rejected connection is marked
+            // closing, do not block cleanup trying to drain a body solely for
+            // reuse. Healthy connections still discard any unread body before
+            // returning to the shared pool.
+            if (!connection.closing) {
+                connection.closing = switch (r.reader.state) {
+                    .ready => false,
+                    .received_head => c: {
+                        if (r.method.requestHasBody()) break :c true;
+                        if (!r.method.responseHasBody()) break :c false;
+                        const reader = r.reader.bodyReader(&.{}, r.response_transfer_encoding, r.response_content_length);
+                        _ = reader.discardRemaining() catch |err| switch (err) {
+                            error.ReadFailed => break :c true,
+                        };
+                        break :c r.reader.state != .ready;
+                    },
+                    else => true,
+                };
+            }
             r.client.connection_pool.release(connection, io);
         }
         r.* = undefined;
@@ -1220,8 +1226,12 @@ pub const Request = struct {
             if (r.method == .HEAD or head.status.class() == .informational or
                 head.status == .no_content or head.status == .not_modified)
             {
-                r.response_transfer_encoding = head.transfer_encoding;
-                r.response_content_length = head.content_length;
+                // Content-Length on these responses describes the selected
+                // representation, not bytes following this header block.
+                // Normalize the framing so request cleanup can safely reuse
+                // the connection instead of waiting for a nonexistent body.
+                r.response_transfer_encoding = .none;
+                r.response_content_length = 0;
                 return response;
             }
 
@@ -2544,9 +2554,18 @@ pub fn request(
         if (disable_tls) unreachable;
         {
             try client.ca_bundle_lock.lockShared(io);
-            defer client.ca_bundle_lock.unlockShared(io);
-            if (client.now != null) break :tls;
+            const loaded = client.now != null;
+            client.ca_bundle_lock.unlockShared(io);
+            if (loaded) break :tls;
         }
+
+        // Only the first request in a shared session scans the system trust
+        // store. Concurrent requests wait here and observe the populated
+        // bundle after acquiring the lock.
+        try client.ca_bundle_lock.lock(io);
+        defer client.ca_bundle_lock.unlock(io);
+        if (client.now != null) break :tls;
+
         var bundle: std.crypto.Certificate.Bundle = .empty;
         defer bundle.deinit(client.allocator);
         const now = Io.Clock.real.now(io);
@@ -2554,8 +2573,6 @@ pub fn request(
             error.Canceled => |e| return e,
             else => return error.CertificateBundleLoadFailure,
         };
-        try client.ca_bundle_lock.lock(io);
-        defer client.ca_bundle_lock.unlock(io);
         client.now = now;
         std.mem.swap(std.crypto.Certificate.Bundle, &client.ca_bundle, &bundle);
     }

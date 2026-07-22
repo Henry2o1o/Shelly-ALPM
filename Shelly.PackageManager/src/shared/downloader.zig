@@ -1,8 +1,15 @@
 const std = @import("std");
 const operations = @import("operation_context");
-const HttpClient = @import("http_client.zig");
+pub const HttpClient = @import("http_client.zig");
 
 pub const AddressFamilyPolicy = HttpClient.AddressFamilyPolicy;
+
+pub const FileDurability = enum {
+    /// Synchronize each completed temporary file before its atomic rename.
+    sync_before_rename,
+    /// The caller owns the durability barrier for a batch of atomic renames.
+    caller_managed,
+};
 
 pub const DownloadEventType = enum {
     Start,
@@ -59,9 +66,86 @@ pub const DownloadConfiguration = struct {
     retry_delay_secs: u32 = 1,
     verify_ssl: bool = true,
     parallel_downloads: u8 = 10,
+    file_durability: FileDurability = .sync_before_rename,
 
     pub fn default() DownloadConfiguration {
         return .{ .user_agent = "ShellyPackageManager/2.0" };
+    }
+};
+
+fn initHttpClient(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    connect_timeout_seconds: u32,
+    address_family_policy: AddressFamilyPolicy,
+) HttpClient {
+    return .{
+        .allocator = allocator,
+        .io = io,
+        .connect_timeout = connectTimeout(connect_timeout_seconds),
+        .address_family_policy = address_family_policy,
+    };
+}
+
+/// Owns the HTTP connection pool and certificate bundle shared by all
+/// downloaders participating in one logical batch.
+pub const DownloadSession = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    http_client: HttpClient,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        connect_timeout_seconds: u32,
+        address_family_policy: AddressFamilyPolicy,
+    ) DownloadSession {
+        return .{
+            .allocator = allocator,
+            .io = io,
+            .http_client = initHttpClient(
+                allocator,
+                io,
+                connect_timeout_seconds,
+                address_family_policy,
+            ),
+        };
+    }
+
+    pub fn deinit(self: *DownloadSession) void {
+        self.http_client.deinit();
+        self.* = undefined;
+    }
+
+    /// Returns a lightweight downloader borrowing this session. The session
+    /// must outlive the downloader and every request made through it.
+    pub fn downloader(self: *DownloadSession, config: DownloadConfiguration) CoreDownloader {
+        std.debug.assert(config.address_family_policy == self.http_client.address_family_policy);
+        return CoreDownloader.initWithSharedHttpClient(
+            self.allocator,
+            self.io,
+            config,
+            &self.http_client,
+        );
+    }
+};
+
+const HttpClientStorage = union(enum) {
+    owned: HttpClient,
+    shared: *HttpClient,
+
+    fn get(self: *HttpClientStorage) *HttpClient {
+        return switch (self.*) {
+            .owned => |*client| client,
+            .shared => |client| client,
+        };
+    }
+
+    fn deinit(self: *HttpClientStorage) void {
+        switch (self.*) {
+            .owned => |*client| client.deinit(),
+            .shared => {},
+        }
     }
 };
 
@@ -87,7 +171,7 @@ pub const CoreDownloader = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     configuration: DownloadConfiguration,
-    http_client: HttpClient,
+    http_client: HttpClientStorage,
     event_callback: ?DownloadEventCallback = null,
     event_context: ?*anyopaque = null,
     operation_context: ?*operations.OperationContext = null,
@@ -103,12 +187,26 @@ pub const CoreDownloader = struct {
             .allocator = allocator,
             .io = io,
             .configuration = config,
-            .http_client = .{
-                .allocator = allocator,
-                .io = io,
-                .connect_timeout = connectTimeout(config.timeout_in_seconds),
-                .address_family_policy = config.address_family_policy,
-            },
+            .http_client = .{ .owned = initHttpClient(
+                allocator,
+                io,
+                config.timeout_in_seconds,
+                config.address_family_policy,
+            ) },
+        };
+    }
+
+    fn initWithSharedHttpClient(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        config: DownloadConfiguration,
+        http_client: *HttpClient,
+    ) CoreDownloader {
+        return .{
+            .allocator = allocator,
+            .io = io,
+            .configuration = config,
+            .http_client = .{ .shared = http_client },
         };
     }
 
@@ -132,14 +230,26 @@ pub const CoreDownloader = struct {
         self.http_client.deinit();
     }
 
+    fn httpClient(self: *CoreDownloader) *HttpClient {
+        return self.http_client.get();
+    }
+
     fn resetHttpClient(self: *CoreDownloader) void {
-        self.http_client.deinit();
-        self.http_client = .{
-            .allocator = self.allocator,
-            .io = self.io,
-            .connect_timeout = connectTimeout(self.configuration.timeout_in_seconds),
-            .address_family_policy = self.configuration.address_family_policy,
-        };
+        switch (self.http_client) {
+            .owned => |*client| {
+                client.deinit();
+                client.* = initHttpClient(
+                    self.allocator,
+                    self.io,
+                    self.configuration.timeout_in_seconds,
+                    self.configuration.address_family_policy,
+                );
+            },
+            // A shared client cannot be torn down while sibling downloads are
+            // active. The failed TLS request has already discarded its own
+            // connection, so its retry opens a fresh connection in the session.
+            .shared => {},
+        }
     }
 
     pub fn downloadToFile(
@@ -249,7 +359,7 @@ pub const CoreDownloader = struct {
         else
             .default;
         var req = requestWithSetupTimeout(
-            &self.http_client,
+            self.httpClient(),
             self.io,
             .GET,
             uri,
@@ -377,10 +487,12 @@ pub const CoreDownloader = struct {
             }
         }
 
-        file.sync(self.io) catch |err| {
-            self.logErr("Failed to sync temporary file {s}: {}", .{ part_path, err });
-            return DownloadError.FileError;
-        };
+        if (self.configuration.file_durability == .sync_before_rename) {
+            file.sync(self.io) catch |err| {
+                self.logErr("Failed to sync temporary file {s}: {}", .{ part_path, err });
+                return DownloadError.FileError;
+            };
+        }
         file.close(self.io);
         file_open = false;
         std.Io.Dir.cwd().rename(part_path, std.Io.Dir.cwd(), destination_path, self.io) catch |err| {
@@ -653,11 +765,9 @@ fn downloadRequestOptions(
         .headers = .{ .user_agent = user_agent, .accept_encoding = .{ .override = "identity" } },
         .extra_headers = extra_headers,
         .redirect_behavior = .init(10),
-        // A 304 response may legally advertise the selected representation's
-        // Content-Length while carrying no body. Closing the request instead
-        // of pooling it prevents cleanup from waiting for those nonexistent
-        // bytes.
-        .keep_alive = false,
+        // The HTTP client normalizes bodyless responses such as 304 before
+        // cleanup, allowing successful connections to return to the pool.
+        .keep_alive = true,
     };
 }
 
@@ -785,6 +895,7 @@ test "DownloadConfiguration.default() returns correct default values" {
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     try std.testing.expectEqual(true, config.verify_ssl);
     try std.testing.expectEqual(@as(u8, 10), config.parallel_downloads);
+    try std.testing.expectEqual(FileDurability.sync_before_rename, config.file_durability);
 }
 
 test "connect timeout uses the configured duration" {
@@ -805,12 +916,30 @@ test "address-family policy is forwarded to the HTTP client" {
     });
     defer downloader.deinit();
 
-    try std.testing.expectEqual(AddressFamilyPolicy.ipv4_only, downloader.http_client.address_family_policy);
+    try std.testing.expectEqual(AddressFamilyPolicy.ipv4_only, downloader.httpClient().address_family_policy);
 }
 
-test "download requests disable connection reuse for bodyless conditional responses" {
+test "download requests participate in connection reuse" {
     const options = downloadRequestOptions(.default, &.{});
-    try std.testing.expect(!options.keep_alive);
+    try std.testing.expect(options.keep_alive);
+}
+
+test "download session lends one HTTP client without transferring ownership" {
+    var session = DownloadSession.init(
+        std.testing.allocator,
+        std.testing.io,
+        3,
+        .prefer_ipv4,
+    );
+    defer session.deinit();
+
+    var first = session.downloader(.{});
+    defer first.deinit();
+    var second = session.downloader(.{});
+    defer second.deinit();
+
+    try std.testing.expect(first.httpClient() == second.httpClient());
+    try std.testing.expect(first.httpClient() == &session.http_client);
 }
 
 test "makeProgress calculates progress correctly with total size" {
@@ -915,6 +1044,7 @@ const TestServerMode = enum {
     stall_headers,
     stall_body,
     drip_body,
+    reuse_with_not_modified,
 };
 
 const TestHttpServer = struct {
@@ -978,9 +1108,49 @@ const TestHttpServer = struct {
                 try writer.writeAll("ef");
                 try writer.flush();
             },
+            .reuse_with_not_modified => {
+                var read_buffer: [2048]u8 = undefined;
+                var stream_reader = stream.reader(self.io, &read_buffer);
+                const reader = &stream_reader.interface;
+
+                try consumeTestRequest(reader);
+                try writer.writeAll(
+                    "HTTP/1.1 200 OK\r\n" ++
+                        "Content-Length: 5\r\n" ++
+                        "Connection: keep-alive\r\n\r\n" ++
+                        "first",
+                );
+                try writer.flush();
+
+                try consumeTestRequest(reader);
+                // A 304 may advertise the selected representation's length,
+                // but no body follows the header block.
+                try writer.writeAll(
+                    "HTTP/1.1 304 Not Modified\r\n" ++
+                        "Content-Length: 5\r\n" ++
+                        "Connection: keep-alive\r\n\r\n",
+                );
+                try writer.flush();
+
+                try consumeTestRequest(reader);
+                try writer.writeAll(
+                    "HTTP/1.1 200 OK\r\n" ++
+                        "Content-Length: 5\r\n" ++
+                        "Connection: close\r\n\r\n" ++
+                        "third",
+                );
+                try writer.flush();
+            },
         }
     }
 };
+
+fn consumeTestRequest(reader: *std.Io.Reader) !void {
+    while (true) {
+        const line = (try reader.takeDelimiter('\n')) orelse return error.EndOfStream;
+        if (std.mem.eql(u8, line, "\r")) return;
+    }
+}
 
 fn testDestinationPath(
     allocator: std.mem.Allocator,
@@ -1096,6 +1266,55 @@ test "body idle deadline resets whenever progress arrives" {
     const contents = try std.Io.Dir.cwd().readFileAlloc(io, destination, std.testing.allocator, .limited(64));
     defer std.testing.allocator.free(contents);
     try std.testing.expectEqualStrings("abcdef", contents);
+}
+
+test "shared session reuses one connection across a bodyless 304 response" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = try TestHttpServer.init(io, .reuse_with_not_modified);
+    defer server.deinit();
+    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
+    defer _ = server_future.cancel(io) catch {};
+
+    const url = try server.url(std.testing.allocator);
+    defer std.testing.allocator.free(url);
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
+    defer std.testing.allocator.free(destination);
+
+    var session = DownloadSession.init(std.testing.allocator, io, 2, .prefer_ipv4);
+    defer session.deinit();
+    var config = timeoutTestConfiguration();
+    config.file_durability = .caller_managed;
+
+    var first = session.downloader(config);
+    defer first.deinit();
+    switch (first.downloadToFile(url, destination, true)) {
+        .succes => {},
+        else => return error.ExpectedSuccessfulDownload,
+    }
+
+    var second = session.downloader(config);
+    defer second.deinit();
+    switch (second.downloadToFile(url, destination, false)) {
+        .skipped => |skipped| try std.testing.expectEqual(SkippedReason.NotModified, skipped.reason),
+        else => return error.ExpectedNotModified,
+    }
+
+    var third = session.downloader(config);
+    defer third.deinit();
+    switch (third.downloadToFile(url, destination, true)) {
+        .succes => {},
+        else => return error.ExpectedSuccessfulDownload,
+    }
+
+    try server_future.await(io);
+    const contents = try std.Io.Dir.cwd().readFileAlloc(io, destination, std.testing.allocator, .limited(64));
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("third", contents);
 }
 
 test "quiet mirror candidates suppress error callbacks" {
