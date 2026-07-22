@@ -10,6 +10,8 @@ const support = @import("support.zig");
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const Package = @import("../models/packages.zig").Package;
 const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
+const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
+const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
 
 pub const PackageDetail = extern struct {
     parent_instance: Parent,
@@ -23,8 +25,14 @@ pub const PackageDetail = extern struct {
         name_label: *gtk.Label,
         description_label: *gtk.Label,
         spec_box: *gtk.Box,
-
         sections_box: *gtk.Box,
+
+        reinstall_action: *gio.SimpleAction,
+        add_ignore_action: *gio.SimpleAction,
+        add_hold_action: *gio.SimpleAction,
+        add_explicit_action: *gio.SimpleAction,
+        mark_dependency_action: *gio.SimpleAction,
+
         debounce_source: c_uint,
         pending_name: [256]u8,
         pending_len: usize,
@@ -56,13 +64,37 @@ pub const PackageDetail = extern struct {
         p.arena = null;
         p.debounce_source = 0;
         p.pending_len = 0;
+
+        const group = gio.SimpleActionGroup.new();
+
+        p.reinstall_action = addAction(self, group, "reinstall", &on_reinstall);
+        p.add_ignore_action = addAction(self, group, "addignore", &on_add_ignore);
+        p.add_hold_action = addAction(self, group, "addhold", &on_add_hold);
+        p.add_explicit_action = addAction(self, group, "addexplicit", &on_add_explicit);
+        p.mark_dependency_action = addAction(self, group, "dependency", &on_mark_dependency);
+
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "detail", group.as(gio.ActionGroup));
+        group.as(gobject.Object).unref();
+    }
+
+    fn addAction(
+        self: *Self,
+        group: *gio.SimpleActionGroup,
+        name: [:0]const u8,
+        handler: *const fn (*gio.SimpleAction, ?*glib.Variant, *Self) callconv(.c) void,
+    ) *gio.SimpleAction {
+        const action = gio.SimpleAction.new(name, null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, handler, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        action.as(gobject.Object).unref(); // group holds the ref now
+        return action;
     }
 
     pub fn new() *Self {
         return gobject.ext.newInstance(Self, .{});
     }
 
-    pub fn showPackage(self: *Self, name: []const u8, icon_path: ?[:0]const u8) void {
+    pub fn showPackage(self: *Self, name: []const u8, is_installed: bool, icon_path: ?[:0]const u8) void {
         const p = self.priv();
 
         const len = @min(name.len, p.pending_name.len);
@@ -79,6 +111,11 @@ pub const PackageDetail = extern struct {
         gtk.Label.setLabel(p.description_label, "Loading...");
         clear_box(p.spec_box);
         clear_box(p.sections_box);
+
+        gio.SimpleAction.setEnabled(p.reinstall_action, @intFromBool(is_installed));
+        gio.SimpleAction.setEnabled(p.add_explicit_action, @intFromBool(is_installed));
+        gio.SimpleAction.setEnabled(p.mark_dependency_action, @intFromBool(is_installed));
+        gio.SimpleAction.setEnabled(p.add_hold_action, @intFromBool(is_installed));
 
         if (p.debounce_source != 0) {
             _ = glib.Source.remove(p.debounce_source);
@@ -279,6 +316,113 @@ pub const PackageDetail = extern struct {
         var buf: [32]u8 = undefined;
         const formatted = SizeConverter.convert_null_term(&buf, bytes);
         add_spec_row(box, label, formatted);
+    }
+
+    fn on_reinstall(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        const p = self.priv();
+
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "install") catch return;
+        argv.append(std.heap.c_allocator, "standard") catch return;
+        argv.append(std.heap.c_allocator, &p.pending_name) catch return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Reinstalling package",
+                .argv = argv.items,
+                .packages = &.{&p.pending_name},
+                .on_complete = &on_reinstall_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_add_ignore(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        const p = self.priv();
+
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "mark") catch return;
+        argv.append(std.heap.c_allocator, "ignore") catch return;
+        argv.append(std.heap.c_allocator, &p.pending_name) catch return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Adding to package ignore",
+                .argv = argv.items,
+                .packages = &.{&p.pending_name},
+                .on_complete = &on_reinstall_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+    fn on_add_hold(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        const p = self.priv();
+
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "mark") catch return;
+        argv.append(std.heap.c_allocator, "hold") catch return;
+        argv.append(std.heap.c_allocator, &p.pending_name) catch return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Adding to package to hold",
+                .argv = argv.items,
+                .packages = &.{&p.pending_name},
+                .on_complete = &on_reinstall_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+    fn on_add_explicit(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        const p = self.priv();
+
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "mark") catch return;
+        argv.append(std.heap.c_allocator, "explicit") catch return;
+        argv.append(std.heap.c_allocator, &p.pending_name) catch return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Making Package Explicit",
+                .argv = argv.items,
+                .packages = &.{&p.pending_name},
+                .on_complete = &on_reinstall_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+    fn on_mark_dependency(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        const p = self.priv();
+
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "mark") catch return;
+        argv.append(std.heap.c_allocator, "dependency") catch return;
+        argv.append(std.heap.c_allocator, &p.pending_name) catch return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Making Package Dependency",
+                .argv = argv.items,
+                .packages = &.{&p.pending_name},
+                .on_complete = &on_reinstall_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_reinstall_complete(ctx: *anyopaque, success: bool) void {
+        _ = success;
+        _ = ctx;
     }
 
     fn clear_box(box: *gtk.Box) void {

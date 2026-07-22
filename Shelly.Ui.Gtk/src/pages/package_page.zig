@@ -512,7 +512,7 @@ pub const PackagePage = extern struct {
         const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
 
         const path = p.resolver.resolve(pkg.getName());
-        p.detail.showPackage(pkg.getName(), path);
+        p.detail.showPackage(pkg.getName(), pkg.isInstalled(), path);
         gtk.Revealer.setRevealChild(p.detail_revealer, 1);
     }
 

@@ -3,13 +3,23 @@ const bindings = @import("Shelly_Ui_Gtk");
 const gtk = bindings.gtk;
 const gio = bindings.gio;
 const gdk = bindings.gdk;
+const glib = bindings.glib;
 const gobject = bindings.gobject;
 const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
 const runtime = @import("services/runtime.zig");
 
+extern fn bindtextdomain(domainname: [*:0]const u8, dirname: [*:0]const u8) ?[*:0]const u8;
+extern fn bind_textdomain_codeset(domainname: [*:0]const u8, codeset: [*:0]const u8) ?[*:0]const u8;
+extern fn textdomain(domainname: [*:0]const u8) ?[*:0]const u8;
+
 pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
     runtime.environ_map = init.environ_map;
+
+    //hook up translations
+    _ = bindtextdomain("shelly-ui", "/usr/share/locale");
+    _ = bind_textdomain_codeset("shelly-ui", "UTF-8");
+    _ = textdomain("shelly-ui");
 
     const app = gtk.Application.new("com.shellyorzig.shelly", .{}); //RENAME THIS PLEASE FOR THE LOVE OF GOD LATER BUT LIKE THIS FOR DEVVING
     defer app.unref();
