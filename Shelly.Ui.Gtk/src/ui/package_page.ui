@@ -271,6 +271,14 @@
                         <property name="active">false</property>
                     </object>
                 </child>
+                <child>
+                    <object class="GtkCheckButton" id="show_detail_pane">
+                        <property name="label" translatable="yes">Hide Detail Pane</property>
+                        <property name="tooltip-text" translatable="yes">Hide Detail Pane</property>
+                        <signal name="toggled" handler="on_detail_pane"/>
+                        <property name="active">false</property>
+                    </object>
+                </child>
             </object>
         </property>
     </object>

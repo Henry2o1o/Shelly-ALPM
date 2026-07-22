@@ -717,6 +717,7 @@ pub const PackagePage = extern struct {
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_list_view_toggled", @ptrCast(&on_list_view_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_explicit_only", @ptrCast(&on_explicit_only));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_installed_only_toggled", @ptrCast(&on_installed_only_toggled));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_detail_pane", @ptrCast(&on_detail_pane));
         }
     };
 
@@ -756,6 +757,12 @@ pub const PackagePage = extern struct {
         const p = self.priv();
         p.show_explicit_only = gtk.CheckButton.getActive(check) != 0;
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+    }
+
+    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const active = gtk.CheckButton.getActive(check);
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active != 0) 0 else 1);
     }
 
     fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
