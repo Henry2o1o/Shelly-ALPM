@@ -541,6 +541,7 @@ pub const PackagePage = extern struct {
         p.loaded = true;
         p.generation += 1;
         show_loading(self);
+        self.update_selection_ui();
         _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
         thread.detach();
