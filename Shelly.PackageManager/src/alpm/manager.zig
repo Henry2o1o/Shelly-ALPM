@@ -861,10 +861,15 @@ pub const Manager = struct {
                     var required_by = local_pkg.required_by();
                     var still_required: bool = false;
                     while (required_by.next()) |package_name| {
-                        _ = rawLibalpm.alpm_db_get_pkg(local_db, package_name.ptr) orelse {
+                        const requiring_package = rawLibalpm.alpm_db_get_pkg(local_db, package_name.ptr) orelse {
                             // continuing on as this package is not installed and we can ignore.
                             continue;
                         };
+                        if (std.mem.findScalar(
+                            *rawLibalpm.alpm_pkg_t,
+                            package_pointers.items[0..current_count],
+                            requiring_package,
+                        ) != null) continue;
                         const message = try std.fmt.allocPrint(self.allocator, "Found {s} is still needed. Skipping removal...", .{package_name});
                         defer self.allocator.free(message);
                         self.dispatcher.raiseInformational(.{ .event_type = libalpm.EventType.failed_optional_dependency_operation, .message = message });
