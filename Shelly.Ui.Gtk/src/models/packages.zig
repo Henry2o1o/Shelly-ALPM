@@ -21,6 +21,7 @@ pub const Package = struct {
     RequiredBy: []const []const u8 = &.{},
     OptionalFor: []const []const u8 = &.{},
     Installed: bool = false,
+    Explicit: bool = false,
 };
 
 const FileNode = struct { Name: []const u8, Files: []const FileNode };

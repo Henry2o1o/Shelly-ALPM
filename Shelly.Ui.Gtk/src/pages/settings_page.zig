@@ -9,6 +9,8 @@ const ShellyTabs = @import("../models/shelly_config.zig").ShellyTabs;
 const DayOfWeek = @import("../models/shelly_config.zig").DayOfWeek;
 const ConfigResolver = @import("../services/config_resolver.zig").ConfigResolver;
 const runtime = @import("../services/runtime.zig");
+const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
+const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const support = @import("support.zig");
 const datetime = @import("../helpers/datetime.zig");
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
@@ -360,16 +362,64 @@ pub const ShellySettingsPage = extern struct {
         updateConfigField(.AppImageInstallPath, path_slice);
     }
 
-    fn on_sync_db(_: *gtk.Button, _: *Self) callconv(.c) void {
-        std.debug.print("settings: force database update (not implemented yet)\n", .{});
+    fn on_sync_db(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const argv = ShellyCommands.sync_db(std.heap.c_allocator) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        const win = support.getWindow(ShellyWindow, self) orelse return;
+        win.startTransaction(.{
+            .title = "Refreshing package databases",
+            .argv = argv,
+            .packages = &.{},
+            .on_complete = &on_transaction_complete,
+            .privileged = true,
+            .ctx = self,
+        });
+    }
+
+    fn on_transaction_complete(_: *anyopaque, success: bool) void {
+        // TODO: Let there be toast.
+        if (success) {
+            std.log.info("settings: database sync completed", .{});
+        } else {
+            std.log.warn("settings: database sync failed", .{});
+        }
     }
 
     fn on_remove_db_lock(_: *gtk.Button, _: *Self) callconv(.c) void {
-        std.debug.print("settings: remove db.lck (not implemented yet)\n", .{});
+        var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        defer arena.deinit();
+        var threaded: std.Io.Threaded = .init(arena.allocator(), .{});
+        defer threaded.deinit();
+
+        const cli = ShellyCli{ .allocator = arena.allocator(), .io = threaded.io() };
+        const parsed = cli.repair_db() catch |err| {
+            std.log.err("settings: repair-db failed: {any}", .{err});
+            return;
+        };
+        defer parsed.deinit();
+
+        const response = parsed.value;
+        // TODO: A toast must be given.
+        std.log.info("settings: repair-db {s}: '{s}'", .{
+            if (response.isSuccess()) "succeeded" else "failed",
+            response.text(),
+        });
     }
 
-    fn on_fix_permissions(_: *gtk.Button, _: *Self) callconv(.c) void {
-        std.debug.print("settings: fix permissions (not implemented yet)\n", .{});
+    fn on_fix_permissions(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const argv = ShellyCommands.fix_permissions(std.heap.c_allocator) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        const win = support.getWindow(ShellyWindow, self) orelse return;
+        win.startTransaction(.{
+            .title = "Fixing permissions",
+            .argv = argv,
+            .packages = &.{},
+            .on_complete = &on_transaction_complete,
+            .privileged = true,
+            .ctx = self,
+        });
     }
 
     fn on_purify(_: *gtk.Button, _: *Self) callconv(.c) void {
@@ -566,43 +616,30 @@ fn populateFromConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
     gtk.DropDown.setSelected(p.default_page_drop, @intFromEnum(cfg.DefaultPageDropDown));
     gtk.DropDown.setSelected(p.language_drop, languageIndex(cfg.Culture));
 
+    setButtonLabel(p.tray_icon_button, std.heap.c_allocator, cfg.TrayIconPath, "Select Icon");
+    setButtonLabel(p.tray_updates_icon_button, std.heap.c_allocator, cfg.TrayUpdatesIconPath, "Select Icon");
+
     // Advanced
     setSwitch(p.no_confirm_switch, cfg.NoConfirm);
     setSwitch(p.shelly_search_switch, cfg.ShellySearchEnabled);
     setSwitch(p.package_downgrade_switch, cfg.PackageDowngradeEnabled);
 
-    if (cfg.AppImageInstallPath.len == 0) {
-        gtk.Button.setLabel(p.appimage_install_path_button, "Select Directory");
-    } else {
-        const dup = std.heap.c_allocator.dupeSentinel(u8, cfg.AppImageInstallPath, 0) catch {
-            gtk.Button.setLabel(p.appimage_install_path_button, "Select Directory");
-            return;
-        };
-        defer std.heap.c_allocator.free(dup);
-        gtk.Button.setLabel(p.appimage_install_path_button, dup);
+    setButtonLabel(p.appimage_install_path_button, std.heap.c_allocator, cfg.AppImageInstallPath, "Select Directory");
+}
+
+fn setButtonLabel(b: *gtk.Button, allocator: std.mem.Allocator, value: []const u8, default: [:0]const u8) void {
+    if (value.len == 0) {
+        gtk.Button.setLabel(b, default);
+        return;
     }
 
-    if (cfg.TrayIconPath.len == 0) {
-        gtk.Button.setLabel(p.tray_icon_button, "Select Icon");
-    } else {
-        const dup = std.heap.c_allocator.dupeSentinel(u8, cfg.TrayIconPath, 0) catch {
-            gtk.Button.setLabel(p.tray_icon_button, "Select Icon");
-            return;
-        };
-        defer std.heap.c_allocator.free(dup);
-        gtk.Button.setLabel(p.tray_icon_button, dup);
-    }
+    const dup = allocator.dupeSentinel(u8, value, 0) catch {
+        gtk.Button.setLabel(b, default);
+        return;
+    };
+    defer allocator.free(dup);
 
-    if (cfg.TrayUpdatesIconPath.len == 0) {
-        gtk.Button.setLabel(p.tray_updates_icon_button, "Select Icon");
-    } else {
-        const dup = std.heap.c_allocator.dupeSentinel(u8, cfg.TrayUpdatesIconPath, 0) catch {
-            gtk.Button.setLabel(p.tray_updates_icon_button, "Select Icon");
-            return;
-        };
-        defer std.heap.c_allocator.free(dup);
-        gtk.Button.setLabel(p.tray_updates_icon_button, dup);
-    }
+    gtk.Button.setLabel(b, dup);
 }
 
 fn collectIntoConfig(p: *ShellySettingsPage.Private, allocator: std.mem.Allocator, cfg: *ShellyConfig) void {

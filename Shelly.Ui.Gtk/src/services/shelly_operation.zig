@@ -161,6 +161,13 @@ pub const ShellyCommands = struct {
         return argv.toOwnedSlice(alloc);
     }
 
+    pub fn sync_db(alloc: std.mem.Allocator) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "sync");
+        try argv.append(alloc, "--force");
+        return argv.toOwnedSlice(alloc);
+    }
+
     pub fn install_flatpak(alloc: std.mem.Allocator, names: []const u8, remote: Scope) ![]const []const u8 {
         var argv: std.ArrayListUnmanaged([]const u8) = .empty;
         try argv.append(alloc, "install");
@@ -222,6 +229,13 @@ pub const ShellyCommands = struct {
         if (path.len > 0) try argv.append(alloc, path);
         try argv.append(alloc, "--bundle");
         if (user) try argv.append(alloc, "--user");
+        return argv.toOwnedSlice(alloc);
+    }
+
+    pub fn fix_permissions(alloc: std.mem.Allocator) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "utility");
+        try argv.append(alloc, "--fix-permissions");
         return argv.toOwnedSlice(alloc);
     }
 };

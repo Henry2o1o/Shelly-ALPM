@@ -16,6 +16,7 @@ pub const PackageObject = extern struct {
         repository: [:0]const u8,
         description: [:0]const u8,
         groups: []const [:0]const u8,
+        explicit: bool,
         installed_size: i64,
         installed: bool,
         selected: bool,
@@ -41,6 +42,7 @@ pub const PackageObject = extern struct {
         p.version = "";
         p.repository = "";
         p.description = "";
+        p.explicit = false;
         p.groups = &.{};
         p.installed_size = 0;
         p.installed = false;
@@ -62,6 +64,7 @@ pub const PackageObject = extern struct {
         p.description = a.dupeZ(u8, package.Description) catch "";
         p.installed_size = package.InstalledSize;
         p.installed = package.Installed;
+        p.explicit = package.Explicit;
         p.selected = false;
 
         if (a.alloc([:0]const u8, package.Groups.len)) |g| {
@@ -104,6 +107,9 @@ pub const PackageObject = extern struct {
     }
     pub fn isInstalled(self: *Self) bool {
         return self.priv().installed;
+    }
+    pub fn isExplicit(self: *Self) bool {
+        return self.priv().explicit;
     }
     pub fn isSelected(self: *Self) bool {
         return self.priv().selected;

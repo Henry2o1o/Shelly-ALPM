@@ -318,6 +318,9 @@ pub fn build(b: *std.Build) void {
             "ALPM queries honor shared cancellation",
             "single-server repositories receive a three second setup timeout",
             "multi-mirror repositories receive a one second setup timeout",
+            "database downloads defer file durability to the batch barrier",
+            "database batch barrier synchronizes its directory",
+            "process-wide address-family default is configurable",
             "onDownloadEvent does not duplicate progress when a common operation is attached",
         },
     });
