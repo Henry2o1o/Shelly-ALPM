@@ -126,7 +126,7 @@ Installs repository names, repository-qualified names, local Arch/Shelly package
 - `--build-deps`: dependency-only workflow for build dependencies.
 - `--make-deps`: include make dependencies in that workflow.
 - `--no-deps`: use the ALPM nodeps transaction flag.
-- `--upgrade`: synchronize and upgrade standard packages before installing.
+- `--upgrade`: after explicit confirmation, synchronize and upgrade standard packages before installing. `--no-confirm` bypasses this prompt.
 
 UI use: install action and local-file/URL import. This is a privileged, interactive transaction and may ask for dependency/conflict confirmation.
 

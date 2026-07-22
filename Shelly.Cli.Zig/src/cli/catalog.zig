@@ -133,7 +133,7 @@ pub const variants = [_]Variant{
             }},
             .options = &.{
                 .{ .name = "--no-deps", .description = "Pass the ALPM nodeps transaction flag when installing repository packages" },
-                .{ .name = "--upgrade", .description = "Synchronize and upgrade the standard system before installing the requested repository packages" },
+                .{ .name = "--upgrade", .description = "After confirmation, synchronize and upgrade the standard system before installing the requested repository packages" },
             },
         },
     },
