@@ -3,7 +3,7 @@ msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
 "POT-Creation-Date: 2026-07-03 00:26+0000\n"
-"PO-Revision-Date: 2026-07-07 15:01+0200\n"
+"PO-Revision-Date: 2026-07-14 18:33+0200\n"
 "Last-Translator: helge1o1o1@gmail.com\n"
 "Language-Team: Deutschland (Deutsch) helge1o1o1@gmail.com\n"
 "Language: de\n"
@@ -143,7 +143,7 @@ msgid ""
 "Run the --check function during package build (installs checkdepends)\n"
 "                        "
 msgstr ""
-"Führt die --check-Funktion während des Paketbaus aus (installiert "
+"Führt die --check-Funktion während des Paket-Build aus (installiert "
 "checkdepends).\n"
 "                        "
 
@@ -436,7 +436,7 @@ msgid "Remove Selected"
 msgstr "Ausgewählte entfernen"
 
 msgid "Package Name"
-msgstr "Paketename"
+msgstr "Paketname"
 
 msgid "Size"
 msgstr "Größe"
@@ -493,6 +493,9 @@ msgstr "AUR aktivieren"
 
 msgid "Language"
 msgstr "Sprache"
+
+msgid "Follow system language"
+msgstr "Systemsprache folgen"
 
 msgid "Enable Flatpak"
 msgstr "Flatpak aktivieren"
@@ -603,7 +606,7 @@ msgid "Enable Shelly Search"
 msgstr "Shelly-Suche aktivieren"
 
 msgid "Enable Package Downgrade"
-msgstr "Paket-Herabstufung aktivieren"
+msgstr "Paketherabstufung aktivieren"
 
 msgid "Enable Webview Visualization (experimental)"
 msgstr "Webview-Visualisierung aktivieren (experimentell)"
@@ -759,7 +762,7 @@ msgid "Installed {0} Package(s)"
 msgstr "{0} Paket(e) installiert"
 
 msgid "Package Build"
-msgstr "Paketstellung"
+msgstr "Paket-Build"
 
 msgid "Preview PKGBUILD"
 msgstr "PKGBUILD-Vorschau"
@@ -829,7 +832,7 @@ msgstr "Entfernen..."
 
 #, csharp-format
 msgid "Removed {0} Package(s)"
-msgstr "{0} Pakete(s) entfernen"
+msgstr "{0} Paket(e) entfernen"
 
 msgid "<span size='large'>AUR packages are up to date</span>"
 msgstr "<span size='large'>AUR-Pakete sind auf dem neuesten Stand</span>"
@@ -1320,7 +1323,7 @@ msgid "Installed local package"
 msgstr "Lokales Paket installiert"
 
 msgid "Failed to install local package."
-msgstr "Lokales Pakets installieren fehlgeschlagen."
+msgstr "Lokales Paket installieren fehlgeschlagen."
 
 msgid "Install As"
 msgstr "Installieren als"
@@ -1565,6 +1568,3 @@ msgstr "Auf dem neuesten Stand"
 
 msgid "Calculating"
 msgstr "Berechnen"
-
-#~ msgid "No description available."
-#~ msgstr "Keine Beschreibung verfügbar."
