@@ -11,8 +11,8 @@ const Client = @This();
 const builtin = @import("builtin");
 
 // Vendored from Zig 0.16.0's std.http.Client. TLS is intentionally injected
-// from the local compatibility client. Host names resolve through libc/NSS,
-// after which IPv4 and IPv6 connection attempts race independently.
+// from the local compatibility client. Host names use Zig's native resolver
+// and TCP connections use a curl-style Happy Eyeballs race.
 const std = @import("std");
 const TlsClient = @import("tls_client.zig");
 const Io = std.Io;
@@ -26,15 +26,18 @@ const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const HostName = std.Io.net.HostName;
 const IpAddress = std.Io.net.IpAddress;
+const Socket = std.Io.net.Socket;
 const Stream = std.Io.net.Stream;
 const posix = std.posix;
 
 pub const disable_tls = std.options.http_disable_tls;
 
 /// Controls which resolved address families are eligible for new connections.
-/// `prefer_ipv4` retains IPv6 fallback but starts IPv4 first, which is useful
-/// for VPNs that expose an IPv6-capable local stack without routing IPv6.
+/// `happy_eyeballs` mirrors curl by preferring IPv6 while racing IPv4 shortly
+/// afterwards. `prefer_ipv4` uses the same algorithm with the preference
+/// reversed.
 pub const AddressFamilyPolicy = enum {
+    happy_eyeballs,
     prefer_ipv4,
     ipv4_only,
     ipv6_only,
@@ -49,7 +52,7 @@ io: Io,
 /// also need to bound DNS and TLS should apply a request-setup deadline.
 connect_timeout: Io.Timeout = .none,
 
-address_family_policy: AddressFamilyPolicy = .prefer_ipv4,
+address_family_policy: AddressFamilyPolicy = .happy_eyeballs,
 
 ca_bundle_lock: if (disable_tls) void else Io.RwLock = if (disable_tls) {} else .init,
 ca_bundle: if (disable_tls) void else std.crypto.Certificate.Bundle = if (disable_tls) {} else .empty,
@@ -1534,109 +1537,448 @@ pub fn connectTcpOptions(client: *Client, options: ConnectTcpOptions) ConnectTcp
     }
 }
 
-const FamilyResult = HostName.ConnectError!Stream;
+const max_resolved_addresses_per_family = 32;
+const happy_eyeballs_event_capacity = max_resolved_addresses_per_family * 2 + 16;
+const happy_eyeballs_max_active_attempts = 6;
+const happy_eyeballs_resolution_delay_ms = 50;
+const happy_eyeballs_connection_delay_ms = 200;
+const happy_eyeballs_poll_interval_ms = 25;
 
-const FamilyRace = union(enum) {
-    ip4: FamilyResult,
-    ip6: FamilyResult,
-    timeout: Io.Cancelable!void,
+const AddressFamily = IpAddress.Family;
+const ConnectionResult = IpAddress.ConnectError!Stream;
+
+const TimerKind = enum {
+    resolution,
+    pace,
+    deadline,
 };
 
-const max_resolved_addresses_per_family = 32;
+const HappyEyeballsEvent = union(enum) {
+    address: IpAddress,
+    lookup_done: struct {
+        family: AddressFamily,
+        err: ?HostName.LookupError,
+    },
+    connection: struct {
+        id: u64,
+        result: ConnectionResult,
+    },
+    timer: struct {
+        kind: TimerKind,
+        generation: u64,
+    },
+};
+
+const EventQueue = Io.Queue(HappyEyeballsEvent);
+const VoidFuture = Io.Future(void);
+
+const ConnectionBackend = struct {
+    context: ?*anyopaque = null,
+    connectFn: *const fn (
+        context: ?*anyopaque,
+        address: IpAddress,
+        io: Io,
+        options: IpAddress.ConnectOptions,
+    ) IpAddress.ConnectError!Stream = connectProduction,
+
+    fn connect(
+        backend: ConnectionBackend,
+        address: IpAddress,
+        io: Io,
+        options: IpAddress.ConnectOptions,
+    ) IpAddress.ConnectError!Stream {
+        return backend.connectFn(backend.context, address, io, options);
+    }
+
+    fn connectProduction(
+        context: ?*anyopaque,
+        address: IpAddress,
+        io: Io,
+        options: IpAddress.ConnectOptions,
+    ) IpAddress.ConnectError!Stream {
+        _ = context;
+        return connectAddressNonBlocking(address, io, options);
+    }
+};
+
+const AddressList = struct {
+    items: [max_resolved_addresses_per_family]IpAddress = undefined,
+    next: usize = 0,
+    len: usize = 0,
+
+    fn append(list: *AddressList, address: IpAddress) void {
+        if (list.len == list.items.len) return;
+        list.items[list.len] = address;
+        list.len += 1;
+    }
+
+    fn hasPending(list: *const AddressList) bool {
+        return list.next < list.len;
+    }
+
+    fn pop(list: *AddressList) ?IpAddress {
+        if (!list.hasPending()) return null;
+        defer list.next += 1;
+        return list.items[list.next];
+    }
+
+    fn pendingSlice(list: *const AddressList) []const IpAddress {
+        return list.items[list.next..list.len];
+    }
+};
 
 const ResolvedAddresses = struct {
-    ip4: [max_resolved_addresses_per_family]IpAddress = undefined,
-    ip6: [max_resolved_addresses_per_family]IpAddress = undefined,
-    ip4_len: usize = 0,
-    ip6_len: usize = 0,
+    ip4: AddressList = .{},
+    ip6: AddressList = .{},
 
     fn ip4Slice(resolved: *const ResolvedAddresses) []const IpAddress {
-        return resolved.ip4[0..resolved.ip4_len];
+        return resolved.ip4.pendingSlice();
     }
 
     fn ip6Slice(resolved: *const ResolvedAddresses) []const IpAddress {
-        return resolved.ip6[0..resolved.ip6_len];
+        return resolved.ip6.pendingSlice();
     }
 
     fn append(resolved: *ResolvedAddresses, address: IpAddress) void {
         switch (address) {
-            .ip4 => {
-                if (resolved.ip4_len == resolved.ip4.len) return;
-                resolved.ip4[resolved.ip4_len] = address;
-                resolved.ip4_len += 1;
-            },
-            .ip6 => {
-                if (resolved.ip6_len == resolved.ip6.len) return;
-                resolved.ip6[resolved.ip6_len] = address;
-                resolved.ip6_len += 1;
-            },
+            .ip4 => resolved.ip4.append(address),
+            .ip6 => resolved.ip6.append(address),
         }
+    }
+
+    fn hasPending(resolved: *const ResolvedAddresses) bool {
+        return resolved.ip4.hasPending() or resolved.ip6.hasPending();
+    }
+
+    fn hasFamily(resolved: *const ResolvedAddresses, family: AddressFamily) bool {
+        return switch (family) {
+            .ip4 => resolved.ip4.hasPending(),
+            .ip6 => resolved.ip6.hasPending(),
+        };
+    }
+
+    /// Preserves resolver order within each family while alternating families.
+    /// If the desired family has no address yet, the alternate is used without
+    /// changing the desired family so a late result gets the next opportunity.
+    fn popNext(resolved: *ResolvedAddresses, desired: *AddressFamily) ?IpAddress {
+        if (resolved.popFamily(desired.*)) |address| {
+            desired.* = otherFamily(desired.*);
+            return address;
+        }
+        return resolved.popFamily(otherFamily(desired.*));
+    }
+
+    fn popFamily(resolved: *ResolvedAddresses, family: AddressFamily) ?IpAddress {
+        return switch (family) {
+            .ip4 => resolved.ip4.pop(),
+            .ip6 => resolved.ip6.pop(),
+        };
     }
 };
 
-/// Resolves through libc so NSS, nss-resolve/systemd-resolved, VPN-provided DNS,
-/// `/etc/hosts`, and system address sorting all participate. Zig's Linux-native
-/// resolver intentionally bypasses libc and reads resolver configuration itself.
-fn resolveSystem(
-    host: HostName,
-    port: u16,
+const ActiveAttempt = struct {
+    id: u64,
+    order: u64,
+    future: VoidFuture,
+};
+
+const HappyEyeballsState = struct {
+    io: Io,
+    events: *EventQueue,
     policy: AddressFamilyPolicy,
-) HostName.LookupError!ResolvedAddresses {
-    if (!builtin.link_libc) return error.OptionUnsupported;
+    connection_backend: ConnectionBackend,
+    connect_options: IpAddress.ConnectOptions,
+    overall_timeout: Io.Timeout,
 
-    var name_buffer: [HostName.max_len:0]u8 = undefined;
-    @memcpy(name_buffer[0..host.bytes.len], host.bytes);
-    name_buffer[host.bytes.len] = 0;
-    const name = name_buffer[0..host.bytes.len :0];
+    addresses: ResolvedAddresses = .{},
+    next_family: AddressFamily,
+    lookup_ip4_done: bool,
+    lookup_ip6_done: bool,
+    last_lookup_error: ?HostName.LookupError = null,
+    last_connect_error: ?IpAddress.ConnectError = null,
 
-    var service_buffer: [8]u8 = undefined;
-    const service = std.fmt.bufPrintZ(&service_buffer, "{d}", .{port}) catch unreachable;
+    lookup_ip4_future: ?VoidFuture = null,
+    lookup_ip6_future: ?VoidFuture = null,
+    resolution_timer: ?VoidFuture = null,
+    pace_timer: ?VoidFuture = null,
+    deadline_timer: ?VoidFuture = null,
+    resolution_generation: u64 = 0,
+    pace_generation: u64 = 0,
+    deadline_generation: u64 = 0,
+    resolution_wait_elapsed: bool = false,
 
-    const hints: posix.addrinfo = .{
-        .flags = .{
-            .NUMERICSERV = true,
-            .ADDRCONFIG = true,
-        },
-        .family = switch (policy) {
-            .prefer_ipv4 => posix.AF.UNSPEC,
-            .ipv4_only => posix.AF.INET,
-            .ipv6_only => posix.AF.INET6,
-        },
-        .socktype = posix.SOCK.STREAM,
-        .protocol = posix.IPPROTO.TCP,
-        .canonname = null,
-        .addr = null,
-        .addrlen = 0,
-        .next = null,
-    };
+    active: [happy_eyeballs_max_active_attempts]?ActiveAttempt = @splat(null),
+    active_count: usize = 0,
+    next_attempt_id: u64 = 1,
+    next_attempt_order: u64 = 1,
+    started: bool = false,
+    immediate_next: bool = false,
+    next_launch: ?Io.Timestamp = null,
 
-    var result: ?*posix.addrinfo = null;
-    switch (posix.system.getaddrinfo(name.ptr, service.ptr, &hints, &result)) {
-        @as(posix.system.EAI, @enumFromInt(0)) => {},
-        .ADDRFAMILY, .FAMILY => return error.AddressFamilyUnsupported,
-        .AGAIN, .FAIL => return error.NameServerFailure,
-        .MEMORY => return error.SystemResources,
-        .NODATA, .NONAME => return error.UnknownHostName,
-        else => return error.Unexpected,
+    fn init(
+        io: Io,
+        events: *EventQueue,
+        policy: AddressFamilyPolicy,
+        options: IpAddress.ConnectOptions,
+    ) HappyEyeballsState {
+        return initWithBackend(io, events, policy, options, .{});
     }
-    defer if (result) |head| posix.system.freeaddrinfo(head);
 
-    var resolved: ResolvedAddresses = .{};
-    var next = result;
-    while (next) |info| : (next = info.next) {
-        if (info.family != posix.AF.INET and info.family != posix.AF.INET6) continue;
-        const address = info.addr orelse continue;
-        const storage: *const Io.Threaded.PosixAddress =
-            @alignCast(@fieldParentPtr("any", address));
-        resolved.append(Io.Threaded.addressFromPosix(storage));
+    fn initWithBackend(
+        io: Io,
+        events: *EventQueue,
+        policy: AddressFamilyPolicy,
+        options: IpAddress.ConnectOptions,
+        connection_backend: ConnectionBackend,
+    ) HappyEyeballsState {
+        var connect_options = options;
+        connect_options.timeout = .none;
+        return .{
+            .io = io,
+            .events = events,
+            .policy = policy,
+            .connection_backend = connection_backend,
+            .connect_options = connect_options,
+            .overall_timeout = options.timeout,
+            .next_family = preferredFamily(policy),
+            .lookup_ip4_done = policy == .ipv6_only,
+            .lookup_ip6_done = policy == .ipv4_only,
+        };
     }
-    if (resolved.ip4_len == 0 and resolved.ip6_len == 0) return error.NoAddressReturned;
-    return resolved;
-}
 
-/// Resolves once through the operating system, then races the eligible address
-/// families independently. IPv4 receives a small head start while IPv6 remains
-/// available as a fallback.
+    fn deinit(state: *HappyEyeballsState) void {
+        cancelVoidFuture(&state.resolution_timer, state.io);
+        cancelVoidFuture(&state.pace_timer, state.io);
+        cancelVoidFuture(&state.deadline_timer, state.io);
+        for (&state.active) |*maybe_attempt| {
+            if (maybe_attempt.*) |*attempt| attempt.future.cancel(state.io);
+            maybe_attempt.* = null;
+        }
+        state.active_count = 0;
+        cancelVoidFuture(&state.lookup_ip4_future, state.io);
+        cancelVoidFuture(&state.lookup_ip6_future, state.io);
+
+        state.events.close(state.io);
+        while (state.events.getOneUncancelable(state.io)) |event| {
+            closeEventStream(state.io, event);
+        } else |err| switch (err) {
+            error.Closed => {},
+        }
+    }
+
+    fn allLookupsDone(state: *const HappyEyeballsState) bool {
+        return state.lookup_ip4_done and state.lookup_ip6_done;
+    }
+
+    fn lookupDone(state: *const HappyEyeballsState, family: AddressFamily) bool {
+        return switch (family) {
+            .ip4 => state.lookup_ip4_done,
+            .ip6 => state.lookup_ip6_done,
+        };
+    }
+
+    fn finishLookup(state: *HappyEyeballsState, family: AddressFamily, lookup_error: ?HostName.LookupError) void {
+        switch (family) {
+            .ip4 => {
+                if (state.lookup_ip4_done) return;
+                finishVoidFuture(&state.lookup_ip4_future, state.io);
+                state.lookup_ip4_done = true;
+            },
+            .ip6 => {
+                if (state.lookup_ip6_done) return;
+                finishVoidFuture(&state.lookup_ip6_future, state.io);
+                state.lookup_ip6_done = true;
+            },
+        }
+        if (lookup_error) |err| state.last_lookup_error = err;
+    }
+
+    fn finishAttempt(state: *HappyEyeballsState, id: u64) bool {
+        for (&state.active) |*maybe_attempt| {
+            const attempt = maybe_attempt.* orelse continue;
+            if (attempt.id != id) continue;
+            var future = attempt.future;
+            maybe_attempt.* = null;
+            state.active_count -= 1;
+            future.await(state.io);
+            return true;
+        }
+        return false;
+    }
+
+    fn discardOldestAttempt(state: *HappyEyeballsState) void {
+        var oldest_index: ?usize = null;
+        var oldest_order: u64 = std.math.maxInt(u64);
+        for (state.active, 0..) |maybe_attempt, index| {
+            const attempt = maybe_attempt orelse continue;
+            if (attempt.order < oldest_order) {
+                oldest_order = attempt.order;
+                oldest_index = index;
+            }
+        }
+        const index = oldest_index orelse return;
+        var attempt = state.active[index].?;
+        state.active[index] = null;
+        state.active_count -= 1;
+        attempt.future.cancel(state.io);
+    }
+
+    fn scheduleTimer(
+        state: *HappyEyeballsState,
+        future: *?VoidFuture,
+        generation: *u64,
+        kind: TimerKind,
+        timeout: Io.Timeout,
+    ) void {
+        cancelVoidFuture(future, state.io);
+        generation.* +%= 1;
+        future.* = state.io.async(publishTimer, .{
+            state.io,
+            state.events,
+            kind,
+            generation.*,
+            timeout,
+        });
+    }
+
+    fn consumeTimer(state: *HappyEyeballsState, kind: TimerKind, generation: u64) bool {
+        switch (kind) {
+            .resolution => {
+                if (generation != state.resolution_generation) return false;
+                finishVoidFuture(&state.resolution_timer, state.io);
+            },
+            .pace => {
+                if (generation != state.pace_generation) return false;
+                finishVoidFuture(&state.pace_timer, state.io);
+            },
+            .deadline => {
+                if (generation != state.deadline_generation) return false;
+                finishVoidFuture(&state.deadline_timer, state.io);
+            },
+        }
+        return true;
+    }
+
+    fn launchNext(state: *HappyEyeballsState) bool {
+        const address = state.addresses.popNext(&state.next_family) orelse return false;
+        cancelVoidFuture(&state.resolution_timer, state.io);
+        state.resolution_wait_elapsed = false;
+        cancelVoidFuture(&state.pace_timer, state.io);
+
+        if (state.active_count == happy_eyeballs_max_active_attempts) state.discardOldestAttempt();
+
+        const id = state.next_attempt_id;
+        state.next_attempt_id +%= 1;
+        const order = state.next_attempt_order;
+        state.next_attempt_order +%= 1;
+        const future = state.io.async(runConnectionAttempt, .{
+            state.io,
+            state.events,
+            id,
+            address,
+            state.connect_options,
+            state.connection_backend,
+        });
+        for (&state.active) |*maybe_attempt| {
+            if (maybe_attempt.* != null) continue;
+            maybe_attempt.* = .{ .id = id, .order = order, .future = future };
+            state.active_count += 1;
+            break;
+        } else unreachable;
+
+        if (!state.started) {
+            state.started = true;
+            if (state.overall_timeout != .none) {
+                state.scheduleTimer(
+                    &state.deadline_timer,
+                    &state.deadline_generation,
+                    .deadline,
+                    state.overall_timeout.toDeadline(state.io),
+                );
+            }
+        }
+
+        state.immediate_next = false;
+        const now = Io.Timestamp.now(state.io, .awake);
+        const next_launch = now.addDuration(Io.Duration.fromMilliseconds(happy_eyeballs_connection_delay_ms));
+        state.next_launch = next_launch;
+        if (state.addresses.hasPending()) {
+            state.scheduleTimer(
+                &state.pace_timer,
+                &state.pace_generation,
+                .pace,
+                .{ .deadline = next_launch.withClock(.awake) },
+            );
+        }
+        return true;
+    }
+
+    /// Advances scheduling until another resolver, timer, or connection event
+    /// is needed. A definitive connection failure sets `immediate_next`, while
+    /// unanswered attempts remain open and are paced 200 ms apart.
+    fn drive(state: *HappyEyeballsState) void {
+        if (!state.started) {
+            const preferred = preferredFamily(state.policy);
+            if (state.addresses.hasFamily(preferred)) {
+                _ = state.launchNext();
+                return;
+            }
+
+            const alternate = otherFamily(preferred);
+            if (!state.addresses.hasFamily(alternate)) return;
+            if (state.lookupDone(preferred) or state.resolution_wait_elapsed) {
+                _ = state.launchNext();
+                return;
+            }
+            if (state.resolution_timer == null) {
+                state.scheduleTimer(
+                    &state.resolution_timer,
+                    &state.resolution_generation,
+                    .resolution,
+                    .{ .duration = .{
+                        .raw = Io.Duration.fromMilliseconds(happy_eyeballs_resolution_delay_ms),
+                        .clock = .awake,
+                    } },
+                );
+            }
+            return;
+        }
+
+        if (!state.addresses.hasPending()) {
+            cancelVoidFuture(&state.pace_timer, state.io);
+            return;
+        }
+        if (state.immediate_next or state.active_count == 0) {
+            _ = state.launchNext();
+            return;
+        }
+
+        const next_launch = state.next_launch orelse unreachable;
+        const now = Io.Timestamp.now(state.io, .awake);
+        if (now.nanoseconds >= next_launch.nanoseconds) {
+            _ = state.launchNext();
+            return;
+        }
+        if (state.pace_timer == null) {
+            state.scheduleTimer(
+                &state.pace_timer,
+                &state.pace_generation,
+                .pace,
+                .{ .deadline = next_launch.withClock(.awake) },
+            );
+        }
+    }
+
+    fn terminalError(state: *const HappyEyeballsState) ?HostName.ConnectError {
+        if (!state.allLookupsDone() or state.addresses.hasPending() or state.active_count != 0) return null;
+        if (state.last_connect_error) |err| return err;
+        if (state.last_lookup_error) |err| return err;
+        return error.NoAddressReturned;
+    }
+};
+
+/// Uses Zig's native A and AAAA resolver queries, consumes their results as
+/// they arrive, and applies libcurl's per-address Happy Eyeballs pacing.
 fn connectHost(
     host: HostName,
     io: Io,
@@ -1644,177 +1986,336 @@ fn connectHost(
     policy: AddressFamilyPolicy,
     options: IpAddress.ConnectOptions,
 ) HostName.ConnectError!Stream {
-    const resolved = try resolveSystem(host, port, policy);
-
-    var result_buffer: [3]FamilyRace = undefined;
-    var select = Io.Select(FamilyRace).init(io, &result_buffer);
-
-    // The threaded POSIX backend does not implement native connect timeouts.
-    // Keep the socket options timeout-free and apply one deadline to the
-    // complete post-resolution address-family race instead.
-    var connect_options = options;
-    connect_options.timeout = .none;
-
-    const use_ip4 = policy != .ipv6_only and resolved.ip4_len != 0;
-    const use_ip6 = policy != .ipv4_only and resolved.ip6_len != 0;
-    var remaining_families: usize = 0;
-    if (use_ip4) {
-        select.async(.ip4, connectFamily, .{ io, resolved.ip4Slice(), connect_options });
-        remaining_families += 1;
-    }
-    if (use_ip6) {
-        if (use_ip4) {
-            select.async(.ip6, connectFamilyDelayed, .{ io, resolved.ip6Slice(), connect_options });
-        } else {
-            select.async(.ip6, connectFamily, .{ io, resolved.ip6Slice(), connect_options });
-        }
-        remaining_families += 1;
-    }
-    if (remaining_families == 0) return error.NoAddressReturned;
-
-    const has_timeout = options.timeout != .none;
-    if (has_timeout) {
-        select.async(.timeout, waitForConnectTimeout, .{ io, options.timeout });
-    }
-
-    // Cancellation interrupts a blocked POSIX connect in Zig's threaded I/O
-    // backend, so a successful IPv4 connection does not wait for the kernel's
-    // IPv6 SYN timeout. Close a stream if the losing task completed first.
-    defer while (select.cancel()) |remaining| closeFamilyRace(io, remaining);
-
-    var last_error: ?HostName.ConnectError = null;
-    while (remaining_families != 0) {
-        const completed = try select.await();
-        const result = switch (completed) {
-            .ip4 => |value| result: {
-                remaining_families -= 1;
-                break :result value;
-            },
-            .ip6 => |value| result: {
-                remaining_families -= 1;
-                break :result value;
-            },
-            .timeout => |value| {
-                try value;
-                return error.Timeout;
-            },
-        };
-        if (result) |stream| {
-            return stream;
-        } else |err| {
-            if (err == error.Canceled) return err;
-            last_error = err;
-        }
-    }
-    return last_error orelse error.UnknownHostName;
+    return connectHostWithBackend(host, io, port, policy, options, .{});
 }
 
-fn connectFamilyDelayed(
+fn connectHostWithBackend(
+    host: HostName,
     io: Io,
-    addresses: []const IpAddress,
+    port: u16,
+    policy: AddressFamilyPolicy,
     options: IpAddress.ConnectOptions,
-) FamilyResult {
-    io.sleep(Io.Duration.fromMilliseconds(200), .awake) catch |err| return err;
-    return connectFamily(io, addresses, options);
+    connection_backend: ConnectionBackend,
+) HostName.ConnectError!Stream {
+    var event_buffer: [happy_eyeballs_event_capacity]HappyEyeballsEvent = undefined;
+    var events: EventQueue = .init(&event_buffer);
+    var state: HappyEyeballsState = .initWithBackend(io, &events, policy, options, connection_backend);
+    defer state.deinit();
+
+    if (policy != .ipv6_only) {
+        state.lookup_ip4_future = io.async(resolveFamily, .{ host, io, port, .ip4, &events });
+    }
+    if (policy != .ipv4_only) {
+        state.lookup_ip6_future = io.async(resolveFamily, .{ host, io, port, .ip6, &events });
+    }
+
+    while (true) {
+        const event = events.getOne(io) catch |err| switch (err) {
+            error.Canceled => |canceled| return canceled,
+            error.Closed => return error.Unexpected,
+        };
+        switch (event) {
+            .address => |address| state.addresses.append(address),
+            .lookup_done => |done| state.finishLookup(done.family, done.err),
+            .connection => |connection| {
+                if (!state.finishAttempt(connection.id)) {
+                    closeConnectionResult(io, connection.result);
+                    continue;
+                }
+                if (connection.result) |stream| {
+                    return stream;
+                } else |err| {
+                    if (isFatalConnectError(err)) return err;
+                    state.last_connect_error = err;
+                    state.immediate_next = true;
+                }
+            },
+            .timer => |timer| {
+                if (!state.consumeTimer(timer.kind, timer.generation)) continue;
+                switch (timer.kind) {
+                    .resolution => state.resolution_wait_elapsed = true,
+                    .pace => {},
+                    .deadline => return error.Timeout,
+                }
+            },
+        }
+
+        state.drive();
+        if (state.terminalError()) |err| return err;
+    }
 }
 
-fn closeFamilyRace(io: Io, completed: FamilyRace) void {
-    const result = switch (completed) {
-        .ip4 => |value| value,
-        .ip6 => |value| value,
-        .timeout => return,
+fn preferredFamily(policy: AddressFamilyPolicy) AddressFamily {
+    return switch (policy) {
+        .happy_eyeballs, .ipv6_only => .ip6,
+        .prefer_ipv4, .ipv4_only => .ip4,
     };
+}
+
+fn otherFamily(family: AddressFamily) AddressFamily {
+    return switch (family) {
+        .ip4 => .ip6,
+        .ip6 => .ip4,
+    };
+}
+
+fn cancelVoidFuture(maybe_future: *?VoidFuture, io: Io) void {
+    if (maybe_future.*) |*future| future.cancel(io);
+    maybe_future.* = null;
+}
+
+fn finishVoidFuture(maybe_future: *?VoidFuture, io: Io) void {
+    if (maybe_future.*) |*future| future.await(io);
+    maybe_future.* = null;
+}
+
+fn publishTimer(
+    io: Io,
+    events: *EventQueue,
+    kind: TimerKind,
+    generation: u64,
+    timeout: Io.Timeout,
+) void {
+    timeout.sleep(io) catch return;
+    events.putOne(io, .{ .timer = .{ .kind = kind, .generation = generation } }) catch {};
+}
+
+fn resolveFamily(
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: AddressFamily,
+    events: *EventQueue,
+) void {
+    var canonical_name_buffer: [HostName.max_len]u8 = undefined;
+    var lookup_buffer: [max_resolved_addresses_per_family]HostName.LookupResult = undefined;
+    var lookup_queue: Io.Queue(HostName.LookupResult) = .init(&lookup_buffer);
+    var lookup_future = io.async(HostName.lookup, .{ host, io, &lookup_queue, .{
+        .port = port,
+        .family = family,
+        .canonical_name_buffer = &canonical_name_buffer,
+    } });
+    defer lookup_future.cancel(io) catch {};
+
+    while (lookup_queue.getOne(io)) |result| switch (result) {
+        .address => |address| events.putOne(io, .{ .address = address }) catch return,
+        .canonical_name => {},
+    } else |err| switch (err) {
+        error.Canceled => return,
+        error.Closed => {},
+    }
+
+    lookup_future.await(io) catch |err| {
+        if (err == error.Canceled) return;
+        events.putOne(io, .{ .lookup_done = .{ .family = family, .err = err } }) catch {};
+        return;
+    };
+    events.putOne(io, .{ .lookup_done = .{ .family = family, .err = null } }) catch {};
+}
+
+fn runConnectionAttempt(
+    io: Io,
+    events: *EventQueue,
+    id: u64,
+    address: IpAddress,
+    options: IpAddress.ConnectOptions,
+    connection_backend: ConnectionBackend,
+) void {
+    const stream = connection_backend.connect(address, io, options) catch |err| {
+        if (err == error.Canceled) return;
+        const result: ConnectionResult = err;
+        events.putOne(io, .{ .connection = .{ .id = id, .result = result } }) catch {};
+        return;
+    };
+    const result: ConnectionResult = stream;
+    events.putOne(io, .{ .connection = .{ .id = id, .result = result } }) catch {
+        stream.close(io);
+    };
+}
+
+fn closeEventStream(io: Io, event: HappyEyeballsEvent) void {
+    switch (event) {
+        .connection => |connection| closeConnectionResult(io, connection.result),
+        else => {},
+    }
+}
+
+fn closeConnectionResult(io: Io, result: ConnectionResult) void {
     if (result) |stream| stream.close(io) else |_| {}
 }
 
-fn waitForConnectTimeout(io: Io, timeout: Io.Timeout) Io.Cancelable!void {
-    return timeout.sleep(io);
+fn isFatalConnectError(err: IpAddress.ConnectError) bool {
+    return switch (err) {
+        error.SystemResources,
+        error.OptionUnsupported,
+        error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded,
+        error.ProtocolUnsupportedBySystem,
+        error.SocketModeUnsupported,
+        error.Unexpected,
+        => true,
+        else => false,
+    };
 }
 
-fn connectFamily(
-    io: Io,
-    addresses: []const IpAddress,
-    options: IpAddress.ConnectOptions,
-) HostName.ConnectError!Stream {
-    if (addresses.len == 0) return error.NoAddressReturned;
-
-    var connect_many_buffer: [32]IpAddress.ConnectError!Stream = undefined;
-    var connect_many_queue: Io.Queue(IpAddress.ConnectError!Stream) = .init(&connect_many_buffer);
-
-    var connect_many = io.async(connectManyAddresses, .{
-        io,
-        addresses,
-        &connect_many_queue,
-        options,
-    });
-    defer {
-        connect_many.cancel(io) catch {};
-        while (connect_many_queue.getOneUncancelable(io)) |loser| {
-            if (loser) |stream| stream.close(io) else |_| {}
-        } else |err| switch (err) {
-            error.Closed => {},
-        }
-    }
-
-    var ip_connect_error: ?IpAddress.ConnectError = null;
-    while (connect_many_queue.getOne(io)) |result| {
-        if (result) |stream| {
-            return stream;
-        } else |err| switch (err) {
-            error.Canceled => unreachable,
-            error.SystemResources,
-            error.OptionUnsupported,
-            error.ProcessFdQuotaExceeded,
-            error.SystemFdQuotaExceeded,
-            => |fatal| return fatal,
-            error.WouldBlock => return error.Unexpected,
-            else => |connection_error| ip_connect_error = connection_error,
-        }
-    } else |err| switch (err) {
-        error.Canceled => |canceled| return canceled,
-        error.Closed => {
-            try connect_many.await(io);
-            return ip_connect_error orelse error.UnknownHostName;
-        },
-    }
-}
-
-fn connectManyAddresses(
-    io: Io,
-    addresses: []const IpAddress,
-    results: *Io.Queue(IpAddress.ConnectError!Stream),
-    options: IpAddress.ConnectOptions,
-) Io.Cancelable!void {
-    defer results.close(io);
-
-    var group: Io.Group = .init;
-    defer group.cancel(io);
-
-    for (addresses) |address| {
-        group.async(io, enqueueFamilyConnection, .{
-            address,
-            io,
-            results,
-            options,
-        });
-    }
-    return group.await(io);
-}
-
-fn enqueueFamilyConnection(
+/// The production downloader uses `Io.Threaded` on Linux. Owning a
+/// nonblocking descriptor per attempt lets the scheduler cancel losers without
+/// waiting for a kernel TCP timeout. Other targets retain Zig's portable
+/// connector while using the same Happy Eyeballs coordinator.
+fn connectAddressNonBlocking(
     address: IpAddress,
     io: Io,
-    queue: *Io.Queue(IpAddress.ConnectError!Stream),
     options: IpAddress.ConnectOptions,
-) Io.Cancelable!void {
-    const result = address.connect(io, options) catch |err| switch (err) {
-        error.Canceled => |canceled| return canceled,
-        else => |connection_error| connection_error,
+) IpAddress.ConnectError!Stream {
+    if (comptime builtin.os.tag == .linux) return connectAddressPosix(address, io, options);
+    return address.connect(io, options);
+}
+
+fn connectAddressPosix(
+    address: IpAddress,
+    io: Io,
+    options: IpAddress.ConnectOptions,
+) IpAddress.ConnectError!Stream {
+    try io.checkCancel();
+    const family = Io.Threaded.posixAddressFamily(&address);
+    const mode, const protocol = try Io.Threaded.posixSocketModeProtocol(family, options.mode, options.protocol);
+    const flags: u32 = mode | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+
+    const socket_fd: posix.socket_t = while (true) {
+        const rc = posix.system.socket(family, flags, protocol);
+        switch (posix.errno(rc)) {
+            .SUCCESS => break @intCast(rc),
+            .INTR => {
+                try io.checkCancel();
+                continue;
+            },
+            .ACCES, .PERM => return error.AccessDenied,
+            .AFNOSUPPORT => return error.AddressFamilyUnsupported,
+            .INVAL => return error.ProtocolUnsupportedBySystem,
+            .MFILE => return error.ProcessFdQuotaExceeded,
+            .NFILE => return error.SystemFdQuotaExceeded,
+            .NOBUFS, .NOMEM => return error.SystemResources,
+            .PROTONOSUPPORT => return error.ProtocolUnsupportedByAddressFamily,
+            .PROTOTYPE => return error.SocketModeUnsupported,
+            else => return error.Unexpected,
+        }
     };
-    errdefer if (result) |stream| stream.close(io) else |_| {};
-    queue.putOne(io, result) catch |err| switch (err) {
-        error.Canceled => |canceled| return canceled,
-        error.Closed => unreachable,
+    errdefer closeSocketFd(io, socket_fd, address);
+
+    var storage: Io.Threaded.PosixAddress = undefined;
+    const address_len = Io.Threaded.addressToPosix(&address, &storage);
+    connect: while (true) {
+        try io.checkCancel();
+        switch (posix.errno(posix.system.connect(socket_fd, &storage.any, address_len))) {
+            .SUCCESS, .ISCONN => break :connect,
+            .INTR => continue,
+            .AGAIN, .INPROGRESS, .ALREADY => {},
+            else => |err| return mapConnectErrno(err),
+        }
+
+        var poll_fd: posix.pollfd = .{
+            .fd = socket_fd,
+            .events = posix.POLL.OUT | posix.POLL.ERR | posix.POLL.HUP,
+            .revents = 0,
+        };
+        while (true) {
+            try io.checkCancel();
+            poll_fd.revents = 0;
+            const poll_rc = posix.system.poll(@ptrCast(&poll_fd), 1, happy_eyeballs_poll_interval_ms);
+            switch (posix.errno(poll_rc)) {
+                .SUCCESS => if (poll_rc == 0) continue,
+                .INTR => continue,
+                .NOMEM => return error.SystemResources,
+                else => return error.Unexpected,
+            }
+            if ((poll_fd.revents & posix.POLL.NVAL) != 0) return error.Unexpected;
+            break;
+        }
+
+        var socket_error: c_int = 0;
+        var socket_error_len: posix.socklen_t = @sizeOf(c_int);
+        while (true) {
+            try io.checkCancel();
+            const rc = posix.system.getsockopt(
+                socket_fd,
+                posix.SOL.SOCKET,
+                posix.SO.ERROR,
+                @ptrCast(&socket_error),
+                &socket_error_len,
+            );
+            switch (posix.errno(rc)) {
+                .SUCCESS => break,
+                .INTR => continue,
+                else => return error.Unexpected,
+            }
+        }
+        const connect_error: posix.E = @enumFromInt(socket_error);
+        switch (connect_error) {
+            .SUCCESS, .ISCONN => break :connect,
+            .INPROGRESS, .ALREADY => continue :connect,
+            else => return mapConnectErrno(connect_error),
+        }
+    }
+
+    try setSocketBlocking(io, socket_fd);
+    var local_storage: Io.Threaded.PosixAddress = undefined;
+    var local_len: posix.socklen_t = @sizeOf(Io.Threaded.PosixAddress);
+    while (true) {
+        try io.checkCancel();
+        switch (posix.errno(posix.system.getsockname(socket_fd, &local_storage.any, &local_len))) {
+            .SUCCESS => break,
+            .INTR => continue,
+            .NOBUFS => return error.SystemResources,
+            else => return error.Unexpected,
+        }
+    }
+    return .{ .socket = .{
+        .handle = socket_fd,
+        .address = Io.Threaded.addressFromPosix(&local_storage),
+    } };
+}
+
+fn setSocketBlocking(io: Io, socket_fd: posix.socket_t) IpAddress.ConnectError!void {
+    var file_flags: usize = while (true) {
+        try io.checkCancel();
+        const rc = posix.system.fcntl(socket_fd, posix.F.GETFL, @as(usize, 0));
+        switch (posix.errno(rc)) {
+            .SUCCESS => break @intCast(rc),
+            .INTR => continue,
+            else => return error.Unexpected,
+        }
+    };
+    file_flags &= ~(@as(usize, 1) << @bitOffsetOf(posix.O, "NONBLOCK"));
+    while (true) {
+        try io.checkCancel();
+        switch (posix.errno(posix.system.fcntl(socket_fd, posix.F.SETFL, file_flags))) {
+            .SUCCESS => return,
+            .INTR => continue,
+            else => return error.Unexpected,
+        }
+    }
+}
+
+fn closeSocketFd(io: Io, socket_fd: posix.socket_t, address: IpAddress) void {
+    const socket: Socket = .{ .handle = socket_fd, .address = address };
+    socket.close(io);
+}
+
+fn mapConnectErrno(err: posix.E) IpAddress.ConnectError {
+    return switch (err) {
+        .ADDRNOTAVAIL => error.AddressUnavailable,
+        .AFNOSUPPORT => error.AddressFamilyUnsupported,
+        .AGAIN, .INPROGRESS => error.WouldBlock,
+        .ALREADY => error.ConnectionPending,
+        .CONNREFUSED => error.ConnectionRefused,
+        .CONNRESET => error.ConnectionResetByPeer,
+        .HOSTUNREACH => error.HostUnreachable,
+        .NETUNREACH => error.NetworkUnreachable,
+        .TIMEDOUT => error.Timeout,
+        .ACCES, .PERM => error.AccessDenied,
+        .NETDOWN => error.NetworkDown,
+        .NOBUFS, .NOMEM => error.SystemResources,
+        else => error.Unexpected,
     };
 }
 
@@ -2204,17 +2705,192 @@ test {
     _ = Response;
 }
 
-test "system resolver uses the host database and enforces ipv4-only policy" {
-    if (!builtin.link_libc) return error.SkipZigTest;
+test "Zig resolver uses the host database for an IPv4 query" {
+    const host = try HostName.init("localhost");
+    var event_buffer: [happy_eyeballs_event_capacity]HappyEyeballsEvent = undefined;
+    var events: EventQueue = .init(&event_buffer);
+    defer events.close(testing.io);
+
+    resolveFamily(host, testing.io, 443, .ip4, &events);
+    var drained: [happy_eyeballs_event_capacity]HappyEyeballsEvent = undefined;
+    const count = try events.get(testing.io, &drained, 0);
+    var address_count: usize = 0;
+    var lookup_completed = false;
+    for (drained[0..count]) |event| switch (event) {
+        .address => |address| {
+            try testing.expect(address == .ip4);
+            try testing.expectEqual(@as(u16, 443), address.getPort());
+            address_count += 1;
+        },
+        .lookup_done => |done| {
+            try testing.expectEqual(AddressFamily.ip4, done.family);
+            try testing.expectEqual(@as(?HostName.LookupError, null), done.err);
+            lookup_completed = true;
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expect(address_count > 0);
+    try testing.expect(lookup_completed);
+}
+
+test "resolved addresses alternate in curl Happy Eyeballs order" {
+    var resolved: ResolvedAddresses = .{};
+    resolved.append(try IpAddress.parse("::1", 80));
+    resolved.append(try IpAddress.parse("::2", 80));
+    resolved.append(try IpAddress.parse("127.0.0.1", 80));
+    resolved.append(try IpAddress.parse("127.0.0.2", 80));
+
+    var next_family: AddressFamily = .ip6;
+    try testing.expect((resolved.popNext(&next_family) orelse return error.TestUnexpectedResult) == .ip6);
+    try testing.expect((resolved.popNext(&next_family) orelse return error.TestUnexpectedResult) == .ip4);
+    try testing.expect((resolved.popNext(&next_family) orelse return error.TestUnexpectedResult) == .ip6);
+    try testing.expect((resolved.popNext(&next_family) orelse return error.TestUnexpectedResult) == .ip4);
+    try testing.expect(resolved.popNext(&next_family) == null);
+}
+
+const BlackholeTestContext = struct {
+    ip6_started_ms: std.atomic.Value(i64) = .init(-1),
+    ip4_started_ms: std.atomic.Value(i64) = .init(-1),
+    ip6_canceled: std.atomic.Value(bool) = .init(false),
+};
+
+fn blackholeIp6TestConnect(
+    raw_context: ?*anyopaque,
+    address: IpAddress,
+    io: Io,
+    options: IpAddress.ConnectOptions,
+) IpAddress.ConnectError!Stream {
+    const context: *BlackholeTestContext = @ptrCast(@alignCast(raw_context.?));
+    const now_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
+    switch (address) {
+        .ip4 => {
+            context.ip4_started_ms.store(now_ms, .release);
+            return connectAddressNonBlocking(address, io, options);
+        },
+        .ip6 => {
+            context.ip6_started_ms.store(now_ms, .release);
+            io.sleep(Io.Duration.fromSeconds(10), .awake) catch |err| {
+                if (err == error.Canceled) context.ip6_canceled.store(true, .release);
+                return err;
+            };
+            return error.Timeout;
+        },
+    }
+}
+
+const PendingConnectTestContext = struct {
+    canceled: std.atomic.Value(u32) = .init(0),
+};
+
+fn pendingTestConnect(
+    raw_context: ?*anyopaque,
+    address: IpAddress,
+    io: Io,
+    options: IpAddress.ConnectOptions,
+) IpAddress.ConnectError!Stream {
+    _ = address;
+    _ = options;
+    const context: *PendingConnectTestContext = @ptrCast(@alignCast(raw_context.?));
+    io.sleep(Io.Duration.fromSeconds(10), .awake) catch |err| {
+        if (err == error.Canceled) _ = context.canceled.fetchAdd(1, .acq_rel);
+        return err;
+    };
+    return error.Timeout;
+}
+
+test "Happy Eyeballs keeps at most six connection attempts active" {
+    var threaded: Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var event_buffer: [happy_eyeballs_event_capacity]HappyEyeballsEvent = undefined;
+    var events: EventQueue = .init(&event_buffer);
+    var context: PendingConnectTestContext = .{};
+    var state: HappyEyeballsState = .initWithBackend(io, &events, .ipv6_only, .{
+        .mode = .stream,
+    }, .{
+        .context = &context,
+        .connectFn = pendingTestConnect,
+    });
+    defer state.deinit();
+
+    inline for (.{ "2001:db8::1", "2001:db8::2", "2001:db8::3", "2001:db8::4", "2001:db8::5", "2001:db8::6", "2001:db8::7" }) |text| {
+        state.addresses.append(try IpAddress.parse(text, 443));
+    }
+    for (0..7) |_| try testing.expect(state.launchNext());
+
+    try testing.expectEqual(@as(usize, happy_eyeballs_max_active_attempts), state.active_count);
+    try testing.expectEqual(@as(u32, 1), context.canceled.load(.acquire));
+}
+
+fn acceptOneTestConnection(server: *Io.net.Server, io: Io) Io.net.Server.AcceptError!void {
+    var stream = try server.accept(io);
+    defer stream.close(io);
+}
+
+test "Happy Eyeballs reaches an IPv4 localhost server through the Zig resolver" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    var threaded: Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var listen_address = try IpAddress.parse("127.0.0.1", 0);
+    var server = try listen_address.listen(io, .{});
+    defer server.deinit(io);
+
+    var accept_future = io.async(acceptOneTestConnection, .{ &server, io });
+    defer accept_future.cancel(io) catch {};
 
     const host = try HostName.init("localhost");
-    const resolved = try resolveSystem(host, 443, .ipv4_only);
-    try testing.expect(resolved.ip4_len > 0);
-    try testing.expectEqual(@as(usize, 0), resolved.ip6_len);
-    for (resolved.ip4Slice()) |address| {
-        try testing.expect(address == .ip4);
-        try testing.expectEqual(@as(u16, 443), address.getPort());
-    }
+    var stream = try connectHost(host, io, server.socket.address.getPort(), .happy_eyeballs, .{
+        .mode = .stream,
+        .timeout = .{ .duration = .{
+            .raw = Io.Duration.fromSeconds(1),
+            .clock = .awake,
+        } },
+    });
+    stream.close(io);
+    try accept_future.await(io);
+}
+
+test "Happy Eyeballs starts IPv4 after 200 ms when IPv6 blackholes" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    var threaded: Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var listen_address = try IpAddress.parse("127.0.0.1", 0);
+    var server = try listen_address.listen(io, .{});
+    defer server.deinit(io);
+
+    var accept_future = io.async(acceptOneTestConnection, .{ &server, io });
+    defer accept_future.cancel(io) catch {};
+
+    var context: BlackholeTestContext = .{};
+    const host = try HostName.init("localhost");
+    var stream = try connectHostWithBackend(host, io, server.socket.address.getPort(), .happy_eyeballs, .{
+        .mode = .stream,
+        .timeout = .{ .duration = .{
+            .raw = Io.Duration.fromSeconds(1),
+            .clock = .awake,
+        } },
+    }, .{
+        .context = &context,
+        .connectFn = blackholeIp6TestConnect,
+    });
+    stream.close(io);
+    try accept_future.await(io);
+
+    const ip6_started_ms = context.ip6_started_ms.load(.acquire);
+    const ip4_started_ms = context.ip4_started_ms.load(.acquire);
+    try testing.expect(ip6_started_ms >= 0);
+    try testing.expect(ip4_started_ms >= 0);
+    const fallback_delay_ms = ip4_started_ms - ip6_started_ms;
+    try testing.expect(fallback_delay_ms >= 150);
+    try testing.expect(fallback_delay_ms < 900);
+    try testing.expect(context.ip6_canceled.load(.acquire));
 }
 
 test "resolved addresses remain partitioned by family" {
@@ -2222,8 +2898,8 @@ test "resolved addresses remain partitioned by family" {
     resolved.append(try IpAddress.parse("127.0.0.1", 80));
     resolved.append(try IpAddress.parse("::1", 80));
 
-    try testing.expectEqual(@as(usize, 1), resolved.ip4_len);
-    try testing.expectEqual(@as(usize, 1), resolved.ip6_len);
+    try testing.expectEqual(@as(usize, 1), resolved.ip4.len);
+    try testing.expectEqual(@as(usize, 1), resolved.ip6.len);
     try testing.expect(resolved.ip4Slice()[0] == .ip4);
     try testing.expect(resolved.ip6Slice()[0] == .ip6);
 }

@@ -51,9 +51,10 @@ pub const DownloadConfiguration = struct {
     response_header_timeout_in_seconds: u32 = 30,
     /// Bounds each individual body read. Receiving bytes resets the deadline.
     body_idle_timeout_in_seconds: u32 = 30,
-    /// Defaults to IPv4-first dual-stack operation. `ipv4_only` is an explicit
+    /// Defaults to curl-style IPv6-first Happy Eyeballs. `prefer_ipv4` reverses
+    /// the preference without disabling IPv6, while `ipv4_only` is an explicit
     /// escape hatch for networks or VPNs that advertise but blackhole IPv6.
-    address_family_policy: AddressFamilyPolicy = .prefer_ipv4,
+    address_family_policy: AddressFamilyPolicy = .happy_eyeballs,
     max_retries: u8 = 3,
     retry_delay_secs: u32 = 1,
     verify_ssl: bool = true,
@@ -779,7 +780,7 @@ test "DownloadConfiguration.default() returns correct default values" {
     try std.testing.expectEqual(@as(u32, 30), config.timeout_in_seconds);
     try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
     try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
-    try std.testing.expectEqual(AddressFamilyPolicy.prefer_ipv4, config.address_family_policy);
+    try std.testing.expectEqual(AddressFamilyPolicy.happy_eyeballs, config.address_family_policy);
     try std.testing.expectEqual(@as(u8, 3), config.max_retries);
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     try std.testing.expectEqual(true, config.verify_ssl);

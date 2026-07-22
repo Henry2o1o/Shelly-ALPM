@@ -316,8 +316,8 @@ pub fn build(b: *std.Build) void {
             "install_local_packages installs multiple archives in a DB-only transaction",
             "Manager.init applies configured libalpm options and callback contexts",
             "ALPM queries honor shared cancellation",
-            "single-server repositories receive a thirty second setup timeout",
-            "multi-mirror repositories do not use a stagger as a hard setup deadline",
+            "single-server repositories receive a three second setup timeout",
+            "multi-mirror repositories receive a one second setup timeout",
             "onDownloadEvent does not duplicate progress when a common operation is attached",
         },
     });
