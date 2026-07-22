@@ -263,6 +263,14 @@
                         <property name="active">false</property>
                     </object>
                 </child>
+                <child>
+                    <object class="GtkCheckButton" id="show_explicit_only">
+                        <property name="label" translatable="yes">Show Explicit Only</property>
+                        <property name="tooltip-text" translatable="yes">Show only explicitly installed packages</property>
+                        <signal name="toggled" handler="on_explicit_only"/>
+                        <property name="active">false</property>
+                    </object>
+                </child>
             </object>
         </property>
     </object>

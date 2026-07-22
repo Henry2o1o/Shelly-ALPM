@@ -49,11 +49,13 @@ pub const PackagePage = extern struct {
         detail_grid_hbox: *gtk.Box,
         grid_view_button: *gtk.ToggleButton,
         list_view_button: *gtk.ToggleButton,
+
         arena: ?*std.heap.ArenaAllocator,
         selected_group: [64]u8,
         selected_group_len: usize,
         generation: u64,
         show_installed_only: bool,
+        show_explicit_only: bool,
         loaded: bool,
         resolver: IconResolver,
         search_text: [256]u8,
@@ -444,6 +446,8 @@ pub const PackagePage = extern struct {
 
         if (p.show_installed_only and !pkg.isInstalled()) return 0;
 
+        if (p.show_explicit_only and !pkg.isExplicit()) return 0;
+
         if (p.search_len < 1) return 1;
 
         const needle = p.search_text[0..p.search_len];
@@ -575,9 +579,18 @@ pub const PackagePage = extern struct {
 
         const installed = icli.get_installed_packages() catch null;
         if (installed) |inst| {
-            var set: std.StringHashMapUnmanaged(void) = .empty;
-            for (inst.value) |pkg| set.put(ialloc, pkg.Name, {}) catch {};
-            for (parsed.value) |*pkg| pkg.Installed = set.contains(pkg.Name);
+            var map: std.StringHashMapUnmanaged(*const Package) = .empty;
+            for (inst.value) |*pkg| {
+                map.put(ialloc, pkg.Name, pkg) catch {};
+            }
+            for (parsed.value) |*pkg| {
+                if (map.get(pkg.Name)) |ipkg| {
+                    pkg.Installed = true;
+                    pkg.Explicit = std.mem.eql(u8, ipkg.InstallReason, "Explicit");
+                } else {
+                    pkg.Installed = false;
+                }
+            }
         }
 
         var set: std.StringHashMapUnmanaged(void) = .empty;
@@ -702,6 +715,7 @@ pub const PackagePage = extern struct {
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "install_selected", @ptrCast(&install_selected));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_grid_view_toggled", @ptrCast(&on_grid_view_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_list_view_toggled", @ptrCast(&on_list_view_toggled));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_explicit_only", @ptrCast(&on_explicit_only));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_installed_only_toggled", @ptrCast(&on_installed_only_toggled));
         }
     };
@@ -735,6 +749,12 @@ pub const PackagePage = extern struct {
     fn on_installed_only_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
         const p = self.priv();
         p.show_installed_only = gtk.CheckButton.getActive(check) != 0;
+        gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+    }
+
+    fn on_explicit_only(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        p.show_explicit_only = gtk.CheckButton.getActive(check) != 0;
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 
