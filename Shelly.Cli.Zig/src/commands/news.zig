@@ -37,6 +37,14 @@ pub fn dispatch(
     return try executeWithFetcher(context, invocation, real_fetcher);
 }
 
+pub fn showUnread(context: *runtime.RuntimeContext) !u8 {
+    return executeWithFetcher(context, .{
+        .show_all = false,
+        .ui_mode = false,
+        .json = false,
+    }, real_fetcher);
+}
+
 fn executeWithFetcher(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,

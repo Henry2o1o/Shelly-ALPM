@@ -12,6 +12,7 @@ const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
 const xdg = @import("../runtime/xdg.zig");
 const spec = @import("../cli/spec.zig");
+const news = @import("news.zig");
 
 const standard_command_path = "shelly upgrade standard";
 const all_command_path = "shelly upgrade all";
@@ -594,6 +595,16 @@ fn runStandard(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
+    if (!invocation.globals.ui_mode) {
+        const result = elevation.runAsInvokingUser(
+            context,
+            &.{ "news", "standard" },
+        ) catch null;
+
+        if (result == null) {
+            _ = news.showUnread(context) catch {};
+        }
+    }
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
