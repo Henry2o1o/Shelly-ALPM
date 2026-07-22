@@ -300,13 +300,13 @@ pub const libalpm = struct {
         }
 
         pub fn build_date(self: Package) ?time.Time {
-            return time.Time.fromUnix(alpm.alpm_pkg_get_builddate(self.ptr));
+            return time.Time.fromUnix(alpm.alpm_pkg_get_builddate(self.ptr), 0);
         }
 
         pub fn install_date(self: Package) ?time.Time {
-            const date: ?alpm.alpm_time_t = alpm.alpm_pkg_get_installdate(self.ptr);
-            if (date == null) return null;
-            return time.Time.fromUnix(date.?);
+            const date = alpm.alpm_pkg_get_installdate(self.ptr);
+            if (date == 0) return null;
+            return time.Time.fromUnix(date, 0);
         }
 
         pub fn optional_for(self: Package) ListIterator([:0]const u8, asStr) {
@@ -345,6 +345,17 @@ pub const libalpm = struct {
         download_size_value: i64,
         install_size_value: i64,
         reason_value: PackageReason,
+        replaces_value: [][:0]u8,
+        licenses_value: [][:0]u8,
+        groups_value: [][:0]u8,
+        provides_value: [][:0]u8,
+        depends_value: [][:0]u8,
+        optional_depends_value: [][:0]u8,
+        conflicts_value: [][:0]u8,
+        required_by_value: [][:0]u8,
+        optional_for_value: [][:0]u8,
+        build_date_value: i64,
+        install_date_value: ?i64,
 
         pub fn init(allocator: std.mem.Allocator, package: Package) std.mem.Allocator.Error!OwnedPackage {
             const name_value = try allocator.dupeZ(u8, package.name() orelse "");
@@ -365,6 +376,29 @@ pub const libalpm = struct {
             const file_name_value = try allocator.dupeZ(u8, package.file_name());
             errdefer allocator.free(file_name_value);
 
+            const replaces_value = try dupeDependencies(allocator, package.replaces());
+            errdefer freeStrings(allocator, replaces_value);
+            const licenses_value = try dupeStrings(allocator, package.licenses());
+            errdefer freeStrings(allocator, licenses_value);
+            const groups_value = try dupeStrings(allocator, package.groups());
+            errdefer freeStrings(allocator, groups_value);
+            const provides_value = try dupeDependencies(allocator, package.provides());
+            errdefer freeStrings(allocator, provides_value);
+            const depends_value = try dupeDependencies(allocator, package.depends());
+            errdefer freeStrings(allocator, depends_value);
+            const optional_depends_value = try dupeDependencies(allocator, package.optional_depends());
+            errdefer freeStrings(allocator, optional_depends_value);
+            const conflicts_value = try dupeDependencies(allocator, package.conflicts());
+            errdefer freeStrings(allocator, conflicts_value);
+            // Keep parity with the C# DTO, whose ToDto implementation currently
+            // leaves these two reverse-dependency collections empty. Computing
+            // them for every repository package also turns a search into an
+            // expensive dependency-graph walk.
+            const required_by_value = try allocator.alloc([:0]u8, 0);
+            errdefer freeStrings(allocator, required_by_value);
+            const optional_for_value = try allocator.alloc([:0]u8, 0);
+            errdefer freeStrings(allocator, optional_for_value);
+
             return .{
                 .name_value = name_value,
                 .version_value = version_value,
@@ -375,11 +409,61 @@ pub const libalpm = struct {
                 .download_size_value = package.download_size(),
                 .install_size_value = package.install_size(),
                 .reason_value = package.install_reason(),
+                .replaces_value = replaces_value,
+                .licenses_value = licenses_value,
+                .groups_value = groups_value,
+                .provides_value = provides_value,
+                .depends_value = depends_value,
+                .optional_depends_value = optional_depends_value,
+                .conflicts_value = conflicts_value,
+                .required_by_value = required_by_value,
+                .optional_for_value = optional_for_value,
+                .build_date_value = if (package.build_date()) |date| date.unix() else 0,
+                .install_date_value = if (package.install_date()) |date| date.unix() else null,
             };
         }
 
         fn dupeOptional(allocator: std.mem.Allocator, value: ?[:0]const u8) std.mem.Allocator.Error!?[:0]u8 {
             return if (value) |text| try allocator.dupeZ(u8, text) else null;
+        }
+
+        fn dupeStrings(allocator: std.mem.Allocator, iterator_value: anytype) std.mem.Allocator.Error![][:0]u8 {
+            var iterator = iterator_value;
+            var values: std.ArrayList([:0]u8) = .empty;
+            errdefer {
+                for (values.items) |value| allocator.free(value);
+                values.deinit(allocator);
+            }
+            while (iterator.next()) |value| {
+                const owned = try allocator.dupeZ(u8, value);
+                values.append(allocator, owned) catch |err| {
+                    allocator.free(owned);
+                    return err;
+                };
+            }
+            return values.toOwnedSlice(allocator);
+        }
+
+        fn dupeDependencies(allocator: std.mem.Allocator, iterator_value: anytype) std.mem.Allocator.Error![][:0]u8 {
+            var iterator = iterator_value;
+            var values: std.ArrayList([:0]u8) = .empty;
+            errdefer {
+                for (values.items) |value| allocator.free(value);
+                values.deinit(allocator);
+            }
+            while (iterator.next()) |dependency| {
+                const value = dependency.computed_dependency_string(allocator) orelse continue;
+                values.append(allocator, @constCast(value)) catch |err| {
+                    allocator.free(value);
+                    return err;
+                };
+            }
+            return values.toOwnedSlice(allocator);
+        }
+
+        fn freeStrings(allocator: std.mem.Allocator, values: [][:0]u8) void {
+            for (values) |value| allocator.free(value);
+            allocator.free(values);
         }
 
         pub fn deinit(self: *OwnedPackage, allocator: std.mem.Allocator) void {
@@ -389,6 +473,15 @@ pub const libalpm = struct {
             if (self.url_value) |value| allocator.free(value);
             if (self.repository_value) |value| allocator.free(value);
             allocator.free(self.file_name_value);
+            freeStrings(allocator, self.replaces_value);
+            freeStrings(allocator, self.licenses_value);
+            freeStrings(allocator, self.groups_value);
+            freeStrings(allocator, self.provides_value);
+            freeStrings(allocator, self.depends_value);
+            freeStrings(allocator, self.optional_depends_value);
+            freeStrings(allocator, self.conflicts_value);
+            freeStrings(allocator, self.required_by_value);
+            freeStrings(allocator, self.optional_for_value);
             self.* = undefined;
         }
 
@@ -435,6 +528,50 @@ pub const libalpm = struct {
 
         pub fn install_reason(self: OwnedPackage) PackageReason {
             return self.reason_value;
+        }
+
+        pub fn replaces(self: OwnedPackage) []const [:0]u8 {
+            return self.replaces_value;
+        }
+
+        pub fn licenses(self: OwnedPackage) []const [:0]u8 {
+            return self.licenses_value;
+        }
+
+        pub fn groups(self: OwnedPackage) []const [:0]u8 {
+            return self.groups_value;
+        }
+
+        pub fn provides(self: OwnedPackage) []const [:0]u8 {
+            return self.provides_value;
+        }
+
+        pub fn depends(self: OwnedPackage) []const [:0]u8 {
+            return self.depends_value;
+        }
+
+        pub fn optional_depends(self: OwnedPackage) []const [:0]u8 {
+            return self.optional_depends_value;
+        }
+
+        pub fn conflicts(self: OwnedPackage) []const [:0]u8 {
+            return self.conflicts_value;
+        }
+
+        pub fn required_by(self: OwnedPackage) []const [:0]u8 {
+            return self.required_by_value;
+        }
+
+        pub fn optional_for(self: OwnedPackage) []const [:0]u8 {
+            return self.optional_for_value;
+        }
+
+        pub fn build_date(self: OwnedPackage) i64 {
+            return self.build_date_value;
+        }
+
+        pub fn install_date(self: OwnedPackage) ?i64 {
+            return self.install_date_value;
         }
     };
 

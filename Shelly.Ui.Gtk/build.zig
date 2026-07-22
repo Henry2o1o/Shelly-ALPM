@@ -8,6 +8,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const shelly_http = b.dependency("shelly_http", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const shelly_ui_gtk = b.addModule("Shelly_Ui_Gtk", .{
         .root_source_file = b.path("src/root.zig"),
@@ -19,6 +23,8 @@ pub fn build(b: *std.Build) void {
     shelly_ui_gtk.addImport("gio2", gobject.module("gio2"));
     shelly_ui_gtk.addImport("pango1", gobject.module("pango1"));
     shelly_ui_gtk.addImport("gtk4", gobject.module("gtk4"));
+    shelly_ui_gtk.addImport("gdk4", gobject.module("gdk4"));
+    shelly_ui_gtk.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
 
     const exe = b.addExecutable(.{
         .name = "Shelly_Ui_Gtk",
@@ -31,7 +37,39 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.root_module.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
     b.installArtifact(exe);
+
+    // Compile the gresource bundle to C source.
+    const gresource = b.addSystemCommand(&.{"glib-compile-resources"});
+    gresource.addArg("--generate-source");
+    gresource.addArg("--sourcedir");
+    gresource.addDirectoryArg(b.path("src"));
+    gresource.addArg("--target");
+    const resources_c = gresource.addOutputFileArg("resources.c");
+    gresource.addFileArg(b.path("src/gresource.xml"));
+
+    gresource.addFileInput(b.path("src/style.css"));
+    gresource.addFileInput(b.path("src/ui/main_window.ui"));
+    gresource.addFileInput(b.path("src/ui/settings_page.ui"));
+    gresource.addFileInput(b.path("src/ui/flatpak/flatpak_page.ui"));
+    gresource.addFileInput(b.path("src/ui/appimage_page.ui"));
+    gresource.addFileInput(b.path("src/ui/aur_page.ui"));
+    gresource.addFileInput(b.path("src/ui/package_page.ui"));
+    gresource.addFileInput(b.path("src/ui/update_page.ui"));
+    gresource.addFileInput(b.path("src/dialog/ui/yn.ui"));
+    gresource.addFileInput(b.path("src/dialog/ui/multiselect.ui"));
+    gresource.addFileInput(b.path("src/ui/package_detail.ui"));
+    gresource.addFileInput(b.path("src/ui/transaction_page.ui"));
+    gresource.addFileInput(b.path("src/ui/flatpak/flatpak_install_view.ui"));
+    gresource.addFileInput(b.path("src/ui/flatpak/flatpak_remove_view.ui"));
+    gresource.addFileInput(b.path("src/ui/flatpak/flatpak_remotes_view.ui"));
+    gresource.addFileInput(b.path("src/ui/flatpak/flatpak_install_local.ui"));
+
+    // Link the generated resource C into the exe.
+    exe.root_module.addCSourceFile(.{ .file = resources_c });
+    exe.root_module.link_libc = true;
+    exe.root_module.linkSystemLibrary("gtk4", .{});
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

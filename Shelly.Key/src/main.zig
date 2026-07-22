@@ -15,72 +15,162 @@ fn run(init: std.process.Init) !void {
 
     switch (opts.command) {
         .help => try Shelly_Key.cli.printHelp(stdout),
-        .init => {
-            try Shelly_Key.elevate.ensureRoot(
-                init.io,
-                init.arena.allocator(),
-                args,
-                init.environ_map.get("PATH").?,
-            );
-
-            const init_path = opts.init_path;
-            try Shelly_Key.keyring.init(init.io, init_path, stdout);
+        .init => try Shelly_Key.keyring.init(
+            init.io,
+            init.arena.allocator(),
+            args,
+            init.environ_map.get("PATH").?,
+            opts.init_path,
+            stdout,
+        ),
+        .updatedb => Shelly_Key.keyring.updatedb(
+            init.io,
+            init.arena.allocator(),
+            args,
+            init.environ_map.get("PATH").?,
+            opts.gpgdir,
+            stdout,
+        ) catch |err| switch (err) {
+            error.GpgFailed => {
+                stderrPrint(init.io, "error: failed to update trust database.", .{});
+                std.process.exit(1);
+            },
+            else => return err,
         },
-        .populate => {
-            try Shelly_Key.elevate.ensureRoot(
-                init.io,
-                init.arena.allocator(),
-                args,
-                init.environ_map.get("PATH").?,
-            );
-
-            Shelly_Key.keyring.populate(
-                init.io,
-                init.arena.allocator(),
-                opts.gpgdir,
-                opts.populate_from,
-                opts.populate_keyrings,
-                stdout,
-            ) catch |err| switch (err) {
-                error.TrustdbMissing => {
-                    stderrPrint(init.io, "error: The pacman keyring is not initialized (trustdb.gpg not found).", .{});
-                    stderrPrint(init.io, "Run 'shelly-key --init' to initialize the keyring.", .{});
-                    std.process.exit(1);
-                },
-                error.NoSecretKey => {
-                    stderrPrint(init.io, "error: There is no secret key available to sign with.", .{});
-                    stderrPrint(init.io, "Use 'shelly-key --init' to generate a default secret key.", .{});
-                    std.process.exit(1);
-                },
-                error.NoKeyringsFound => {
-                    stderrPrint(init.io, "error: No keyring files exist in {s}.", .{opts.populate_from});
-                    std.process.exit(1);
-                },
-                error.MissingKeyringFile => {
-                    const base: std.Io.Dir = .cwd();
-                    for (opts.populate_keyrings) |id| {
-                        const exists = Shelly_Key.keyfiles.keyringFileExists(
-                            base,
+        .list_keys => Shelly_Key.keyring.listKeys(
+            init.io,
+            opts.gpgdir,
+            opts.key_ids,
+        ) catch |err| switch (err) {
+            error.GpgFailed => {
+                stderrPrint(init.io, "error: gpg command failed.", .{});
+                std.process.exit(1);
+            },
+            else => return err,
+        },
+        .finger => Shelly_Key.keyring.finger(
+            init.io,
+            opts.gpgdir,
+            opts.key_ids,
+        ) catch |err| switch (err) {
+            error.GpgFailed => {
+                stderrPrint(init.io, "error: gpg command failed.", .{});
+                std.process.exit(1);
+            },
+            else => return err,
+        },
+        .list_sigs => Shelly_Key.keyring.listSigs(
+            init.io,
+            opts.gpgdir,
+            opts.key_ids,
+        ) catch |err| switch (err) {
+            error.GpgFailed => {
+                stderrPrint(init.io, "error: gpg command failed.", .{});
+                std.process.exit(1);
+            },
+            else => return err,
+        },
+        .export_keys => Shelly_Key.keyring.exportKeys(
+            init.io,
+            init.arena.allocator(),
+            opts.gpgdir,
+            opts.key_ids,
+        ) catch |err| switch (err) {
+            error.GpgFailed => {
+                stderrPrint(init.io, "error: gpg command failed.", .{});
+                std.process.exit(1);
+            },
+            else => return err,
+        },
+        .lsign_key => Shelly_Key.keyring.lsignKey(
+            init.io,
+            init.arena.allocator(),
+            args,
+            init.environ_map.get("PATH").?,
+            opts.gpgdir,
+            opts.key_ids,
+            stdout,
+        ) catch |err| switch (err) {
+            error.NoTargetsSpecified => {
+                stderrPrint(init.io, "error: no targets specified.", .{});
+                std.process.exit(1);
+            },
+            error.NoSecretKey => {
+                stderrPrint(init.io, "error: There is no secret key available to sign with.", .{});
+                stderrPrint(init.io, "Use 'shelly-key --init' to generate a default secret key.", .{});
+                std.process.exit(1);
+            },
+            error.GpgFailed => {
+                stderrPrint(init.io, "error: gpg command failed.", .{});
+                std.process.exit(1);
+            },
+            else => return err,
+        },
+        .populate => Shelly_Key.keyring.populate(
+            init.io,
+            init.arena.allocator(),
+            args,
+            init.environ_map,
+            opts.gpgdir,
+            opts.populate_from,
+            opts.populate_keyrings,
+            stdout,
+        ) catch |err| switch (err) {
+            error.TrustdbMissing => {
+                stderrPrint(
+                    init.io,
+                    "error: The pacman keyring at '{s}' is not initialized.",
+                    .{opts.gpgdir},
+                );
+                stderrPrint(
+                    init.io,
+                    "Run 'shelly-key --init {s}' first.",
+                    .{opts.gpgdir},
+                );
+                std.process.exit(1);
+            },
+            error.NoSecretKey => {
+                stderrPrint(init.io, "error: There is no secret key available to sign with.", .{});
+                stderrPrint(init.io, "Use 'shelly-key --init' to generate a default secret key.", .{});
+                std.process.exit(1);
+            },
+            error.NoKeyringsFound => {
+                stderrPrint(init.io, "error: No keyring files exist in {s}.", .{opts.populate_from});
+                std.process.exit(1);
+            },
+            error.PopulateFromMissing => {
+                stderrPrint(
+                    init.io,
+                    "error: The keyring source directory '{s}' does not exist.",
+                    .{opts.populate_from},
+                );
+                stderrPrint(
+                    init.io,
+                    "Check --populate-from or install a package that ships keyring files.",
+                    .{},
+                );
+                std.process.exit(1);
+            },
+            error.MissingKeyringFile => {
+                const base: std.Io.Dir = .cwd();
+                for (opts.populate_keyrings) |id| {
+                    const exists = Shelly_Key.keyfiles.keyringFileExists(
+                        base,
+                        init.io,
+                        opts.populate_from,
+                        id,
+                    ) catch false;
+                    if (!exists) {
+                        stderrPrint(
                             init.io,
-                            opts.populate_from,
-                            id,
-                        ) catch false;
-                        if (!exists) {
-                            stderrPrint(
-                                init.io,
-                                "error: The keyring file {s}/{s}.gpg does not exist.",
-                                .{ opts.populate_from, id },
-                            );
-                        }
+                            "error: The keyring file {s}/{s}.gpg does not exist.",
+                            .{ opts.populate_from, id },
+                        );
                     }
-                    std.process.exit(1);
-                },
-                error.NotImplemented => {
-                    stderrPrint(init.io, "error: --populate pipeline is not yet implemented past validation", .{});
-                    std.process.exit(1);
-                },
-                else => return err,
-            };
+                }
+                std.process.exit(1);
+            },
+            else => return err,
         },
     }
 }

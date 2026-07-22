@@ -65,7 +65,9 @@ pub const PostInstallValidator = struct {
 
         var iter = pkg_build.local_source_contents.iterator();
         while (iter.next()) |entry| {
-            try self.scan_hook(entry.value_ptr.*, entry.key_ptr.*, &result);
+            const hook = try std.fmt.allocPrint(self.allocator, "source: {s}", .{entry.key_ptr.*});
+            defer self.allocator.free(hook);
+            try self.scan_hook(entry.value_ptr.*, hook, &result);
         }
 
         return result;
@@ -730,6 +732,7 @@ test "validate: risky tool in local_source_contents produces finding" {
     try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
     try std.testing.expect(result.has_findings);
     try std.testing.expectEqualStrings("wget", result.findings.items[0].tool);
+    try std.testing.expectEqualStrings("source: install.sh", result.findings.items[0].hook);
 }
 
 test "validate: findings from both post_install and local_source_contents" {

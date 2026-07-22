@@ -10,12 +10,15 @@ const max_include_depth = 16;
 const SigLevel = Bindings.libalpm.SigLevel;
 const DatabaseUsage = Bindings.libalpm.DatabaseUsage;
 
-pub const IgnorePackageError = error{
+pub const PackageDirectiveError = error{
     InvalidPackageName,
     ConfigReadFailed,
     ConfigWriteFailed,
     OutOfMemory,
 };
+
+pub const IgnorePackageError = PackageDirectiveError;
+pub const HoldPackageError = PackageDirectiveError;
 
 inline fn sig(level: SigLevel) u32 {
     return @bitCast(level.to_sig_level());
@@ -193,15 +196,166 @@ pub const Configuration = struct {
         return result;
     }
 
+    pub fn add_hold_package(
+        config: *Config,
+        io: Io,
+        scratch_allocator: Allocator,
+        config_path: []const u8,
+        package_name: []const u8,
+    ) HoldPackageError!void {
+        const normalized = normalize_package_name(package_name) orelse
+            return HoldPackageError.InvalidPackageName;
+        try add_hold_packages(config, io, scratch_allocator, config_path, &.{normalized});
+    }
+
+    pub fn add_hold_packages(
+        config: *Config,
+        io: Io,
+        scratch_allocator: Allocator,
+        config_path: []const u8,
+        package_names: []const []const u8,
+    ) HoldPackageError!void {
+        var changed = false;
+        const arena_allocator = config.arena.allocator();
+
+        for (package_names) |package_name| {
+            const normalized = normalize_package_name(package_name) orelse continue;
+            if (contains_package_name(config.hold_packages.items, normalized)) continue;
+
+            const owned_name = try arena_allocator.dupeSentinel(u8, normalized, 0);
+            try config.hold_packages.append(arena_allocator, owned_name);
+            changed = true;
+        }
+
+        if (changed) try rewrite_hold_packages(config, io, scratch_allocator, config_path);
+    }
+
+    pub fn remove_hold_package(
+        config: *Config,
+        io: Io,
+        scratch_allocator: Allocator,
+        config_path: []const u8,
+        package_name: []const u8,
+    ) HoldPackageError!void {
+        const normalized = normalize_package_name(package_name) orelse
+            return HoldPackageError.InvalidPackageName;
+        try remove_hold_packages(config, io, scratch_allocator, config_path, &.{normalized});
+    }
+
+    pub fn remove_hold_packages(
+        config: *Config,
+        io: Io,
+        scratch_allocator: Allocator,
+        config_path: []const u8,
+        package_names: []const []const u8,
+    ) HoldPackageError!void {
+        var normalized_names: std.ArrayList([]const u8) = .empty;
+        defer normalized_names.deinit(scratch_allocator);
+
+        for (package_names) |package_name| {
+            const normalized = normalize_package_name(package_name) orelse continue;
+            if (std.mem.eql(u8, normalized, "shelly")) continue;
+            if (contains_name(normalized_names.items, normalized)) continue;
+            try normalized_names.append(scratch_allocator, normalized);
+        }
+        if (normalized_names.items.len == 0) return;
+
+        var changed = false;
+        var index: usize = 0;
+        while (index < config.hold_packages.items.len) {
+            if (contains_name(normalized_names.items, config.hold_packages.items[index])) {
+                _ = config.hold_packages.orderedRemove(index);
+                changed = true;
+            } else {
+                index += 1;
+            }
+        }
+
+        if (changed) try rewrite_hold_packages(config, io, scratch_allocator, config_path);
+    }
+
+    /// Returns a normalized list whose strings are borrowed from `config`.
+    /// The caller must deinitialize the returned list, but must not free its items.
+    pub fn get_held_packages(
+        config: *const Config,
+        allocator: Allocator,
+    ) HoldPackageError!std.ArrayList([:0]const u8) {
+        var result: std.ArrayList([:0]const u8) = .empty;
+        errdefer result.deinit(allocator);
+
+        for (config.hold_packages.items) |package_name| {
+            if (package_name.len == 0 or contains_package_name(result.items, package_name)) continue;
+            try result.append(allocator, package_name);
+        }
+
+        return result;
+    }
+
+    /// Returns repository names borrowed from `config` in declaration order.
+    /// The caller must deinitialize the returned list, but must not free its items.
+    pub fn get_repository_names(
+        config: *const Config,
+        allocator: Allocator,
+    ) Allocator.Error!std.ArrayList([]const u8) {
+        var result: std.ArrayList([]const u8) = .empty;
+        errdefer result.deinit(allocator);
+
+        try result.ensureTotalCapacity(allocator, config.repositories.items.len);
+        for (config.repositories.items) |repository| {
+            result.appendAssumeCapacity(repository.name);
+        }
+        return result;
+    }
+
+    /// Finds a configured repository by its exact ALPM database name.
+    /// The returned pointer and all of its strings are borrowed from `config`.
+    pub fn find_repository(config: *const Config, name: []const u8) ?*const Repository {
+        for (config.repositories.items) |*repository| {
+            if (std.mem.eql(u8, repository.name, name)) return repository;
+        }
+        return null;
+    }
+
     fn rewrite_ignore_packages(
         config: *const Config,
         io: Io,
         allocator: Allocator,
         config_path: []const u8,
     ) IgnorePackageError!void {
+        return rewrite_package_directive(
+            io,
+            allocator,
+            config_path,
+            "IgnorePkg",
+            config.ignore_package.items,
+        );
+    }
+
+    fn rewrite_hold_packages(
+        config: *const Config,
+        io: Io,
+        allocator: Allocator,
+        config_path: []const u8,
+    ) HoldPackageError!void {
+        return rewrite_package_directive(
+            io,
+            allocator,
+            config_path,
+            "HoldPkg",
+            config.hold_packages.items,
+        );
+    }
+
+    fn rewrite_package_directive(
+        io: Io,
+        allocator: Allocator,
+        config_path: []const u8,
+        directive: []const u8,
+        package_names: []const [:0]const u8,
+    ) PackageDirectiveError!void {
         const contents = Io.Dir.cwd().readFileAlloc(io, config_path, allocator, .unlimited) catch |err| switch (err) {
-            error.OutOfMemory => return IgnorePackageError.OutOfMemory,
-            else => return IgnorePackageError.ConfigReadFailed,
+            error.OutOfMemory => return PackageDirectiveError.OutOfMemory,
+            else => return PackageDirectiveError.ConfigReadFailed,
         };
         defer allocator.free(contents);
 
@@ -229,11 +383,11 @@ pub const Configuration = struct {
             }
         }
 
-        var first_ignore_line: ?usize = null;
+        var first_directive_line: ?usize = null;
         if (options_start) |start| {
             for (lines.items[start + 1 .. options_end], start + 1..) |line, index| {
-                if (is_ignore_package_line(line)) {
-                    first_ignore_line = index;
+                if (is_package_directive_line(line, directive)) {
+                    first_directive_line = index;
                     break;
                 }
             }
@@ -241,7 +395,7 @@ pub const Configuration = struct {
 
         var normalized_names: std.ArrayList([:0]const u8) = .empty;
         defer normalized_names.deinit(allocator);
-        for (config.ignore_package.items) |package_name| {
+        for (package_names) |package_name| {
             if (package_name.len == 0 or contains_package_name(normalized_names.items, package_name)) continue;
             try normalized_names.append(allocator, package_name);
         }
@@ -252,33 +406,48 @@ pub const Configuration = struct {
         for (lines.items, 0..) |line, index| {
             if (options_start) |start| {
                 const in_options = index > start and index < options_end;
-                if (in_options and is_ignore_package_line(line)) {
-                    if (first_ignore_line.? == index) {
-                        try append_ignore_package_line(&rewritten, allocator, normalized_names.items);
+                if (in_options and is_package_directive_line(line, directive)) {
+                    if (first_directive_line.? == index) {
+                        try append_package_directive_line(
+                            &rewritten,
+                            allocator,
+                            directive,
+                            normalized_names.items,
+                        );
                     }
                     continue;
                 }
             }
 
             try append_config_line(&rewritten, allocator, line);
-            if (options_start != null and first_ignore_line == null and options_start.? == index) {
-                try append_ignore_package_line(&rewritten, allocator, normalized_names.items);
+            if (options_start != null and first_directive_line == null and options_start.? == index) {
+                try append_package_directive_line(
+                    &rewritten,
+                    allocator,
+                    directive,
+                    normalized_names.items,
+                );
             }
         }
 
         if (options_start == null) {
             try append_config_line(&rewritten, allocator, "[options]");
-            try append_ignore_package_line(&rewritten, allocator, normalized_names.items);
+            try append_package_directive_line(
+                &rewritten,
+                allocator,
+                directive,
+                normalized_names.items,
+            );
         }
 
         var file = Io.Dir.cwd().createFile(io, config_path, .{}) catch
-            return IgnorePackageError.ConfigWriteFailed;
+            return PackageDirectiveError.ConfigWriteFailed;
         defer file.close(io);
 
         var write_buffer: [4096]u8 = undefined;
         var writer = file.writer(io, &write_buffer);
-        writer.interface.writeAll(rewritten.items) catch return IgnorePackageError.ConfigWriteFailed;
-        writer.interface.flush() catch return IgnorePackageError.ConfigWriteFailed;
+        writer.interface.writeAll(rewritten.items) catch return PackageDirectiveError.ConfigWriteFailed;
+        writer.interface.flush() catch return PackageDirectiveError.ConfigWriteFailed;
     }
 
     fn normalize_package_name(package_name: []const u8) ?[]const u8 {
@@ -306,14 +475,14 @@ pub const Configuration = struct {
         return std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t\r");
     }
 
-    fn is_ignore_package_line(line: []const u8) bool {
+    fn is_package_directive_line(line: []const u8, directive: []const u8) bool {
         var trimmed = std.mem.trimStart(u8, line, " \t");
         if (trimmed.len != 0 and trimmed[0] == '#') {
             trimmed = std.mem.trimStart(u8, trimmed[1..], " \t");
         }
         const equals = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
         const key = std.mem.trim(u8, trimmed[0..equals], " \t");
-        return equalIgnoreCase(key, "IgnorePkg");
+        return equalIgnoreCase(key, directive);
     }
 
     fn append_config_line(
@@ -325,17 +494,21 @@ pub const Configuration = struct {
         try output.append(allocator, '\n');
     }
 
-    fn append_ignore_package_line(
+    fn append_package_directive_line(
         output: *std.ArrayList(u8),
         allocator: Allocator,
+        directive: []const u8,
         package_names: []const [:0]const u8,
-    ) IgnorePackageError!void {
+    ) PackageDirectiveError!void {
         if (package_names.len == 0) {
-            try append_config_line(output, allocator, "#IgnorePkg =");
+            try output.append(allocator, '#');
+            try output.appendSlice(allocator, directive);
+            try output.appendSlice(allocator, " =\n");
             return;
         }
 
-        try output.appendSlice(allocator, "IgnorePkg = ");
+        try output.appendSlice(allocator, directive);
+        try output.appendSlice(allocator, " = ");
         for (package_names, 0..) |package_name, index| {
             if (index != 0) try output.append(allocator, ' ');
             try output.appendSlice(allocator, package_name);
@@ -679,6 +852,17 @@ test "parses repositories, servers, siglevel and usage" {
     const extra = conf.repositories.items[1];
     try testing.expectEqualStrings("extra", extra.name);
     try testing.expectEqual(@as(usize, 2), extra.servers.items.len);
+
+    var names = try Configuration.get_repository_names(&conf, testing.allocator);
+    defer names.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), names.items.len);
+    try testing.expectEqualStrings("core", names.items[0]);
+    try testing.expectEqualStrings("extra", names.items[1]);
+
+    const found = Configuration.find_repository(&conf, "extra") orelse return error.TestFailed;
+    try testing.expectEqualStrings("extra", found.name);
+    try testing.expectEqual(@as(usize, 2), found.servers.items.len);
+    try testing.expect(Configuration.find_repository(&conf, "missing") == null);
 }
 
 test "HoldPkg is replaced and shelly is injected" {
@@ -818,6 +1002,67 @@ test "adding an ignored package creates a missing options section" {
     defer testing.allocator.free(rewritten);
     try testing.expectEqualStrings(
         original ++ "[options]\nIgnorePkg = linux\n",
+        rewritten,
+    );
+}
+
+test "hold package mutations rewrite HoldPkg and preserve shelly" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const config_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/pacman.conf",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(config_path);
+
+    const original =
+        \\[options]
+        \\Architecture = auto
+        \\HoldPkg = pacman glibc
+    ;
+    var file = try Io.Dir.cwd().createFile(testing.io, config_path, .{});
+    try file.writeStreamingAll(testing.io, original);
+    file.close(testing.io);
+
+    var config = try Configuration.parse_string(testing.allocator, testing.io, original);
+    defer config.deinitialize();
+    try Configuration.add_hold_packages(
+        &config,
+        testing.io,
+        testing.allocator,
+        config_path,
+        &.{ " linux ", "linux" },
+    );
+
+    var held = try Configuration.get_held_packages(&config, testing.allocator);
+    defer held.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 4), held.items.len);
+    try testing.expectEqualStrings("linux", held.items[3]);
+
+    try Configuration.remove_hold_packages(
+        &config,
+        testing.io,
+        testing.allocator,
+        config_path,
+        &.{ "pacman", "glibc", "linux", "shelly" },
+    );
+
+    var remaining = try Configuration.get_held_packages(&config, testing.allocator);
+    defer remaining.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), remaining.items.len);
+    try testing.expectEqualStrings("shelly", remaining.items[0]);
+
+    const rewritten = try Io.Dir.cwd().readFileAlloc(
+        testing.io,
+        config_path,
+        testing.allocator,
+        .unlimited,
+    );
+    defer testing.allocator.free(rewritten);
+    try testing.expectEqualStrings(
+        "[options]\nArchitecture = auto\nHoldPkg = shelly\n",
         rewritten,
     );
 }

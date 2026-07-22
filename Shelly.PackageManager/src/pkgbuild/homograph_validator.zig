@@ -34,10 +34,9 @@ pub const HomographValidator = struct {
     const script_class = enum(i32) { latin, cyrillic, greek, armenian, other };
 
     fn scan(self: HomographValidator, value: ?[]const u8, hook: []const u8, result: *shared_validator.ValidationResult) !void {
-        if (value) |v| for (v) |chars| if (std.ascii.isWhitespace(chars)) return;
-
         if (value == null) return;
         const v = value.?;
+        if (std.mem.trim(u8, v, " \t\r\n").len == 0) return;
 
         if (try is_plain_ascii(v)) return;
 
@@ -866,6 +865,17 @@ test "scan - whitespace value passes" {
     try validator.scan("  \t\n  ", "pkgname", &result);
 
     try std.testing.expectEqual(false, result.has_findings);
+}
+
+test "scan - embedded whitespace does not bypass homograph analysis" {
+    const validator = HomographValidator{ .allocator = std.testing.allocator };
+    var result = empty_result();
+    defer result.deinit(std.testing.allocator);
+
+    try validator.scan("trusted dеpendency", "depends", &result);
+
+    try std.testing.expect(result.has_findings);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
 }
 
 test "scan - matched_line shows codepoints for non-ascii" {

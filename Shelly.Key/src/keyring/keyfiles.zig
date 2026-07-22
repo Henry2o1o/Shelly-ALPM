@@ -12,7 +12,10 @@ pub fn trustdbExists(
     io: Io,
     keyring_dir: []const u8,
 ) KeyfilesError!bool {
-    var dir = try base.openDir(io, keyring_dir, .{});
+    var dir = base.openDir(io, keyring_dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
     defer dir.close(io);
 
     return fsutil.isRegularFile(dir, io, "trustdb.gpg");
@@ -32,6 +35,7 @@ pub fn applyKeyringPermissions(
 pub const ResolveKeyringsError = error{
     NoKeyringsFound,
     MissingKeyringFile,
+    PopulateFromMissing,
     OutOfMemory,
 } || std.Io.Dir.OpenError ||
     std.Io.Dir.Iterator.Error ||
@@ -57,7 +61,10 @@ fn discoverKeyrings(
     io: Io,
     import_dir: []const u8,
 ) ResolveKeyringsError![][]const u8 {
-    var dir = try base.openDir(io, import_dir, .{ .iterate = true });
+    var dir = base.openDir(io, import_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return error.PopulateFromMissing,
+        else => |e| return e,
+    };
     defer dir.close(io);
 
     var ids: std.ArrayList([]const u8) = .empty;
@@ -89,7 +96,10 @@ fn validateRequestedKeyrings(
     import_dir: []const u8,
     requested: []const []const u8,
 ) ResolveKeyringsError![][]const u8 {
-    var dir = try base.openDir(io, import_dir, .{});
+    var dir = base.openDir(io, import_dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.PopulateFromMissing,
+        else => |e| return e,
+    };
     defer dir.close(io);
 
     var is_missing = false;
@@ -122,6 +132,104 @@ pub fn keyringFileExists(
     var dir = try base.openDir(io, import_dir, .{});
     defer dir.close(io);
     return keyringIdFileExists(dir, io, id);
+}
+
+pub fn readTrustedFingerprints(
+    allocator: std.mem.Allocator,
+    base: std.Io.Dir,
+    io: Io,
+    import_dir: []const u8,
+    keyring_id: []const u8,
+) ![][]const u8 {
+    return readFingerprintFile(allocator, base, io, import_dir, keyring_id, "-trusted");
+}
+
+pub fn readRevokedFingerprints(
+    allocator: std.mem.Allocator,
+    base: std.Io.Dir,
+    io: Io,
+    import_dir: []const u8,
+    keyring_id: []const u8,
+) ![][]const u8 {
+    return readFingerprintFile(allocator, base, io, import_dir, keyring_id, "-revoked");
+}
+
+fn readFingerprintFile(
+    allocator: std.mem.Allocator,
+    base: std.Io.Dir,
+    io: Io,
+    import_dir: []const u8,
+    keyring_id: []const u8,
+    suffix: []const u8,
+) ![][]const u8 {
+    var dir = base.openDir(io, import_dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
+    defer dir.close(io);
+
+    var name_buf: [256]u8 = undefined;
+    const filename = std.fmt.bufPrint(&name_buf, "{s}{s}", .{ keyring_id, suffix }) catch
+        return &.{};
+
+    var file = dir.openFile(io, filename, .{ .mode = .read_only }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
+    defer file.close(io);
+
+    var read_buf: [16384]u8 = undefined;
+    const n = try file.readPositionalAll(io, &read_buf, 0);
+    if (n == read_buf.len) {
+        const size = try file.length(io);
+        if (size > n) return error.MetadataFileTooLarge;
+    }
+    const contents = read_buf[0..n];
+
+    var fingerprints: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (fingerprints.items) |fp| allocator.free(fp);
+        fingerprints.deinit(allocator);
+    }
+
+    var iter = std.mem.splitScalar(u8, contents, '\n');
+    while (iter.next()) |raw_line| {
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (line.len == 0) continue;
+        if (line[0] == '#') continue;
+
+        const fp = if (std.mem.indexOfScalar(u8, line, ':')) |pos|
+            line[0..pos]
+        else
+            line;
+        if (fp.len == 0) continue;
+        try fingerprints.append(allocator, try allocator.dupe(u8, fp));
+    }
+
+    return try fingerprints.toOwnedSlice(allocator);
+}
+
+pub fn trustedFileNonempty(
+    base: std.Io.Dir,
+    io: Io,
+    import_dir: []const u8,
+    keyring_id: []const u8,
+) !bool {
+    var dir = base.openDir(io, import_dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
+    defer dir.close(io);
+
+    var name_buf: [256]u8 = undefined;
+    const filename = std.fmt.bufPrint(&name_buf, "{s}-trusted", .{keyring_id}) catch
+        return false;
+
+    const st = dir.statFile(io, filename, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
+    return st.kind == .file and st.size > 0;
 }
 
 const testing = std.testing;
@@ -203,6 +311,13 @@ test "trustdbExists returns false when trustdb.gpg is a directory" {
     try testing.expect(!try trustdbExists(tmp.dir, testing.io, "gnupg"));
 }
 
+test "trustdbExists returns false when the keyring directory is absent" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try testing.expect(!try trustdbExists(tmp.dir, testing.io, "gnupg"));
+}
+
 test "resolveKeyrings discovers every .gpg file when no targets are given" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
@@ -271,6 +386,24 @@ test "resolveKeyrings fails when the import directory is empty" {
     );
 }
 
+test "resolveKeyrings reports PopulateFromMissing when the directory is absent" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    // No targets: discovery path.
+    try testing.expectError(
+        error.PopulateFromMissing,
+        resolveKeyrings(testing.allocator, tmp.dir, testing.io, "does-not-exist", &.{}),
+    );
+
+    // Targets supplied: validation path.
+    const requested: []const []const u8 = &.{"archlinux"};
+    try testing.expectError(
+        error.PopulateFromMissing,
+        resolveKeyrings(testing.allocator, tmp.dir, testing.io, "does-not-exist", requested),
+    );
+}
+
 test "resolveKeyrings accepts requested keyring IDs whose .gpg files exist" {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
@@ -335,4 +468,317 @@ test "resolveKeyrings rejects a requested keyring that is a directory" {
         error.MissingKeyringFile,
         resolveKeyrings(testing.allocator, tmp.dir, testing.io, "keyrings", requested),
     );
+}
+
+fn writeFile(dir: Io.Dir, io: Io, name: []const u8, content: []const u8) !void {
+    var f = try dir.createFile(io, name, .{});
+    defer f.close(io);
+    try f.writeStreamingAll(io, content);
+}
+
+test "readTrustedFingerprints returns an empty list when the file is absent" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+
+    const fps = try readTrustedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer testing.allocator.free(fps);
+
+    try testing.expectEqual(@as(usize, 0), fps.len);
+}
+
+test "readTrustedFingerprints returns an empty list when the directory is absent" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const fps = try readTrustedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "nonexistent",
+        "archlinux",
+    );
+    defer testing.allocator.free(fps);
+
+    try testing.expectEqual(@as(usize, 0), fps.len);
+}
+
+test "readTrustedFingerprints extracts fingerprints before the first colon" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try writeFile(dir, testing.io, "archlinux-trusted", "ABCD1234EFGH5678:4:\n" ++
+            "IJKL9012MNOP3456:4:\n");
+    }
+
+    const fps = try readTrustedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer {
+        for (fps) |fp| testing.allocator.free(fp);
+        testing.allocator.free(fps);
+    }
+
+    try testing.expectEqual(@as(usize, 2), fps.len);
+    try testing.expectEqualStrings("ABCD1234EFGH5678", fps[0]);
+    try testing.expectEqualStrings("IJKL9012MNOP3456", fps[1]);
+}
+
+test "readTrustedFingerprints skips blank and comment lines" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try writeFile(dir, testing.io, "archlinux-trusted", "# Trusted keys for archlinux\n" ++
+            "\n" ++
+            "ABCD1234EFGH5678:4:\n" ++
+            "# another comment\n" ++
+            "\n" ++
+            "IJKL9012MNOP3456:4:\n");
+    }
+
+    const fps = try readTrustedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer {
+        for (fps) |fp| testing.allocator.free(fp);
+        testing.allocator.free(fps);
+    }
+
+    try testing.expectEqual(@as(usize, 2), fps.len);
+    try testing.expectEqualStrings("ABCD1234EFGH5678", fps[0]);
+    try testing.expectEqualStrings("IJKL9012MNOP3456", fps[1]);
+}
+
+test "readTrustedFingerprints accepts lines without a colon" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try writeFile(dir, testing.io, "archlinux-trusted", "ABCD1234EFGH5678\n");
+    }
+
+    const fps = try readTrustedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer {
+        for (fps) |fp| testing.allocator.free(fp);
+        testing.allocator.free(fps);
+    }
+
+    try testing.expectEqual(@as(usize, 1), fps.len);
+    try testing.expectEqualStrings("ABCD1234EFGH5678", fps[0]);
+}
+
+test "readTrustedFingerprints strips trailing carriage returns" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try writeFile(dir, testing.io, "archlinux-trusted", "ABCD1234EFGH5678\r\n");
+    }
+
+    const fps = try readTrustedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer {
+        for (fps) |fp| testing.allocator.free(fp);
+        testing.allocator.free(fps);
+    }
+
+    try testing.expectEqual(@as(usize, 1), fps.len);
+    try testing.expectEqualStrings("ABCD1234EFGH5678", fps[0]);
+}
+
+test "readTrustedFingerprints returns an empty list for an empty file" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try touch(dir, testing.io, "archlinux-trusted");
+    }
+
+    const fps = try readTrustedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer testing.allocator.free(fps);
+
+    try testing.expectEqual(@as(usize, 0), fps.len);
+}
+
+test "trustedFileNonempty returns true for a nonempty trusted file" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try writeFile(dir, testing.io, "archlinux-trusted", "ABCD1234EFGH5678:f:\n");
+    }
+
+    try testing.expect(try trustedFileNonempty(
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    ));
+}
+
+test "trustedFileNonempty returns false for an empty trusted file" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try touch(dir, testing.io, "archlinux-trusted");
+    }
+
+    try testing.expect(!try trustedFileNonempty(
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    ));
+}
+
+test "trustedFileNonempty returns false when the trusted file is absent" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+
+    try testing.expect(!try trustedFileNonempty(
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    ));
+}
+
+test "trustedFileNonempty returns false when the import directory is absent" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try testing.expect(!try trustedFileNonempty(
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    ));
+}
+
+test "readRevokedFingerprints reads fingerprints from the revoked file" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        try writeFile(dir, testing.io, "archlinux-revoked", "DEAD1111BEEF2222\n# revoked\n\nFEED3333CAFE4444:\n");
+    }
+
+    const fps = try readRevokedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer {
+        for (fps) |fp| testing.allocator.free(fp);
+        testing.allocator.free(fps);
+    }
+
+    try testing.expectEqual(@as(usize, 2), fps.len);
+    try testing.expectEqualStrings("DEAD1111BEEF2222", fps[0]);
+    try testing.expectEqualStrings("FEED3333CAFE4444", fps[1]);
+}
+
+test "readRevokedFingerprints returns an empty list when the revoked file is absent" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+
+    const fps = try readRevokedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer testing.allocator.free(fps);
+
+    try testing.expectEqual(@as(usize, 0), fps.len);
+}
+
+test "readRevokedFingerprints ignores a similarly-named trusted file" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "keyrings", .default_dir);
+    {
+        var dir = try tmp.dir.openDir(testing.io, "keyrings", .{});
+        defer dir.close(testing.io);
+        // Only the -trusted side exists; -revoked must not pick it up.
+        try writeFile(dir, testing.io, "archlinux-trusted", "TRUSTED0000000000\n");
+    }
+
+    const fps = try readRevokedFingerprints(
+        testing.allocator,
+        tmp.dir,
+        testing.io,
+        "keyrings",
+        "archlinux",
+    );
+    defer testing.allocator.free(fps);
+
+    try testing.expectEqual(@as(usize, 0), fps.len);
 }
