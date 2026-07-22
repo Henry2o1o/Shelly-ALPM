@@ -1557,7 +1557,7 @@ const AddressFamily = IpAddress.Family;
 const ConnectionResult = IpAddress.ConnectError!Stream;
 
 const TimerKind = enum {
-    resolution,
+    alternate_lookup,
     pace,
     deadline,
 };
@@ -1580,6 +1580,41 @@ const HappyEyeballsEvent = union(enum) {
 
 const EventQueue = Io.Queue(HappyEyeballsEvent);
 const VoidFuture = Io.Future(void);
+
+const ResolutionBackend = struct {
+    context: ?*anyopaque = null,
+    resolveFn: *const fn (
+        context: ?*anyopaque,
+        host: HostName,
+        io: Io,
+        port: u16,
+        family: AddressFamily,
+        events: *EventQueue,
+    ) void = resolveProduction,
+
+    fn resolve(
+        backend: ResolutionBackend,
+        host: HostName,
+        io: Io,
+        port: u16,
+        family: AddressFamily,
+        events: *EventQueue,
+    ) void {
+        backend.resolveFn(backend.context, host, io, port, family, events);
+    }
+
+    fn resolveProduction(
+        context: ?*anyopaque,
+        host: HostName,
+        io: Io,
+        port: u16,
+        family: AddressFamily,
+        events: *EventQueue,
+    ) void {
+        _ = context;
+        resolveFamily(host, io, port, family, events);
+    }
+};
 
 const ConnectionBackend = struct {
     context: ?*anyopaque = null,
@@ -1696,6 +1731,7 @@ const HappyEyeballsState = struct {
     events: *EventQueue,
     policy: AddressFamilyPolicy,
     connection_backend: ConnectionBackend,
+    resolution_backend: ResolutionBackend,
     connect_options: IpAddress.ConnectOptions,
     overall_timeout: Io.Timeout,
 
@@ -1708,13 +1744,13 @@ const HappyEyeballsState = struct {
 
     lookup_ip4_future: ?VoidFuture = null,
     lookup_ip6_future: ?VoidFuture = null,
-    resolution_timer: ?VoidFuture = null,
+    alternate_lookup_timer: ?VoidFuture = null,
     pace_timer: ?VoidFuture = null,
     deadline_timer: ?VoidFuture = null,
-    resolution_generation: u64 = 0,
+    alternate_lookup_generation: u64 = 0,
     pace_generation: u64 = 0,
     deadline_generation: u64 = 0,
-    resolution_wait_elapsed: bool = false,
+    alternate_lookup_delay_elapsed: bool = false,
 
     active: [happy_eyeballs_max_active_attempts]?ActiveAttempt = @splat(null),
     active_count: usize = 0,
@@ -1740,6 +1776,17 @@ const HappyEyeballsState = struct {
         options: IpAddress.ConnectOptions,
         connection_backend: ConnectionBackend,
     ) HappyEyeballsState {
+        return initWithBackends(io, events, policy, options, connection_backend, .{});
+    }
+
+    fn initWithBackends(
+        io: Io,
+        events: *EventQueue,
+        policy: AddressFamilyPolicy,
+        options: IpAddress.ConnectOptions,
+        connection_backend: ConnectionBackend,
+        resolution_backend: ResolutionBackend,
+    ) HappyEyeballsState {
         var connect_options = options;
         connect_options.timeout = .none;
         return .{
@@ -1747,6 +1794,7 @@ const HappyEyeballsState = struct {
             .events = events,
             .policy = policy,
             .connection_backend = connection_backend,
+            .resolution_backend = resolution_backend,
             .connect_options = connect_options,
             .overall_timeout = options.timeout,
             .next_family = preferredFamily(policy),
@@ -1756,7 +1804,7 @@ const HappyEyeballsState = struct {
     }
 
     fn deinit(state: *HappyEyeballsState) void {
-        cancelVoidFuture(&state.resolution_timer, state.io);
+        cancelVoidFuture(&state.alternate_lookup_timer, state.io);
         cancelVoidFuture(&state.pace_timer, state.io);
         cancelVoidFuture(&state.deadline_timer, state.io);
         for (&state.active) |*maybe_attempt| {
@@ -1784,6 +1832,67 @@ const HappyEyeballsState = struct {
             .ip4 => state.lookup_ip4_done,
             .ip6 => state.lookup_ip6_done,
         };
+    }
+
+    fn lookupFuture(state: *HappyEyeballsState, family: AddressFamily) *?VoidFuture {
+        return switch (family) {
+            .ip4 => &state.lookup_ip4_future,
+            .ip6 => &state.lookup_ip6_future,
+        };
+    }
+
+    fn lookupStarted(state: *const HappyEyeballsState, family: AddressFamily) bool {
+        return state.lookupDone(family) or switch (family) {
+            .ip4 => state.lookup_ip4_future != null,
+            .ip6 => state.lookup_ip6_future != null,
+        };
+    }
+
+    fn startLookup(
+        state: *HappyEyeballsState,
+        host: HostName,
+        port: u16,
+        family: AddressFamily,
+    ) error{SystemResources}!bool {
+        if (state.lookupStarted(family)) return false;
+        // These workers publish into a queue consumed by this coordinator.
+        // `Io.async` may execute inline when its worker pool is saturated,
+        // which would block the consumer behind a DNS or timer deadline.
+        state.lookupFuture(family).* = state.io.concurrent(runResolution, .{
+            state.resolution_backend,
+            host,
+            state.io,
+            port,
+            family,
+            state.events,
+        }) catch return error.SystemResources;
+        return true;
+    }
+
+    fn startAlternateLookup(
+        state: *HappyEyeballsState,
+        host: HostName,
+        port: u16,
+    ) error{SystemResources}!bool {
+        if (!usesBothFamilies(state.policy)) return false;
+        const alternate = otherFamily(preferredFamily(state.policy));
+        if (state.lookupStarted(alternate)) return false;
+        cancelVoidFuture(&state.alternate_lookup_timer, state.io);
+        return state.startLookup(host, port, alternate);
+    }
+
+    fn maybeStartAlternateLookup(
+        state: *HappyEyeballsState,
+        host: HostName,
+        port: u16,
+    ) error{SystemResources}!void {
+        if (!usesBothFamilies(state.policy)) return;
+        const preferred = preferredFamily(state.policy);
+        const preferred_exhausted = state.lookupDone(preferred) and
+            !state.addresses.hasFamily(preferred) and state.active_count == 0;
+        if (state.alternate_lookup_delay_elapsed or preferred_exhausted) {
+            _ = try state.startAlternateLookup(host, port);
+        }
     }
 
     fn finishLookup(state: *HappyEyeballsState, family: AddressFamily, lookup_error: ?HostName.LookupError) void {
@@ -1838,23 +1947,23 @@ const HappyEyeballsState = struct {
         generation: *u64,
         kind: TimerKind,
         timeout: Io.Timeout,
-    ) void {
+    ) error{SystemResources}!void {
         cancelVoidFuture(future, state.io);
         generation.* +%= 1;
-        future.* = state.io.async(publishTimer, .{
+        future.* = state.io.concurrent(publishTimer, .{
             state.io,
             state.events,
             kind,
             generation.*,
             timeout,
-        });
+        }) catch return error.SystemResources;
     }
 
     fn consumeTimer(state: *HappyEyeballsState, kind: TimerKind, generation: u64) bool {
         switch (kind) {
-            .resolution => {
-                if (generation != state.resolution_generation) return false;
-                finishVoidFuture(&state.resolution_timer, state.io);
+            .alternate_lookup => {
+                if (generation != state.alternate_lookup_generation) return false;
+                finishVoidFuture(&state.alternate_lookup_timer, state.io);
             },
             .pace => {
                 if (generation != state.pace_generation) return false;
@@ -1868,10 +1977,8 @@ const HappyEyeballsState = struct {
         return true;
     }
 
-    fn launchNext(state: *HappyEyeballsState) bool {
+    fn launchNext(state: *HappyEyeballsState) error{SystemResources}!bool {
         const address = state.addresses.popNext(&state.next_family) orelse return false;
-        cancelVoidFuture(&state.resolution_timer, state.io);
-        state.resolution_wait_elapsed = false;
         cancelVoidFuture(&state.pace_timer, state.io);
 
         if (state.active_count == happy_eyeballs_max_active_attempts) state.discardOldestAttempt();
@@ -1880,14 +1987,14 @@ const HappyEyeballsState = struct {
         state.next_attempt_id +%= 1;
         const order = state.next_attempt_order;
         state.next_attempt_order +%= 1;
-        const future = state.io.async(runConnectionAttempt, .{
+        const future = state.io.concurrent(runConnectionAttempt, .{
             state.io,
             state.events,
             id,
             address,
             state.connect_options,
             state.connection_backend,
-        });
+        }) catch return error.SystemResources;
         for (&state.active) |*maybe_attempt| {
             if (maybe_attempt.* != null) continue;
             maybe_attempt.* = .{ .id = id, .order = order, .future = future };
@@ -1898,7 +2005,7 @@ const HappyEyeballsState = struct {
         if (!state.started) {
             state.started = true;
             if (state.overall_timeout != .none) {
-                state.scheduleTimer(
+                try state.scheduleTimer(
                     &state.deadline_timer,
                     &state.deadline_generation,
                     .deadline,
@@ -1912,7 +2019,7 @@ const HappyEyeballsState = struct {
         const next_launch = now.addDuration(Io.Duration.fromMilliseconds(happy_eyeballs_connection_delay_ms));
         state.next_launch = next_launch;
         if (state.addresses.hasPending()) {
-            state.scheduleTimer(
+            try state.scheduleTimer(
                 &state.pace_timer,
                 &state.pace_generation,
                 .pace,
@@ -1925,30 +2032,18 @@ const HappyEyeballsState = struct {
     /// Advances scheduling until another resolver, timer, or connection event
     /// is needed. A definitive connection failure sets `immediate_next`, while
     /// unanswered attempts remain open and are paced 200 ms apart.
-    fn drive(state: *HappyEyeballsState) void {
+    fn drive(state: *HappyEyeballsState) error{SystemResources}!void {
         if (!state.started) {
             const preferred = preferredFamily(state.policy);
             if (state.addresses.hasFamily(preferred)) {
-                _ = state.launchNext();
+                _ = try state.launchNext();
                 return;
             }
 
             const alternate = otherFamily(preferred);
             if (!state.addresses.hasFamily(alternate)) return;
-            if (state.lookupDone(preferred) or state.resolution_wait_elapsed) {
-                _ = state.launchNext();
-                return;
-            }
-            if (state.resolution_timer == null) {
-                state.scheduleTimer(
-                    &state.resolution_timer,
-                    &state.resolution_generation,
-                    .resolution,
-                    .{ .duration = .{
-                        .raw = Io.Duration.fromMilliseconds(happy_eyeballs_resolution_delay_ms),
-                        .clock = .awake,
-                    } },
-                );
+            if (state.lookupDone(preferred) or state.alternate_lookup_delay_elapsed) {
+                _ = try state.launchNext();
             }
             return;
         }
@@ -1958,18 +2053,18 @@ const HappyEyeballsState = struct {
             return;
         }
         if (state.immediate_next or state.active_count == 0) {
-            _ = state.launchNext();
+            _ = try state.launchNext();
             return;
         }
 
         const next_launch = state.next_launch orelse unreachable;
         const now = Io.Timestamp.now(state.io, .awake);
         if (now.nanoseconds >= next_launch.nanoseconds) {
-            _ = state.launchNext();
+            _ = try state.launchNext();
             return;
         }
         if (state.pace_timer == null) {
-            state.scheduleTimer(
+            try state.scheduleTimer(
                 &state.pace_timer,
                 &state.pace_generation,
                 .pace,
@@ -1986,8 +2081,9 @@ const HappyEyeballsState = struct {
     }
 };
 
-/// Uses Zig's native A and AAAA resolver queries, consumes their results as
-/// they arrive, and applies libcurl's per-address Happy Eyeballs pacing.
+/// Starts the preferred Zig-native DNS query immediately, delays the alternate
+/// family query by 50 ms unless the preferred family is exhausted first, and
+/// applies libcurl's per-address Happy Eyeballs connection pacing.
 fn connectHost(
     host: HostName,
     io: Io,
@@ -2006,16 +2102,41 @@ fn connectHostWithBackend(
     options: IpAddress.ConnectOptions,
     connection_backend: ConnectionBackend,
 ) HostName.ConnectError!Stream {
+    return connectHostWithBackends(host, io, port, policy, options, connection_backend, .{});
+}
+
+fn connectHostWithBackends(
+    host: HostName,
+    io: Io,
+    port: u16,
+    policy: AddressFamilyPolicy,
+    options: IpAddress.ConnectOptions,
+    connection_backend: ConnectionBackend,
+    resolution_backend: ResolutionBackend,
+) HostName.ConnectError!Stream {
     var event_buffer: [happy_eyeballs_event_capacity]HappyEyeballsEvent = undefined;
     var events: EventQueue = .init(&event_buffer);
-    var state: HappyEyeballsState = .initWithBackend(io, &events, policy, options, connection_backend);
+    var state: HappyEyeballsState = .initWithBackends(
+        io,
+        &events,
+        policy,
+        options,
+        connection_backend,
+        resolution_backend,
+    );
     defer state.deinit();
 
-    if (policy != .ipv6_only) {
-        state.lookup_ip4_future = io.async(resolveFamily, .{ host, io, port, .ip4, &events });
-    }
-    if (policy != .ipv4_only) {
-        state.lookup_ip6_future = io.async(resolveFamily, .{ host, io, port, .ip6, &events });
+    _ = try state.startLookup(host, port, preferredFamily(policy));
+    if (usesBothFamilies(policy)) {
+        try state.scheduleTimer(
+            &state.alternate_lookup_timer,
+            &state.alternate_lookup_generation,
+            .alternate_lookup,
+            .{ .duration = .{
+                .raw = Io.Duration.fromMilliseconds(happy_eyeballs_resolution_delay_ms),
+                .clock = .awake,
+            } },
+        );
     }
 
     while (true) {
@@ -2042,14 +2163,15 @@ fn connectHostWithBackend(
             .timer => |timer| {
                 if (!state.consumeTimer(timer.kind, timer.generation)) continue;
                 switch (timer.kind) {
-                    .resolution => state.resolution_wait_elapsed = true,
+                    .alternate_lookup => state.alternate_lookup_delay_elapsed = true,
                     .pace => {},
                     .deadline => return error.Timeout,
                 }
             },
         }
 
-        state.drive();
+        try state.maybeStartAlternateLookup(host, port);
+        try state.drive();
         if (state.terminalError()) |err| return err;
     }
 }
@@ -2066,6 +2188,10 @@ fn otherFamily(family: AddressFamily) AddressFamily {
         .ip4 => .ip6,
         .ip6 => .ip4,
     };
+}
+
+fn usesBothFamilies(policy: AddressFamilyPolicy) bool {
+    return policy == .happy_eyeballs or policy == .prefer_ipv4;
 }
 
 fn cancelVoidFuture(maybe_future: *?VoidFuture, io: Io) void {
@@ -2089,6 +2215,17 @@ fn publishTimer(
     events.putOne(io, .{ .timer = .{ .kind = kind, .generation = generation } }) catch {};
 }
 
+fn runResolution(
+    backend: ResolutionBackend,
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: AddressFamily,
+    events: *EventQueue,
+) void {
+    backend.resolve(host, io, port, family, events);
+}
+
 fn resolveFamily(
     host: HostName,
     io: Io,
@@ -2099,11 +2236,19 @@ fn resolveFamily(
     var canonical_name_buffer: [HostName.max_len]u8 = undefined;
     var lookup_buffer: [max_resolved_addresses_per_family]HostName.LookupResult = undefined;
     var lookup_queue: Io.Queue(HostName.LookupResult) = .init(&lookup_buffer);
-    var lookup_future = io.async(HostName.lookup, .{ host, io, &lookup_queue, .{
+    // HostName.lookup produces into lookup_queue, so its consumer must be able
+    // to run concurrently even when the ordinary async worker limit is full.
+    var lookup_future = io.concurrent(HostName.lookup, .{ host, io, &lookup_queue, .{
         .port = port,
         .family = family,
         .canonical_name_buffer = &canonical_name_buffer,
-    } });
+    } }) catch {
+        events.putOne(io, .{ .lookup_done = .{
+            .family = family,
+            .err = error.SystemResources,
+        } }) catch {};
+        return;
+    };
     defer lookup_future.cancel(io) catch {};
 
     while (lookup_queue.getOne(io)) |result| switch (result) {
@@ -2770,6 +2915,80 @@ const BlackholeTestContext = struct {
     ip6_canceled: std.atomic.Value(bool) = .init(false),
 };
 
+const FastPreferredResolutionContext = struct {
+    ip4_started: std.atomic.Value(u32) = .init(0),
+    ip6_started: std.atomic.Value(u32) = .init(0),
+};
+
+fn resolveFastPreferredIpv4(
+    raw_context: ?*anyopaque,
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: AddressFamily,
+    events: *EventQueue,
+) void {
+    _ = host;
+    const context: *FastPreferredResolutionContext = @ptrCast(@alignCast(raw_context.?));
+    switch (family) {
+        .ip4 => {
+            _ = context.ip4_started.fetchAdd(1, .acq_rel);
+            events.putOne(io, .{ .address = .{ .ip4 = .loopback(port) } }) catch return;
+        },
+        .ip6 => _ = context.ip6_started.fetchAdd(1, .acq_rel),
+    }
+    events.putOne(io, .{ .lookup_done = .{ .family = family, .err = null } }) catch {};
+}
+
+const DelayedAlternateResolutionContext = struct {
+    ip6_started_ms: std.atomic.Value(i64) = .init(-1),
+    ip4_started_ms: std.atomic.Value(i64) = .init(-1),
+    ip6_canceled: std.atomic.Value(bool) = .init(false),
+};
+
+fn resolveAfterStalledIpv6(
+    raw_context: ?*anyopaque,
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: AddressFamily,
+    events: *EventQueue,
+) void {
+    _ = host;
+    const context: *DelayedAlternateResolutionContext = @ptrCast(@alignCast(raw_context.?));
+    const now_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
+    switch (family) {
+        .ip6 => {
+            context.ip6_started_ms.store(now_ms, .release);
+            io.sleep(Io.Duration.fromSeconds(10), .awake) catch |err| {
+                if (err == error.Canceled) context.ip6_canceled.store(true, .release);
+                return;
+            };
+        },
+        .ip4 => {
+            context.ip4_started_ms.store(now_ms, .release);
+            events.putOne(io, .{ .address = .{ .ip4 = .loopback(port) } }) catch return;
+        },
+    }
+    events.putOne(io, .{ .lookup_done = .{ .family = family, .err = null } }) catch {};
+}
+
+fn pendingTestResolution(
+    raw_context: ?*anyopaque,
+    host: HostName,
+    io: Io,
+    port: u16,
+    family: AddressFamily,
+    events: *EventQueue,
+) void {
+    _ = raw_context;
+    _ = host;
+    _ = port;
+    _ = family;
+    _ = events;
+    io.sleep(Io.Duration.fromSeconds(10), .awake) catch {};
+}
+
 fn blackholeIp6TestConnect(
     raw_context: ?*anyopaque,
     address: IpAddress,
@@ -2833,7 +3052,7 @@ test "Happy Eyeballs keeps at most six connection attempts active" {
     inline for (.{ "2001:db8::1", "2001:db8::2", "2001:db8::3", "2001:db8::4", "2001:db8::5", "2001:db8::6", "2001:db8::7" }) |text| {
         state.addresses.append(try IpAddress.parse(text, 443));
     }
-    for (0..7) |_| try testing.expect(state.launchNext());
+    for (0..7) |_| try testing.expect(try state.launchNext());
 
     try testing.expectEqual(@as(usize, happy_eyeballs_max_active_attempts), state.active_count);
     try testing.expectEqual(@as(u32, 1), context.canceled.load(.acquire));
@@ -2842,6 +3061,101 @@ test "Happy Eyeballs keeps at most six connection attempts active" {
 fn acceptOneTestConnection(server: *Io.net.Server, io: Io) Io.net.Server.AcceptError!void {
     var stream = try server.accept(io);
     defer stream.close(io);
+}
+
+test "Prefer IPv4 skips the AAAA lookup when IPv4 connects within the DNS delay" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    // With no async workers, any correctness-critical use of `Io.async`
+    // executes inline. The connection must still beat its one-second deadline.
+    var threaded: Io.Threaded = .init(testing.allocator, .{ .async_limit = .nothing });
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var listen_address = try IpAddress.parse("127.0.0.1", 0);
+    var server = try listen_address.listen(io, .{});
+    defer server.deinit(io);
+    var accept_future = try io.concurrent(acceptOneTestConnection, .{ &server, io });
+    defer _ = accept_future.cancel(io) catch {};
+
+    var context: FastPreferredResolutionContext = .{};
+    const host = try HostName.init("fast-preferred.test");
+    const started = Io.Timestamp.now(io, .awake);
+    var stream = try connectHostWithBackends(host, io, server.socket.address.getPort(), .prefer_ipv4, .{
+        .mode = .stream,
+        .timeout = .{ .duration = .{
+            .raw = Io.Duration.fromSeconds(1),
+            .clock = .awake,
+        } },
+    }, .{}, .{
+        .context = &context,
+        .resolveFn = resolveFastPreferredIpv4,
+    });
+    const elapsed = started.durationTo(Io.Timestamp.now(io, .awake));
+    stream.close(io);
+    try accept_future.await(io);
+
+    try testing.expect(elapsed.nanoseconds < Io.Duration.fromMilliseconds(500).nanoseconds);
+    try testing.expectEqual(@as(u32, 1), context.ip4_started.load(.acquire));
+    try testing.expectEqual(@as(u32, 0), context.ip6_started.load(.acquire));
+}
+
+test "Happy Eyeballs starts alternate DNS after the resolution delay" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    var threaded: Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var listen_address = try IpAddress.parse("127.0.0.1", 0);
+    var server = try listen_address.listen(io, .{});
+    defer server.deinit(io);
+    var accept_future = io.async(acceptOneTestConnection, .{ &server, io });
+    defer accept_future.cancel(io) catch {};
+
+    var context: DelayedAlternateResolutionContext = .{};
+    const host = try HostName.init("delayed-alternate.test");
+    var stream = try connectHostWithBackends(host, io, server.socket.address.getPort(), .happy_eyeballs, .{
+        .mode = .stream,
+        .timeout = .{ .duration = .{
+            .raw = Io.Duration.fromSeconds(1),
+            .clock = .awake,
+        } },
+    }, .{}, .{
+        .context = &context,
+        .resolveFn = resolveAfterStalledIpv6,
+    });
+    stream.close(io);
+    try accept_future.await(io);
+
+    const ip6_started_ms = context.ip6_started_ms.load(.acquire);
+    const ip4_started_ms = context.ip4_started_ms.load(.acquire);
+    try testing.expect(ip6_started_ms >= 0);
+    try testing.expect(ip4_started_ms >= 0);
+    const lookup_delay_ms = ip4_started_ms - ip6_started_ms;
+    try testing.expect(lookup_delay_ms >= 40);
+    try testing.expect(lookup_delay_ms < 500);
+    try testing.expect(context.ip6_canceled.load(.acquire));
+}
+
+test "Happy Eyeballs starts alternate DNS immediately when the preferred family is exhausted" {
+    var threaded: Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var event_buffer: [happy_eyeballs_event_capacity]HappyEyeballsEvent = undefined;
+    var events: EventQueue = .init(&event_buffer);
+    var state: HappyEyeballsState = .initWithBackends(io, &events, .happy_eyeballs, .{
+        .mode = .stream,
+    }, .{}, .{
+        .resolveFn = pendingTestResolution,
+    });
+    defer state.deinit();
+
+    state.lookup_ip6_done = true;
+    const host = try HostName.init("preferred-exhausted.test");
+    try state.maybeStartAlternateLookup(host, 443);
+    try testing.expect(state.lookup_ip4_future != null);
 }
 
 test "Happy Eyeballs reaches an IPv4 localhost server through the Zig resolver" {

@@ -593,15 +593,20 @@ fn sendAndReceiveHeadWithTimeout(
 
     var result_buffer: [2]HeaderExchangeRace = undefined;
     var select = std.Io.Select(HeaderExchangeRace).init(io, &result_buffer);
-    select.async(.response, sendAndReceiveHead, .{ req, redirect_buffer });
-    select.async(.timeout, waitForRequestSetupTimeout, .{ io, timeout });
-
     var interrupt_on_cleanup = false;
+    // A timeout branch may sleep for seconds. Require real concurrency so a
+    // saturated async pool cannot run it inline ahead of a ready response.
+    select.concurrent(.response, sendAndReceiveHead, .{ req, redirect_buffer }) catch
+        return error.Unexpected;
     defer {
         if (interrupt_on_cleanup) req.interrupt();
         while (select.cancel()) |_| {}
         if (interrupt_on_cleanup) req.markConnectionClosing();
     }
+    select.concurrent(.timeout, waitForRequestSetupTimeout, .{ io, timeout }) catch {
+        interrupt_on_cleanup = true;
+        return error.Unexpected;
+    };
 
     return switch (try select.await()) {
         .response => |result| result,
@@ -650,9 +655,13 @@ fn requestWithSetupTimeout(
 
     var result_buffer: [2]RequestSetupRace = undefined;
     var select = std.Io.Select(RequestSetupRace).init(io, &result_buffer);
-    select.async(.request, beginRequest, .{ client, method, uri, options });
-    select.async(.timeout, waitForRequestSetupTimeout, .{ io, timeout });
+    // Both sides must run beside the caller; `async` is allowed to run either
+    // branch inline when its worker pool is saturated.
+    select.concurrent(.request, beginRequest, .{ client, method, uri, options }) catch
+        return error.Unexpected;
     defer while (select.cancel()) |remaining| closeRequestSetupRace(remaining);
+    select.concurrent(.timeout, waitForRequestSetupTimeout, .{ io, timeout }) catch
+        return error.Unexpected;
 
     return switch (try select.await()) {
         .request => |result| result,
@@ -1113,7 +1122,9 @@ test "response header timeout interrupts a server that never responds" {
 }
 
 test "shared session reuses one connection across a bodyless 304 response" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    // Force `Io.async` to execute inline. Timeout races must use the stronger
+    // concurrent contract so their sleeping branches cannot stall fast I/O.
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{ .async_limit = .nothing });
     defer threaded.deinit();
     const io = threaded.io();
 
@@ -1133,6 +1144,7 @@ test "shared session reuses one connection across a bodyless 304 response" {
     defer session.deinit();
     var config = timeoutTestConfiguration();
     config.file_durability = .caller_managed;
+    const started = std.Io.Timestamp.now(io, .awake);
 
     var first = session.downloader(config);
     defer first.deinit();
@@ -1154,8 +1166,10 @@ test "shared session reuses one connection across a bodyless 304 response" {
         .succes => {},
         else => return error.ExpectedSuccessfulDownload,
     }
+    const elapsed = started.durationTo(std.Io.Timestamp.now(io, .awake));
 
     try server_future.await(io);
+    try std.testing.expect(elapsed.nanoseconds < std.Io.Duration.fromMilliseconds(1500).nanoseconds);
     const contents = try std.Io.Dir.cwd().readFileAlloc(io, destination, std.testing.allocator, .limited(64));
     defer std.testing.allocator.free(contents);
     try std.testing.expectEqualStrings("third", contents);
