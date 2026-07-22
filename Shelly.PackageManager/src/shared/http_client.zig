@@ -34,8 +34,7 @@ pub const disable_tls = std.options.http_disable_tls;
 
 /// Controls which resolved address families are eligible for new connections.
 /// `happy_eyeballs` mirrors curl by preferring IPv6 while racing IPv4 shortly
-/// afterwards. `prefer_ipv4` uses the same algorithm with the preference
-/// reversed.
+/// afterwards. `prefer_ipv4` uses the same algorithm with IPv4 launched first.
 pub const AddressFamilyPolicy = enum {
     happy_eyeballs,
     prefer_ipv4,
@@ -52,7 +51,7 @@ io: Io,
 /// also need to bound DNS and TLS should apply a request-setup deadline.
 connect_timeout: Io.Timeout = .none,
 
-address_family_policy: AddressFamilyPolicy = .happy_eyeballs,
+address_family_policy: AddressFamilyPolicy = .prefer_ipv4,
 
 ca_bundle_lock: if (disable_tls) void else Io.RwLock = if (disable_tls) {} else .init,
 ca_bundle: if (disable_tls) void else std.crypto.Certificate.Bundle = if (disable_tls) {} else .empty,

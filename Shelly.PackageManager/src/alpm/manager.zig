@@ -166,7 +166,7 @@ pub const Manager = struct {
     is_root: bool = false,
     temp_root_path: []const u8,
     show_hidden_packages: bool = false,
-    download_address_family_policy: downloader.AddressFamilyPolicy = .happy_eyeballs,
+    download_address_family_policy: downloader.AddressFamilyPolicy = .prefer_ipv4,
     operation_context: ?*operation_api.OperationContext = null,
     unexpected_fetch_reported: std.atomic.Value(bool) = .init(false),
 
