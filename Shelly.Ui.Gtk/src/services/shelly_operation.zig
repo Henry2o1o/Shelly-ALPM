@@ -260,7 +260,7 @@ pub const ShellyOperation = struct {
         const shelly_bin = if (builtin.mode == .Debug)
             "../Shelly.Cli.Zig/zig-out/bin/shelly"
         else
-            "shelly";
+            "shelly-beta";
         var full = try self.allocator.alloc([]const u8, args.len + 2);
         full[0] = shelly_bin;
         @memcpy(full[1 .. 1 + args.len], args);

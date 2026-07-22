@@ -19,7 +19,7 @@ pub const ShellyCli = struct {
         const shelly_bin = if (builtin.mode == .Debug)
             "../Shelly.Cli.Zig/zig-out/bin/shelly"
         else
-            "shelly";
+            "shelly-beta";
 
         var argv = try self.allocator.alloc([]const u8, args.len + 2);
         defer self.allocator.free(argv);
