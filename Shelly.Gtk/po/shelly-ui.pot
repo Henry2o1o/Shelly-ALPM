@@ -1496,12 +1496,6 @@ msgstr ""
 msgid "Failed to remove packages: {0}"
 msgstr ""
 
-msgid "Changes"
-msgstr ""
-
-msgid "Review Changes"
-msgstr ""
-
 msgid "Package Statistics"
 msgstr ""
 
