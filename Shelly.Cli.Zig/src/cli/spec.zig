@@ -200,7 +200,7 @@ test "builds the complete action-first manifest from native Zig metadata" {
     defer arena.deinit();
     const manifest = try Manifest.load(arena.allocator());
     try std.testing.expectEqual(catalog.variants.len, manifest.leafCommandCount);
-    try std.testing.expectEqualStrings("2.4.1+4", manifest.version);
+    try std.testing.expectEqualStrings(catalog.version, manifest.version);
     try std.testing.expect(manifest.findByPath("shelly search flatpak") != null);
     try std.testing.expect(manifest.findByPath("shelly sync flatpak") != null);
     try std.testing.expect(manifest.findByPath("shelly flatpak search") == null);

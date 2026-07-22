@@ -1,7 +1,8 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 pub const binary = "shelly";
-pub const version = "2.4.1+4";
+pub const version = build_options.version;
 pub const informational_version = version;
 pub const root_description = "Shelly — a native, unified package manager for Arch Linux repository packages, the AUR, Flatpaks, and AppImages. A bare value searches standard repositories and the AUR, then prompts for a package to install.";
 
