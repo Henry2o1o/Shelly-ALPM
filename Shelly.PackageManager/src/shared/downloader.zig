@@ -2,6 +2,8 @@ const std = @import("std");
 const operations = @import("operation_context");
 const HttpClient = @import("http_client.zig");
 
+pub const AddressFamilyPolicy = HttpClient.AddressFamilyPolicy;
+
 pub const DownloadEventType = enum {
     Start,
     Progress,
@@ -49,6 +51,9 @@ pub const DownloadConfiguration = struct {
     response_header_timeout_in_seconds: u32 = 30,
     /// Bounds each individual body read. Receiving bytes resets the deadline.
     body_idle_timeout_in_seconds: u32 = 30,
+    /// Defaults to IPv4-first dual-stack operation. `ipv4_only` is an explicit
+    /// escape hatch for networks or VPNs that advertise but blackhole IPv6.
+    address_family_policy: AddressFamilyPolicy = .prefer_ipv4,
     max_retries: u8 = 3,
     retry_delay_secs: u32 = 1,
     verify_ssl: bool = true,
@@ -101,6 +106,7 @@ pub const CoreDownloader = struct {
                 .allocator = allocator,
                 .io = io,
                 .connect_timeout = connectTimeout(config.timeout_in_seconds),
+                .address_family_policy = config.address_family_policy,
             },
         };
     }
@@ -131,6 +137,7 @@ pub const CoreDownloader = struct {
             .allocator = self.allocator,
             .io = self.io,
             .connect_timeout = connectTimeout(self.configuration.timeout_in_seconds),
+            .address_family_policy = self.configuration.address_family_policy,
         };
     }
 
@@ -772,6 +779,7 @@ test "DownloadConfiguration.default() returns correct default values" {
     try std.testing.expectEqual(@as(u32, 30), config.timeout_in_seconds);
     try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
     try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
+    try std.testing.expectEqual(AddressFamilyPolicy.prefer_ipv4, config.address_family_policy);
     try std.testing.expectEqual(@as(u8, 3), config.max_retries);
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
     try std.testing.expectEqual(true, config.verify_ssl);
@@ -788,6 +796,15 @@ test "connect timeout uses the configured duration" {
         else => return error.TestExpectedDuration,
     }
     try std.testing.expect(connectTimeout(0) == .none);
+}
+
+test "address-family policy is forwarded to the HTTP client" {
+    var downloader = CoreDownloader.init(std.testing.allocator, std.testing.io, .{
+        .address_family_policy = .ipv4_only,
+    });
+    defer downloader.deinit();
+
+    try std.testing.expectEqual(AddressFamilyPolicy.ipv4_only, downloader.http_client.address_family_policy);
 }
 
 test "download requests disable connection reuse for bodyless conditional responses" {

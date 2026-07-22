@@ -254,6 +254,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/shared/downloader.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     downloader_test_module.addImport("operation_context", operation_context_mod);
     const downloader_tests = b.addTest(.{ .name = "downloader-test", .root_module = downloader_test_module });
@@ -316,7 +317,7 @@ pub fn build(b: *std.Build) void {
             "Manager.init applies configured libalpm options and callback contexts",
             "ALPM queries honor shared cancellation",
             "single-server repositories receive a thirty second setup timeout",
-            "zero-server and multi-mirror repositories retain fast failover",
+            "multi-mirror repositories do not use a stagger as a hard setup deadline",
             "onDownloadEvent does not duplicate progress when a common operation is attached",
         },
     });

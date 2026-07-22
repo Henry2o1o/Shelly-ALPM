@@ -11,8 +11,8 @@ const Client = @This();
 const builtin = @import("builtin");
 
 // Vendored from Zig 0.16.0's std.http.Client. TLS is intentionally injected
-// from the local compatibility client, and hostname connection uses separate
-// A/AAAA lookups so either address family can succeed independently.
+// from the local compatibility client. Host names resolve through libc/NSS,
+// after which IPv4 and IPv6 connection attempts race independently.
 const std = @import("std");
 const TlsClient = @import("tls_client.zig");
 const Io = std.Io;
@@ -27,17 +27,29 @@ const Reader = std.Io.Reader;
 const HostName = std.Io.net.HostName;
 const IpAddress = std.Io.net.IpAddress;
 const Stream = std.Io.net.Stream;
+const posix = std.posix;
 
 pub const disable_tls = std.options.http_disable_tls;
+
+/// Controls which resolved address families are eligible for new connections.
+/// `prefer_ipv4` retains IPv6 fallback but starts IPv4 first, which is useful
+/// for VPNs that expose an IPv6-capable local stack without routing IPv6.
+pub const AddressFamilyPolicy = enum {
+    prefer_ipv4,
+    ipv4_only,
+    ipv6_only,
+};
 
 /// Used for all client allocations. Must be thread-safe.
 allocator: Allocator,
 /// Used for opening TCP connections.
 io: Io,
 
-/// Applied to every individual IP connection attempt. DNS resolution has its
-/// own resolver timeout. A duration is restarted for each candidate address.
+/// Bounds the post-resolution address-family connection race. Callers that
+/// also need to bound DNS and TLS should apply a request-setup deadline.
 connect_timeout: Io.Timeout = .none,
+
+address_family_policy: AddressFamilyPolicy = .prefer_ipv4,
 
 ca_bundle_lock: if (disable_tls) void else Io.RwLock = if (disable_tls) {} else .init,
 ca_bundle: if (disable_tls) void else std.crypto.Certificate.Bundle = if (disable_tls) {} else .empty,
@@ -1496,7 +1508,7 @@ pub fn connectTcpOptions(client: *Client, options: ConnectTcpOptions) ConnectTcp
         .protocol = protocol,
     })) |conn| return conn;
 
-    var stream = try connectPreferIp4(host, io, port, .{
+    var stream = try connectHost(host, io, port, client.address_family_policy, .{
         .mode = .stream,
         .timeout = options.timeout orelse client.connect_timeout,
     });
@@ -1530,38 +1542,158 @@ const FamilyRace = union(enum) {
     timeout: Io.Cancelable!void,
 };
 
-/// Resolves A and AAAA independently so failure of one DNS family does not
-/// discard a valid result from the other. IPv4 receives a small head start,
-/// matching Shelly's C# client's preference while retaining IPv6 fallback.
-fn connectPreferIp4(
+const max_resolved_addresses_per_family = 32;
+
+const ResolvedAddresses = struct {
+    ip4: [max_resolved_addresses_per_family]IpAddress = undefined,
+    ip6: [max_resolved_addresses_per_family]IpAddress = undefined,
+    ip4_len: usize = 0,
+    ip6_len: usize = 0,
+
+    fn ip4Slice(resolved: *const ResolvedAddresses) []const IpAddress {
+        return resolved.ip4[0..resolved.ip4_len];
+    }
+
+    fn ip6Slice(resolved: *const ResolvedAddresses) []const IpAddress {
+        return resolved.ip6[0..resolved.ip6_len];
+    }
+
+    fn append(resolved: *ResolvedAddresses, address: IpAddress) void {
+        switch (address) {
+            .ip4 => {
+                if (resolved.ip4_len == resolved.ip4.len) return;
+                resolved.ip4[resolved.ip4_len] = address;
+                resolved.ip4_len += 1;
+            },
+            .ip6 => {
+                if (resolved.ip6_len == resolved.ip6.len) return;
+                resolved.ip6[resolved.ip6_len] = address;
+                resolved.ip6_len += 1;
+            },
+        }
+    }
+};
+
+/// Resolves through libc so NSS, nss-resolve/systemd-resolved, VPN-provided DNS,
+/// `/etc/hosts`, and system address sorting all participate. Zig's Linux-native
+/// resolver intentionally bypasses libc and reads resolver configuration itself.
+fn resolveSystem(
+    host: HostName,
+    port: u16,
+    policy: AddressFamilyPolicy,
+) HostName.LookupError!ResolvedAddresses {
+    if (!builtin.link_libc) return error.OptionUnsupported;
+
+    var name_buffer: [HostName.max_len:0]u8 = undefined;
+    @memcpy(name_buffer[0..host.bytes.len], host.bytes);
+    name_buffer[host.bytes.len] = 0;
+    const name = name_buffer[0..host.bytes.len :0];
+
+    var service_buffer: [8]u8 = undefined;
+    const service = std.fmt.bufPrintZ(&service_buffer, "{d}", .{port}) catch unreachable;
+
+    const hints: posix.addrinfo = .{
+        .flags = .{
+            .NUMERICSERV = true,
+            .ADDRCONFIG = true,
+        },
+        .family = switch (policy) {
+            .prefer_ipv4 => posix.AF.UNSPEC,
+            .ipv4_only => posix.AF.INET,
+            .ipv6_only => posix.AF.INET6,
+        },
+        .socktype = posix.SOCK.STREAM,
+        .protocol = posix.IPPROTO.TCP,
+        .canonname = null,
+        .addr = null,
+        .addrlen = 0,
+        .next = null,
+    };
+
+    var result: ?*posix.addrinfo = null;
+    switch (posix.system.getaddrinfo(name.ptr, service.ptr, &hints, &result)) {
+        @as(posix.system.EAI, @enumFromInt(0)) => {},
+        .ADDRFAMILY, .FAMILY => return error.AddressFamilyUnsupported,
+        .AGAIN, .FAIL => return error.NameServerFailure,
+        .MEMORY => return error.SystemResources,
+        .NODATA, .NONAME => return error.UnknownHostName,
+        else => return error.Unexpected,
+    }
+    defer if (result) |head| posix.system.freeaddrinfo(head);
+
+    var resolved: ResolvedAddresses = .{};
+    var next = result;
+    while (next) |info| : (next = info.next) {
+        if (info.family != posix.AF.INET and info.family != posix.AF.INET6) continue;
+        const address = info.addr orelse continue;
+        const storage: *const Io.Threaded.PosixAddress =
+            @alignCast(@fieldParentPtr("any", address));
+        resolved.append(Io.Threaded.addressFromPosix(storage));
+    }
+    if (resolved.ip4_len == 0 and resolved.ip6_len == 0) return error.NoAddressReturned;
+    return resolved;
+}
+
+/// Resolves once through the operating system, then races the eligible address
+/// families independently. IPv4 receives a small head start while IPv6 remains
+/// available as a fallback.
+fn connectHost(
     host: HostName,
     io: Io,
     port: u16,
+    policy: AddressFamilyPolicy,
     options: IpAddress.ConnectOptions,
 ) HostName.ConnectError!Stream {
+    const resolved = try resolveSystem(host, port, policy);
+
     var result_buffer: [3]FamilyRace = undefined;
     var select = Io.Select(FamilyRace).init(io, &result_buffer);
 
     // The threaded POSIX backend does not implement native connect timeouts.
     // Keep the socket options timeout-free and apply one deadline to the
-    // complete DNS + address-family race instead.
+    // complete post-resolution address-family race instead.
     var connect_options = options;
     connect_options.timeout = .none;
-    select.async(.ip4, connectFamily, .{ host, io, port, IpAddress.Family.ip4, connect_options });
-    select.async(.ip6, connectFamilyDelayed, .{ host, io, port, IpAddress.Family.ip6, connect_options });
-    const has_timeout = options.timeout != .none;
-    if (has_timeout) select.async(.timeout, waitForConnectTimeout, .{ io, options.timeout });
 
-    // Cancel the losing lookup/connection and close any stream it completed
-    // before cancelation reached it.
+    const use_ip4 = policy != .ipv6_only and resolved.ip4_len != 0;
+    const use_ip6 = policy != .ipv4_only and resolved.ip6_len != 0;
+    var remaining_families: usize = 0;
+    if (use_ip4) {
+        select.async(.ip4, connectFamily, .{ io, resolved.ip4Slice(), connect_options });
+        remaining_families += 1;
+    }
+    if (use_ip6) {
+        if (use_ip4) {
+            select.async(.ip6, connectFamilyDelayed, .{ io, resolved.ip6Slice(), connect_options });
+        } else {
+            select.async(.ip6, connectFamily, .{ io, resolved.ip6Slice(), connect_options });
+        }
+        remaining_families += 1;
+    }
+    if (remaining_families == 0) return error.NoAddressReturned;
+
+    const has_timeout = options.timeout != .none;
+    if (has_timeout) {
+        select.async(.timeout, waitForConnectTimeout, .{ io, options.timeout });
+    }
+
+    // Cancellation interrupts a blocked POSIX connect in Zig's threaded I/O
+    // backend, so a successful IPv4 connection does not wait for the kernel's
+    // IPv6 SYN timeout. Close a stream if the losing task completed first.
     defer while (select.cancel()) |remaining| closeFamilyRace(io, remaining);
 
     var last_error: ?HostName.ConnectError = null;
-    for (0..if (has_timeout) 3 else 2) |_| {
+    while (remaining_families != 0) {
         const completed = try select.await();
         const result = switch (completed) {
-            .ip4 => |value| value,
-            .ip6 => |value| value,
+            .ip4 => |value| result: {
+                remaining_families -= 1;
+                break :result value;
+            },
+            .ip6 => |value| result: {
+                remaining_families -= 1;
+                break :result value;
+            },
             .timeout => |value| {
                 try value;
                 return error.Timeout;
@@ -1578,14 +1710,12 @@ fn connectPreferIp4(
 }
 
 fn connectFamilyDelayed(
-    host: HostName,
     io: Io,
-    port: u16,
-    family: IpAddress.Family,
+    addresses: []const IpAddress,
     options: IpAddress.ConnectOptions,
 ) FamilyResult {
     io.sleep(Io.Duration.fromMilliseconds(200), .awake) catch |err| return err;
-    return connectFamily(host, io, port, family, options);
+    return connectFamily(io, addresses, options);
 }
 
 fn closeFamilyRace(io: Io, completed: FamilyRace) void {
@@ -1601,24 +1731,19 @@ fn waitForConnectTimeout(io: Io, timeout: Io.Timeout) Io.Cancelable!void {
     return timeout.sleep(io);
 }
 
-/// Family-specific counterpart of `HostName.connect`. The standard helper
-/// performs one combined A+AAAA lookup, which makes a failure from either DNS
-/// family fatal even when the other family returned usable addresses.
 fn connectFamily(
-    host: HostName,
     io: Io,
-    port: u16,
-    family: IpAddress.Family,
+    addresses: []const IpAddress,
     options: IpAddress.ConnectOptions,
 ) HostName.ConnectError!Stream {
+    if (addresses.len == 0) return error.NoAddressReturned;
+
     var connect_many_buffer: [32]IpAddress.ConnectError!Stream = undefined;
     var connect_many_queue: Io.Queue(IpAddress.ConnectError!Stream) = .init(&connect_many_buffer);
 
-    var connect_many = io.async(connectManyFamily, .{
-        host,
+    var connect_many = io.async(connectManyAddresses, .{
         io,
-        port,
-        family,
+        addresses,
         &connect_many_queue,
         options,
     });
@@ -1654,44 +1779,26 @@ fn connectFamily(
     }
 }
 
-fn connectManyFamily(
-    host: HostName,
+fn connectManyAddresses(
     io: Io,
-    port: u16,
-    family: IpAddress.Family,
+    addresses: []const IpAddress,
     results: *Io.Queue(IpAddress.ConnectError!Stream),
     options: IpAddress.ConnectOptions,
-) HostName.LookupError!void {
+) Io.Cancelable!void {
     defer results.close(io);
-
-    var canonical_name_buffer: [HostName.max_len]u8 = undefined;
-    var lookup_buffer: [32]HostName.LookupResult = undefined;
-    var lookup_queue: Io.Queue(HostName.LookupResult) = .init(&lookup_buffer);
-    var lookup_future = io.async(HostName.lookup, .{ host, io, &lookup_queue, .{
-        .port = port,
-        .canonical_name_buffer = &canonical_name_buffer,
-        .family = family,
-    } });
-    defer lookup_future.cancel(io) catch {};
 
     var group: Io.Group = .init;
     defer group.cancel(io);
 
-    while (lookup_queue.getOne(io)) |dns_result| switch (dns_result) {
-        .address => |address| group.async(io, enqueueFamilyConnection, .{
+    for (addresses) |address| {
+        group.async(io, enqueueFamilyConnection, .{
             address,
             io,
             results,
             options,
-        }),
-        .canonical_name => continue,
-    } else |err| switch (err) {
-        error.Canceled => |canceled| return canceled,
-        error.Closed => {
-            try group.await(io);
-            return lookup_future.await(io);
-        },
+        });
     }
+    return group.await(io);
 }
 
 fn enqueueFamilyConnection(
@@ -2095,4 +2202,28 @@ pub fn fetch(client: *Client, options: FetchOptions) FetchError!FetchResult {
 
 test {
     _ = Response;
+}
+
+test "system resolver uses the host database and enforces ipv4-only policy" {
+    if (!builtin.link_libc) return error.SkipZigTest;
+
+    const host = try HostName.init("localhost");
+    const resolved = try resolveSystem(host, 443, .ipv4_only);
+    try testing.expect(resolved.ip4_len > 0);
+    try testing.expectEqual(@as(usize, 0), resolved.ip6_len);
+    for (resolved.ip4Slice()) |address| {
+        try testing.expect(address == .ip4);
+        try testing.expectEqual(@as(u16, 443), address.getPort());
+    }
+}
+
+test "resolved addresses remain partitioned by family" {
+    var resolved: ResolvedAddresses = .{};
+    resolved.append(try IpAddress.parse("127.0.0.1", 80));
+    resolved.append(try IpAddress.parse("::1", 80));
+
+    try testing.expectEqual(@as(usize, 1), resolved.ip4_len);
+    try testing.expectEqual(@as(usize, 1), resolved.ip6_len);
+    try testing.expect(resolved.ip4Slice()[0] == .ip4);
+    try testing.expect(resolved.ip6Slice()[0] == .ip6);
 }

@@ -12,8 +12,7 @@ const operation_api = @import("operation_context");
 
 const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ...)
 const rawLibalpm = bindings.libalpm.alpm;
-const mirror_failover_timeout_seconds: u32 = 1;
-const single_server_timeout_seconds: u32 = 30;
+const repository_setup_timeout_seconds: u32 = 30;
 
 pub const ConfigError = error{
     InitFailed,
@@ -166,6 +165,7 @@ pub const Manager = struct {
     is_root: bool = false,
     temp_root_path: []const u8,
     show_hidden_packages: bool = false,
+    download_address_family_policy: downloader.AddressFamilyPolicy = .prefer_ipv4,
     operation_context: ?*operation_api.OperationContext = null,
     unexpected_fetch_reported: std.atomic.Value(bool) = .init(false),
 
@@ -270,6 +270,12 @@ pub const Manager = struct {
     /// synchronous calls made through it.
     pub fn setOperationContext(self: *Manager, context: ?*operation_api.OperationContext) void {
         self.operation_context = context;
+    }
+
+    /// Changes the address-family policy for subsequent repository database and
+    /// package downloads. Existing connections are unaffected.
+    pub fn setDownloadAddressFamilyPolicy(self: *Manager, policy: downloader.AddressFamilyPolicy) void {
+        self.download_address_family_policy = policy;
     }
 
     pub fn sync(self: *Manager, force: bool) TransactionError!void {
@@ -1959,7 +1965,7 @@ pub const Manager = struct {
         force_download: bool,
         signature_required: bool,
     ) downloader.DownloadError!void {
-        const download_config = mirrorDownloadConfiguration(urls.items.len);
+        const download_config = mirrorDownloadConfiguration(urls.items.len, self.download_address_family_policy);
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
         downloader_instance.quiet = true;
@@ -2083,7 +2089,10 @@ pub const Manager = struct {
     }
 
     fn download_package(self: *Manager, package: libalpm.Package, database: libalpm.Database) downloader.DownloadError!void {
-        const download_config = mirrorDownloadConfiguration(databaseServerCount(database));
+        const download_config = mirrorDownloadConfiguration(
+            databaseServerCount(database),
+            self.download_address_family_policy,
+        );
         var downloader_instance = downloader.CoreDownloader.init(self.allocator, self.io(), download_config);
         defer downloader_instance.deinit();
         downloader_instance.quiet = true;
@@ -2785,13 +2794,16 @@ fn databaseServerCount(database: libalpm.Database) usize {
     return count;
 }
 
-fn mirrorDownloadConfiguration(configured_server_count: usize) downloader.DownloadConfiguration {
+fn mirrorDownloadConfiguration(
+    configured_server_count: usize,
+    address_family_policy: downloader.AddressFamilyPolicy,
+) downloader.DownloadConfiguration {
     return .{
         .user_agent = "Shelly-ALPM/3",
-        .timeout_in_seconds = if (configured_server_count == 1)
-            single_server_timeout_seconds
-        else
-            mirror_failover_timeout_seconds,
+        // This is a real DNS/TCP/TLS deadline. Advancing to another mirror is
+        // handled by the caller and must not shorten this to a one-second cutoff.
+        .timeout_in_seconds = repository_setup_timeout_seconds,
+        .address_family_policy = address_family_policy,
         // A failed candidate should immediately advance to the next mirror.
         .max_retries = if (configured_server_count == 1)
             2
@@ -2809,22 +2821,24 @@ fn propagateSignatureCancellation(result: downloader.DownloadResult) downloader.
 }
 
 test "single-server repositories receive a thirty second setup timeout" {
-    const config = mirrorDownloadConfiguration(1);
-    try std.testing.expectEqual(single_server_timeout_seconds, config.timeout_in_seconds);
-    try std.testing.expectEqual(single_server_timeout_seconds, config.response_header_timeout_in_seconds);
-    try std.testing.expectEqual(single_server_timeout_seconds, config.body_idle_timeout_in_seconds);
+    const config = mirrorDownloadConfiguration(1, .prefer_ipv4);
+    try std.testing.expectEqual(repository_setup_timeout_seconds, config.timeout_in_seconds);
+    try std.testing.expectEqual(repository_setup_timeout_seconds, config.response_header_timeout_in_seconds);
+    try std.testing.expectEqual(repository_setup_timeout_seconds, config.body_idle_timeout_in_seconds);
     try std.testing.expectEqual(@as(u8, 2), config.max_retries);
     try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
+    try std.testing.expectEqual(downloader.AddressFamilyPolicy.prefer_ipv4, config.address_family_policy);
 }
 
-test "zero-server and multi-mirror repositories retain fast failover" {
+test "multi-mirror repositories do not use a stagger as a hard setup deadline" {
     for ([_]usize{ 0, 2, 8 }) |server_count| {
-        const config = mirrorDownloadConfiguration(server_count);
-        try std.testing.expectEqual(mirror_failover_timeout_seconds, config.timeout_in_seconds);
+        const config = mirrorDownloadConfiguration(server_count, .ipv4_only);
+        try std.testing.expectEqual(repository_setup_timeout_seconds, config.timeout_in_seconds);
         try std.testing.expectEqual(@as(u32, 30), config.response_header_timeout_in_seconds);
         try std.testing.expectEqual(@as(u32, 30), config.body_idle_timeout_in_seconds);
         try std.testing.expectEqual(@as(u8, 0), config.max_retries);
         try std.testing.expectEqual(@as(u32, 1), config.retry_delay_secs);
+        try std.testing.expectEqual(downloader.AddressFamilyPolicy.ipv4_only, config.address_family_policy);
     }
 }
 
