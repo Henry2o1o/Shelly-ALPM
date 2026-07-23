@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm zig base-devel gtk4 clang glibc git vala meson ninja json-glib
+          pacman -S --noconfirm zig flatpak base-devel gtk4 clang glibc git vala meson ninja json-glib
 
       # Checkout only after git is installed
       - uses: actions/checkout@v6
