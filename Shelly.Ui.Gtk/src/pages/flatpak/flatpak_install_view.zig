@@ -68,6 +68,7 @@ pub const FlatpakInstallView = extern struct {
         filter: ?*gtk.CustomFilter,
         selection: ?*gtk.SingleSelection,
         selected_app: ?*AppstreamAppObject,
+        history_entries: ?[]Entry,
         loaded: bool,
         disposed: bool,
         load_generation: u64,
@@ -139,6 +140,7 @@ pub const FlatpakInstallView = extern struct {
         p.filter = null;
         p.selection = null;
         p.selected_app = null;
+        p.history_entries = null;
         p.loaded = false;
         p.disposed = false;
         p.load_generation = 0;
@@ -365,41 +367,55 @@ pub const FlatpakInstallView = extern struct {
 
     fn on_version_history_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const app = self.priv().selected_app orelse return;
-        var entries: std.ArrayList(Entry) = .empty;
-        defer entries.deinit(std.heap.c_allocator);
+
+        var entries: std.ArrayListUnmanaged(Entry) = .empty;
+        errdefer {
+            for (entries.items) |e| {
+                std.heap.c_allocator.free(e.version);
+                if (e.note) |n| std.heap.c_allocator.free(n);
+            }
+            entries.deinit(std.heap.c_allocator);
+        }
 
         for (app.getReleases()) |release| {
-            std.log.info("Flatpak version history overlay: release={s}", .{release.Version});
             const version = std.heap.c_allocator.dupeZ(u8, release.Version) catch continue;
             const note = std.heap.c_allocator.dupeZ(u8, release.Description) catch {
                 std.heap.c_allocator.free(version);
                 continue;
             };
-            entries.append(std.heap.c_allocator, Entry{
-                .version = version,
-                .note = note,
-                .date = "",
-            }) catch {
+            entries.append(std.heap.c_allocator, .{ .version = version, .note = note, .date = "" }) catch {
                 std.heap.c_allocator.free(version);
                 std.heap.c_allocator.free(note);
                 continue;
             };
         }
 
-        const dlg = VersionHistoryDialog.new(
-            "Version History",
-            app.getName(),
-            entries.toOwnedSlice(std.heap.c_allocator) catch &[_]Entry{},
-            &on_close,
-            self,
-        );
+        const owned = entries.toOwnedSlice(std.heap.c_allocator) catch return;
+        const p = self.priv();
+        p.history_entries = owned;
+
+        const dlg = VersionHistoryDialog.new("Version History", app.getName(), owned, &on_close, self);
+
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.showLockout(dlg.as(gtk.Widget));
         }
     }
 
+    fn free_history_entries(self: *Self) void {
+        const p = self.priv();
+        if (p.history_entries) |entries| {
+            for (entries) |e| {
+                std.heap.c_allocator.free(e.version);
+                std.heap.c_allocator.free(e.note);
+            }
+            std.heap.c_allocator.free(entries);
+            p.history_entries = null;
+        }
+    }
+
     fn on_close(ctx: ?*anyopaque) void {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx.?));
+        self.free_history_entries();
         if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
     }
 
@@ -463,7 +479,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.Widget.setSensitive(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len > 0));
         gtk.Widget.setSensitive(p.overlay_install_button.as(gtk.Widget), @intFromBool(remotes.len > 0));
         if (remotes.len > 0) self.request_remote_info(remotes[0].Name, app.getId());
-        gtk.Widget.setVisible(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len == 0));
+        gtk.Widget.setVisible(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len > 1));
     }
 
     fn request_selected_remote_info(self: *Self) void {
@@ -523,6 +539,11 @@ pub const FlatpakInstallView = extern struct {
         };
 
         defer parsed.deinit();
+        if (parsed.value.hits.len == 0) {
+            load.failed = true;
+            _ = glib.idleAdd(&remote_info_complete, load);
+            return;
+        }
         load.download_size = parsed.value.hits[0].download_size;
         load.installed_size = parsed.value.hits[0].installed_size;
         _ = glib.idleAdd(&remote_info_complete, load);
@@ -837,6 +858,7 @@ pub const FlatpakInstallView = extern struct {
     pub fn apply_category(self: *Self, category: Category) void {
         const p = self.priv();
         p.category = category;
+        self.show_list();
         if (p.filter) |filter| gtk.Filter.changed(filter.as(gtk.Filter), .different);
     }
 
@@ -897,7 +919,7 @@ pub const FlatpakInstallView = extern struct {
         result.arena = arena;
         const alloc = arena.allocator();
 
-        var threaded: std.Io.Threaded = .init(alloc, .{});
+        var threaded: std.Io.Threaded = .init(std.heap.c_allocator, .{});
         defer threaded.deinit();
         const io = threaded.io();
 
@@ -908,7 +930,7 @@ pub const FlatpakInstallView = extern struct {
             return;
         };
 
-        var flathub = FlatHubApiService.init(alloc, io);
+        var flathub = FlatHubApiService.init(std.heap.c_allocator, io);
         defer flathub.deinit();
 
         result.trending_set = collectionSet(alloc, &flathub, .trending);
@@ -929,7 +951,10 @@ pub const FlatpakInstallView = extern struct {
 
         var set: std.StringHashMapUnmanaged(void) = .empty;
         set.ensureTotalCapacity(alloc, @intCast(ids.len)) catch return .empty;
-        for (ids) |id| set.putAssumeCapacity(id, {});
+        for (ids) |id| {
+            const owned = alloc.dupe(u8, id) catch continue;
+            set.putAssumeCapacity(owned, {});
+        }
         return set;
     }
 
@@ -1007,6 +1032,7 @@ pub const FlatpakInstallView = extern struct {
             p.disposed = true;
             p.loaded = false;
             p.load_generation +%= 1;
+            self.free_history_entries();
             self.clear_details();
             gtk.GridView.setModel(p.list_flatpaks, null);
             gtk.GridView.setFactory(p.list_flatpaks, null);
