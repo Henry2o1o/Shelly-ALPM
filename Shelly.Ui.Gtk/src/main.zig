@@ -21,7 +21,7 @@ pub fn main(init: std.process.Init) void {
     _ = bind_textdomain_codeset("shelly-ui", "UTF-8");
     _ = textdomain("shelly-ui");
 
-    const app = gtk.Application.new("com.shellyorzig.shelly", .{}); //RENAME THIS PLEASE FOR THE LOVE OF GOD LATER BUT LIKE THIS FOR DEVVING
+    const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();
 
     _ = gio.Application.signals.activate.connect(app, ?*anyopaque, &activate, null, .{});
