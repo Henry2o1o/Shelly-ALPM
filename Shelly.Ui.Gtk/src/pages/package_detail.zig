@@ -33,7 +33,12 @@ pub const PackageDetail = extern struct {
         add_explicit_action: *gio.SimpleAction,
         mark_dependency_action: *gio.SimpleAction,
 
+        back_button: *gtk.Button,
+        actions_button: *gtk.MenuButton,
+
         debounce_source: c_uint,
+        base_installed: bool,
+        nav_stack: std.ArrayListUnmanaged([]const u8),
         pending_name: [256]u8,
         pending_len: usize,
         generation: u64,
@@ -74,6 +79,7 @@ pub const PackageDetail = extern struct {
         p.mark_dependency_action = addAction(self, group, "dependency", &on_mark_dependency);
 
         gtk.Widget.insertActionGroup(self.as(gtk.Widget), "detail", group.as(gio.ActionGroup));
+        _ = gtk.Button.signals.clicked.connect(p.back_button, *Self, &on_back_clicked, self, .{});
         group.as(gobject.Object).unref();
     }
 
@@ -96,11 +102,17 @@ pub const PackageDetail = extern struct {
 
     pub fn showPackage(self: *Self, name: []const u8, is_installed: bool, icon_path: ?[:0]const u8) void {
         const p = self.priv();
+        clear_nav_stack(self);
+        p.base_installed = is_installed;
+        self.show_package_internal(name, is_installed, icon_path);
+        update_nav(self);
+    }
 
+    fn show_package_internal(self: *Self, name: []const u8, is_installed: bool, icon_path: ?[:0]const u8) void {
+        const p = self.priv();
         const len = @min(name.len, p.pending_name.len);
         @memcpy(p.pending_name[0..len], name[0..len]);
         p.pending_len = len;
-
         if (icon_path) |path| {
             gtk.Image.setFromFile(p.icon, path);
         } else {
@@ -111,12 +123,10 @@ pub const PackageDetail = extern struct {
         gtk.Label.setLabel(p.description_label, "Loading...");
         clear_box(p.spec_box);
         clear_box(p.sections_box);
-
         gio.SimpleAction.setEnabled(p.reinstall_action, @intFromBool(is_installed));
         gio.SimpleAction.setEnabled(p.add_explicit_action, @intFromBool(is_installed));
         gio.SimpleAction.setEnabled(p.mark_dependency_action, @intFromBool(is_installed));
         gio.SimpleAction.setEnabled(p.add_hold_action, @intFromBool(is_installed));
-
         if (p.debounce_source != 0) {
             _ = glib.Source.remove(p.debounce_source);
             p.debounce_source = 0;
@@ -222,9 +232,9 @@ pub const PackageDetail = extern struct {
         add_spec_list(p.spec_box, alloc, "Provides", package.Provides);
         add_spec_list(p.spec_box, alloc, "Conflicts", package.Conflicts);
 
-        add_list_section(p.sections_box, "Depends", package.Depends);
-        add_list_section(p.sections_box, "Optional Depends", package.OptDepends);
-        add_list_section(p.sections_box, "Required By", package.RequiredBy);
+        add_list_section(p.sections_box, self, "Depends", package.Depends);
+        add_list_section(p.sections_box, self, "Optional Depends", package.OptDepends);
+        add_list_section(p.sections_box, self, "Required By", package.RequiredBy);
     }
 
     fn add_spec_row(box: *gtk.Box, label: []const u8, value: []const u8) void {
@@ -285,31 +295,130 @@ pub const PackageDetail = extern struct {
         gtk.Box.append(box, row.as(gtk.Widget));
     }
 
-    fn add_list_section(box: *gtk.Box, title: []const u8, items: []const []const u8) void {
+    fn add_list_section(box: *gtk.Box, page: *PackageDetail, title: []const u8, items: []const []const u8) void {
         if (items.len == 0) return;
+
         var buf: [64]u8 = undefined;
         const header = std.fmt.bufPrintZ(&buf, "{s} ({d})", .{ title, items.len }) catch "Section";
         const expander = gtk.Expander.new(header);
         gtk.Expander.setExpanded(expander, 0);
-        const list = gtk.Box.new(.vertical, 2);
-        gtk.Widget.setMarginTop(list.as(gtk.Widget), 6);
+        gtk.Widget.addCssClass(expander.as(gtk.Widget), "spec-expander");
+
+        const list = gtk.Box.new(.vertical, 0);
         gtk.Widget.setMarginStart(list.as(gtk.Widget), 8);
+
         for (items) |item| {
-            var ibuf: [256]u8 = undefined;
-            const lbl = gtk.Label.new(c_string.cstr(&ibuf, item));
-            gtk.Widget.setHalign(lbl.as(gtk.Widget), .start);
-            gtk.Label.setXalign(lbl, 0);
-            gtk.Label.setEllipsize(lbl, .end);
-            gtk.Widget.addCssClass(lbl.as(gtk.Widget), "dim-label");
-            gtk.Box.append(list, lbl.as(gtk.Widget));
+            const dep_name = strip_version(item);
+
+            const navigable = std.mem.indexOf(u8, dep_name, ".so") == null and dep_name.len > 0;
+
+            if (navigable) {
+                const row_btn = gtk.Button.new();
+                gtk.Widget.addCssClass(row_btn.as(gtk.Widget), "flat");
+                gtk.Widget.addCssClass(row_btn.as(gtk.Widget), "dep-row");
+                gtk.Widget.setHalign(row_btn.as(gtk.Widget), .fill);
+                var ibuf: [256]u8 = undefined;
+                const lbl = gtk.Label.new(c_string.cstr(&ibuf, item));
+                gtk.Widget.setHalign(lbl.as(gtk.Widget), .start);
+                gtk.Label.setXalign(lbl, 0);
+                gtk.Label.setEllipsize(lbl, .end);
+                gtk.Widget.addCssClass(lbl.as(gtk.Widget), "spec-value");
+                gtk.Button.setChild(row_btn, lbl.as(gtk.Widget));
+                const name_owned = std.heap.c_allocator.dupeZ(u8, dep_name) catch continue;
+                gobject.Object.setDataFull(row_btn.as(gobject.Object), "dep-name", name_owned.ptr, &free_dep_name);
+                gobject.Object.setData(row_btn.as(gobject.Object), "page", page);
+                _ = gtk.Button.signals.clicked.connect(row_btn, ?*anyopaque, &on_dep_clicked, null, .{});
+                gtk.Box.append(list, row_btn.as(gtk.Widget));
+            } else {
+                var ibuf: [256]u8 = undefined;
+                const lbl = gtk.Label.new(c_string.cstr(&ibuf, item));
+                gtk.Widget.setHalign(lbl.as(gtk.Widget), .start);
+                gtk.Label.setXalign(lbl, 0);
+                gtk.Label.setEllipsize(lbl, .end);
+                gtk.Widget.addCssClass(lbl.as(gtk.Widget), "spec-value");
+                gtk.Widget.addCssClass(lbl.as(gtk.Widget), "dim-label");
+                gtk.Widget.addCssClass(lbl.as(gtk.Widget), "dep-row-static");
+                gtk.Box.append(list, lbl.as(gtk.Widget));
+            }
         }
-        const scroll = gtk.ScrolledWindow.new();
-        gtk.ScrolledWindow.setChild(scroll, list.as(gtk.Widget));
-        gtk.ScrolledWindow.setPolicy(scroll, .never, .automatic);
-        gtk.ScrolledWindow.setMaxContentHeight(scroll, 180);
-        gtk.ScrolledWindow.setPropagateNaturalHeight(scroll, 1);
-        gtk.Expander.setChild(expander, scroll.as(gtk.Widget));
+
+        if (items.len > 8) {
+            const scroll = gtk.ScrolledWindow.new();
+            gtk.ScrolledWindow.setChild(scroll, list.as(gtk.Widget));
+            gtk.ScrolledWindow.setPolicy(scroll, .never, .automatic);
+            gtk.ScrolledWindow.setMinContentHeight(scroll, 200);
+            gtk.ScrolledWindow.setMaxContentHeight(scroll, 300);
+            gtk.ScrolledWindow.setPropagateNaturalHeight(scroll, 0);
+            gtk.Expander.setChild(expander, scroll.as(gtk.Widget));
+        } else {
+            gtk.Expander.setChild(expander, list.as(gtk.Widget));
+        }
+
         gtk.Box.append(box, expander.as(gtk.Widget));
+    }
+
+    fn free_dep_name(ptr: ?*anyopaque) callconv(.c) void {
+        const p: [*:0]u8 = @ptrCast(ptr orelse return);
+        std.heap.c_allocator.free(std.mem.span(p));
+    }
+
+    fn on_dep_clicked(button: *gtk.Button, _: ?*anyopaque) callconv(.c) void {
+        const name_ptr = gobject.Object.getData(button.as(gobject.Object), "dep-name") orelse return;
+        const name: [*:0]const u8 = @ptrCast(name_ptr);
+        const page_ptr = gobject.Object.getData(button.as(gobject.Object), "page") orelse return;
+        const self: *PackageDetail = @ptrCast(@alignCast(page_ptr));
+        self.navigate_to_dep(std.mem.span(name));
+    }
+
+    fn navigate_to_dep(self: *Self, name: []const u8) void {
+        const p = self.priv();
+
+        const current = p.pending_name[0..p.pending_len];
+        const owned = std.heap.c_allocator.dupe(u8, current) catch return;
+        p.nav_stack.append(std.heap.c_allocator, owned) catch {
+            std.heap.c_allocator.free(owned);
+            return;
+        };
+        self.show_package_internal(name, false, null);
+        update_nav(self);
+    }
+
+    fn on_back_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const prev = p.nav_stack.pop() orelse return;
+        defer std.heap.c_allocator.free(prev);
+
+        const at_root_after = p.nav_stack.items.len == 0;
+        const installed = if (at_root_after) p.base_installed else false;
+        self.show_package_internal(prev, installed, null);
+        update_nav(self);
+    }
+
+    fn update_nav(self: *Self) void {
+        const p = self.priv();
+        const at_root = p.nav_stack.items.len == 0;
+        gtk.Widget.setVisible(p.back_button.as(gtk.Widget), @intFromBool(!at_root));
+        gtk.Widget.setVisible(p.actions_button.as(gtk.Widget), @intFromBool(at_root));
+    }
+
+    fn clear_nav_stack(self: *Self) void {
+        const p = self.priv();
+        for (p.nav_stack.items) |name| std.heap.c_allocator.free(name);
+        p.nav_stack.clearRetainingCapacity();
+    }
+
+    fn strip_version(item: []const u8) []const u8 {
+        const desc_end = std.mem.indexOfScalar(u8, item, ':') orelse item.len;
+        var name = std.mem.trim(u8, item[0..desc_end], " ");
+
+        const ops = [_][]const u8{ ">=", "<=", "=", ">", "<" };
+        var cut: usize = name.len;
+        for (ops) |op| {
+            if (std.mem.indexOf(u8, name, op)) |idx| {
+                if (idx < cut) cut = idx;
+            }
+        }
+        return std.mem.trim(u8, name[0..cut], " ");
     }
 
     fn add_spec_size(box: *gtk.Box, label: []const u8, bytes: i64) void {
@@ -359,6 +468,7 @@ pub const PackageDetail = extern struct {
             });
         }
     }
+
     fn on_add_hold(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
         const p = self.priv();
 
@@ -449,11 +559,12 @@ pub const PackageDetail = extern struct {
     const template_children = .{
         .{ "icon", @offsetOf(Private, "icon") },
         .{ "name_label", @offsetOf(Private, "name_label") },
-
         .{ "description_label", @offsetOf(Private, "description_label") },
         .{ "spec_box", @offsetOf(Private, "spec_box") },
         .{ "sections_box", @offsetOf(Private, "sections_box") },
         .{ "content_box", @offsetOf(Private, "content_box") },
+        .{ "back_button", @offsetOf(Private, "back_button") },
+        .{ "actions_button", @offsetOf(Private, "actions_button") },
     };
 
     pub const Class = extern struct {

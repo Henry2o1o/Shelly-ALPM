@@ -69,7 +69,7 @@
                 <property name="spacing">6</property>
                 <child>
                   <object class="GtkImage">
-                    <property name="icon-name">view-refresh-symbolic</property>
+                    <property name="icon-name">software-update-available-symbolic</property>
                   </object>
                 </child>
                 <child>

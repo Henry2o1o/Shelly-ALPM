@@ -22,7 +22,7 @@ pub const UpdatePage = extern struct {
     pub const Parent = gtk.Box;
 
     pub const title: [:0]const u8 = "Update";
-    pub const icon_name: [:0]const u8 = "package-x-generic-symbolic";
+    pub const icon_name: [:0]const u8 = "software-update-available-symbolic";
     const resource_path = "/com/shellyorg/shelly/ui/update_page.ui";
 
     const Private = struct {
@@ -482,7 +482,9 @@ pub const UpdatePage = extern struct {
     fn reload(self: *Self) void {
         const p = self.priv();
         p.generation += 1;
+
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        self.update_source_labels();
         thread.detach();
     }
 
