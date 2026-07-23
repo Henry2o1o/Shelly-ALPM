@@ -87,15 +87,22 @@ pub const MakePackageConfiguration = struct {
     package_extension: []const u8,
     source_extension: []const u8,
 
+    fn read_while_file(io: Io, alloc: Allocator, path: []const u8) ![]u8 {
+        return Io.Dir.cwd().readFileAlloc(io, path, alloc, .unlimited);
+    }
+
     const Parser = struct {
         io: Io,
         scratch_allocator: Allocator,
         arena_allocator: Allocator,
         config: *MakePackageConfiguration,
+        depth: usize = 0,
 
         fn parse_file(self: *Parser, path: []const u8) Allocator.Error!void {
-            _ = self;
-            _ = path;
+            if (self.depth >= max_depth) return;
+            const bytes = read_while_file(self.io, self.scratch_allocator, path);
+            defer self.scratch_allocator.free(bytes);
+            self.depth += 1;
         }
     };
 };
