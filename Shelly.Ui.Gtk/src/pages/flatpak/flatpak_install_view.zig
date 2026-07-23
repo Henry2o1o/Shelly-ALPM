@@ -9,6 +9,7 @@ const gobject = bindings.gobject;
 const support = @import("../support.zig");
 const flatpak = @import("../../models/flatpak.zig");
 const search = @import("../../helpers/search.zig");
+const c_string = @import("../../helpers/c_string.zig");
 
 const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const AppstreamAppObject = @import("../../g_objects/appstream_app_object.zig").AppstreamAppObject;
@@ -19,6 +20,8 @@ const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 const Category = @import("../../models/flatpak.zig").Category;
 const FlatHubApiService = @import("../../services/flathub_api.zig").FlatHubApiService;
+const VersionHistoryDialog = @import("../../dialog/page/version_history.zig").VersionHistoryDialog;
+const Entry = @import("../../dialog/page/version_history.zig").Entry;
 
 extern fn g_get_user_data_dir() [*:0]const u8;
 extern fn g_file_test(filename: [*:0]const u8, flags: c_uint) c_int;
@@ -362,7 +365,42 @@ pub const FlatpakInstallView = extern struct {
 
     fn on_version_history_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const app = self.priv().selected_app orelse return;
-        std.log.info("Flatpak version history overlay stub: app={s}", .{app.getId()});
+        var entries: std.ArrayList(Entry) = .empty;
+        defer entries.deinit(std.heap.c_allocator);
+
+        for (app.getReleases()) |release| {
+            std.log.info("Flatpak version history overlay: release={s}", .{release.Version});
+            const version = std.heap.c_allocator.dupeZ(u8, release.Version) catch continue;
+            const note = std.heap.c_allocator.dupeZ(u8, release.Description) catch {
+                std.heap.c_allocator.free(version);
+                continue;
+            };
+            entries.append(std.heap.c_allocator, Entry{
+                .version = version,
+                .note = note,
+                .date = "",
+            }) catch {
+                std.heap.c_allocator.free(version);
+                std.heap.c_allocator.free(note);
+                continue;
+            };
+        }
+
+        const dlg = VersionHistoryDialog.new(
+            "Version History",
+            app.getName(),
+            entries.toOwnedSlice(std.heap.c_allocator) catch &[_]Entry{},
+            &on_close,
+            self,
+        );
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.showLockout(dlg.as(gtk.Widget));
+        }
+    }
+
+    fn on_close(ctx: ?*anyopaque) void {
+        const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx.?));
+        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
     }
 
     fn show_list(self: *Self) void {
