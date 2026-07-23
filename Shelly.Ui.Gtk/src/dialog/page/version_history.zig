@@ -68,8 +68,6 @@ pub const VersionHistoryDialog = extern struct {
             gtk.ListBox.append(p.history_list, make_row(entry));
         }
 
-        gtk.Stack.setVisibleChildName(p.history_stack, if (entries.len == 0) "empty" else "list");
-
         for (entries) |entry| {
             std.heap.c_allocator.free(entry.version);
             std.heap.c_allocator.free(entry.note);

@@ -20,6 +20,7 @@ const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 const Category = @import("../../models/flatpak.zig").Category;
 const FlatHubApiService = @import("../../services/flathub_api.zig").FlatHubApiService;
+const PermissionsDialog = @import("../../dialog/page/permissions.zig").PermissionsDialog;
 const VersionHistoryDialog = @import("../../dialog/page/version_history.zig").VersionHistoryDialog;
 const Entry = @import("../../dialog/page/version_history.zig").Entry;
 
@@ -110,6 +111,8 @@ pub const FlatpakInstallView = extern struct {
         app_id: [:0]u8,
         download_size: i64 = 0,
         installed_size: i64 = 0,
+        permissions: []const []const u8 = &.{},
+        app: *AppstreamAppObject,
         failed: bool = false,
     };
 
@@ -362,7 +365,9 @@ pub const FlatpakInstallView = extern struct {
 
     fn on_permissions_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const app = self.priv().selected_app orelse return;
-        std.log.info("Flatpak permissions overlay stub: app={s}", .{app.getId()});
+
+        const dlg = PermissionsDialog.new("Permissions", app.getName(), app.getPermissions(), &on_close, self);
+        if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dlg.as(gtk.Widget));
     }
 
     fn on_version_history_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
@@ -463,7 +468,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.DropDown.setSelected(p.overlay_remote_selection, 0);
         gtk.Widget.setSensitive(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len > 0));
         gtk.Widget.setSensitive(p.overlay_install_button.as(gtk.Widget), @intFromBool(remotes.len > 0));
-        if (remotes.len > 0) self.request_remote_info(remotes[0].Name, app.getId());
+        if (remotes.len > 0) self.request_remote_info(remotes[0].Name, app);
         gtk.Widget.setVisible(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len > 1));
     }
 
@@ -473,10 +478,10 @@ pub const FlatpakInstallView = extern struct {
         const remotes = app.getRemotes();
         const selected = gtk.DropDown.getSelected(p.overlay_remote_selection);
         if (selected == std.math.maxInt(u32) or selected >= remotes.len) return;
-        self.request_remote_info(remotes[selected].Name, app.getId());
+        self.request_remote_info(remotes[selected].Name, app);
     }
 
-    fn request_remote_info(self: *Self, remote: []const u8, app_id: []const u8) void {
+    fn request_remote_info(self: *Self, remote: []const u8, app: *AppstreamAppObject) void {
         const p = self.priv();
         p.remote_info_generation +%= 1;
         const request_generation = p.remote_info_generation;
@@ -491,7 +496,7 @@ pub const FlatpakInstallView = extern struct {
             gtk.Label.setLabel(p.overlay_size_label, "Size: Unavailable");
             return;
         };
-        const owned_app_id = std.heap.c_allocator.dupeZ(u8, app_id) catch {
+        const owned_app_id = std.heap.c_allocator.dupeZ(u8, app.getId()) catch {
             std.heap.c_allocator.free(owned_remote);
             std.heap.c_allocator.destroy(load);
             gtk.Label.setLabel(p.overlay_size_label, "Size: Unavailable");
@@ -502,6 +507,7 @@ pub const FlatpakInstallView = extern struct {
             .details_generation = p.details_generation,
             .request_generation = request_generation,
             .remote = owned_remote,
+            .app = app,
             .app_id = owned_app_id,
         };
         _ = self.as(gobject.Object).ref();
@@ -531,6 +537,8 @@ pub const FlatpakInstallView = extern struct {
         }
         load.download_size = parsed.value.hits[0].download_size;
         load.installed_size = parsed.value.hits[0].installed_size;
+        load.permissions = parsed.value.hits[0].permissions;
+
         _ = glib.idleAdd(&remote_info_complete, load);
     }
 
@@ -554,7 +562,9 @@ pub const FlatpakInstallView = extern struct {
                     "Download: {s}  •  Installed: {s}",
                     .{ download, installed },
                 ) catch "Size: Unavailable";
+                gtk.Widget.setSensitive(p.overlay_permissions_button.as(gtk.Widget), 1);
                 gtk.Label.setLabel(p.overlay_size_label, label);
+                load.app.setPermissions(load.permissions);
             }
         }
         cleanup_remote_info_load(load);
@@ -579,7 +589,7 @@ pub const FlatpakInstallView = extern struct {
         } else {
             gtk.Label.setLabel(p.overlay_description_label, if (description.len > 0) description else "No description available.");
             gtk.Label.setLabel(p.overlay_description_label_full, "");
-            gtk.Widget.setVisible(p.description_reveal_button.as(gtk.Widget), 0);
+            gtk.Widget.setVisible(p.description_reveal_button.as(gtk.Widget), 1);
         }
         gtk.Revealer.setRevealChild(p.description_revealer, 0);
         gtk.Button.setLabel(p.description_reveal_button, "Show more");
@@ -795,6 +805,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.DropDown.setModel(p.overlay_remote_selection, null);
         gtk.Widget.setSensitive(p.overlay_remote_selection.as(gtk.Widget), 0);
         gtk.Widget.setSensitive(p.overlay_install_button.as(gtk.Widget), 0);
+        gtk.Widget.setSensitive(p.overlay_permissions_button.as(gtk.Widget), 0);
         gtk.ListBox.removeAll(p.overlay_links_box);
         if (p.selected_app) |app| {
             app.as(gobject.Object).unref();
