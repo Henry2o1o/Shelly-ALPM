@@ -250,13 +250,6 @@ fn runAppImage(
         &.{install_directory}
     else
         &.{ install_directory, fallback_directory };
-    const target = try resolveAppImage(
-        context.allocator,
-        context.io,
-        invocation.positionals[0],
-        search_paths,
-    );
-    defer context.allocator.free(target);
     const local_db_path = try std.fs.path.join(
         context.allocator,
         &.{ try xdg.configHome(context), "shelly", "appimage-metadata-v2.db" },
@@ -272,6 +265,24 @@ fn runAppImage(
     defer manager.deinit();
     try manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null) catch {};
+
+    const target = resolveAppImage(
+        context.allocator,
+        context.io,
+        invocation.positionals[0],
+        search_paths,
+    ) catch |err| switch (err) {
+        RemoveError.AppImageNotFound => {
+            const app_images = try manager.getAppImagesFromLocalDb();
+            defer manager.freeAppImages(app_images);
+            const app_name = try resolveAppImageDbName(app_images, invocation.positionals[0]);
+            try manager.removeAppImageFromLocalDb(app_name);
+            return;
+        },
+        else => return err,
+    };
+    defer context.allocator.free(target);
+
     if (!try manager.removeAppImage(target, optionEnabled(invocation, "--remove-config")))
         return RemoveError.BackendFailed;
 }
@@ -371,6 +382,19 @@ fn resolveAppImage(
             if (match != null) return RemoveError.AmbiguousAppImage;
             match = try std.fs.path.join(allocator, &.{ directory, entry.name });
         }
+    }
+    return match orelse RemoveError.AppImageNotFound;
+}
+
+fn resolveAppImageDbName(
+    app_images: []const Zigalpm.appimage.AppImage,
+    query: []const u8,
+) ![]const u8 {
+    var match: ?[]const u8 = null;
+    for (app_images) |app_image| {
+        if (!containsTextIgnoreCase(app_image.name, query)) continue;
+        if (match != null) return RemoveError.AmbiguousAppImage;
+        match = app_image.name;
     }
     return match orelse RemoveError.AppImageNotFound;
 }
@@ -801,6 +825,65 @@ test "resolves one AppImage across configured and fallback locations" {
         RemoveError.AmbiguousAppImage,
         resolveAppImage(allocator, std.testing.io, "example", &.{ configured, fallback }),
     );
+}
+
+test "remove AppImage falls back to orphaned local database metadata" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+
+    var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const absolute_length = try temporary.dir.realPath(std.testing.io, &absolute_buffer);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const root = absolute_buffer[0..absolute_length];
+    const config_home = try std.fs.path.join(allocator, &.{ root, "config" });
+    const bin_home = try std.fs.path.join(allocator, &.{ root, "bin" });
+    const local_db_path = try std.fs.path.join(allocator, &.{ config_home, "shelly", "appimage-metadata-v2.db" });
+
+    var environment = std.process.Environ.Map.init(allocator);
+    try environment.put("HOME", root);
+    try environment.put("XDG_CONFIG_HOME", config_home);
+    try environment.put("XDG_BIN_HOME", bin_home);
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .environment = &environment,
+    };
+
+    const db_manager = Zigalpm.AppImageManager{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .environ = std.testing.environ,
+        .install_directory = bin_home,
+        .local_db_path = local_db_path,
+    };
+    try db_manager.addAppImageToLocalDb(.{
+        .name = "OrphanedEditor",
+        .desktop_name = "Orphaned Editor",
+        .path = "/missing/OrphanedEditor.AppImage",
+    });
+
+    const command_spec = @import("../cli/spec.zig");
+    const manifest = try command_spec.Manifest.load(allocator);
+    const outcome = try parser.parse(allocator, &manifest, &.{
+        "remove", "appimage", "--no-confirm", "orphaned",
+    });
+    var operation_context = Zigalpm.OperationContext.init(allocator, std.testing.io);
+    defer operation_context.deinit();
+
+    try runAppImage(&context, &operation_context, &outcome.dispatch);
+
+    const remaining = try db_manager.getAppImagesFromLocalDb();
+    defer db_manager.freeAppImages(remaining);
+    try std.testing.expectEqual(@as(usize, 0), remaining.len);
 }
 
 test "flatpak config cleanup uses the canonical application id" {

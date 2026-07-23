@@ -435,6 +435,10 @@ pub fn build(b: *std.Build) void {
             "getAppImagesFromLocalDb migrates C# database and second load is native",
             "getAppImagesFromLocalDb leaves native database unchanged",
             "getAppImagesFromLocalDb leaves malformed C# database unchanged",
+            "removeAppImageFromLocalDb removes an orphaned entry by name",
+            "installAppImage preserves an existing install when staged validation fails",
+            "installAppImage atomically replaces a validated AppImage",
+            "installAppImage restores the previous binary when database commit fails",
         },
     });
     const run_appimage_tests = b.addRunArtifact(appimage_tests);
