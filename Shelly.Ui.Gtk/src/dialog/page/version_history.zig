@@ -23,9 +23,7 @@ pub const VersionHistoryDialog = extern struct {
     const Private = struct {
         title_label: *gtk.Label,
         subtitle_label: *gtk.Label,
-        history_stack: *gtk.Stack,
         history_list: *gtk.ListBox,
-        empty_label: *gtk.Label,
         close_button: *gtk.Button,
         on_close: ?CloseFn,
         ctx: ?*anyopaque,
@@ -55,6 +53,7 @@ pub const VersionHistoryDialog = extern struct {
         p.ctx = null;
     }
 
+    /// Takes ownership of `entries` and its strings; frees them before returning.
     pub fn new(title: [:0]const u8, subtitle: [:0]const u8, entries: []Entry, on_close_fn: CloseFn, ctx: ?*anyopaque) *Self {
         const self = gobject.ext.newInstance(Self, .{});
         const p = self.priv();
@@ -66,16 +65,17 @@ pub const VersionHistoryDialog = extern struct {
         std.log.info("Flatpak version history overlay: entries={}", .{entries.len});
 
         for (entries) |entry| {
-            std.log.info("Flatpak version history overlay: entry={s}", .{entry.version});
             gtk.ListBox.append(p.history_list, make_row(entry));
         }
+
+        gtk.Stack.setVisibleChildName(p.history_stack, if (entries.len == 0) "empty" else "list");
+
         for (entries) |entry| {
             std.heap.c_allocator.free(entry.version);
             std.heap.c_allocator.free(entry.note);
         }
-        if (entries.len > 0) {
-            std.heap.c_allocator.free(entries);
-        }
+        std.heap.c_allocator.free(entries);
+
         p.ctx = ctx;
         return self;
     }
@@ -126,9 +126,7 @@ pub const VersionHistoryDialog = extern struct {
     const template_children = .{
         .{ "title_label", @offsetOf(Private, "title_label") },
         .{ "subtitle_label", @offsetOf(Private, "subtitle_label") },
-        .{ "history_stack", @offsetOf(Private, "history_stack") },
         .{ "history_list", @offsetOf(Private, "history_list") },
-        .{ "empty_label", @offsetOf(Private, "empty_label") },
         .{ "close_button", @offsetOf(Private, "close_button") },
     };
 

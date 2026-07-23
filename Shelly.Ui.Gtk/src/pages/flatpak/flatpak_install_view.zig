@@ -68,7 +68,7 @@ pub const FlatpakInstallView = extern struct {
         filter: ?*gtk.CustomFilter,
         selection: ?*gtk.SingleSelection,
         selected_app: ?*AppstreamAppObject,
-        history_entries: ?[]Entry,
+
         loaded: bool,
         disposed: bool,
         load_generation: u64,
@@ -140,7 +140,7 @@ pub const FlatpakInstallView = extern struct {
         p.filter = null;
         p.selection = null;
         p.selected_app = null;
-        p.history_entries = null;
+
         p.loaded = false;
         p.disposed = false;
         p.load_generation = 0;
@@ -391,9 +391,6 @@ pub const FlatpakInstallView = extern struct {
         }
 
         const owned = entries.toOwnedSlice(std.heap.c_allocator) catch return;
-        const p = self.priv();
-        p.history_entries = owned;
-
         const dlg = VersionHistoryDialog.new("Version History", app.getName(), owned, &on_close, self);
 
         if (support.getWindow(ShellyWindow, self)) |win| {
@@ -401,21 +398,9 @@ pub const FlatpakInstallView = extern struct {
         }
     }
 
-    fn free_history_entries(self: *Self) void {
-        const p = self.priv();
-        if (p.history_entries) |entries| {
-            for (entries) |e| {
-                std.heap.c_allocator.free(e.version);
-                std.heap.c_allocator.free(e.note);
-            }
-            std.heap.c_allocator.free(entries);
-            p.history_entries = null;
-        }
-    }
-
     fn on_close(ctx: ?*anyopaque) void {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx.?));
-        self.free_history_entries();
+
         if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
     }
 
@@ -1032,7 +1017,7 @@ pub const FlatpakInstallView = extern struct {
             p.disposed = true;
             p.loaded = false;
             p.load_generation +%= 1;
-            self.free_history_entries();
+
             self.clear_details();
             gtk.GridView.setModel(p.list_flatpaks, null);
             gtk.GridView.setFactory(p.list_flatpaks, null);
