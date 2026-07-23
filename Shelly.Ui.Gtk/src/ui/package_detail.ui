@@ -47,6 +47,17 @@
             <property name="margin-end">20</property>
             <style><class name="detail-content"/></style>
             <child>
+              <object class="GtkButton" id="back_button">
+                <property name="icon-name">go-previous-symbolic</property>
+                <property name="halign">start</property>
+                <property name="valign">center</property>
+                <property name="visible">false</property>
+                <property name="margin-bottom">4</property>
+                <property name="tooltip-text" translatable="yes">Back</property>
+                <style><class name="flat"/></style>
+              </object>
+            </child>
+            <child>
               <object class="GtkBox">
                 <property name="orientation">horizontal</property>
                 <property name="margin-bottom">8</property>
@@ -103,8 +114,6 @@
             <child>
               <object class="GtkBox" id="sections_box">
                 <property name="orientation">vertical</property>
-                <property name="spacing">8</property>
-                <property name="margin-top">12</property>
               </object>
             </child>
           </object>
