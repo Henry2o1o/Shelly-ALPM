@@ -2,6 +2,10 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
+// Max depth is at most one for this configuration file.
+// Why the hell would you ever want more than one of these???
+const max_depth: usize = 1;
+
 pub const MakePackageConfiguration = struct {
     // Starting with architecture flags as source acquisition isn't needed
     carch: []const u8,
