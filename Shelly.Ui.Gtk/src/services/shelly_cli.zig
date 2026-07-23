@@ -35,7 +35,7 @@ pub const ShellyCli = struct {
         return if (builtin.mode == .Debug)
             "../Shelly.Cli.Zig/zig-out/bin/shelly"
         else
-            "shelly-beta";
+            "shelly";
     }
 
     fn run(self: ShellyCli, args: []const []const u8) !RunResult {
