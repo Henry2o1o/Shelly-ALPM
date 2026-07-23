@@ -58,7 +58,7 @@
                                 <child>
                                     <object class="GtkMenuButton" id="cart_button">
                                         <property name="tooltip-text" translatable="yes">Selected Packages</property>
-                                        <property name="sensitive" >false</property>
+                                        <property name="sensitive" >true</property>
                                         <property name="popover">cart_popover</property>
                                         <child>
                                             <object class="GtkLabel" id="cart_label">

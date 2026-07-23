@@ -59,7 +59,8 @@ pub const PackagePage = extern struct {
         show_installed_only: bool,
         show_explicit_only: bool,
 
-        check_map: std.AutoHashMapUnmanaged(*PackageObject, *gtk.CheckButton),
+        check_map_grid: std.AutoHashMapUnmanaged(*PackageObject, *gtk.CheckButton),
+        check_map_column: std.AutoHashMapUnmanaged(*PackageObject, *gtk.CheckButton),
         loaded: bool,
         resolver: IconResolver,
         search_text: [256]u8,
@@ -107,7 +108,8 @@ pub const PackagePage = extern struct {
         p.generation = 0;
         p.show_installed_only = false;
 
-        p.check_map = .empty;
+        p.check_map_grid = .empty;
+        p.check_map_column = .empty;
 
         const detail = PackageDetail.new();
         p.detail = detail;
@@ -145,6 +147,9 @@ pub const PackagePage = extern struct {
 
         _ = gobject.Object.signals.notify.connect(p.grouping_selection.as(gobject.Object), *Self, &on_group_notify, self, .{ .detail = "selected" });
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
+
+        _ = gtk.GridView.signals.activate.connect(p.grid_view, *Self, &on_grid_activated, self, .{});
+        _ = gtk.ColumnView.signals.activate.connect(p.column_view, *Self, &on_column_activated, self, .{});
 
         p.resolver = IconResolver.init(std.heap.c_allocator);
 
@@ -189,7 +194,7 @@ pub const PackagePage = extern struct {
                 const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
 
                 const box = gtk.Box.new(.horizontal, 6);
-
+                gtk.ListItem.setActivatable(gobject.ext.as(gtk.ListItem, cell), 1);
                 const icon = gtk.Image.new();
                 gtk.Image.setPixelSize(icon, 24);
                 gtk.Box.append(box, icon.as(gtk.Widget));
@@ -256,7 +261,7 @@ pub const PackagePage = extern struct {
         const child = gtk.ColumnViewCell.getChild(cell) orelse return;
         const check = gobject.ext.cast(gtk.CheckButton, child) orelse return;
 
-        page.priv().check_map.put(std.heap.c_allocator, pkg, check) catch {};
+        page.priv().check_map_column.put(std.heap.c_allocator, pkg, check) catch {};
 
         gobject.Object.setData(check.as(gobject.Object), "syncing", @ptrFromInt(1));
         gtk.CheckButton.setActive(check, @intFromBool(pkg.isSelected()));
@@ -267,7 +272,7 @@ pub const PackagePage = extern struct {
         const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
         const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
         const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
-        _ = page.priv().check_map.remove(pkg);
+        _ = page.priv().check_map_column.remove(pkg);
     }
 
     fn size_bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
@@ -297,7 +302,13 @@ pub const PackagePage = extern struct {
         pkg.setSelected(gtk.CheckButton.getActive(check) != 0);
 
         const page_ptr = gobject.Object.getData(check.as(gobject.Object), "page") orelse return;
+
         const self: *Self = @ptrCast(@alignCast(page_ptr));
+        const p = self.priv();
+        const path = p.resolver.resolve(pkg.getName());
+        p.detail.showPackage(pkg.getName(), pkg.isInstalled(), path);
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
+
         self.update_selection_ui();
     }
 
@@ -397,7 +408,7 @@ pub const PackagePage = extern struct {
                 const right_box = gobject.ext.cast(gtk.Box, gtk.Grid.getChildAt(content_grid, 1, 0) orelse return) orelse return;
                 const selection_check = gobject.ext.cast(gtk.CheckButton, gtk.Grid.getChildAt(content_grid, 2, 0) orelse return) orelse return;
 
-                page.priv().check_map.put(std.heap.c_allocator, pkg, selection_check) catch {};
+                page.priv().check_map_grid.put(std.heap.c_allocator, pkg, selection_check) catch {};
 
                 const title_grid_w = gtk.Widget.getFirstChild(right_box.as(gtk.Widget)) orelse return;
                 const title_grid = gobject.ext.cast(gtk.Grid, title_grid_w) orelse return;
@@ -426,7 +437,7 @@ pub const PackagePage = extern struct {
                 const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
                 const obj = gtk.ListItem.getItem(list_item) orelse return;
                 const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
-                _ = page.priv().check_map.remove(pkg);
+                _ = page.priv().check_map_grid.remove(pkg);
             }
         };
 
@@ -447,7 +458,45 @@ pub const PackagePage = extern struct {
 
         const page_ptr = gobject.Object.getData(check.as(gobject.Object), "page") orelse return;
         const self: *Self = @ptrCast(@alignCast(page_ptr));
+        const p = self.priv();
+        const path = p.resolver.resolve(pkg.getName());
+        p.detail.showPackage(pkg.getName(), pkg.isInstalled(), path);
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
         self.update_selection_ui();
+    }
+
+    fn on_grid_activated(_: *gtk.GridView, position: c_uint, self: *Self) callconv(.c) void {
+        toggle_selection_at(self, position);
+    }
+
+    fn on_column_activated(_: *gtk.ColumnView, position: c_uint, self: *Self) callconv(.c) void {
+        toggle_selection_at(self, position);
+    }
+
+    fn toggle_selection_at(self: *Self, position: c_uint) void {
+        const p = self.priv();
+        const model = p.selection.as(gio.ListModel);
+        const obj = gio.ListModel.getObject(model, position) orelse return;
+        defer obj.unref();
+        const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
+
+        const new_state = !pkg.isSelected();
+        pkg.setSelected(new_state);
+
+        if (p.check_map_grid.get(pkg)) |check| {
+            set_sync_active(check, new_state);
+        }
+        if (p.check_map_column.get(pkg)) |check| {
+            set_sync_active(check, new_state);
+        }
+
+        self.update_selection_ui();
+    }
+
+    fn set_sync_active(check: *gtk.CheckButton, active: bool) void {
+        gobject.Object.setData(check.as(gobject.Object), "syncing", @ptrFromInt(1));
+        gtk.CheckButton.setActive(check, @intFromBool(active));
+        gobject.Object.setData(check.as(gobject.Object), "syncing", null);
     }
 
     fn filter_func(item: *gobject.Object, data: ?*anyopaque) callconv(.c) c_int {
@@ -848,13 +897,14 @@ pub const PackagePage = extern struct {
         const self: *Self = @ptrCast(@alignCast(page_ptr));
 
         pkg.setSelected(false);
+        const p = self.priv();
 
-        if (self.priv().check_map.get(pkg)) |check| {
-            gobject.Object.setData(check.as(gobject.Object), "syncing", @ptrFromInt(1));
-            gtk.CheckButton.setActive(check, 0);
-            gobject.Object.setData(check.as(gobject.Object), "syncing", null);
+        if (p.check_map_grid.get(pkg)) |check| {
+            set_sync_active(check, false);
         }
-
+        if (p.check_map_column.get(pkg)) |check| {
+            set_sync_active(check, false);
+        }
         self.update_selection_ui();
     }
 
