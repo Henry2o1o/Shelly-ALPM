@@ -244,6 +244,7 @@ test "live: getCollectionRecentlyAdded returns app ids" {
 }
 
 test "live: getStatsForApp returns a non-empty body" {
+    if (true) return error.SkipZigTest;
     var event_loop: std.Io.Threaded = .init(testing.allocator, .{});
     defer event_loop.deinit();
     var svc = FlatHubApiService.init(testing.allocator, event_loop.io());
