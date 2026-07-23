@@ -41,12 +41,12 @@
 .spec-value { font-weight: 600; }
 
 .nav-rail {
-  padding: 8px 4px;}
+  padding: 2px 2px;}
 
 .nav-btn {
-  padding: 10px 8px;
+  padding: 6px 4px;
   margin: 2px 4px;
-  border-radius: 8px;
+
 }
 
 .nav-btn:hover {

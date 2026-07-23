@@ -146,10 +146,6 @@ pub const ShellyWindow = extern struct {
         const popover = gtk.Popover.new();
 
         const menu_box = gtk.Box.new(.vertical, 4);
-        gtk.Widget.setMarginStart(menu_box.as(gtk.Widget), 8);
-        gtk.Widget.setMarginEnd(menu_box.as(gtk.Widget), 8);
-        gtk.Widget.setMarginTop(menu_box.as(gtk.Widget), 8);
-        gtk.Widget.setMarginBottom(menu_box.as(gtk.Widget), 8);
 
         const utils_btn = gtk.Button.newWithLabel("Utilities");
         gtk.Widget.addCssClass(utils_btn.as(gtk.Widget), "flat");

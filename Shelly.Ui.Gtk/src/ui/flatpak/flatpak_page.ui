@@ -47,8 +47,7 @@
                     <property name="label" translatable="yes">Browse</property>
                     <property name="halign">start</property>
                     <property name="margin-start">6</property>
-                    <property name="margin-top">2</property>
-                    <property name="margin-bottom">2</property>
+
                     <style>
                       <class name="dim-label"/>
                       <class name="caption-heading"/>
@@ -57,7 +56,6 @@
                 </child>
                 <child>
                   <object class="GtkListBox" id="section_nav_list">
-
                     <style>
                       <class name="flatpak-nav"/>
                     </style>
@@ -67,12 +65,13 @@
                     <child>
                       <object class="GtkListBoxRow" id="nav_install_row">
 
-
                         <child>
                           <object class="GtkBox">
                             <property name="orientation">horizontal</property>
                             <property name="spacing">10</property>
-                               <property name="margin-start">6</property>
+                            <property name="margin-start">6</property>
+                            <property name="margin-top">2</property>
+                            <property name="margin-bottom">2</property>
                             <child>
                               <object class="GtkImage">
                                 <property name="icon-name">system-software-install-symbolic</property>
@@ -96,7 +95,9 @@
                           <object class="GtkBox">
                             <property name="orientation">horizontal</property>
                             <property name="spacing">10</property>
-                                  <property name="margin-start">6</property>
+                            <property name="margin-start">6</property>
+                            <property name="margin-top">2</property>
+                            <property name="margin-bottom">2</property>
                             <child>
                               <object class="GtkImage">
                                 <property name="icon-name">applications-system-symbolic</property>
@@ -115,12 +116,13 @@
                     </child>
                     <child>
                       <object class="GtkListBoxRow" id="nav_remote_row">
-
                         <child>
                           <object class="GtkBox">
                             <property name="orientation">horizontal</property>
                             <property name="spacing">10</property>
-                                  <property name="margin-start">6</property>
+                            <property name="margin-start">6</property>
+                            <property name="margin-top">2</property>
+                            <property name="margin-bottom">2</property>
                             <child>
                               <object class="GtkImage">
                                 <property name="icon-name">preferences-system-symbolic</property>
@@ -139,12 +141,13 @@
                     </child>
                     <child>
                       <object class="GtkListBoxRow" id="nav_install_local">
-
                         <child>
                           <object class="GtkBox">
                             <property name="orientation">horizontal</property>
                             <property name="spacing">10</property>
                             <property name="margin-start">6</property>
+                            <property name="margin-top">2</property>
+                            <property name="margin-bottom">2</property>
                             <child>
                               <object class="GtkImage">
                                 <property name="icon-name">document-open-symbolic</property>

@@ -9,7 +9,9 @@
     <file>ui/flatpak/flatpak_remotes_view.ui</file>
     <file>ui/flatpak/flatpak_install_local.ui</file>
     <file>dialog/ui/yn.ui</file>
+    <file>dialog/ui/version_history.ui</file>
     <file>dialog/ui/multiselect.ui</file>
+    <file>dialog/ui/permissions.ui</file>
     <file>ui/appimage_page.ui</file>
     <file>ui/transaction_page.ui</file>
     <file>ui/package_page.ui</file>
