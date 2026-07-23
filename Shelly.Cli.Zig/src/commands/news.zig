@@ -29,6 +29,12 @@ const Fetcher = struct {
 
 const real_fetcher: Fetcher = .{ .call = fetchFeed };
 
+const ExecutionOptions = struct {
+    show_all: bool = false,
+    ui_mode: bool = false,
+    json: bool = false,
+};
+
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
@@ -38,11 +44,7 @@ pub fn dispatch(
 }
 
 pub fn showUnread(context: *runtime.RuntimeContext) !u8 {
-    return executeWithFetcher(context, .{
-        .show_all = false,
-        .ui_mode = false,
-        .json = false,
-    }, real_fetcher);
+    return execute(context, .{}, real_fetcher);
 }
 
 fn executeWithFetcher(
@@ -50,22 +52,33 @@ fn executeWithFetcher(
     invocation: *const parser.Invocation,
     fetcher: Fetcher,
 ) !u8 {
+    return execute(context, .{
+        .show_all = optionEnabled(invocation, "--all"),
+        .ui_mode = invocation.globals.ui_mode,
+        .json = invocation.globals.json,
+    }, fetcher);
+}
+
+fn execute(
+    context: *runtime.RuntimeContext,
+    options: ExecutionOptions,
+    fetcher: Fetcher,
+) !u8 {
     const raw_feed = fetcher.call(fetcher.data, context, arch_linux_feed) catch |err| {
-        try writeFailure(context, invocation, err);
+        try writeFailure(context, options, err);
         return 1;
     };
     const full_feed = parseFeed(context.allocator, raw_feed) catch |err| {
-        try writeFailure(context, invocation, err);
+        try writeFailure(context, options, err);
         return 1;
     };
-    const show_all = optionEnabled(invocation, "--all");
-    const viewed_links = if (show_all)
+    const viewed_links = if (options.show_all)
         &.{}
     else
         loadViewedLinks(context) catch &.{};
 
     var selected: std.ArrayList(NewsItem) = .empty;
-    if (show_all) {
+    if (options.show_all) {
         try selected.appendSlice(context.allocator, full_feed);
     } else {
         for (full_feed) |item| {
@@ -74,23 +87,23 @@ fn executeWithFetcher(
         }
     }
 
-    if (invocation.globals.ui_mode) {
+    if (options.ui_mode) {
         var payload = std.Io.Writer.Allocating.init(context.allocator);
         defer payload.deinit();
         try writeJson(&payload.writer, selected.items);
         try output.writeFrame(context, payload.writer.buffered());
-    } else if (invocation.globals.json) {
+    } else if (options.json) {
         try writeJson(context.stdout, selected.items);
         try context.stdout.writeByte('\n');
     } else {
         try writePlain(context, selected.items);
-        if (!show_all and selected.items.len == 0)
+        if (!options.show_all and selected.items.len == 0)
             try output.writeSuccess(context, "No new news found");
     }
 
-    if (show_all or selected.items.len > 0) {
+    if (options.show_all or selected.items.len > 0) {
         saveFeed(context, full_feed) catch |err| {
-            try writeFailure(context, invocation, err);
+            try writeFailure(context, options, err);
             return 1;
         };
     }
@@ -544,7 +557,7 @@ fn writeColored(
 
 fn writeFailure(
     context: *runtime.RuntimeContext,
-    invocation: *const parser.Invocation,
+    options: ExecutionOptions,
     err: anyerror,
 ) !void {
     const message = try std.fmt.allocPrint(
@@ -552,9 +565,9 @@ fn writeFailure(
         "Error fetching Arch Linux news: {t}",
         .{err},
     );
-    if (invocation.globals.ui_mode)
+    if (options.ui_mode)
         try output.writeErrorFrame(context, message)
-    else if (invocation.globals.json)
+    else if (options.json)
         try context.stderr.print("{s}\n", .{message})
     else
         try output.writeFailure(context, message);
