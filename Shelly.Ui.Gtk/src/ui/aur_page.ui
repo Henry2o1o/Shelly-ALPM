@@ -17,9 +17,7 @@
           <object class="GtkSearchEntry" id="search_entry">
             <property name="placeholder-text" translatable="yes">Search the AUR</property>
             <property name="width-request">200</property>
-            <signal name="search-changed" handler="on_search_changed" swapped="true"/>
-            <signal name="activate" handler="on_search_activate" swapped="true"/>
-
+            <signal name="activate" handler="on_search_activate" swapped="no"/>
           </object>
         </child>
         <child>
@@ -28,7 +26,7 @@
             <property name="valign">center</property>
             <property name="active">false</property>
             <property name="tooltip-text" translatable="yes">Show only packages already installed on this system</property>
-            <signal name="toggled" handler="on_installed_toggled" swapped="true"/>
+            <signal name="toggled" handler="on_installed_toggled" />
           </object>
         </child>
         <child>
@@ -228,13 +226,7 @@
                     <property name="justify">center</property>
                   </object>
                 </child>
-                <child>
-                  <object class="GtkButton" id="retry_button">
-                    <property name="label" translatable="yes">Try Again</property>
-                    <property name="halign">center</property>
-                    <signal name="clicked" handler="on_retry_clicked" swapped="true"/>
-                  </object>
-                </child>
+
               </object>
             </property>
           </object>

@@ -8,6 +8,7 @@ const FlatpakSearchResponse = @import("../models/flatpak.zig").FlatpakSearchResp
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const RunResult = std.process.RunResult;
+const AurPackage = @import("../models/aur_package.zig").AurPackage;
 const runtime = @import("runtime.zig");
 const builtin = @import("builtin");
 
@@ -157,6 +158,25 @@ pub const ShellyCli = struct {
         defer self.allocator.free(result.stderr);
 
         return JsonPackFrame.decodeLast(Package, self.allocator, result.stdout);
+    }
+
+    pub fn search_aur(self: ShellyCli, query: []const u8) !std.json.Parsed([]AurPackage) {
+        const result = try self.run(&.{ "search", "aur", query });
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        return JsonPackFrame.decodeLast([]AurPackage, self.allocator, result.stdout);
+    }
+
+    pub fn list_aur_installed(self: ShellyCli) !std.json.Parsed([]AurPackage) {
+        const result = try self.run(&.{
+            "list",
+            "aur",
+        });
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        return JsonPackFrame.decodeLast([]AurPackage, self.allocator, result.stdout);
     }
 
     pub fn check_updates(self: ShellyCli) !std.json.Parsed(CheckUpdates) {

@@ -81,6 +81,15 @@ pub const Question = union(enum) {
         prompt: []const u8,
         options: []Option,
     },
+    pkgbuild: struct {
+        question_id: []const u8,
+        package_name: []const u8,
+        old_pkgbuild: []const u8,
+        new_pkgbuild: []const u8,
+        warnings: []const []const u8 = &.{},
+        diff_lines: []const []const u8 = &.{},
+        source_files: ?[]const []const u8 = null,
+    },
 };
 
 pub const Option = struct {
@@ -97,6 +106,17 @@ const SelectionRequest = struct {
     DependencyName: []const u8 = "",
     QuestionText: []const u8 = "",
     Options: []OptionWire = &.{},
+};
+
+pub const PkgbuildDiff = struct {
+    @"$kind": []const u8 = "",
+    QuestionId: []const u8,
+    PackageName: []const u8,
+    OldPkgbuild: []const u8,
+    NewPkgbuild: []const u8,
+    Warnings: []const []const u8 = &.{},
+    DiffLines: []const []const u8 = &.{},
+    SourceFiles: ?[]const []const u8 = null,
 };
 
 const OptionWire = struct {
@@ -127,6 +147,7 @@ pub const PendingQuestion = struct {
             .yes_no => |q| q.question_id,
             .select_many => |q| q.question_id,
             .select_one => |q| q.question_id,
+            .pkgbuild => |q| q.question_id,
         };
     }
 
@@ -483,6 +504,49 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
                 pending.destroy();
                 return 0;
             },
+        } };
+
+        op.on_question(op.ctx, pending);
+        return 0;
+    }
+
+    if (std.mem.eql(u8, kind, "q.pkgbuilddiff")) {
+        const e = std.json.parseFromSlice(PkgbuildDiff, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        defer e.deinit();
+
+        const pending = op.allocator.create(PkgbuildDiff) catch return 0;
+        pending.* = .{
+            .arena = std.heap.ArenaAllocator.init(op.allocator),
+            .operation = op,
+            .request = undefined,
+        };
+        const qa = pending.arena.allocator();
+        pending.request = .{ .pkgbuild = .{
+            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
+                pending.destroy();
+                return 0;
+            },
+            .package_name = qa.dupe(u8, e.value.PackageName) catch {
+                pending.destroy();
+                return 0;
+            },
+            .old_pkgbuild = qa.dupe(u8, e.value.OldPkgbuild) catch {
+                pending.destroy();
+                return 0;
+            },
+            .new_pkgbuild = qa.dupe(u8, e.value.NewPkgbuild) catch {
+                pending.destroy();
+                return 0;
+            },
+            .warnings = qa.alloc([]const u8, e.value.Warnings.len) catch {
+                pending.destroy();
+                return 0;
+            },
+            .diff_lines = qa.alloc([]const u8, e.value.DiffLines.len) catch {
+                pending.destroy();
+                return 0;
+            },
+            .source_files = e.value.SourceFiles,
         } };
 
         op.on_question(op.ctx, pending);

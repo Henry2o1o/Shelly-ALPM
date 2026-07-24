@@ -1,14 +1,23 @@
 const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const gtk = bindings.gtk;
-const gobject = bindings.gobject;
+const gio = bindings.gio;
 const glib = bindings.glib;
+const gobject = bindings.gobject;
 const support = @import("support.zig");
+const AurPackageObject = @import("../g_objects/aur_package_object.zig").AurPackageObject;
+const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
+const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
+const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
+const AurPackage = @import("../models/aur_package.zig").AurPackage;
+const runtime = @import("../services/runtime.zig");
 
 pub const AurPage = extern struct {
     parent_instance: Parent,
+
     const Self = @This();
     pub const Parent = gtk.Box;
+
     pub const title: [:0]const u8 = "AUR";
     pub const icon_name: [:0]const u8 = "arch-symbolic";
     const resource_path = "/com/shellyorg/shelly/ui/aur_page.ui";
@@ -16,7 +25,6 @@ pub const AurPage = extern struct {
     const Private = struct {
         search_entry: *gtk.SearchEntry,
         installed_toggle: *gtk.ToggleButton,
-        options_menu: *gtk.MenuButton,
         install_button: *gtk.Button,
         results_stack: *gtk.Stack,
         loading_spinner: *gtk.Spinner,
@@ -26,16 +34,31 @@ pub const AurPage = extern struct {
         votes_column: *gtk.ColumnViewColumn,
         popularity_column: *gtk.ColumnViewColumn,
         version_column: *gtk.ColumnViewColumn,
-        empty_label: *gtk.Label,
-        empty_hint_label: *gtk.Label,
         error_label: *gtk.Label,
-        retry_button: *gtk.Button,
         chroot_check: *gtk.CheckButton,
         run_checks_check: *gtk.CheckButton,
-
+        list_store: *gio.ListStore,
+        selection: *gtk.SingleSelection,
+        arena: ?*std.heap.ArenaAllocator,
+        generation: u64,
         loaded: bool,
-        last_query: ?[:0]u8,
+        installed_mode: bool,
+        last_query: [256]u8,
+        last_query_len: usize,
+        check_map: std.AutoHashMapUnmanaged(*AurPackageObject, *gtk.CheckButton),
+
         var offset: c_int = 0;
+    };
+
+    const Mode = enum { search, installed };
+
+    const LoadResult = struct {
+        page: *Self,
+        packages: []AurPackage,
+        arena: *std.heap.ArenaAllocator,
+        generation: u64,
+        index: usize = 0,
+        failed: bool = false,
     };
 
     pub const getGObjectType = gobject.ext.defineClass(Self, .{
@@ -62,31 +85,42 @@ pub const AurPage = extern struct {
         gtk.Widget.initTemplate(self.as(gtk.Widget));
         const p = self.priv();
         p.loaded = false;
-        p.last_query = null;
+        p.arena = null;
+        p.generation = 0;
+        p.installed_mode = false;
+        p.last_query_len = 0;
+        p.check_map = .empty;
+
+        p.list_store = gio.ListStore.new(AurPackageObject.getGObjectType());
+        p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
+        gtk.ColumnView.setModel(p.package_grid, p.selection.as(gtk.SelectionModel));
+
+        setup_name_column(p.name_column);
+        setup_text_column(p.version_column, &AurPackageObject.getVersion, .start);
+        setup_number_column(p.votes_column, &votes_text);
+        setup_number_column(p.popularity_column, &popularity_text);
+
+        const check_factory = gtk.SignalListItemFactory.new();
+        _ = gtk.SignalListItemFactory.signals.setup.connect(check_factory, *Self, &on_check_setup, self, .{});
+        _ = gtk.SignalListItemFactory.signals.bind.connect(check_factory, *Self, &on_check_bind, self, .{});
+        _ = gtk.SignalListItemFactory.signals.unbind.connect(check_factory, *Self, &on_check_unbind, self, .{});
+        gtk.ColumnViewColumn.setFactory(p.check_column, check_factory.as(gtk.ListItemFactory));
+
+        _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
+
         support.connectLifecycle(Self, self);
     }
 
     fn dispose(self: *Self) callconv(.c) void {
         const p = self.priv();
-        if (p.last_query) |q| {
-            glib.free(q.ptr);
-            p.last_query = null;
+        p.check_map.deinit(std.heap.c_allocator);
+        if (p.arena) |a| {
+            a.deinit();
+            std.heap.c_allocator.destroy(a);
+            p.arena = null;
         }
         gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
-        gobject.Object.virtual_methods.dispose.call(Class.parent, self.as(gobject.Object));
-    }
-
-    pub fn onMap(self: *Self) void {
-        const p = self.priv();
-        if (p.loaded) return;
-        p.loaded = true;
-        _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
-    }
-
-    pub fn onUnmap(self: *Self) void {
-        const p = self.priv();
-        if (!p.loaded) return;
-        p.loaded = false;
+        Class.parent.as(gobject.Object.Class).f_dispose.?(self.as(gobject.Object));
     }
 
     const State = enum {
@@ -110,112 +144,486 @@ pub const AurPage = extern struct {
     fn set_state(self: *Self, state: State) void {
         const p = self.priv();
         gtk.Stack.setVisibleChildName(p.results_stack, state.name());
-        if (state == .loading) {
-            gtk.Spinner.start(p.loading_spinner);
-        } else {
-            gtk.Spinner.stop(p.loading_spinner);
+        switch (state) {
+            .loading => gtk.Spinner.start(p.loading_spinner),
+            else => gtk.Spinner.stop(p.loading_spinner),
         }
     }
 
-    fn set_last_query(self: *Self, text: [*:0]const u8) void {
+    fn setup_text_column(
+        column: *gtk.ColumnViewColumn,
+        comptime getter: *const fn (*const AurPackageObject) [:0]const u8,
+        comptime halign: gtk.Align,
+    ) void {
+        const c = struct {
+            fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+                const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+                const label = gtk.Label.new("");
+                gtk.Widget.setHalign(label.as(gtk.Widget), halign);
+                gtk.Label.setEllipsize(label, .end);
+                gtk.ColumnViewCell.setChild(cell, label.as(gtk.Widget));
+            }
+            fn bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+                const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+                const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+                const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
+                const child = gtk.ColumnViewCell.getChild(cell) orelse return;
+                const label = gobject.ext.cast(gtk.Label, child) orelse return;
+                gtk.Label.setLabel(label, getter(pkg));
+            }
+        };
+        const factory = gtk.SignalListItemFactory.new();
+        _ = gtk.SignalListItemFactory.signals.setup.connect(factory, ?*anyopaque, &c.setup, null, .{});
+        _ = gtk.SignalListItemFactory.signals.bind.connect(factory, ?*anyopaque, &c.bind, null, .{});
+        gtk.ColumnViewColumn.setFactory(column, factory.as(gtk.ListItemFactory));
+    }
+
+    fn votes_text(buf: []u8, pkg: *const AurPackageObject) [:0]const u8 {
+        return std.fmt.bufPrintZ(buf, "{d}", .{pkg.getNumVotes()}) catch "";
+    }
+
+    fn popularity_text(buf: []u8, pkg: *const AurPackageObject) [:0]const u8 {
+        return std.fmt.bufPrintZ(buf, "{d:.2}", .{pkg.getPopularity()}) catch "";
+    }
+
+    fn setup_number_column(
+        column: *gtk.ColumnViewColumn,
+        comptime formatter: *const fn ([]u8, *const AurPackageObject) [:0]const u8,
+    ) void {
+        const c = struct {
+            fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+                const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+                const label = gtk.Label.new("");
+                gtk.Widget.setHalign(label.as(gtk.Widget), .end);
+                gtk.ColumnViewCell.setChild(cell, label.as(gtk.Widget));
+            }
+            fn bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+                const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+                const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+                const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
+                const child = gtk.ColumnViewCell.getChild(cell) orelse return;
+                const label = gobject.ext.cast(gtk.Label, child) orelse return;
+                var buf: [32]u8 = undefined;
+                gtk.Label.setLabel(label, formatter(&buf, pkg));
+            }
+        };
+        const factory = gtk.SignalListItemFactory.new();
+        _ = gtk.SignalListItemFactory.signals.setup.connect(factory, ?*anyopaque, &c.setup, null, .{});
+        _ = gtk.SignalListItemFactory.signals.bind.connect(factory, ?*anyopaque, &c.bind, null, .{});
+        gtk.ColumnViewColumn.setFactory(column, factory.as(gtk.ListItemFactory));
+    }
+
+    fn setup_name_column(column: *gtk.ColumnViewColumn) void {
+        const c = struct {
+            fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+                const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+                gtk.ListItem.setActivatable(gobject.ext.as(gtk.ListItem, cell), 1);
+
+                const box = gtk.Box.new(.vertical, 0);
+                gtk.Widget.setValign(box.as(gtk.Widget), .center);
+
+                const title_box = gtk.Box.new(.horizontal, 6);
+
+                const name_label = gtk.Label.new("");
+                gtk.Widget.setHalign(name_label.as(gtk.Widget), .start);
+                gtk.Label.setUseMarkup(name_label, 1);
+                gtk.Label.setEllipsize(name_label, .end);
+                gtk.Box.append(title_box, name_label.as(gtk.Widget));
+
+                const ood_icon = gtk.Image.newFromIconName("dialog-warning-symbolic");
+                gtk.Widget.setTooltipText(ood_icon.as(gtk.Widget), "Flagged out of date");
+                gtk.Box.append(title_box, ood_icon.as(gtk.Widget));
+
+                gtk.Box.append(box, title_box.as(gtk.Widget));
+
+                const desc_label = gtk.Label.new("");
+                gtk.Widget.setHalign(desc_label.as(gtk.Widget), .start);
+                gtk.Widget.addCssClass(desc_label.as(gtk.Widget), "dim-label");
+                gtk.Label.setEllipsize(desc_label, .end);
+                gtk.Label.setMaxWidthChars(desc_label, 60);
+                gtk.Box.append(box, desc_label.as(gtk.Widget));
+
+                gtk.ColumnViewCell.setChild(cell, box.as(gtk.Widget));
+            }
+
+            fn bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+                const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+                const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+                const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
+                const child = gtk.ColumnViewCell.getChild(cell) orelse return;
+                const box = gobject.ext.cast(gtk.Box, child) orelse return;
+
+                const title_box_w = gtk.Widget.getFirstChild(box.as(gtk.Widget)) orelse return;
+                const title_box = gobject.ext.cast(gtk.Box, title_box_w) orelse return;
+                const name_w = gtk.Widget.getFirstChild(title_box.as(gtk.Widget)) orelse return;
+                const name_label = gobject.ext.cast(gtk.Label, name_w) orelse return;
+                const ood_w = gtk.Widget.getNextSibling(name_w) orelse return;
+                const desc_w = gtk.Widget.getLastChild(box.as(gtk.Widget)) orelse return;
+                const desc_label = gobject.ext.cast(gtk.Label, desc_w) orelse return;
+
+                var buf: [256]u8 = undefined;
+                const markup = std.fmt.bufPrintZ(&buf, "<b>{s}</b>", .{pkg.getName()}) catch pkg.getName();
+                gtk.Label.setMarkup(name_label, markup);
+                gtk.Widget.setVisible(ood_w, @intFromBool(pkg.isOutOfDate()));
+                gtk.Label.setLabel(desc_label, pkg.getDescription());
+            }
+        };
+        const factory = gtk.SignalListItemFactory.new();
+        _ = gtk.SignalListItemFactory.signals.setup.connect(factory, ?*anyopaque, &c.setup, null, .{});
+        _ = gtk.SignalListItemFactory.signals.bind.connect(factory, ?*anyopaque, &c.bind, null, .{});
+        gtk.ColumnViewColumn.setFactory(column, factory.as(gtk.ListItemFactory));
+    }
+
+    fn on_check_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, self: *Self) callconv(.c) void {
+        const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+        const check = gtk.CheckButton.new();
+        gtk.Widget.setMarginStart(check.as(gtk.Widget), 10);
+        gtk.Widget.setMarginEnd(check.as(gtk.Widget), 10);
+        gtk.Widget.setValign(check.as(gtk.Widget), .center);
+        gobject.Object.setData(check.as(gobject.Object), "cell", cell);
+        gobject.Object.setData(check.as(gobject.Object), "page", self);
+        _ = gtk.CheckButton.signals.toggled.connect(check, ?*anyopaque, &on_check_toggled, null, .{});
+        gtk.ColumnViewCell.setChild(cell, check.as(gtk.Widget));
+    }
+
+    fn on_check_bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, page: *Self) callconv(.c) void {
+        const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+        const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+        const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
+        const child = gtk.ColumnViewCell.getChild(cell) orelse return;
+        const check = gobject.ext.cast(gtk.CheckButton, child) orelse return;
+
+        page.priv().check_map.put(std.heap.c_allocator, pkg, check) catch {};
+
+        set_sync_active(check, pkg.isSelected());
+    }
+
+    fn on_check_unbind(_: *gtk.SignalListItemFactory, item: *gobject.Object, page: *Self) callconv(.c) void {
+        const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+        const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+        const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
+        _ = page.priv().check_map.remove(pkg);
+    }
+
+    fn set_sync_active(check: *gtk.CheckButton, active: bool) void {
+        gobject.Object.setData(check.as(gobject.Object), "syncing", @ptrFromInt(1));
+        gtk.CheckButton.setActive(check, @intFromBool(active));
+        gobject.Object.setData(check.as(gobject.Object), "syncing", null);
+    }
+
+    fn on_check_toggled(check: *gtk.CheckButton, _: ?*anyopaque) callconv(.c) void {
+        if (gobject.Object.getData(check.as(gobject.Object), "syncing") != null) return;
+
+        const cell_ptr = gobject.Object.getData(check.as(gobject.Object), "cell") orelse return;
+        const cell: *gtk.ColumnViewCell = @ptrCast(@alignCast(cell_ptr));
+        const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+        const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
+        pkg.setSelected(gtk.CheckButton.getActive(check) != 0);
+
+        const page_ptr = gobject.Object.getData(check.as(gobject.Object), "page") orelse return;
+        const self: *Self = @ptrCast(@alignCast(page_ptr));
+        self.refresh_install_sensitivity();
+    }
+
+    fn on_row_activated(_: *gtk.ColumnView, position: c_uint, self: *Self) callconv(.c) void {
         const p = self.priv();
-        if (p.last_query) |q| glib.free(q.ptr);
-        const dup = glib.strdup(text);
-        p.last_query = std.mem.span(dup.?);
-    }
 
-    fn search_text(self: *Self) [*:0]const u8 {
-        const p = self.priv();
-        return gtk.Editable.getText(p.search_entry.as(gtk.Editable));
-    }
+        const obj = gio.ListModel.getObject(p.selection.as(gio.ListModel), position) orelse return;
+        defer obj.unref();
+        const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
 
-    fn run_search(self: *Self, term: [*:0]const u8) void {
-        self.set_last_query(term);
-        self.set_state(.loading);
-
-        // TODO:
-    }
-
-    fn load_installed(self: *Self) void {
-        self.set_state(.loading);
-        // TODO:
+        const new_state = !pkg.isSelected();
+        pkg.setSelected(new_state);
+        if (p.check_map.get(pkg)) |check| set_sync_active(check, new_state);
+        self.refresh_install_sensitivity();
     }
 
     fn selection_count(self: *Self) u32 {
-        _ = self;
-        // TODO: count checked rows in your list model.
-        return 0;
+        const p = self.priv();
+        const model = p.list_store.as(gio.ListModel);
+        const n = gio.ListModel.getNItems(model);
+        var count: u32 = 0;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(model, i) orelse continue;
+            defer obj.unref();
+            const pkg = gobject.ext.cast(AurPackageObject, obj) orelse continue;
+            if (pkg.isSelected()) count += 1;
+        }
+        return count;
     }
 
     fn refresh_install_sensitivity(self: *Self) void {
         const p = self.priv();
-        const installed_mode = gtk.ToggleButton.getActive(p.installed_toggle) != 0;
-        const enabled = !installed_mode and self.selection_count() > 0;
-        gtk.Widget.setSensitive(p.install_button.as(gtk.Widget), @intFromBool(enabled));
-    }
+        const count = self.selection_count();
+        const btn = p.install_button.as(gtk.Widget);
 
-    fn on_search_changed(_: *gtk.SearchEntry, self: *Self) callconv(.c) void {
-        const p = self.priv();
-        if (gtk.ToggleButton.getActive(p.installed_toggle) != 0) return;
+        gtk.Widget.removeCssClass(btn, "suggested-action");
+        gtk.Widget.removeCssClass(btn, "destructive-action");
 
-        const text = self.search_text();
-        if (text[0] == 0) {
-            self.set_state(.prompt);
+        if (count == 0) {
+            gtk.Button.setLabel(p.install_button, if (p.installed_mode) "Remove Selected" else "Build Selected");
+            gtk.Widget.setSensitive(btn, 0);
             return;
         }
-        // TODO:
+
+        var buf: [48]u8 = undefined;
+        if (p.installed_mode) {
+            gtk.Button.setLabel(p.install_button, std.fmt.bufPrintZ(&buf, "Remove Selected ({d})", .{count}) catch "Remove Selected");
+            gtk.Widget.addCssClass(btn, "destructive-action");
+        } else {
+            gtk.Button.setLabel(p.install_button, std.fmt.bufPrintZ(&buf, "Build Selected ({d})", .{count}) catch "Build Selected");
+            gtk.Widget.addCssClass(btn, "suggested-action");
+        }
+        gtk.Widget.setSensitive(btn, 1);
+    }
+
+    pub fn onMap(self: *Self) void {
+        const p = self.priv();
+        if (p.loaded) return;
+        p.loaded = true;
+        _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
+        self.refresh_install_sensitivity();
+    }
+
+    extern fn malloc_trim(pad: usize) c_int;
+
+    pub fn onUnmap(self: *Self) void {
+        const p = self.priv();
+        if (!p.loaded) return;
+        p.loaded = false;
+
+        p.generation += 1;
+        gio.ListStore.removeAll(p.list_store);
+
+        if (p.arena) |a| {
+            a.deinit();
+            std.heap.c_allocator.destroy(a);
+            p.arena = null;
+        }
+
+        _ = malloc_trim(0);
+    }
+
+    fn start_load(self: *Self, mode: Mode) void {
+        const p = self.priv();
+        p.generation += 1;
+        gio.ListStore.removeAll(p.list_store);
+        self.set_state(.loading);
+        self.refresh_install_sensitivity();
+
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, mode }) catch {
+            self.set_state(.err);
+            return;
+        };
+        thread.detach();
+    }
+
+    fn load_worker(page: *Self, generation: u64, mode: Mode) void {
+        const arena_ptr = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
+        arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        const alloc = arena_ptr.allocator();
+
+        var threaded: std.Io.Threaded = .init(alloc, .{});
+        defer threaded.deinit();
+
+        const cli = ShellyCli{ .allocator = alloc, .io = threaded.io() };
+
+        const parsed = switch (mode) {
+            .search => blk: {
+                const p = page.priv();
+                const query = alloc.dupe(u8, p.last_query[0..p.last_query_len]) catch {
+                    post_failure(page, arena_ptr, generation);
+                    return;
+                };
+                break :blk cli.search_aur(query) catch |err| {
+                    std.debug.print("aur_search failed: {t}\n", .{err});
+                    post_failure(page, arena_ptr, generation);
+                    return;
+                };
+            },
+            .installed => cli.list_aur_installed() catch |err| {
+                std.debug.print("aur_installed failed: {t}\n", .{err});
+                post_failure(page, arena_ptr, generation);
+                return;
+            },
+        };
+
+        post_result(page, parsed.value, arena_ptr, generation);
+    }
+
+    fn post_result(page: *Self, packages: []AurPackage, arena: *std.heap.ArenaAllocator, generation: u64) void {
+        const result = std.heap.c_allocator.create(LoadResult) catch return;
+        result.* = .{
+            .page = page,
+            .packages = packages,
+            .arena = arena,
+            .generation = generation,
+        };
+        _ = glib.idleAdd(&onLoadComplete, result);
+    }
+
+    fn post_failure(page: *Self, arena: *std.heap.ArenaAllocator, generation: u64) void {
+        const result = std.heap.c_allocator.create(LoadResult) catch {
+            arena.deinit();
+            std.heap.c_allocator.destroy(arena);
+            return;
+        };
+        result.* = .{
+            .page = page,
+            .packages = &.{},
+            .arena = arena,
+            .generation = generation,
+            .failed = true,
+        };
+        _ = glib.idleAdd(&onLoadComplete, result);
+    }
+
+    fn finish(result: *LoadResult) void {
+        result.arena.deinit();
+        std.heap.c_allocator.destroy(result.arena);
+        std.heap.c_allocator.destroy(result);
+    }
+
+    fn onLoadComplete(data: ?*anyopaque) callconv(.c) c_int {
+        const result: *LoadResult = @ptrCast(@alignCast(data.?));
+        const page = result.page;
+        const p = page.priv();
+
+        if (result.generation != p.generation) {
+            finish(result);
+            return 0;
+        }
+
+        if (result.failed) {
+            gtk.Label.setLabel(p.error_label, "Could not reach the AUR. Check your connection and try again.");
+            page.set_state(.err);
+            finish(result);
+            return 0;
+        }
+
+        if (result.packages.len == 0) {
+            page.set_state(.empty);
+            finish(result);
+            return 0;
+        }
+
+        const batch_size = 200;
+        const end = @min(result.index + batch_size, result.packages.len);
+
+        var batch: [batch_size]*gobject.Object = undefined;
+        var i: usize = 0;
+        for (result.packages[result.index..end]) |d| {
+            const pkg = AurPackageObject.new(d) catch continue;
+            batch[i] = pkg.as(gobject.Object);
+            i += 1;
+        }
+        const pos = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        gio.ListStore.splice(p.list_store, pos, 0, &batch, @intCast(i));
+        for (batch[0..i]) |o| o.unref();
+
+        result.index = end;
+        if (result.index < result.packages.len) return 1;
+
+        page.set_state(.results);
+        page.refresh_install_sensitivity();
+        finish(result);
+        return 0;
+    }
+
+    fn search_text(self: *Self) [:0]const u8 {
+        const p = self.priv();
+        return std.mem.span(gtk.Editable.getText(p.search_entry.as(gtk.Editable)));
     }
 
     fn on_search_activate(_: *gtk.SearchEntry, self: *Self) callconv(.c) void {
         const p = self.priv();
-        if (gtk.ToggleButton.getActive(p.installed_toggle) != 0) {
+
+        if (p.installed_mode) {
             gtk.ToggleButton.setActive(p.installed_toggle, 0);
         }
+
         const text = self.search_text();
-        if (text[0] == 0) {
+        if (text.len == 0) {
+            p.last_query_len = 0;
+            gio.ListStore.removeAll(p.list_store);
             self.set_state(.prompt);
             return;
         }
-        self.run_search(text);
+
+        const len = @min(text.len, p.last_query.len);
+        @memcpy(p.last_query[0..len], text[0..len]);
+        p.last_query_len = len;
+
+        self.start_load(.search);
     }
 
-    fn on_installed_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.c) void {
+    fn on_installed_toggled(_: *gtk.ToggleButton, self: *Self) callconv(.c) void {
         const p = self.priv();
-        if (gtk.ToggleButton.getActive(button) != 0) {
-            self.load_installed();
-        } else if (p.last_query) |q| {
-            self.run_search(q.ptr);
+        p.installed_mode = gtk.ToggleButton.getActive(p.installed_toggle) != 0;
+
+        if (p.installed_mode) {
+            self.start_load(.installed);
+        } else if (p.last_query_len > 0) {
+            self.start_load(.search);
         } else {
+            gio.ListStore.removeAll(p.list_store);
             self.set_state(.prompt);
+            self.refresh_install_sensitivity();
         }
-        self.refresh_install_sensitivity();
     }
 
     fn on_install_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        if (self.selection_count() == 0) return;
         const p = self.priv();
-        const use_chroot = gtk.CheckButton.getActive(p.chroot_check) != 0;
-        const run_checks = gtk.CheckButton.getActive(p.run_checks_check) != 0;
-        _ = use_chroot;
-        _ = run_checks;
 
-        // TODO:
+        if (p.installed_mode) {
+            const dialog = ConfirmDialog.new(
+                "Remove Packages",
+                "Remove the selected AUR packages?",
+                &on_remove_response,
+                self,
+            );
+            dialog.setButtons("Remove", "Cancel");
+            if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dialog.as(gtk.Widget));
+        } else {
+            const dialog = ConfirmDialog.new(
+                "Build from AUR",
+                "Build and install the selected packages? This may take a while.",
+                &on_install_response,
+                self,
+            );
+            dialog.setButtons("Build", "Cancel");
+            if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dialog.as(gtk.Widget));
+        }
     }
 
-    fn on_retry_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+    fn on_remove_response(ctx: ?*anyopaque, confirmed: bool) void {
+        _ = ctx;
+        _ = confirmed;
+    }
+
+    fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
+        _ = ctx;
+        _ = confirmed;
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        if (!success) return;
         const p = self.priv();
-        if (gtk.ToggleButton.getActive(p.installed_toggle) != 0) {
-            self.load_installed();
-        } else if (p.last_query) |q| {
-            self.run_search(q.ptr);
+        if (p.installed_mode) {
+            self.start_load(.installed);
+        } else if (p.last_query_len > 0) {
+            self.start_load(.search);
         } else {
-            self.set_state(.prompt);
+            self.refresh_install_sensitivity();
         }
     }
 
     const template_children = .{
         .{ "search_entry", @offsetOf(Private, "search_entry") },
         .{ "installed_toggle", @offsetOf(Private, "installed_toggle") },
-        .{ "options_menu", @offsetOf(Private, "options_menu") },
         .{ "install_button", @offsetOf(Private, "install_button") },
         .{ "results_stack", @offsetOf(Private, "results_stack") },
         .{ "loading_spinner", @offsetOf(Private, "loading_spinner") },
@@ -225,20 +633,15 @@ pub const AurPage = extern struct {
         .{ "votes_column", @offsetOf(Private, "votes_column") },
         .{ "popularity_column", @offsetOf(Private, "popularity_column") },
         .{ "version_column", @offsetOf(Private, "version_column") },
-        .{ "empty_label", @offsetOf(Private, "empty_label") },
-        .{ "empty_hint_label", @offsetOf(Private, "empty_hint_label") },
         .{ "error_label", @offsetOf(Private, "error_label") },
-        .{ "retry_button", @offsetOf(Private, "retry_button") },
         .{ "chroot_check", @offsetOf(Private, "chroot_check") },
         .{ "run_checks_check", @offsetOf(Private, "run_checks_check") },
     };
 
     const template_callbacks = .{
-        .{ "on_search_changed", &on_search_changed },
         .{ "on_search_activate", &on_search_activate },
         .{ "on_installed_toggled", &on_installed_toggled },
         .{ "on_install_clicked", &on_install_clicked },
-        .{ "on_retry_clicked", &on_retry_clicked },
     };
 
     pub const Class = extern struct {

@@ -382,6 +382,9 @@ pub const TransactionPage = extern struct {
             .select_one => |q| {
                 _ = q;
             },
+            .pkgbuild_diff => |q| {
+                _ = q;
+            },
         }
     }
 
