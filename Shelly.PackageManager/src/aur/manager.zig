@@ -8,6 +8,7 @@ const homograph_validator = @import("../pkgbuild/homograph_validator.zig");
 const post_install_validator = @import("../pkgbuild/post_install_validator.zig");
 const validation = @import("../pkgbuild/shared_validtor.zig");
 const operation_api = @import("operation_context");
+const MakePackageConfiguration = @import("makepackage.zig").MakePackageConfiguration;
 
 pub const models = @import("models.zig");
 pub const rpc = @import("rpc_client.zig");
@@ -203,6 +204,7 @@ pub const Manager = struct {
     cache_root: []u8,
     aur_git_base_url: []u8,
     makepkg_command: ?[]u8,
+    makepkg_config: *MakePackageConfiguration,
     vcs_store_path: []u8,
     chroot_path: []u8,
     use_chroot: bool,
@@ -219,7 +221,8 @@ pub const Manager = struct {
         const temporary_root = if (options.use_temp_path) options.temp_path else null;
         const alpm = try AlpmManager.init(allocator, environ, options.config_path, options.root, temporary_root);
         errdefer alpm.deinit();
-
+        const makepkg_config = try MakePackageConfiguration.init(alpm.io(), allocator);
+        errdefer makepkg_config.deinit();
         const cache_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_CACHE_HOME", ".cache");
         defer allocator.free(cache_home);
         const data_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_DATA_HOME", ".local/share");
@@ -263,6 +266,7 @@ pub const Manager = struct {
             .cache_root = cache_root,
             .aur_git_base_url = aur_git_base_url,
             .makepkg_command = makepkg_command,
+            .makepkg_config = makepkg_config,
             .vcs_store_path = vcs_store_path,
             .chroot_path = chroot_path,
             .use_chroot = options.use_chroot,
@@ -300,6 +304,7 @@ pub const Manager = struct {
         self.approved_pkgbuild_reviews.deinit();
         self.dispatcher.deinit();
         self.aur_client.deinit();
+        self.makepkg_config.deinit();
         self.alpm.deinit();
         allocator.free(self.cache_root);
         allocator.free(self.aur_git_base_url);
@@ -949,7 +954,8 @@ pub const Manager = struct {
             self.allocator.free(key);
         }
         if (!(try self.buildPreparedPackage(dependency, false))) return error.BuildFailed;
-        const files = try builder.selectBuiltPackageFiles(self.allocator, self.io(), dependency.cache_path, dependency.package_name);
+        const cache_path = if (std.ascii.eqlIgnoreCase(self.makepkg_config.package_destination, "/home/packages")) dependency.cache_path else self.makepkg_config.package_destination;
+        const files = try builder.selectBuiltPackageFiles(self.allocator, self.io(), cache_path, dependency.package_name);
         defer builder.deinitPaths(self.allocator, files);
         if (files.len == 0) return error.NoBuiltPackages;
         const install_paths: []const []const u8 = @ptrCast(files);
