@@ -111,7 +111,7 @@ pub const MakePackageConfiguration = struct {
                 const line = std.mem.trim(u8, raw, " \t\r\n");
                 if (line.len == 0 or line[0] == '#') continue;
             }
-            _ = self;2
+            _ = self;
         }
     };
 };
