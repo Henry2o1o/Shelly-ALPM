@@ -313,6 +313,7 @@ pub fn build(b: *std.Build) void {
             "Manager hold APIs mutate HoldPkg while retaining shelly",
             "dependency query APIs resolve exact, versioned, and virtual remote packages",
             "install_packages predownloads prepared repository packages before commit",
+            "install_packages exposes its prepared plan and decline prevents downloads",
             "install_local_packages installs multiple archives in a DB-only transaction",
             "Manager.init applies configured libalpm options and callback contexts",
             "ALPM queries honor shared cancellation",

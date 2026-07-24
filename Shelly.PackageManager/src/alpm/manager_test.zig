@@ -1254,6 +1254,68 @@ test "install_packages predownloads prepared repository packages before commit" 
     try testing.expect(cancel_download.saw_download.load(.acquire));
 }
 
+test "install_packages exposes its prepared plan and decline prevents downloads" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.createSyncDatabase(allocator);
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{workspace.root});
+    defer allocator.free(cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\nArchitecture = auto\nSigLevel = Never\nDBPath = {s}\nCacheDir = {s}\n\n" ++
+            "[seafoam-labs]\nServer = file://{s}/mirror\n",
+        .{ workspace.db_path, cache_path, workspace.root },
+    );
+    defer allocator.free(config);
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+    const Capture = struct {
+        saw_plan: bool = false,
+        package_count: usize = 0,
+        download_size: ?u64 = null,
+
+        fn answer(data: ?*anyopaque, question: operations.Question) operations.QuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            if (question.kind != .confirm_transaction) return .accepted;
+            const plan = question.transaction_plan orelse return .declined;
+            self.saw_plan = true;
+            self.package_count = plan.packages.len;
+            if (plan.packages.len > 0) {
+                testing.expectEqualStrings("remote-provider", plan.packages[0].name) catch unreachable;
+                testing.expectEqual(operations.TransactionPackageRole.requested, plan.packages[0].role) catch unreachable;
+                self.download_size = plan.packages[0].download_size;
+            }
+            return .declined;
+        }
+    };
+    var capture: Capture = .{};
+    var context = operations.OperationContext.init(allocator, io);
+    defer context.deinit();
+    context.setQuestionHandler(.{ .function = Capture.answer, .data = &capture });
+    mgr.setOperationContext(&context);
+
+    var package_names = [_][:0]const u8{"remote-provider"};
+    try testing.expectError(error.Cancelled, mgr.install_packages(&package_names, .{}));
+    try testing.expect(capture.saw_plan);
+    try testing.expectEqual(@as(usize, 1), capture.package_count);
+    try testing.expectEqual(@as(?u64, 1), capture.download_size);
+    const archive_path = try std.fmt.allocPrint(allocator, "{s}/remote-provider-2.0-1-any.pkg.tar", .{cache_path});
+    defer allocator.free(archive_path);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, archive_path, .{}));
+}
+
 // ---------------------------------------------------------------------------
 // install_local_packages
 // ---------------------------------------------------------------------------

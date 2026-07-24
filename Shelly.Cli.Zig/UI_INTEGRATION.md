@@ -61,6 +61,9 @@ The UI should:
 | `appimage.progress` | `Status`, `Percentage` | Update AppImage progress. |
 | `q.yesno` | `QuestionId`, `QuestionKind`, `QuestionText` | Show a confirmation and send `a.yesno`. |
 | `q.pkgbuilddiff` | `QuestionId`, `PackageName`, `OldPkgbuild`, `NewPkgbuild`, `Warnings`, `DiffLines`, `SourceFiles` | Show the complete AUR review. Preserve warning severity and related files, then send `a.pkgbuilddiff`. |
+| `q.transaction` | `QuestionId`, `QuestionText`, `Action`, `Packages`, aggregate size fields | Show every requested package and resolved dependency, including its source, role, version, and known sizes; send `a.transaction`. |
+| `q.provider` | `QuestionId`, `DependencyName`, `Options` | Select one provider and send `a.provider`. |
+| `q.optdeps` | `QuestionId`, `QuestionText`, `Options` | Select zero or more optional dependencies and send `a.optdeps`. |
 
 A yes/no answer is:
 
@@ -73,6 +76,14 @@ A PKGBUILD review answer is:
 ```json
 {"$kind":"a.pkgbuilddiff","QuestionId":"13","ProceedWithUpdate":true}
 ```
+
+A transaction answer is:
+
+```json
+{"$kind":"a.transaction","QuestionId":"14","Accept":true}
+```
+
+Each transaction package has `Name`, optional `Version`, `Repository`, `PackageBase`, and `Revision`, plus `Source`, `Role`, `DownloadSize`, and `InstalledSize`. A null AUR size means it is determined during the build. Repository dependencies in the preliminary AUR plan may also have null sizes; the subsequent ALPM transaction supplies their exact values before downloading.
 
 Encode that JSON as base64 and wrap it in `[JSON]...[/JSON]\n`. `QuestionId` is a string and must match the pending question exactly. Unrecognized lines and answers for another question are ignored.
 
@@ -128,7 +139,7 @@ Installs repository names, repository-qualified names, local Arch/Shelly package
 - `--no-deps`: use the ALPM nodeps transaction flag.
 - `--upgrade`: after explicit confirmation, synchronize and upgrade standard packages before installing. `--no-confirm` bypasses this prompt.
 
-UI use: install action and local-file/URL import. This is a privileged, interactive transaction and may ask for dependency/conflict confirmation.
+UI use: install action and local-file/URL import. After ALPM resolves dependencies and conflicts, Shelly emits `q.transaction` with the exact repository transaction before downloading or committing it. Declining cancels cleanly without downloading package archives.
 
 ### `shelly update standard [packages...]`
 
@@ -227,7 +238,7 @@ Fetches, reviews, builds, and installs AUR packages.
 - `--check`: enable the PKGBUILD `check()` function.
 - `--version`: require exactly `<package> <git-commit>` and install that revision.
 
-The UI must implement `q.pkgbuilddiff`; never collapse PKGBUILD warnings into a generic yes/no dialog.
+The UI must implement `q.pkgbuilddiff`; never collapse PKGBUILD warnings into a generic yes/no dialog. After approved PKGBUILDs have been parsed and optional dependencies selected, Shelly emits one `q.transaction` containing requested AUR packages plus recursive runtime, build, check, optional, and repository dependencies. Values unavailable before `makepkg` are null and should be displayed as “Determined during build.” Repository dependencies receive a second, exact ALPM transaction confirmation before download.
 
 ### `shelly update aur [packages...]`
 

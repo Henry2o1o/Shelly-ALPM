@@ -106,6 +106,9 @@ pub const Event = union(enum) {
 pub const Question = union(enum) {
     yes_no: YesNoQuestion,
     pkgbuild_review: PkgbuildQuestion,
+    transaction: TransactionQuestion,
+    optional_dependencies: SelectionQuestion,
+    provider: SelectionQuestion,
 };
 ```
 
@@ -196,9 +199,9 @@ Create one operation view owned by the controller, with at least:
 
 `ShellyWindow.showLockout` removes the previous lockout child before inserting a new one. If a question temporarily replaces the operation view, the controller must retain the operation view and restore it after answering. Do not let individual pages independently replace and forget the active lockout content.
 
-## 4. Handle the two native CLI question kinds
+## 4. Handle every native CLI question kind
 
-`Shelly.Cli.Zig` currently emits `q.yesno` and `q.pkgbuilddiff`. Although the underlying operation library has provider and multi-select question kinds, UI mode currently uses backend defaults for them; there is no native `q.provider` or `q.optdeps` wire contract yet.
+`Shelly.Cli.Zig` emits `q.yesno`, `q.pkgbuilddiff`, `q.transaction`, `q.provider`, and `q.optdeps`. The GTK service currently parses yes/no, transaction, provider, and optional-dependency questions and keeps each pending payload alive until its response is written. Native `q.pkgbuilddiff` parsing and review UI remain required before the AUR UI path is complete.
 
 Only one question is normally outstanding because the CLI waits for its answer before continuing. `QuestionId` is an opaque string and must be copied exactly into the answer.
 
@@ -250,6 +253,20 @@ fn onYesNoResponse(ctx: ?*anyopaque, accepted: bool) void {
 ```
 
 The exact controller field layout can differ; the important properties are one-shot completion and owned `QuestionId` memory.
+
+### Transaction questions
+
+`q.transaction` is the final package-plan confirmation. `Packages` contains every requested package and resolved dependency with its `Source` and `Role`. Repository transactions include exact versions and size totals after ALPM prepares the transaction. AUR plans come from the reviewed PKGBUILDs and distinguish runtime, build, check, and selected optional dependencies.
+
+Unknown AUR values are encoded as null and the UI displays them as “Determined during build.” A repository dependency in an AUR preview may have unknown sizes until its exact ALPM transaction is prepared.
+
+Answer JSON:
+
+```json
+{"$kind":"a.transaction","QuestionId":"14","Accept":true}
+```
+
+The transaction page adds dependency rows dynamically, presents the complete scrollable plan, and does not start downloads or builds until the answer is accepted. Closing or cancelling sends `Accept: false`.
 
 ### PKGBUILD review questions
 
