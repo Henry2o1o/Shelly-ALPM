@@ -568,217 +568,117 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
     const kind = env.value.@"$kind";
 
     if (std.mem.eql(u8, kind, "q.yesno")) {
-        const e = std.json.parseFromSlice(YesNoRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
-        defer e.deinit();
+        if (parseYesNo(op, msg.json) catch null) |p| op.on_question(op.ctx, p);
+    } else if (std.mem.eql(u8, kind, "q.transaction")) {
+        if (parseTransaction(op, msg.json) catch null) |p| op.on_question(op.ctx, p);
+    } else if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
+        if (parseSelection(op, msg.json, kind) catch null) |p| op.on_question(op.ctx, p);
+    } else {
+        dispatchEvent(op, alloc, msg.json, kind);
+    }
 
-        const pending = op.allocator.create(PendingQuestion) catch return 0;
-        pending.* = .{
-            .arena = std.heap.ArenaAllocator.init(op.allocator),
-            .operation = op,
-            .request = undefined,
+    return 0;
+}
+
+fn newPending(op: *ShellyOperation) !*PendingQuestion {
+    const p = try op.allocator.create(PendingQuestion);
+    p.* = .{
+        .arena = std.heap.ArenaAllocator.init(op.allocator),
+        .operation = op,
+        .request = undefined,
+    };
+    return p;
+}
+
+fn parseYesNo(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {
+    const e = try std.json.parseFromSlice(YesNoRequest, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer e.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    pending.request = .{ .yes_no = .{
+        .question_id = try qa.dupe(u8, e.value.QuestionId),
+        .question_kind = try qa.dupe(u8, e.value.QuestionKind),
+        .question_text = try qa.dupe(u8, e.value.QuestionText),
+    } };
+    return pending;
+}
+
+fn parseTransaction(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {
+    const e = try std.json.parseFromSlice(TransactionRequest, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer e.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    const packages = try qa.alloc(TransactionPackage, e.value.Packages.len);
+    for (e.value.Packages, packages) |package, *target| target.* = .{
+        .name = qa.dupe(u8, package.Name) catch "",
+        .version = dupeOptional(qa, package.Version),
+        .repository = dupeOptional(qa, package.Repository),
+        .package_base = dupeOptional(qa, package.PackageBase),
+        .revision = dupeOptional(qa, package.Revision),
+        .source = qa.dupe(u8, package.Source) catch "",
+        .role = qa.dupe(u8, package.Role) catch "",
+        .download_size = package.DownloadSize,
+        .installed_size = package.InstalledSize,
+    };
+
+    pending.request = .{ .transaction = .{
+        .question_id = try qa.dupe(u8, e.value.QuestionId),
+        .question_text = qa.dupe(u8, e.value.QuestionText) catch "",
+        .action = qa.dupe(u8, e.value.Action) catch "",
+        .packages = packages,
+        .total_download_size = e.value.TotalDownloadSize,
+        .total_installed_size = e.value.TotalInstalledSize,
+        .net_installed_size = e.value.NetInstalledSize,
+    } };
+    return pending;
+}
+
+fn parseSelection(op: *ShellyOperation, json: []const u8, kind: []const u8) !?*PendingQuestion {
+    const e = try std.json.parseFromSlice(SelectionRequest, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer e.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    const opts = try qa.alloc(Option, e.value.Options.len);
+    for (e.value.Options, 0..) |o, i| {
+        opts[i] = .{
+            .index = o.Index,
+            .name = qa.dupe(u8, o.Name) catch "",
+            .description = qa.dupe(u8, o.Description) catch "",
+            .is_installed = o.IsInstalled,
+            .is_selected = o.IsSelected,
         };
-        const qa = pending.arena.allocator();
-        pending.request = .{ .yes_no = .{
-            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
-                pending.destroy();
-                return 0;
-            },
-            .question_kind = qa.dupe(u8, e.value.QuestionKind) catch {
-                pending.destroy();
-                return 0;
-            },
-            .question_text = qa.dupe(u8, e.value.QuestionText) catch {
-                pending.destroy();
-                return 0;
-            },
+    }
+
+    const qid = try qa.dupe(u8, e.value.QuestionId);
+
+    if (std.mem.eql(u8, kind, "q.optdeps")) {
+        pending.request = .{ .select_many = .{
+            .question_id = qid,
+            .prompt = qa.dupe(u8, e.value.QuestionText) catch "",
+            .options = opts,
         } };
-
-        op.on_question(op.ctx, pending);
-        return 0;
-    }
-
-    if (std.mem.eql(u8, kind, "q.pkgbuilddiff")) {
-        const e = std.json.parseFromSlice(PkgbuildDiff, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
-        defer e.deinit();
-
-        const pending = op.allocator.create(PendingQuestion) catch return 0;
-        pending.* = .{
-            .arena = std.heap.ArenaAllocator.init(op.allocator),
-            .operation = op,
-            .request = undefined,
-        };
-
-        std.log.info("diff_lines from event: {d}", .{e.value.DiffLines.len});
-
-        const qa = pending.arena.allocator();
-
-        const warnings = qa.alloc(Warning, e.value.Warnings.len) catch {
-            pending.destroy();
-            return 0;
-        };
-        for (e.value.Warnings, 0..) |w, i| {
-            warnings[i] = .{
-                .Tool = qa.dupe(u8, w.Tool) catch {
-                    pending.destroy();
-                    return 0;
-                },
-                .Hook = qa.dupe(u8, w.Hook) catch {
-                    pending.destroy();
-                    return 0;
-                },
-                .Severity = qa.dupe(u8, w.Severity) catch {
-                    pending.destroy();
-                    return 0;
-                },
-                .Message = qa.dupe(u8, w.Message) catch {
-                    pending.destroy();
-                    return 0;
-                },
-                .MatchedLine = qa.dupe(u8, w.MatchedLine) catch {
-                    pending.destroy();
-                    return 0;
-                },
-            };
-        }
-
-        const diff_lines = qa.alloc([]const u8, e.value.DiffLines.len) catch {
-            pending.destroy();
-            return 0;
-        };
-        for (e.value.DiffLines, 0..) |line, i| {
-            diff_lines[i] = qa.dupe(u8, line) catch {
-                pending.destroy();
-                return 0;
-            };
-        }
-
-        const source_files: ?[][]const u8 = if (e.value.SourceFiles) |src| blk: {
-            const files = qa.alloc([]const u8, src.len) catch {
-                pending.destroy();
-                return 0;
-            };
-            for (src, 0..) |f, i| {
-                files[i] = qa.dupe(u8, f) catch {
-                    pending.destroy();
-                    return 0;
-                };
-            }
-            break :blk files;
-        } else null;
-
-        pending.request = .{ .pkgbuild = .{
-            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
-                pending.destroy();
-                return 0;
-            },
-            .package_name = qa.dupe(u8, e.value.PackageName) catch {
-                pending.destroy();
-                return 0;
-            },
-            .old_pkgbuild = qa.dupe(u8, e.value.OldPkgbuild) catch {
-                pending.destroy();
-                return 0;
-            },
-            .new_pkgbuild = qa.dupe(u8, e.value.NewPkgbuild) catch {
-                pending.destroy();
-                return 0;
-            },
-            .warnings = warnings,
-            .diff_lines = diff_lines,
-            .source_files = source_files,
+    } else {
+        pending.request = .{ .select_one = .{
+            .question_id = qid,
+            .prompt = qa.dupe(u8, e.value.DependencyName) catch "",
+            .options = opts,
         } };
-
-        std.log.info("pending pkgbuild diff question: {d}", .{pending.request.pkgbuild.diff_lines.len});
-        op.on_question(op.ctx, pending);
-        return 0;
     }
+    return pending;
+}
 
-    if (std.mem.eql(u8, kind, "q.transaction")) {
-        const e = std.json.parseFromSlice(TransactionRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
-        defer e.deinit();
-        const pending = op.allocator.create(PendingQuestion) catch return 0;
-        pending.* = .{
-            .arena = std.heap.ArenaAllocator.init(op.allocator),
-            .operation = op,
-            .request = undefined,
-        };
-        const qa = pending.arena.allocator();
-        const packages = qa.alloc(TransactionPackage, e.value.Packages.len) catch {
-            pending.destroy();
-            return 0;
-        };
-        for (e.value.Packages, packages) |package, *target| target.* = .{
-            .name = qa.dupe(u8, package.Name) catch "",
-            .version = dupeOptional(qa, package.Version),
-            .repository = dupeOptional(qa, package.Repository),
-            .package_base = dupeOptional(qa, package.PackageBase),
-            .revision = dupeOptional(qa, package.Revision),
-            .source = qa.dupe(u8, package.Source) catch "",
-            .role = qa.dupe(u8, package.Role) catch "",
-            .download_size = package.DownloadSize,
-            .installed_size = package.InstalledSize,
-        };
-        pending.request = .{ .transaction = .{
-            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
-                pending.destroy();
-                return 0;
-            },
-            .question_text = qa.dupe(u8, e.value.QuestionText) catch "",
-            .action = qa.dupe(u8, e.value.Action) catch "",
-            .packages = packages,
-            .total_download_size = e.value.TotalDownloadSize,
-            .total_installed_size = e.value.TotalInstalledSize,
-            .net_installed_size = e.value.NetInstalledSize,
-        } };
-        op.on_question(op.ctx, pending);
-        return 0;
-    }
-
-    if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
-        const e = std.json.parseFromSlice(SelectionRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
-        defer e.deinit();
-
-        const pending = op.allocator.create(PendingQuestion) catch return 0;
-        pending.* = .{
-            .arena = std.heap.ArenaAllocator.init(op.allocator),
-            .operation = op,
-            .request = undefined,
-        };
-        const qa = pending.arena.allocator();
-
-        const opts = qa.alloc(Option, e.value.Options.len) catch {
-            pending.destroy();
-            return 0;
-        };
-        for (e.value.Options, 0..) |o, i| {
-            opts[i] = .{
-                .index = o.Index,
-                .name = qa.dupe(u8, o.Name) catch "",
-                .description = qa.dupe(u8, o.Description) catch "",
-                .is_installed = o.IsInstalled,
-                .is_selected = o.IsSelected,
-            };
-        }
-
-        const qid = qa.dupe(u8, e.value.QuestionId) catch {
-            pending.destroy();
-            return 0;
-        };
-
-        if (std.mem.eql(u8, kind, "q.optdeps")) {
-            const prompt = qa.dupe(u8, e.value.QuestionText) catch "";
-            pending.request = .{ .select_many = .{ .question_id = qid, .prompt = prompt, .options = opts } };
-        } else {
-            const prompt = qa.dupe(u8, e.value.DependencyName) catch "";
-            pending.request = .{ .select_one = .{ .question_id = qid, .prompt = prompt, .options = opts } };
-        }
-
-        op.on_question(op.ctx, pending);
-        return 0;
-    }
-
+fn dispatchEvent(op: *ShellyOperation, alloc: std.mem.Allocator, json: []const u8, kind: []const u8) void {
     if (std.mem.eql(u8, kind, "alpm.info")) {
-        const e = std.json.parseFromSlice(AlpmInfo, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(AlpmInfo, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .info = .{
             .event_type = e.value.EventType,
@@ -788,30 +688,30 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
             .total = e.value.TotalCount,
         } });
     } else if (std.mem.eql(u8, kind, "alpm.error")) {
-        const e = std.json.parseFromSlice(AlpmError, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(AlpmError, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .err = .{ .message = e.value.ErrorMessage } });
     } else if (std.mem.eql(u8, kind, "alpm.progress")) {
-        const e = std.json.parseFromSlice(AlpmProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(AlpmProgress, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .alpm_progress = .{
             .package_name = e.value.PackageName,
+            .stage = e.value.Stage,
             .current_download = e.value.CurrentDownload,
             .total_download = e.value.TotalDownload,
             .progress_type = e.value.ProgressType,
             .percent = clampPercent(e.value.Percent),
-            .stage = e.value.Stage,
             .message = e.value.Message,
         } });
     } else if (std.mem.eql(u8, kind, "flatpak.progress")) {
-        const e = std.json.parseFromSlice(SimpleProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(SimpleProgress, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .flatpak_progress = .{
             .status = e.value.Status,
             .percentage = clampPercent(e.value.Percentage),
         } });
     } else if (std.mem.eql(u8, kind, "appimage.progress")) {
-        const e = std.json.parseFromSlice(SimpleProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(SimpleProgress, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .appimage_progress = .{
             .status = e.value.Status,
@@ -820,8 +720,6 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
     } else {
         op.on_event(op.ctx, .unknown);
     }
-
-    return 0;
 }
 
 fn clampPercent(p: i64) i64 {
