@@ -22,6 +22,7 @@ pub const Event = union(enum) {
         total_download: i64,
         progress_type: []const u8,
         percent: i64,
+        stage: ?[]const u8,
         message: ?[]const u8,
     },
     flatpak_progress: struct {
@@ -56,6 +57,7 @@ const AlpmProgress = struct {
     TotalDownload: i64 = 0,
     ProgressType: []const u8 = "",
     Percent: i64 = 0,
+    Stage: ?[]const u8 = null,
     Message: ?[]const u8 = null,
 };
 
@@ -86,7 +88,7 @@ pub const Question = union(enum) {
         package_name: []const u8,
         old_pkgbuild: []const u8,
         new_pkgbuild: []const u8,
-        warnings: []const []const u8 = &.{},
+        warnings: []const Warning = &.{},
         diff_lines: []const []const u8 = &.{},
         source_files: ?[]const []const u8 = null,
     },
@@ -114,9 +116,17 @@ pub const PkgbuildDiff = struct {
     PackageName: []const u8,
     OldPkgbuild: []const u8,
     NewPkgbuild: []const u8,
-    Warnings: []const []const u8 = &.{},
+    Warnings: []const Warning = &.{},
     DiffLines: []const []const u8 = &.{},
     SourceFiles: ?[]const []const u8 = null,
+};
+
+pub const Warning = struct {
+    Tool: []const u8 = "",
+    Severity: []const u8 = "",
+    Hook: []const u8 = "",
+    MatchedLine: []const u8 = "",
+    Message: []const u8 = "",
 };
 
 const OptionWire = struct {
@@ -265,6 +275,14 @@ pub const ShellyCommands = struct {
         try argv.append(alloc, "purify");
         try argv.append(alloc, "standard");
         try argv.append(alloc, "--orphans");
+        return argv.toOwnedSlice(alloc);
+    }
+
+    pub fn install_aur(alloc: std.mem.Allocator, names: []const []const u8) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "install");
+        try argv.append(alloc, "aur");
+        for (names) |n| try argv.append(alloc, n);
         return argv.toOwnedSlice(alloc);
     }
 };
@@ -430,6 +448,17 @@ pub const ShellyOperation = struct {
         try self.writeAnswerFrame(json_buf.items);
     }
 
+    pub fn answerPkgbuildDiff(self: *ShellyOperation, question_id: []const u8, accepted: bool) !void {
+        var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+        try json_buf.appendSlice(self.allocator, "{\"$kind\":\"a.pkgbuilddiff\",\"QuestionId\":\"");
+        try json_buf.appendSlice(self.allocator, question_id);
+        try json_buf.appendSlice(self.allocator, "\",\"ProceedWithUpdate\":");
+        try json_buf.appendSlice(self.allocator, if (accepted) "true" else "false");
+        try json_buf.append(self.allocator, '}');
+        try self.writeAnswerFrame(json_buf.items);
+    }
+
     pub fn answerProvider(self: *ShellyOperation, question_id: []const u8, selected: usize) !void {
         var json_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer json_buf.deinit(self.allocator);
@@ -514,13 +543,71 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
         const e = std.json.parseFromSlice(PkgbuildDiff, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
         defer e.deinit();
 
-        const pending = op.allocator.create(PkgbuildDiff) catch return 0;
+        const pending = op.allocator.create(PendingQuestion) catch return 0;
         pending.* = .{
             .arena = std.heap.ArenaAllocator.init(op.allocator),
             .operation = op,
             .request = undefined,
         };
+
+        std.log.info("diff_lines from event: {d}", .{e.value.DiffLines.len});
+
         const qa = pending.arena.allocator();
+
+        const warnings = qa.alloc(Warning, e.value.Warnings.len) catch {
+            pending.destroy();
+            return 0;
+        };
+        for (e.value.Warnings, 0..) |w, i| {
+            warnings[i] = .{
+                .Tool = qa.dupe(u8, w.Tool) catch {
+                    pending.destroy();
+                    return 0;
+                },
+                .Hook = qa.dupe(u8, w.Hook) catch {
+                    pending.destroy();
+                    return 0;
+                },
+                .Severity = qa.dupe(u8, w.Severity) catch {
+                    pending.destroy();
+                    return 0;
+                },
+                .Message = qa.dupe(u8, w.Message) catch {
+                    pending.destroy();
+                    return 0;
+                },
+                .MatchedLine = qa.dupe(u8, w.MatchedLine) catch {
+                    pending.destroy();
+                    return 0;
+                },
+            };
+        }
+
+        const diff_lines = qa.alloc([]const u8, e.value.DiffLines.len) catch {
+            pending.destroy();
+            return 0;
+        };
+        for (e.value.DiffLines, 0..) |line, i| {
+            diff_lines[i] = qa.dupe(u8, line) catch {
+                pending.destroy();
+                return 0;
+            };
+        }
+
+        const source_files: ?[][]const u8 = if (e.value.SourceFiles) |src| blk: {
+            const files = qa.alloc([]const u8, src.len) catch {
+                pending.destroy();
+                return 0;
+            };
+            for (src, 0..) |f, i| {
+                files[i] = qa.dupe(u8, f) catch {
+                    pending.destroy();
+                    return 0;
+                };
+            }
+            break :blk files;
+        } else null;
+
         pending.request = .{ .pkgbuild = .{
             .question_id = qa.dupe(u8, e.value.QuestionId) catch {
                 pending.destroy();
@@ -538,17 +625,12 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
                 pending.destroy();
                 return 0;
             },
-            .warnings = qa.alloc([]const u8, e.value.Warnings.len) catch {
-                pending.destroy();
-                return 0;
-            },
-            .diff_lines = qa.alloc([]const u8, e.value.DiffLines.len) catch {
-                pending.destroy();
-                return 0;
-            },
-            .source_files = e.value.SourceFiles,
+            .warnings = warnings,
+            .diff_lines = diff_lines,
+            .source_files = source_files,
         } };
 
+        std.log.info("pending pkgbuild diff question: {d}", .{pending.request.pkgbuild.diff_lines.len});
         op.on_question(op.ctx, pending);
         return 0;
     }
@@ -619,6 +701,7 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
             .total_download = e.value.TotalDownload,
             .progress_type = e.value.ProgressType,
             .percent = clampPercent(e.value.Percent),
+            .stage = e.value.Stage,
             .message = e.value.Message,
         } });
     } else if (std.mem.eql(u8, kind, "flatpak.progress")) {

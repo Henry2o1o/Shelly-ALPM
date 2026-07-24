@@ -76,6 +76,7 @@ pub fn build(b: *std.Build) void {
     gresource.addFileInput(b.path("src/ui/flatpak/flatpak_install_local.ui"));
     gresource.addFileInput(b.path("src/dialog/ui/version_history.ui"));
     gresource.addFileInput(b.path("src/dialog/ui/permissions.ui"));
+    gresource.addFileInput(b.path("src/dialog/ui/pkg_build.ui"));
 
     // Link the generated resource C into the exe.
     exe.root_module.addCSourceFile(.{ .file = resources_c });
