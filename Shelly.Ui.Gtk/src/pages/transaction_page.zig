@@ -14,6 +14,7 @@ const PendingQuestion = @import("../services/shelly_operation.zig").PendingQuest
 const TransactionQuestion = @import("../services/shelly_operation.zig").TransactionQuestion;
 const TransactionPackage = @import("../services/shelly_operation.zig").TransactionPackage;
 const MultiSelectDialog = @import("../dialog/page/multiselect.zig").MultiSelectDialog;
+const PlanDialog = @import("../dialog/page/plan.zig").PlanDialog;
 
 pub const TransactionRequest = struct {
     title: []const u8,
@@ -396,195 +397,16 @@ pub const TransactionPage = extern struct {
             .transaction => |q| {
                 pending.on_dismiss = &dismiss_question;
                 pending.dismiss_ctx = self;
-                self.addPlanRows(q.packages);
-                const dialog = buildTransactionDialog(pending, q);
+                const dialog = PlanDialog.new(q, &on_plan_response, pending);
                 gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
                 gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
             },
         }
     }
 
-    fn addPlanRows(self: *Self, packages: []const TransactionPackage) void {
-        const p = self.priv();
-        const allocator = if (p.arena) |arena| arena.allocator() else return;
-        for (packages) |package| {
-            if (p.rows.get(package.name)) |row| {
-                gtk.Label.setLabel(row.status_label, "Awaiting confirmation");
-                continue;
-            }
-            const owned = allocator.dupeZ(u8, package.name) catch continue;
-            const row = build_row(allocator, owned) catch continue;
-            gtk.Label.setLabel(row.status_label, "Awaiting confirmation");
-            gtk.Box.append(p.rows_box, row.root.as(gtk.Widget));
-            p.rows.put(allocator, owned, row) catch {};
-        }
-    }
-
-    fn buildTransactionDialog(
-        pending: *PendingQuestion,
-        question: TransactionQuestion,
-    ) *gtk.Box {
-        const card = gtk.Box.new(.vertical, 12);
-        gtk.Widget.addCssClass(card.as(gtk.Widget), "pkg-card");
-        gtk.Widget.setSizeRequest(card.as(gtk.Widget), 720, -1);
-        gtk.Widget.setMarginStart(card.as(gtk.Widget), 16);
-        gtk.Widget.setMarginEnd(card.as(gtk.Widget), 16);
-        gtk.Widget.setMarginTop(card.as(gtk.Widget), 16);
-        gtk.Widget.setMarginBottom(card.as(gtk.Widget), 16);
-
-        const title_label = gtk.Label.new("Confirm transaction");
-        gtk.Widget.setHalign(title_label.as(gtk.Widget), .start);
-        gtk.Label.setXalign(title_label, 0);
-        gtk.Widget.addCssClass(title_label.as(gtk.Widget), "detail-title");
-        gtk.Box.append(card, title_label.as(gtk.Widget));
-
-        var question_buffer: [512]u8 = undefined;
-        const prompt = gtk.Label.new(c_string.cstr(&question_buffer, question.question_text));
-        gtk.Widget.setHalign(prompt.as(gtk.Widget), .start);
-        gtk.Label.setXalign(prompt, 0);
-        gtk.Label.setWrap(prompt, 1);
-        gtk.Box.append(card, prompt.as(gtk.Widget));
-
-        const package_box = gtk.Box.new(.vertical, 8);
-        for (question.packages) |package|
-            gtk.Box.append(package_box, buildPlanPackageRow(package).as(gtk.Widget));
-
-        const scroll = gtk.ScrolledWindow.new();
-        gtk.ScrolledWindow.setMinContentHeight(scroll, 220);
-        gtk.ScrolledWindow.setMaxContentHeight(scroll, 480);
-        gtk.ScrolledWindow.setPropagateNaturalHeight(scroll, 1);
-        gtk.ScrolledWindow.setChild(scroll, package_box.as(gtk.Widget));
-        gtk.Box.append(card, scroll.as(gtk.Widget));
-
-        const totals = gtk.Box.new(.vertical, 2);
-        appendPlanTotal(totals, "Total download", question.total_download_size);
-        appendPlanTotal(totals, "Total installed", question.total_installed_size);
-        if (question.net_installed_size) |net| {
-            var text_buffer: [128]u8 = undefined;
-            const absolute: u64 = @abs(net);
-            var size_buffer: [64]u8 = undefined;
-            const text = std.fmt.bufPrint(
-                &text_buffer,
-                "Net installed-size change: {s}{s}",
-                .{ if (net < 0) "-" else "+", formatBytes(&size_buffer, absolute) },
-            ) catch "Net installed-size change: unknown";
-            var c_buffer: [128]u8 = undefined;
-            const label = gtk.Label.new(c_string.cstr(&c_buffer, text));
-            gtk.Widget.setHalign(label.as(gtk.Widget), .start);
-            gtk.Label.setXalign(label, 0);
-            gtk.Widget.addCssClass(label.as(gtk.Widget), "dim-label");
-            gtk.Box.append(totals, label.as(gtk.Widget));
-        }
-        gtk.Box.append(card, totals.as(gtk.Widget));
-
-        const buttons = gtk.Box.new(.horizontal, 8);
-        gtk.Widget.setHalign(buttons.as(gtk.Widget), .end);
-        const cancel = gtk.Button.newWithLabel("Cancel");
-        const confirm = gtk.Button.newWithLabel("Install");
-        gtk.Widget.addCssClass(confirm.as(gtk.Widget), "suggested-action");
-        _ = gtk.Button.signals.clicked.connect(cancel, *PendingQuestion, &on_transaction_cancel, pending, .{});
-        _ = gtk.Button.signals.clicked.connect(confirm, *PendingQuestion, &on_transaction_confirm, pending, .{});
-        gtk.Box.append(buttons, cancel.as(gtk.Widget));
-        gtk.Box.append(buttons, confirm.as(gtk.Widget));
-        gtk.Box.append(card, buttons.as(gtk.Widget));
-        return card;
-    }
-
-    fn buildPlanPackageRow(package: TransactionPackage) *gtk.Box {
-        const row = gtk.Box.new(.vertical, 2);
-        gtk.Widget.addCssClass(row.as(gtk.Widget), "pkg-card");
-
-        const heading = gtk.Box.new(.horizontal, 8);
-        var name_buffer: [256]u8 = undefined;
-        const name = gtk.Label.new(c_string.cstr(&name_buffer, package.name));
-        gtk.Widget.setHalign(name.as(gtk.Widget), .start);
-        gtk.Widget.setHexpand(name.as(gtk.Widget), 1);
-        gtk.Label.setXalign(name, 0);
-        gtk.Widget.addCssClass(name.as(gtk.Widget), "pkg-name");
-        gtk.Box.append(heading, name.as(gtk.Widget));
-
-        var role_buffer: [128]u8 = undefined;
-        const role_text = std.fmt.bufPrint(&role_buffer, "{s} · {s}", .{
-            displayRole(package.role),
-            displaySource(package.source),
-        }) catch package.role;
-        var role_c_buffer: [128]u8 = undefined;
-        const role = gtk.Label.new(c_string.cstr(&role_c_buffer, role_text));
-        gtk.Widget.addCssClass(role.as(gtk.Widget), "dim-label");
-        gtk.Box.append(heading, role.as(gtk.Widget));
-        gtk.Box.append(row, heading.as(gtk.Widget));
-
-        var detail_buffer: [512]u8 = undefined;
-        var download_buffer: [64]u8 = undefined;
-        var installed_buffer: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&detail_buffer, "Version: {s}    Download: {s}    Installed: {s}", .{
-            package.version orelse if (std.mem.eql(u8, package.source, "aur"))
-                "Determined during build"
-            else
-                "Resolved by standard transaction",
-            packageSizeText(&download_buffer, package.download_size, package.source),
-            packageSizeText(&installed_buffer, package.installed_size, package.source),
-        }) catch "";
-        var detail_c_buffer: [512]u8 = undefined;
-        const details = gtk.Label.new(c_string.cstr(&detail_c_buffer, detail));
-        gtk.Widget.setHalign(details.as(gtk.Widget), .start);
-        gtk.Label.setXalign(details, 0);
-        gtk.Label.setWrap(details, 1);
-        gtk.Widget.addCssClass(details.as(gtk.Widget), "dim-label");
-        gtk.Box.append(row, details.as(gtk.Widget));
-        return row;
-    }
-
-    fn appendPlanTotal(box: *gtk.Box, label_text: []const u8, size: ?u64) void {
-        const value = size orelse return;
-        var size_buffer: [64]u8 = undefined;
-        var text_buffer: [128]u8 = undefined;
-        const text = std.fmt.bufPrint(&text_buffer, "{s}: {s}", .{
-            label_text,
-            formatBytes(&size_buffer, value),
-        }) catch return;
-        var c_buffer: [128]u8 = undefined;
-        const label = gtk.Label.new(c_string.cstr(&c_buffer, text));
-        gtk.Widget.setHalign(label.as(gtk.Widget), .start);
-        gtk.Label.setXalign(label, 0);
-        gtk.Widget.addCssClass(label.as(gtk.Widget), "dim-label");
-        gtk.Box.append(box, label.as(gtk.Widget));
-    }
-
-    fn packageSizeText(buffer: []u8, size: ?u64, source: []const u8) []const u8 {
-        if (size) |value| return formatBytes(buffer, value);
-        return if (std.mem.eql(u8, source, "aur") or std.mem.eql(u8, source, "local"))
-            "Determined during build"
-        else
-            "Resolved by standard transaction";
-    }
-
-    fn formatBytes(buffer: []u8, bytes: u64) []const u8 {
-        const mib = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
-        return std.fmt.bufPrint(buffer, "{d:.2} MiB", .{mib}) catch "?";
-    }
-
-    fn displayRole(role: []const u8) []const u8 {
-        if (std.mem.eql(u8, role, "runtime_dependency")) return "Runtime dependency";
-        if (std.mem.eql(u8, role, "build_dependency")) return "Build dependency";
-        if (std.mem.eql(u8, role, "check_dependency")) return "Check dependency";
-        if (std.mem.eql(u8, role, "optional_dependency")) return "Optional dependency";
-        if (std.mem.eql(u8, role, "requested")) return "Requested";
-        return "Dependency";
-    }
-
-    fn displaySource(source: []const u8) []const u8 {
-        if (std.mem.eql(u8, source, "aur")) return "AUR";
-        if (std.mem.eql(u8, source, "local")) return "Local";
-        return "Repository";
-    }
-
-    fn on_transaction_confirm(_: *gtk.Button, pending: *PendingQuestion) callconv(.c) void {
-        respondToTransaction(pending, true);
-    }
-
-    fn on_transaction_cancel(_: *gtk.Button, pending: *PendingQuestion) callconv(.c) void {
-        respondToTransaction(pending, false);
+    fn on_plan_response(ctx: ?*anyopaque, confirmed: bool) void {
+        const pending: *PendingQuestion = @ptrCast(@alignCast(ctx.?));
+        respondToTransaction(pending, confirmed);
     }
 
     fn respondToTransaction(pending: *PendingQuestion, accepted: bool) void {
