@@ -192,6 +192,23 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
+    const makepackage_test_module = b.createModule(.{
+        .root_source_file = b.path("src/aur/makepackage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const makepackage_tests = b.addTest(.{
+        .name = "makepackage-test",
+        .root_module = makepackage_test_module,
+    });
+    const run_makepackage_tests = b.addRunArtifact(makepackage_tests);
+    test_step.dependOn(&run_makepackage_tests.step);
+    const makepackage_test_step = b.step(
+        "makepackage-test",
+        "Run makepkg configuration parser tests",
+    );
+    makepackage_test_step.dependOn(&run_makepackage_tests.step);
+
     // Local package tests are isolated from the package manager's live-system
     // integration tests and use only temporary configured roots.
     const local_test_module = b.createModule(.{

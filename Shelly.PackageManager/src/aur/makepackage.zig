@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const equalIgnoreCase = std.ascii.eqlIgnoreCase;
 
 // Max depth is at most one for this configuration file.
 // Why the hell would you ever want more than one of these???
@@ -55,8 +56,9 @@ pub const MakePackageConfiguration = struct {
     integrity_check: []const u8,
     strip_binaries: []const u8,
     strip_static: []const u8,
+    strip_shared: []const u8,
     man_directories: []const u8,
-    doc_directores: []const u8,
+    doc_directories: []const u8,
     purge_targets: []const u8,
     debug_source_direcctory: []const u8,
     library_directories: []const u8,
@@ -106,12 +108,252 @@ pub const MakePackageConfiguration = struct {
         }
 
         fn parse_buffer(self: *Parser, bytes: []const u8) Allocator.Error!void {
+            var logical: std.ArrayList(u8) = .empty;
+            defer logical.deinit(self.scratch_allocator);
+            var next_line = false;
+
             var lines = std.mem.splitScalar(u8, bytes, '\n');
-            while (lines.next()) |raw| {
-                const line = std.mem.trim(u8, raw, " \t\r\n");
-                if (line.len == 0 or line[0] == '#') continue;
+            while (lines.next()) |raw_input| {
+                const raw = std.mem.trimEnd(u8, raw_input, " \r");
+                const continues = hasLineContinuate(raw);
+
+                const partial = if (next_line) std.mem.trimStart(u8, raw, " \t") else raw;
+
+                if (continues) {
+                    try logical.appendSlice(self.scratch_allocator, partial[0 .. partial.len - 1]);
+
+                    if (logical.items.len > 0 and
+                        logical.items[logical.items.len - 1] != ' ')
+                    {
+                        try logical.append(self.scratch_allocator, ' ');
+                    }
+
+                    next_line = true;
+                    continue;
+                }
+                try logical.appendSlice(self.scratch_allocator, partial);
+
+                const line = std.mem.trim(u8, logical.items, " \t\r\n");
+                if (line.len != 0 and line[0] != '#') {
+                    const eq_index = std.mem.indexOfScalar(u8, line, '=') orelse {
+                        logical.clearRetainingCapacity();
+                        next_line = false;
+                        continue;
+                    };
+                    const owned_line = try self.arena_allocator.dupe(u8, line);
+
+                    const key = std.mem.trim(u8, owned_line[0..eq_index], " \t");
+                    var value = std.mem.trim(u8, owned_line[eq_index + 1 ..], " \t");
+
+                    if (value.len >= 2 and
+                        value[0] == '"' and
+                        value[value.len - 1] == '"')
+                    {
+                        value = value[1 .. value.len - 1];
+                    }
+                    self.parse_key_value(key, value);
+                }
+
+                logical.clearRetainingCapacity();
+                next_line = false;
             }
-            _ = self;
+        }
+
+        fn parse_key_value(self: *Parser, key: []const u8, value: []const u8) void {
+            if (equalIgnoreCase(key, "carch")) {
+                self.config.carch = value;
+            } else if (equalIgnoreCase(key, "chost")) {
+                self.config.chost = value;
+            } else if (equalIgnoreCase(key, "package_carch")) {
+                self.config.package_carch = value;
+            } else if (equalIgnoreCase(key, "nproc")) {
+                self.config.nproc = std.fmt.parseInt(u8, value, 10) catch return;
+            } else if (equalIgnoreCase(key, "cppflags")) {
+                self.config.cpp_flags = value;
+            } else if (equalIgnoreCase(key, "cflags")) {
+                self.config.c_flags = value;
+            } else if (equalIgnoreCase(key, "cxxflags")) {
+                self.config.cxx_flags = value;
+            } else if (equalIgnoreCase(key, "ldflags")) {
+                self.config.ld_flags = value;
+            } else if (equalIgnoreCase(key, "ltoflags")) {
+                self.config.lto_flags = value;
+            } else if (equalIgnoreCase(key, "makeflags")) {
+                self.config.make_flags = value;
+            } else if (equalIgnoreCase(key, "ninjaflags")) {
+                self.config.ninja_flags = value;
+            } else if (equalIgnoreCase(key, "debug_cflags")) {
+                self.config.debug_c_flags = value;
+            } else if (equalIgnoreCase(key, "debug_cxxflags")) {
+                self.config.debug_cxx_flags = value;
+            } else if (equalIgnoreCase(key, "buildenv")) {
+                self.config.build_environment = value;
+            } else if (equalIgnoreCase(key, "distcc_hosts")) {
+                self.config.distributed_c_compiler_hosts = value;
+            } else if (equalIgnoreCase(key, "builddir")) {
+                self.config.build_directory = value;
+            } else if (equalIgnoreCase(key, "options")) {
+                self.config.options = value;
+            } else if (equalIgnoreCase(key, "integrity_check")) {
+                self.config.integrity_check = value;
+            } else if (equalIgnoreCase(key, "strip_binaries")) {
+                self.config.strip_binaries = value;
+            } else if (equalIgnoreCase(key, "strip_shared")) {
+                self.config.strip_shared = value;
+            } else if (equalIgnoreCase(key, "strip_static")) {
+                self.config.strip_static = value;
+            } else if (equalIgnoreCase(key, "man_dirs")) {
+                self.config.man_directories = value;
+            } else if (equalIgnoreCase(key, "doc_dirs")) {
+                self.config.doc_directories = value;
+            } else if (equalIgnoreCase(key, "purge_targets")) {
+                self.config.purge_targets = value;
+            } else if (equalIgnoreCase(key, "dbgsrcdir")) {
+                self.config.debug_source_direcctory = value;
+            } else if (equalIgnoreCase(key, "lib_dirs")) {
+                self.config.library_directories = value;
+            } else if (equalIgnoreCase(key, "pkgdest")) {
+                self.config.package_destination = value;
+            } else if (equalIgnoreCase(key, "srcdest")) {
+                self.config.source_destination = value;
+            } else if (equalIgnoreCase(key, "srcpkgdest")) {
+                self.config.source_package_destionation = value;
+            } else if (equalIgnoreCase(key, "logdest")) {
+                self.config.log_destination = value;
+            } else if (equalIgnoreCase(key, "packager")) {
+                self.config.packager = value;
+            } else if (equalIgnoreCase(key, "gpgkey")) {
+                self.config.gpg_key = value;
+            } else if (equalIgnoreCase(key, "compressgz")) {
+                self.config.gz = value;
+            } else if (equalIgnoreCase(key, "compressbz2")) {
+                self.config.bz2 = value;
+            } else if (equalIgnoreCase(key, "compressxz")) {
+                self.config.xz = value;
+            } else if (equalIgnoreCase(key, "compresszst")) {
+                self.config.zst = value;
+            } else if (equalIgnoreCase(key, "compresslrz")) {
+                self.config.lrz = value;
+            } else if (equalIgnoreCase(key, "compresslzo")) {
+                self.config.lzo = value;
+            } else if (equalIgnoreCase(key, "compressz")) {
+                self.config.z = value;
+            } else if (equalIgnoreCase(key, "compresslz4")) {
+                self.config.lz4 = value;
+            } else if (equalIgnoreCase(key, "compresslz")) {
+                self.config.lz = value;
+            } else if (equalIgnoreCase(key, "pkgext")) {
+                self.config.package_extension = value;
+            } else if (equalIgnoreCase(key, "srcext")) {
+                self.config.source_extension = value;
+            }
+        }
+
+        fn hasLineContinuate(raw: []const u8) bool {
+            const line = std.mem.trimEnd(u8, raw, "\r");
+            if (line.len == 0 or line[line.len - 1] != '\\') return false;
+
+            var slash_count: usize = 0;
+            var index = line.len;
+            while (index > 0 and line[index - 1] == '\\') {
+                slash_count += 1;
+                index -= 1;
+            }
+
+            return slash_count % 2 == 1;
         }
     };
 };
+
+fn TestParser(comptime assertion: *const fn (*const MakePackageConfiguration) anyerror!void) type {
+    return struct {
+        fn run(input: []const u8) !void {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+
+            var config: MakePackageConfiguration = undefined;
+            var parser: MakePackageConfiguration.Parser = .{
+                .io = std.testing.io,
+                .scratch_allocator = arena.allocator(),
+                .arena_allocator = arena.allocator(),
+                .config = &config,
+            };
+            try parser.parse_buffer(input);
+            try assertion(&config);
+        }
+    };
+}
+
+test "makepkg parser reads a quoted scalar case-insensitively" {
+    const Assert = struct {
+        fn value(config: *const MakePackageConfiguration) !void {
+            try std.testing.expectEqualStrings("x86_64-pc-linux-gnu", config.chost);
+        }
+    };
+    try TestParser(&Assert.value).run("cHoSt=\"x86_64-pc-linux-gnu\"\n");
+}
+
+test "makepkg parser joins backslash-continued CFLAGS" {
+    const Assert = struct {
+        fn value(config: *const MakePackageConfiguration) !void {
+            try std.testing.expectEqualStrings(
+                "-march=native -O3 -pipe -fno-plt -fexceptions " ++
+                    "-Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security " ++
+                    "-fstack-clash-protection -fcf-protection",
+                config.c_flags,
+            );
+        }
+    };
+    const input =
+        \\CFLAGS="-march=native -O3 -pipe -fno-plt -fexceptions \
+        \\        -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security \
+        \\        -fstack-clash-protection -fcf-protection"
+    ;
+    try TestParser(&Assert.value).run(input);
+}
+
+test "makepkg parser retains parenthesized option values" {
+    const Assert = struct {
+        fn value(config: *const MakePackageConfiguration) !void {
+            try std.testing.expectEqualStrings(
+                "(!strip docs !libtool staticlibs)",
+                config.options,
+            );
+        }
+    };
+    try TestParser(&Assert.value).run(
+        "OPTIONS=(!strip docs !libtool staticlibs)\n",
+    );
+}
+
+test "makepkg parser ignores comments unknown keys and lines without assignments" {
+    const Assert = struct {
+        fn value(config: *const MakePackageConfiguration) !void {
+            try std.testing.expectEqualStrings("-j8", config.make_flags);
+        }
+    };
+    try TestParser(&Assert.value).run(
+        "# MAKEFLAGS=-j1\n" ++
+            "UNKNOWN=value\n" ++
+            "not-an-assignment\n" ++
+            "MAKEFLAGS=\"-j8\"\n",
+    );
+}
+
+test "makepkg parser parses NPROC as an integer" {
+    const Assert = struct {
+        fn value(config: *const MakePackageConfiguration) !void {
+            try std.testing.expectEqual(@as(u8, 16), config.nproc);
+        }
+    };
+    try TestParser(&Assert.value).run("NPROC=16\n");
+}
+
+test "makepkg continuation requires an odd trailing backslash count" {
+    const Parser = MakePackageConfiguration.Parser;
+    try std.testing.expect(Parser.hasLineContinuate("CFLAGS=\"-O2 \\"));
+    try std.testing.expect(!Parser.hasLineContinuate("CFLAGS=\"-O2 \\\\"));
+    try std.testing.expect(Parser.hasLineContinuate("CFLAGS=\"-O2 \\\\\\"));
+    try std.testing.expect(!Parser.hasLineContinuate("CFLAGS=\"-O2\""));
+    try std.testing.expect(Parser.hasLineContinuate("CFLAGS=\"-O2 \\\r"));
+}
