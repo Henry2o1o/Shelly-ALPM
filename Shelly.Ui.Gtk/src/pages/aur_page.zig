@@ -28,18 +28,21 @@ pub const AurPage = extern struct {
         search_entry: *gtk.SearchEntry,
         installed_toggle: *gtk.ToggleButton,
         install_button: *gtk.Button,
-        results_stack: *gtk.Stack,
+        grid_overlay: *gtk.Overlay,
+        loading_box: *gtk.Box,
         loading_spinner: *gtk.Spinner,
+        placeholder_box: *gtk.Box,
+        placeholder_icon: *gtk.Image,
+        placeholder_title: *gtk.Label,
+        placeholder_subtitle: *gtk.Label,
         package_grid: *gtk.ColumnView,
         check_column: *gtk.ColumnViewColumn,
         name_column: *gtk.ColumnViewColumn,
         votes_column: *gtk.ColumnViewColumn,
         popularity_column: *gtk.ColumnViewColumn,
         version_column: *gtk.ColumnViewColumn,
-        error_label: *gtk.Label,
         chroot_check: *gtk.CheckButton,
         run_checks_check: *gtk.CheckButton,
-
         arena: ?*std.heap.ArenaAllocator,
         generation: u64,
         loaded: bool,
@@ -47,7 +50,6 @@ pub const AurPage = extern struct {
         last_query: [256]u8,
         last_query_len: usize,
         check_map: std.AutoHashMapUnmanaged(*AurPackageObject, *gtk.CheckButton),
-
         var offset: c_int = 0;
     };
 
@@ -109,7 +111,8 @@ pub const AurPage = extern struct {
         gtk.ColumnViewColumn.setFactory(p.check_column, check_factory.as(gtk.ListItemFactory));
 
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
-        std.debug.print("init: list_store={*}\n", .{p.list_store});
+
+        self.update_selection_ui();
         support.connectLifecycle(Self, self);
     }
 
@@ -145,11 +148,31 @@ pub const AurPage = extern struct {
 
     fn set_state(self: *Self, state: State) void {
         const p = self.priv();
-        gtk.Stack.setVisibleChildName(p.results_stack, state.name());
         switch (state) {
-            .loading => gtk.Spinner.start(p.loading_spinner),
-            else => gtk.Spinner.stop(p.loading_spinner),
+            .loading => {
+                gtk.Widget.setVisible(p.loading_box.as(gtk.Widget), 1);
+                gtk.Widget.setVisible(p.placeholder_box.as(gtk.Widget), 0);
+                gtk.Spinner.start(p.loading_spinner);
+            },
+            .results => {
+                gtk.Widget.setVisible(p.loading_box.as(gtk.Widget), 0);
+                gtk.Widget.setVisible(p.placeholder_box.as(gtk.Widget), 0);
+                gtk.Spinner.stop(p.loading_spinner);
+            },
+            .prompt => self.show_placeholder("system-search-symbolic", "Search the AUR", "The AUR has no browsable index — type a package name to begin."),
+            .empty => self.show_placeholder("edit-find-symbolic", "No packages found", "Try a shorter or more general keyword."),
+            .err => self.show_placeholder("dialog-error-symbolic", "Could not reach the AUR", "Check your connection and try again."),
         }
+    }
+
+    fn show_placeholder(self: *Self, icon: [:0]const u8, titles: [:0]const u8, subtitle: [:0]const u8) void {
+        const p = self.priv();
+        gtk.Spinner.stop(p.loading_spinner);
+        gtk.Widget.setVisible(p.loading_box.as(gtk.Widget), 0);
+        gtk.Image.setFromIconName(p.placeholder_icon, icon);
+        gtk.Label.setLabel(p.placeholder_title, titles);
+        gtk.Label.setLabel(p.placeholder_subtitle, subtitle);
+        gtk.Widget.setVisible(p.placeholder_box.as(gtk.Widget), 1);
     }
 
     fn setup_text_column(
@@ -236,6 +259,10 @@ pub const AurPage = extern struct {
                 gtk.Widget.setTooltipText(ood_icon.as(gtk.Widget), "Flagged out of date");
                 gtk.Box.append(title_box, ood_icon.as(gtk.Widget));
 
+                const installed_icon = gtk.Image.newFromIconName("object-select-symbolic");
+                gtk.Widget.setTooltipText(installed_icon.as(gtk.Widget), "Installed");
+                gtk.Box.append(title_box, installed_icon.as(gtk.Widget));
+
                 gtk.Box.append(box, title_box.as(gtk.Widget));
 
                 const desc_label = gtk.Label.new("");
@@ -260,6 +287,7 @@ pub const AurPage = extern struct {
                 const name_w = gtk.Widget.getFirstChild(title_box.as(gtk.Widget)) orelse return;
                 const name_label = gobject.ext.cast(gtk.Label, name_w) orelse return;
                 const ood_w = gtk.Widget.getNextSibling(name_w) orelse return;
+                const installed_w = gtk.Widget.getNextSibling(ood_w) orelse return;
                 const desc_w = gtk.Widget.getLastChild(box.as(gtk.Widget)) orelse return;
                 const desc_label = gobject.ext.cast(gtk.Label, desc_w) orelse return;
 
@@ -267,6 +295,7 @@ pub const AurPage = extern struct {
                 const markup = std.fmt.bufPrintZ(&buf, "<b>{s}</b>", .{pkg.getName()}) catch pkg.getName();
                 gtk.Label.setMarkup(name_label, markup);
                 gtk.Widget.setVisible(ood_w, @intFromBool(pkg.isOutOfDate()));
+                gtk.Widget.setVisible(installed_w, @intFromBool(pkg.isInstalled()));
                 gtk.Label.setLabel(desc_label, pkg.getDescription());
             }
         };
@@ -296,7 +325,6 @@ pub const AurPage = extern struct {
         const check = gobject.ext.cast(gtk.CheckButton, child) orelse return;
 
         page.priv().check_map.put(std.heap.c_allocator, pkg, check) catch {};
-
         set_sync_active(check, pkg.isSelected());
     }
 
@@ -321,6 +349,10 @@ pub const AurPage = extern struct {
         const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
         const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
         pkg.setSelected(gtk.CheckButton.getActive(check) != 0);
+
+        const page_ptr = gobject.Object.getData(check.as(gobject.Object), "page") orelse return;
+        const self: *Self = @ptrCast(@alignCast(page_ptr));
+        self.update_selection_ui();
     }
 
     fn on_row_activated(_: *gtk.ColumnView, position: c_uint, self: *Self) callconv(.c) void {
@@ -333,12 +365,91 @@ pub const AurPage = extern struct {
         const new_state = !pkg.isSelected();
         pkg.setSelected(new_state);
         if (p.check_map.get(pkg)) |check| set_sync_active(check, new_state);
+
+        self.update_selection_ui();
+    }
+
+    fn selection_count(self: *Self) u32 {
+        const p = self.priv();
+        const model = p.list_store.as(gio.ListModel);
+        const n = gio.ListModel.getNItems(model);
+        var count: u32 = 0;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(model, i) orelse continue;
+            defer obj.unref();
+            const pkg = gobject.ext.cast(AurPackageObject, obj) orelse continue;
+            if (pkg.isSelected()) count += 1;
+        }
+        return count;
+    }
+
+    fn collect_selected(self: *Self, list: *std.ArrayListUnmanaged([]const u8)) void {
+        const p = self.priv();
+        const model = p.list_store.as(gio.ListModel);
+        const n = gio.ListModel.getNItems(model);
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(model, i) orelse continue;
+            defer obj.unref();
+            const pkg = gobject.ext.cast(AurPackageObject, obj) orelse continue;
+            if (!pkg.isSelected()) continue;
+            list.append(std.heap.c_allocator, pkg.getName()) catch continue;
+        }
+    }
+
+    fn clear_selection(self: *Self) void {
+        const p = self.priv();
+        const model = p.list_store.as(gio.ListModel);
+        const n = gio.ListModel.getNItems(model);
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(model, i) orelse continue;
+            defer obj.unref();
+            const pkg = gobject.ext.cast(AurPackageObject, obj) orelse continue;
+            pkg.setSelected(false);
+            if (p.check_map.get(pkg)) |check| set_sync_active(check, false);
+        }
+        self.update_selection_ui();
+    }
+
+    fn update_selection_ui(self: *Self) void {
+        const p = self.priv();
+        const count = self.selection_count();
+        const btn = p.install_button.as(gtk.Widget);
+
+        gtk.Widget.removeCssClass(btn, "suggested-action");
+        gtk.Widget.removeCssClass(btn, "destructive-action");
+
+        var buf: [64]u8 = undefined;
+        if (count == 0) {
+            gtk.Button.setLabel(p.install_button, if (p.installed_mode) "Remove Selected" else "Install Selected");
+            gtk.Widget.setSensitive(btn, 0);
+            gtk.Widget.setTooltipText(btn, "Select one or more packages");
+        } else if (p.installed_mode) {
+            gtk.Button.setLabel(
+                p.install_button,
+                std.fmt.bufPrintZ(&buf, "Remove {d} Package(s)", .{count}) catch "Remove Selected",
+            );
+            gtk.Widget.setSensitive(btn, 1);
+            gtk.Widget.addCssClass(btn, "destructive-action");
+            gtk.Widget.setTooltipText(btn, null);
+        } else {
+            gtk.Button.setLabel(
+                p.install_button,
+                std.fmt.bufPrintZ(&buf, "Install {d} Package(s)", .{count}) catch "Install Selected",
+            );
+            gtk.Widget.setSensitive(btn, 1);
+            gtk.Widget.addCssClass(btn, "suggested-action");
+            gtk.Widget.setTooltipText(btn, null);
+        }
     }
 
     pub fn onMap(self: *Self) void {
         const p = self.priv();
         if (p.loaded) return;
         p.loaded = true;
+        self.update_selection_ui();
         _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
     }
 
@@ -365,6 +476,7 @@ pub const AurPage = extern struct {
         const p = self.priv();
         p.generation += 1;
         gio.ListStore.removeAll(p.list_store);
+        self.update_selection_ui();
         self.set_state(.loading);
 
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, mode }) catch {
@@ -451,14 +563,15 @@ pub const AurPage = extern struct {
         }
 
         if (result.failed) {
-            gtk.Label.setLabel(p.error_label, "Could not reach the AUR. Check your connection and try again.");
             page.set_state(.err);
+            page.update_selection_ui();
             finish(result);
             return 0;
         }
 
         if (result.packages.len == 0) {
             page.set_state(.empty);
+            page.update_selection_ui();
             finish(result);
             return 0;
         }
@@ -481,6 +594,7 @@ pub const AurPage = extern struct {
         if (result.index < result.packages.len) return 1;
 
         page.set_state(.results);
+        page.update_selection_ui();
 
         finish(result);
         return 0;
@@ -491,7 +605,7 @@ pub const AurPage = extern struct {
         return std.mem.span(gtk.Editable.getText(p.search_entry.as(gtk.Editable)));
     }
 
-    fn on_search_activate(_: *gtk.SearchEntry, self: *Self) callconv(.c) void {
+    fn on_search_activate(self: *Self) callconv(.c) void {
         const p = self.priv();
 
         if (p.installed_mode) {
@@ -502,6 +616,7 @@ pub const AurPage = extern struct {
         if (text.len == 0) {
             p.last_query_len = 0;
             gio.ListStore.removeAll(p.list_store);
+            self.update_selection_ui();
             self.set_state(.prompt);
             return;
         }
@@ -513,7 +628,7 @@ pub const AurPage = extern struct {
         self.start_load(.search);
     }
 
-    fn on_installed_toggled(_: *gtk.ToggleButton, self: *Self) callconv(.c) void {
+    fn on_installed_toggled(self: *Self) callconv(.c) void {
         const p = self.priv();
         p.installed_mode = gtk.ToggleButton.getActive(p.installed_toggle) != 0;
 
@@ -523,12 +638,14 @@ pub const AurPage = extern struct {
             self.start_load(.search);
         } else {
             gio.ListStore.removeAll(p.list_store);
+            self.update_selection_ui();
             self.set_state(.prompt);
         }
     }
 
-    fn on_install_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+    fn on_install_clicked(self: *Self) callconv(.c) void {
         const p = self.priv();
+        if (self.selection_count() == 0) return;
 
         if (p.installed_mode) {
             const dialog = ConfirmDialog.new(
@@ -551,41 +668,61 @@ pub const AurPage = extern struct {
         }
     }
 
-    fn on_remove_response(ctx: ?*anyopaque, confirmed: bool) void {
-        _ = ctx;
-        _ = confirmed;
-    }
-
     fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
         const self: *AurPage = @ptrCast(@alignCast(ctx.?));
         if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
         if (!confirmed) return;
 
-        //    const p = self.priv();
+        const p = self.priv();
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
         defer names.deinit(std.heap.c_allocator);
-        names.append(std.heap.c_allocator, "shelly-git") catch {};
-        // const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
-        // var i: u32 = 0;
-        // while (i < n) : (i += 1) {
-        //     const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
-        //     const pkg = gobject.ext.cast(AurPackageObject, obj) orelse continue;
-        //     if (pkg.isSelected()) {
-        //         names.append(std.heap.c_allocator, pkg.getName()) catch continue;
-        //     }
-        // }
-        // if (names.items.len == 0) return;
+        self.collect_selected(&names);
+        if (names.items.len == 0) return;
 
         var argv: std.ArrayListUnmanaged([]const u8) = .empty;
         defer argv.deinit(std.heap.c_allocator);
         argv.append(std.heap.c_allocator, "install") catch return;
         argv.append(std.heap.c_allocator, "aur") catch return;
         for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
+        if (gtk.CheckButton.getActive(p.chroot_check) != 0) {
+            argv.append(std.heap.c_allocator, "--chroot") catch return;
+        }
+        if (gtk.CheckButton.getActive(p.run_checks_check) != 0) {
+            argv.append(std.heap.c_allocator, "--check") catch return;
+        }
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Installing Aur Packages",
+                .title = "Installing AUR packages",
+                .argv = argv.items,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_remove_response(ctx: ?*anyopaque, confirmed: bool) void {
+        const self: *AurPage = @ptrCast(@alignCast(ctx.?));
+        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
+        if (!confirmed) return;
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+        self.collect_selected(&names);
+        if (names.items.len == 0) return;
+
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "remove") catch return;
+        argv.append(std.heap.c_allocator, "aur") catch return;
+        for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Removing AUR packages",
                 .argv = argv.items,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,
@@ -596,23 +733,36 @@ pub const AurPage = extern struct {
     }
 
     fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
-        _ = success;
-        _ = ctx;
+        const self: *AurPage = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+
+        const p = self.priv();
+        self.clear_selection();
+
+        if (p.installed_mode) {
+            self.start_load(.installed);
+        } else if (p.last_query_len > 0) {
+            self.start_load(.search);
+        }
     }
 
     const template_children = .{
         .{ "search_entry", @offsetOf(Private, "search_entry") },
         .{ "installed_toggle", @offsetOf(Private, "installed_toggle") },
         .{ "install_button", @offsetOf(Private, "install_button") },
-        .{ "results_stack", @offsetOf(Private, "results_stack") },
+        .{ "grid_overlay", @offsetOf(Private, "grid_overlay") },
+        .{ "loading_box", @offsetOf(Private, "loading_box") },
         .{ "loading_spinner", @offsetOf(Private, "loading_spinner") },
+        .{ "placeholder_box", @offsetOf(Private, "placeholder_box") },
+        .{ "placeholder_icon", @offsetOf(Private, "placeholder_icon") },
+        .{ "placeholder_title", @offsetOf(Private, "placeholder_title") },
+        .{ "placeholder_subtitle", @offsetOf(Private, "placeholder_subtitle") },
         .{ "package_grid", @offsetOf(Private, "package_grid") },
         .{ "check_column", @offsetOf(Private, "check_column") },
         .{ "name_column", @offsetOf(Private, "name_column") },
         .{ "votes_column", @offsetOf(Private, "votes_column") },
         .{ "popularity_column", @offsetOf(Private, "popularity_column") },
         .{ "version_column", @offsetOf(Private, "version_column") },
-        .{ "error_label", @offsetOf(Private, "error_label") },
         .{ "chroot_check", @offsetOf(Private, "chroot_check") },
         .{ "run_checks_check", @offsetOf(Private, "run_checks_check") },
     };
