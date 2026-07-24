@@ -123,6 +123,7 @@ pub const Event = union(enum) {
 
 pub const QuestionKind = enum {
     confirmation,
+    confirm_transaction,
     select_one,
     select_many,
     select_provider,
@@ -169,6 +170,51 @@ pub const ReviewPayload = struct {
     related_files: []const QuestionAttachment = &.{},
 };
 
+pub const TransactionAction = enum {
+    install,
+    update,
+    remove,
+};
+
+pub const TransactionPackageSource = enum {
+    repository,
+    aur,
+    local,
+};
+
+pub const TransactionPackageRole = enum {
+    requested,
+    dependency,
+    runtime_dependency,
+    build_dependency,
+    check_dependency,
+    optional_dependency,
+};
+
+/// A package in a prepared transaction. Null sizes mean the value cannot be
+/// known until the package is built (AUR/local packages) or until a later ALPM
+/// transaction resolves it.
+pub const TransactionPackage = struct {
+    name: []const u8,
+    version: ?[]const u8 = null,
+    repository: ?[]const u8 = null,
+    package_base: ?[]const u8 = null,
+    revision: ?[]const u8 = null,
+    source: TransactionPackageSource,
+    role: TransactionPackageRole,
+    download_size: ?u64 = null,
+    installed_size: ?u64 = null,
+};
+
+/// Structured transaction data borrowed for the duration of `Operation.ask`.
+pub const TransactionPlan = struct {
+    action: TransactionAction,
+    packages: []const TransactionPackage,
+    total_download_size: ?u64 = null,
+    total_installed_size: ?u64 = null,
+    net_installed_size: ?i64 = null,
+};
+
 pub const QuestionResponse = union(enum) {
     default,
     accepted,
@@ -185,6 +231,7 @@ pub const QuestionRequest = struct {
     options: []const QuestionOption = &.{},
     attachments: []const QuestionAttachment = &.{},
     review: ?ReviewPayload = null,
+    transaction_plan: ?TransactionPlan = null,
     dependency_name: ?[]const u8 = null,
     default_response: QuestionResponse = .default,
 };
@@ -197,6 +244,7 @@ pub const Question = struct {
     options: []const QuestionOption,
     attachments: []const QuestionAttachment,
     review: ?ReviewPayload,
+    transaction_plan: ?TransactionPlan,
     dependency_name: ?[]const u8,
     default_response: QuestionResponse,
 };
@@ -446,6 +494,7 @@ pub const OperationContext = struct {
             .options = request.options,
             .attachments = request.attachments,
             .review = request.review,
+            .transaction_plan = request.transaction_plan,
             .dependency_name = request.dependency_name,
             .default_response = request.default_response,
         };

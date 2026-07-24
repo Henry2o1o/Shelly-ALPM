@@ -222,6 +222,61 @@ pub fn writeYesNoQuestionFrame(
     try writeFrame(context, payload.writer.buffered());
 }
 
+pub fn writeTransactionQuestionFrame(
+    context: *runtime.RuntimeContext,
+    question: Zigalpm.OperationQuestion,
+) !void {
+    const plan = question.transaction_plan orelse return error.MissingTransactionPlan;
+    const question_id = try std.fmt.allocPrint(context.allocator, "{d}", .{question.question_id});
+    defer context.allocator.free(question_id);
+
+    var payload = std.Io.Writer.Allocating.init(context.allocator);
+    defer payload.deinit();
+    var json: std.json.Stringify = .{ .writer = &payload.writer };
+    try json.beginObject();
+    try json.objectField("$kind");
+    try json.write("q.transaction");
+    try json.objectField("QuestionId");
+    try json.write(question_id);
+    try json.objectField("QuestionText");
+    try json.write(question.prompt);
+    try json.objectField("Action");
+    try json.write(@tagName(plan.action));
+    try json.objectField("Packages");
+    try json.beginArray();
+    for (plan.packages) |package| {
+        try json.beginObject();
+        try json.objectField("Name");
+        try json.write(package.name);
+        try json.objectField("Version");
+        try json.write(package.version);
+        try json.objectField("Repository");
+        try json.write(package.repository);
+        try json.objectField("PackageBase");
+        try json.write(package.package_base);
+        try json.objectField("Revision");
+        try json.write(package.revision);
+        try json.objectField("Source");
+        try json.write(@tagName(package.source));
+        try json.objectField("Role");
+        try json.write(@tagName(package.role));
+        try json.objectField("DownloadSize");
+        try json.write(package.download_size);
+        try json.objectField("InstalledSize");
+        try json.write(package.installed_size);
+        try json.endObject();
+    }
+    try json.endArray();
+    try json.objectField("TotalDownloadSize");
+    try json.write(plan.total_download_size);
+    try json.objectField("TotalInstalledSize");
+    try json.write(plan.total_installed_size);
+    try json.objectField("NetInstalledSize");
+    try json.write(plan.net_installed_size);
+    try json.endObject();
+    try writeFrame(context, payload.writer.buffered());
+}
+
 pub fn writeOptionalDependenciesQuestionFrame(
     context: *runtime.RuntimeContext,
     question: Zigalpm.OperationQuestion,

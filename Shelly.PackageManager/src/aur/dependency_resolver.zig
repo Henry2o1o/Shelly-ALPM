@@ -3,6 +3,22 @@ const pkgbuild = @import("../pkgbuild/pkgbuild_parser.zig");
 
 pub const ParsedDependency = pkgbuild.parsed_dep;
 
+pub const Role = enum {
+    runtime,
+    build,
+    check,
+};
+
+pub const RepoDependency = struct {
+    name: []u8,
+    role: Role,
+};
+
+pub const AurDependency = struct {
+    dependency: ParsedDependency,
+    role: Role,
+};
+
 pub const Backend = struct {
     context: ?*anyopaque,
     is_installed: *const fn (context: ?*anyopaque, dependency: [:0]const u8) bool,
@@ -10,13 +26,13 @@ pub const Backend = struct {
 };
 
 pub const Resolution = struct {
-    repo_packages: [][]u8,
-    aur_packages: []ParsedDependency,
+    repo_packages: []RepoDependency,
+    aur_packages: []AurDependency,
 
     pub fn deinit(self: *Resolution, allocator: std.mem.Allocator) void {
-        for (self.repo_packages) |package| allocator.free(package);
+        for (self.repo_packages) |package| allocator.free(package.name);
         allocator.free(self.repo_packages);
-        for (self.aur_packages) |dependency| dependency.deinit(allocator);
+        for (self.aur_packages) |dependency| dependency.dependency.deinit(allocator);
         allocator.free(self.aur_packages);
         self.* = undefined;
     }
@@ -28,36 +44,76 @@ pub fn resolve(
     no_check: bool,
     backend: Backend,
 ) !Resolution {
-    var all_dependencies: std.ArrayList(ParsedDependency) = .empty;
-    defer all_dependencies.deinit(allocator);
-    try appendDistinct(&all_dependencies, allocator, info.parsed_depends orelse &.{});
-    try appendDistinct(&all_dependencies, allocator, info.parsed_make_depends orelse &.{});
-    if (!no_check) try appendDistinct(&all_dependencies, allocator, info.parsed_check_depends orelse &.{});
-
-    var repo: std.ArrayList([]u8) = .empty;
+    var repo: std.ArrayList(RepoDependency) = .empty;
     errdefer {
-        for (repo.items) |name| allocator.free(name);
+        for (repo.items) |dependency| allocator.free(dependency.name);
         repo.deinit(allocator);
     }
-    var aur: std.ArrayList(ParsedDependency) = .empty;
+    var aur: std.ArrayList(AurDependency) = .empty;
     errdefer {
-        for (aur.items) |dependency| dependency.deinit(allocator);
+        for (aur.items) |dependency| dependency.dependency.deinit(allocator);
         aur.deinit(allocator);
     }
 
-    for (all_dependencies.items) |dependency| {
-        const dependency_string = try formatDependencyZ(allocator, dependency);
-        defer allocator.free(dependency_string);
-        if (backend.is_installed(backend.context, dependency_string)) continue;
-        if (backend.find_repo_satisfier(backend.context, dependency_string)) |name| {
-            if (!containsString(repo.items, name)) try repo.append(allocator, try allocator.dupe(u8, name));
-        } else try aur.append(allocator, try cloneDependency(allocator, dependency));
-    }
+    try resolveGroup(allocator, info.parsed_depends orelse &.{}, .runtime, backend, &repo, &aur);
+    try resolveGroup(allocator, info.parsed_make_depends orelse &.{}, .build, backend, &repo, &aur);
+    if (!no_check)
+        try resolveGroup(allocator, info.parsed_check_depends orelse &.{}, .check, backend, &repo, &aur);
 
     return .{
         .repo_packages = try repo.toOwnedSlice(allocator),
         .aur_packages = try aur.toOwnedSlice(allocator),
     };
+}
+
+fn resolveGroup(
+    allocator: std.mem.Allocator,
+    dependencies: []const ParsedDependency,
+    role: Role,
+    backend: Backend,
+    repo: *std.ArrayList(RepoDependency),
+    aur: *std.ArrayList(AurDependency),
+) !void {
+    for (dependencies) |dependency| {
+        const dependency_string = try formatDependencyZ(allocator, dependency);
+        defer allocator.free(dependency_string);
+        if (backend.is_installed(backend.context, dependency_string)) continue;
+        if (backend.find_repo_satisfier(backend.context, dependency_string)) |name| {
+            if (findRepoDependency(repo.items, name)) |index| {
+                repo.items[index].role = strongerRole(repo.items[index].role, role);
+            } else try repo.append(allocator, .{
+                .name = try allocator.dupe(u8, name),
+                .role = role,
+            });
+        } else if (findAurDependency(aur.items, dependency)) |index| {
+            aur.items[index].role = strongerRole(aur.items[index].role, role);
+        } else try aur.append(allocator, .{
+            .dependency = try cloneDependency(allocator, dependency),
+            .role = role,
+        });
+    }
+}
+
+fn findRepoDependency(dependencies: []const RepoDependency, name: []const u8) ?usize {
+    for (dependencies, 0..) |dependency, index|
+        if (std.mem.eql(u8, dependency.name, name)) return index;
+    return null;
+}
+
+fn findAurDependency(dependencies: []const AurDependency, expected: ParsedDependency) ?usize {
+    for (dependencies, 0..) |dependency, index| {
+        if (std.mem.eql(u8, dependency.dependency.name, expected.name) and
+            std.mem.eql(u8, dependency.dependency.operator, expected.operator) and
+            std.mem.eql(u8, dependency.dependency.version, expected.version))
+            return index;
+    }
+    return null;
+}
+
+fn strongerRole(lhs: Role, rhs: Role) Role {
+    if (lhs == .runtime or rhs == .runtime) return .runtime;
+    if (lhs == .build or rhs == .build) return .build;
+    return .check;
 }
 
 pub fn collectBuildOnlyDependencies(
@@ -214,8 +270,11 @@ test "dependency resolution partitions installed repo and AUR dependencies" {
         .find_repo_satisfier = Context.repo,
     });
     defer checked.deinit(allocator);
-    try std.testing.expectEqualSlices(u8, "cmake", checked.repo_packages[0]);
+    try std.testing.expectEqualSlices(u8, "cmake", checked.repo_packages[0].name);
+    try std.testing.expectEqual(Role.build, checked.repo_packages[0].role);
     try std.testing.expectEqual(@as(usize, 2), checked.aur_packages.len);
+    try std.testing.expectEqual(Role.runtime, checked.aur_packages[0].role);
+    try std.testing.expectEqual(Role.check, checked.aur_packages[1].role);
 
     var no_check = try resolve(allocator, &info, true, .{
         .context = null,
@@ -224,5 +283,5 @@ test "dependency resolution partitions installed repo and AUR dependencies" {
     });
     defer no_check.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), no_check.aur_packages.len);
-    try std.testing.expectEqualStrings("aur-runtime", no_check.aur_packages[0].name);
+    try std.testing.expectEqualStrings("aur-runtime", no_check.aur_packages[0].dependency.name);
 }

@@ -92,6 +92,29 @@ pub const Question = union(enum) {
         diff_lines: []const []const u8 = &.{},
         source_files: ?[]const []const u8 = null,
     },
+    transaction: TransactionQuestion,
+};
+
+pub const TransactionQuestion = struct {
+    question_id: []const u8,
+    question_text: []const u8,
+    action: []const u8,
+    packages: []TransactionPackage,
+    total_download_size: ?u64,
+    total_installed_size: ?u64,
+    net_installed_size: ?i64,
+};
+
+pub const TransactionPackage = struct {
+    name: []const u8,
+    version: ?[]const u8,
+    repository: ?[]const u8,
+    package_base: ?[]const u8,
+    revision: ?[]const u8,
+    source: []const u8,
+    role: []const u8,
+    download_size: ?u64,
+    installed_size: ?u64,
 };
 
 pub const Option = struct {
@@ -144,6 +167,29 @@ const YesNoRequest = struct {
     QuestionText: []const u8 = "",
 };
 
+pub const TransactionRequest = struct {
+    @"$kind": []const u8 = "",
+    QuestionId: []const u8 = "",
+    QuestionText: []const u8 = "",
+    Action: []const u8 = "",
+    Packages: []TransactionPackageWire = &.{},
+    TotalDownloadSize: ?u64 = null,
+    TotalInstalledSize: ?u64 = null,
+    NetInstalledSize: ?i64 = null,
+};
+
+const TransactionPackageWire = struct {
+    Name: []const u8 = "",
+    Version: ?[]const u8 = null,
+    Repository: ?[]const u8 = null,
+    PackageBase: ?[]const u8 = null,
+    Revision: ?[]const u8 = null,
+    Source: []const u8 = "",
+    Role: []const u8 = "",
+    DownloadSize: ?u64 = null,
+    InstalledSize: ?u64 = null,
+};
+
 pub const PendingQuestion = struct {
     arena: std.heap.ArenaAllocator,
     operation: *ShellyOperation,
@@ -158,6 +204,7 @@ pub const PendingQuestion = struct {
             .select_many => |q| q.question_id,
             .select_one => |q| q.question_id,
             .pkgbuild => |q| q.question_id,
+            .transaction => |q| q.question_id,
         };
     }
 
@@ -430,6 +477,17 @@ pub const ShellyOperation = struct {
         try self.writeAnswerFrame(json_buf.items);
     }
 
+    pub fn answerTransaction(self: *ShellyOperation, question_id: []const u8, accept: bool) !void {
+        var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+        try json_buf.appendSlice(self.allocator, "{\"$kind\":\"a.transaction\",\"QuestionId\":\"");
+        try json_buf.appendSlice(self.allocator, question_id);
+        try json_buf.appendSlice(self.allocator, "\",\"Accept\":");
+        try json_buf.appendSlice(self.allocator, if (accept) "true" else "false");
+        try json_buf.appendSlice(self.allocator, "}");
+        try self.writeAnswerFrame(json_buf.items);
+    }
+
     pub fn answerOptDeps(self: *ShellyOperation, question_id: []const u8, selected: []const usize) !void {
         var json_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer json_buf.deinit(self.allocator);
@@ -635,6 +693,47 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
         return 0;
     }
 
+    if (std.mem.eql(u8, kind, "q.transaction")) {
+        const e = std.json.parseFromSlice(TransactionRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        defer e.deinit();
+        const pending = op.allocator.create(PendingQuestion) catch return 0;
+        pending.* = .{
+            .arena = std.heap.ArenaAllocator.init(op.allocator),
+            .operation = op,
+            .request = undefined,
+        };
+        const qa = pending.arena.allocator();
+        const packages = qa.alloc(TransactionPackage, e.value.Packages.len) catch {
+            pending.destroy();
+            return 0;
+        };
+        for (e.value.Packages, packages) |package, *target| target.* = .{
+            .name = qa.dupe(u8, package.Name) catch "",
+            .version = dupeOptional(qa, package.Version),
+            .repository = dupeOptional(qa, package.Repository),
+            .package_base = dupeOptional(qa, package.PackageBase),
+            .revision = dupeOptional(qa, package.Revision),
+            .source = qa.dupe(u8, package.Source) catch "",
+            .role = qa.dupe(u8, package.Role) catch "",
+            .download_size = package.DownloadSize,
+            .installed_size = package.InstalledSize,
+        };
+        pending.request = .{ .transaction = .{
+            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
+                pending.destroy();
+                return 0;
+            },
+            .question_text = qa.dupe(u8, e.value.QuestionText) catch "",
+            .action = qa.dupe(u8, e.value.Action) catch "",
+            .packages = packages,
+            .total_download_size = e.value.TotalDownloadSize,
+            .total_installed_size = e.value.TotalInstalledSize,
+            .net_installed_size = e.value.NetInstalledSize,
+        } };
+        op.on_question(op.ctx, pending);
+        return 0;
+    }
+
     if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
         const e = std.json.parseFromSlice(SelectionRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
         defer e.deinit();
@@ -729,6 +828,11 @@ fn clampPercent(p: i64) i64 {
     if (p < 0) return 0;
     if (p > 100) return 100;
     return p;
+}
+
+fn dupeOptional(allocator: std.mem.Allocator, value: ?[]const u8) ?[]const u8 {
+    const string = value orelse return null;
+    return allocator.dupe(u8, string) catch null;
 }
 
 fn onDoneIdle(data: ?*anyopaque) callconv(.c) c_int {

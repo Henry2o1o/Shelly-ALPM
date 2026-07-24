@@ -67,6 +67,7 @@ pub const QuestionResponder = struct {
 
         switch (question.kind) {
             .confirmation => output.writeYesNoQuestionFrame(self.context, question) catch return .declined,
+            .confirm_transaction => output.writeTransactionQuestionFrame(self.context, question) catch return .declined,
             .review_changes => output.writePkgbuildQuestionFrame(self.context, question) catch return .declined,
             .select_one, .select_provider => output.writeProviderQuestionFrame(self.context, question) catch return .{ .choice = 0 },
             .select_many, .select_optional_dependencies => output.writeOptionalDependenciesQuestionFrame(self.context, question) catch return .{ .choices = &.{} },
@@ -131,6 +132,7 @@ pub const QuestionResponder = struct {
 
         const accepted = switch (kind) {
             .confirmation => self.readBooleanAnswer(question_id, "a.yesno", "Accept") catch false,
+            .confirm_transaction => self.readBooleanAnswer(question_id, "a.transaction", "Accept") catch false,
             .review_changes => self.readBooleanAnswer(question_id, "a.pkgbuilddiff", "ProceedWithUpdate") catch false,
             else => false,
         };
@@ -285,7 +287,7 @@ fn safeReviewDefault(question: Zigalpm.OperationQuestion) Zigalpm.OperationQuest
 
 fn automaticResponse(kind: Zigalpm.OperationQuestionKind) Zigalpm.OperationQuestionResponse {
     return switch (kind) {
-        .confirmation => .accepted,
+        .confirmation, .confirm_transaction => .accepted,
         .review_changes => .declined,
         .select_one, .select_provider => .{ .choice = 0 },
         .select_many, .select_optional_dependencies => .{ .choices = &.{} },
@@ -441,6 +443,87 @@ test "UI PKGBUILD review emits C# compatible frame and waits for matching answer
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"PackageName\":\"demo\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"Severity\":\"Warning\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"SourceFiles\":{") != null);
+}
+
+test "UI transaction plan preserves package roles sizes and unknown AUR sizes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const response_json =
+        "{\"$kind\":\"a.transaction\",\"QuestionId\":\"1\",\"Accept\":true}";
+    const encoded_size = std.base64.standard.Encoder.calcSize(response_json.len);
+    const encoded = try arena.allocator().alloc(u8, encoded_size);
+    const encoded_response = std.base64.standard.Encoder.encode(encoded, response_json);
+    const response_frame = try std.fmt.allocPrint(
+        arena.allocator(),
+        "[JSON]{s}[/JSON]\n",
+        .{encoded_response},
+    );
+    var stdin = std.Io.Reader.fixed(response_frame);
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdin = &stdin,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
+    defer operation_context.deinit();
+    var responder: QuestionResponder = .{
+        .context = &context,
+        .operation_context = &operation_context,
+        .no_confirm = false,
+    };
+    responder.attach();
+    defer responder.detach();
+
+    const packages = [_]Zigalpm.OperationTransactionPackage{
+        .{
+            .name = "demo",
+            .version = "1.0-1",
+            .repository = "AUR",
+            .package_base = "demo",
+            .revision = "deadbeef",
+            .source = .aur,
+            .role = .requested,
+        },
+        .{
+            .name = "cmake",
+            .repository = "extra",
+            .source = .repository,
+            .role = .build_dependency,
+            .download_size = 1024,
+            .installed_size = 4096,
+        },
+    };
+    var operation = operation_context.begin(.{ .backend = .aur, .kind = .install, .subject = "demo" });
+    var answer = try operation.ask(.{
+        .kind = .confirm_transaction,
+        .prompt = "Proceed with AUR package installation?",
+        .transaction_plan = .{
+            .action = .install,
+            .packages = &packages,
+        },
+    });
+    defer answer.deinit(arena.allocator());
+    operation.finish(.success);
+
+    try std.testing.expect(answer.response == .accepted);
+    const rendered = stdout.writer.buffered();
+    const prefix_end = (std.mem.indexOf(u8, rendered, "[JSON]") orelse return error.MissingFrame) + "[JSON]".len;
+    const suffix_start = std.mem.indexOfPos(u8, rendered, prefix_end, "[/JSON]") orelse return error.MissingFrame;
+    const payload = rendered[prefix_end..suffix_start];
+    const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(payload);
+    const decoded = try arena.allocator().alloc(u8, decoded_size);
+    try std.base64.standard.Decoder.decode(decoded, payload);
+    try std.testing.expect(std.mem.indexOf(u8, decoded, "\"$kind\":\"q.transaction\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, decoded, "\"Role\":\"requested\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, decoded, "\"DownloadSize\":null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, decoded, "\"Role\":\"build_dependency\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, decoded, "\"DownloadSize\":1024") != null);
 }
 
 test "UI optional dependencies emit C# compatible choices and accept selected indices" {

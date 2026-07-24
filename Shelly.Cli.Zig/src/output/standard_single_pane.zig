@@ -74,6 +74,10 @@ pub fn output(
 
     try renderer.begin(opening_message);
     command_operation.call(command_operation.data, context, &operation_context) catch |err| {
+        if (err == error.Cancelled) {
+            try renderer.finishCancelled();
+            return true;
+        }
         const message = try std.fmt.allocPrint(context.allocator, "{t}", .{err});
         defer context.allocator.free(message);
         try renderer.reportError(message);
@@ -170,6 +174,15 @@ pub const Renderer = struct {
         self.mutex.lockUncancelable(self.context.io);
         defer self.mutex.unlock(self.context.io);
         try self.writeColoredLine(.red, "error: {s}", .{message});
+        try self.flush();
+    }
+
+    pub fn finishCancelled(self: *Renderer) !void {
+        self.mutex.lockUncancelable(self.context.io);
+        defer self.mutex.unlock(self.context.io);
+        try self.clearBars();
+        self.bars.clearRetainingCapacity();
+        try self.writeColoredLine(.yellow, ":: Operation cancelled.", .{});
         try self.flush();
     }
 
@@ -401,6 +414,12 @@ pub const Renderer = struct {
         self.mutex.lockUncancelable(self.context.io);
         defer self.mutex.unlock(self.context.io);
         if (self.no_confirm) {
+            if (question.kind == .confirm_transaction) {
+                self.clearBars() catch self.write_failed.store(true, .release);
+                self.renderTransactionPlan(question) catch self.write_failed.store(true, .release);
+                self.drawBars() catch self.write_failed.store(true, .release);
+                return .accepted;
+            }
             if (question.kind == .review_changes) {
                 self.clearBars() catch self.write_failed.store(true, .release);
                 self.renderReview(question, false) catch self.write_failed.store(true, .release);
@@ -420,6 +439,11 @@ pub const Renderer = struct {
         defer self.drawBars() catch self.write_failed.store(true, .release);
         return switch (question.kind) {
             .confirmation => if (try self.confirm(question.prompt, true)) .accepted else .declined,
+            .confirm_transaction => blk: {
+                try self.renderTransactionPlan(question);
+                const default_approved = defaultResponse(question) == .accepted;
+                break :blk if (try self.confirm(question.prompt, default_approved)) .accepted else .declined;
+            },
             .review_changes => blk: {
                 try self.renderReview(question, true);
                 const default_approved = safeReviewDefault(question) == .accepted;
@@ -428,6 +452,61 @@ pub const Renderer = struct {
             .select_one, .select_provider => .{ .choice = try self.selectOne(question) },
             .select_many, .select_optional_dependencies => .{ .choices = try self.selectMany(question) },
         };
+    }
+
+    fn renderTransactionPlan(
+        self: *Renderer,
+        question: Zigalpm.OperationQuestion,
+    ) !void {
+        const plan = question.transaction_plan orelse return error.MissingTransactionPlan;
+        try self.writeColoredLine(.cyan, "Packages to {s}:", .{@tagName(plan.action)});
+        for (plan.packages) |package| {
+            var download_buffer: [64]u8 = undefined;
+            var installed_buffer: [64]u8 = undefined;
+            const download = transactionSizeText(
+                &download_buffer,
+                self.settings.size_display,
+                package.download_size,
+                package.source,
+            );
+            const installed = transactionSizeText(
+                &installed_buffer,
+                self.settings.size_display,
+                package.installed_size,
+                package.source,
+            );
+            try self.writeColoredLine(.white, "  {s} {s} [{s}, {s}]", .{
+                package.name,
+                package.version orelse "version determined during build",
+                transactionRoleName(package.role),
+                transactionSourceName(package.source),
+            });
+            try self.writeColoredLine(.gray, "    download: {s}; installed: {s}", .{
+                download,
+                installed,
+            });
+        }
+        if (plan.total_download_size) |size| {
+            var buffer: [64]u8 = undefined;
+            try self.writeColoredLine(.cyan, "Total download: {s}", .{
+                transactionSizeText(&buffer, self.settings.size_display, size, .repository),
+            });
+        }
+        if (plan.total_installed_size) |size| {
+            var buffer: [64]u8 = undefined;
+            try self.writeColoredLine(.cyan, "Total installed: {s}", .{
+                transactionSizeText(&buffer, self.settings.size_display, size, .repository),
+            });
+        }
+        if (plan.net_installed_size) |size| {
+            var buffer: [64]u8 = undefined;
+            const absolute: u64 = @abs(size);
+            const value = transactionSizeText(&buffer, self.settings.size_display, absolute, .repository);
+            try self.writeColoredLine(.cyan, "Net installed-size change: {s}{s}", .{
+                if (size < 0) "-" else "+",
+                value,
+            });
+        }
     }
 
     fn renderReview(
@@ -569,6 +648,42 @@ fn convertSize(display: SizeDisplay, bytes: u64) f64 {
     return @as(f64, @floatFromInt(bytes)) / divisor;
 }
 
+fn transactionSizeText(
+    buffer: []u8,
+    display: SizeDisplay,
+    size: ?u64,
+    source: Zigalpm.OperationTransactionPackageSource,
+) []const u8 {
+    const value = size orelse return if (source == .repository)
+        "Resolved by standard transaction"
+    else
+        "Determined during build";
+    return switch (display) {
+        .bytes => std.fmt.bufPrint(buffer, "{d} B", .{value}) catch "?",
+        .megabytes => std.fmt.bufPrint(buffer, "{d:.2} MiB", .{convertSize(.megabytes, value)}) catch "?",
+        .gigabytes => std.fmt.bufPrint(buffer, "{d:.2} GiB", .{convertSize(.gigabytes, value)}) catch "?",
+    };
+}
+
+fn transactionRoleName(role: Zigalpm.OperationTransactionPackageRole) []const u8 {
+    return switch (role) {
+        .requested => "requested",
+        .dependency => "dependency",
+        .runtime_dependency => "runtime dependency",
+        .build_dependency => "build dependency",
+        .check_dependency => "check dependency",
+        .optional_dependency => "optional dependency",
+    };
+}
+
+fn transactionSourceName(source: Zigalpm.OperationTransactionPackageSource) []const u8 {
+    return switch (source) {
+        .repository => "repository",
+        .aur => "AUR",
+        .local => "local",
+    };
+}
+
 fn progressPercentage(update: anytype, current: u64, total: u64) u8 {
     if (update.percentage) |percentage| {
         if (percentage <= 0) return 0;
@@ -691,7 +806,7 @@ fn colorCode(color: Color) []const u8 {
 
 fn automaticResponse(kind: Zigalpm.OperationQuestionKind) Zigalpm.OperationQuestionResponse {
     return switch (kind) {
-        .confirmation, .review_changes => .accepted,
+        .confirmation, .confirm_transaction, .review_changes => .accepted,
         .select_one, .select_provider => .{ .choice = 0 },
         .select_many, .select_optional_dependencies => .{ .choices = &.{} },
     };
@@ -802,6 +917,65 @@ test "single-pane no-confirm uses the shared automatic question policy" {
     try std.testing.expect(automaticResponse(.confirmation) == .accepted);
     try std.testing.expectEqual(@as(usize, 0), automaticResponse(.select_provider).choice);
     try std.testing.expectEqual(@as(usize, 0), automaticResponse(.select_optional_dependencies).choices.len);
+}
+
+test "single-pane renders complete transaction plans and build-time unknowns" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    var renderer = try Renderer.init(&context, true);
+    renderer.settings.size_display = .bytes;
+    var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
+    defer {
+        renderer.detach();
+        operation_context.deinit();
+        renderer.deinit();
+    }
+    try renderer.attach(&operation_context);
+
+    const packages = [_]Zigalpm.OperationTransactionPackage{
+        .{
+            .name = "demo",
+            .source = .aur,
+            .role = .requested,
+        },
+        .{
+            .name = "cmake",
+            .version = "4.0.3-1",
+            .repository = "extra",
+            .source = .repository,
+            .role = .build_dependency,
+            .download_size = 1024,
+            .installed_size = 4096,
+        },
+    };
+    var operation = operation_context.begin(.{ .backend = .aur, .kind = .install, .subject = "demo" });
+    var answer = try operation.ask(.{
+        .kind = .confirm_transaction,
+        .prompt = "Proceed with installation?",
+        .transaction_plan = .{
+            .action = .install,
+            .packages = &packages,
+        },
+    });
+    defer answer.deinit(arena.allocator());
+    operation.finish(.success);
+
+    try std.testing.expect(answer.response == .accepted);
+    const rendered = stdout.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "demo version determined during build") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Determined during build") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "cmake 4.0.3-1 [build dependency, repository]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "1024 B") != null);
 }
 
 test "single-pane no-confirm renders risky PKGBUILD review and declines it" {

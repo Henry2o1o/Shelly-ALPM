@@ -755,6 +755,7 @@ pub const Manager = struct {
             self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {};
             return TransactionError.PrepareFailed;
         }
+        try self.confirmPreparedInstall(packages.items, optional_names.items, trans_flags);
         try self.predownloadPreparedPackages(trans_flags);
 
         // The prepare error list does not belong to the commit call.
@@ -2082,8 +2083,79 @@ pub const Manager = struct {
     }
 
     /// Downloads every repository package selected by a prepared transaction
-    /// before libalpm begins its commit. DB-only transactions intentionally do
-    /// not require package archives.
+    fn confirmPreparedInstall(
+        self: *Manager,
+        requested_packages: []const *rawLibalpm.alpm_pkg_t,
+        optional_names: []const [:0]const u8,
+        trans_flags: TransFlag,
+    ) TransactionError!void {
+        const operation = self.dispatcher.operation orelse return;
+
+        var plan_packages: std.ArrayList(operation_api.TransactionPackage) = .empty;
+        defer plan_packages.deinit(self.allocator);
+
+        var total_download: ?u64 = 0;
+        var total_installed: ?u64 = 0;
+        var net_installed: ?i64 = 0;
+        const local_db = rawLibalpm.alpm_get_localdb(self.handle);
+        var packages = rawLibalpm.alpm_trans_get_add(self.handle);
+        while (packages != null) : (packages = packages.*.next) {
+            const data = packages.*.data orelse continue;
+            const package = libalpm.Package{ .ptr = @ptrCast(@alignCast(data)) };
+            const name = package.name() orelse "unknown";
+            const download_size = nonNegativeSize(package.download_size());
+            const installed_size = nonNegativeSize(package.install_size());
+
+            total_download = addOptionalSize(total_download, download_size);
+            total_installed = addOptionalSize(total_installed, installed_size);
+
+            const old_size: i64 = if (rawLibalpm.alpm_db_get_pkg(local_db, name.ptr)) |local_package|
+                (libalpm.Package{ .ptr = local_package }).install_size()
+            else
+                0;
+            net_installed = addOptionalDelta(
+                net_installed,
+                std.math.sub(i64, package.install_size(), old_size) catch null,
+            );
+
+            try plan_packages.append(self.allocator, .{
+                .name = name,
+                .version = package.version(),
+                .repository = package.repository(),
+                .source = .repository,
+                .role = preparedPackageRole(
+                    name,
+                    requested_packages,
+                    optional_names,
+                    trans_flags.alldeps,
+                ),
+                .download_size = download_size,
+                .installed_size = installed_size,
+            });
+        }
+
+        var answer = operation.ask(.{
+            .kind = .confirm_transaction,
+            .prompt = "Proceed with package installation?",
+            .transaction_plan = .{
+                .action = .install,
+                .packages = plan_packages.items,
+                .total_download_size = total_download,
+                .total_installed_size = total_installed,
+                .net_installed_size = net_installed,
+            },
+            .default_response = .accepted,
+        }) catch |err| switch (err) {
+            error.Cancelled => return TransactionError.Cancelled,
+            else => return TransactionError.OutOfMemory,
+        };
+        defer answer.deinit(self.allocator);
+        if (answer.response == .accepted) return;
+
+        operation.context.cancel();
+        return TransactionError.Cancelled;
+    }
+
     fn predownloadPreparedPackages(self: *Manager, trans_flags: TransFlag) TransactionError!void {
         if (trans_flags.dbonly) return;
         self.unexpected_fetch_reported.store(false, .release);
@@ -3014,13 +3086,15 @@ const OperationScope = struct {
     }
 
     fn fail(self: *OperationScope) void {
-        if (self.operation) |*operation| operation.reportError(
-            if (operation.isCancelled()) error.Cancelled else error.AlpmOperationFailed,
-            if (operation.isCancelled()) "ALPM operation cancelled" else "ALPM operation failed",
-            "alpm",
-            null,
-            false,
-        );
+        if (self.operation) |*operation| {
+            if (!operation.isCancelled()) operation.reportError(
+                error.AlpmOperationFailed,
+                "ALPM operation failed",
+                "alpm",
+                null,
+                false,
+            );
+        }
         const status: operation_api.CompletionStatus = if (self.operation) |*operation|
             if (operation.isCancelled()) .cancelled else .failed
         else
@@ -3089,6 +3163,35 @@ fn stringBefore(_: void, lhs: []u8, rhs: []u8) bool {
 fn dependencyName(dependency: []const u8) []const u8 {
     const end = std.mem.indexOfAny(u8, dependency, "<>=") orelse dependency.len;
     return std.mem.trim(u8, dependency[0..end], " \t\r\n");
+}
+
+fn nonNegativeSize(value: i64) ?u64 {
+    if (value < 0) return null;
+    return @intCast(value);
+}
+
+fn addOptionalSize(total: ?u64, value: ?u64) ?u64 {
+    return std.math.add(u64, total orelse return null, value orelse return null) catch null;
+}
+
+fn addOptionalDelta(total: ?i64, value: ?i64) ?i64 {
+    return std.math.add(i64, total orelse return null, value orelse return null) catch null;
+}
+
+fn preparedPackageRole(
+    name: []const u8,
+    requested_packages: []const *rawLibalpm.alpm_pkg_t,
+    optional_names: []const [:0]const u8,
+    all_dependencies: bool,
+) operation_api.TransactionPackageRole {
+    for (optional_names) |optional_name|
+        if (std.mem.eql(u8, name, optional_name)) return .optional_dependency;
+    if (all_dependencies) return .dependency;
+    for (requested_packages) |requested| {
+        const requested_name = libalpm.str(rawLibalpm.alpm_pkg_get_name(requested)) orelse continue;
+        if (std.mem.eql(u8, name, requested_name)) return .requested;
+    }
+    return .dependency;
 }
 
 const testing = std.testing;

@@ -22,9 +22,10 @@ pub fn relaunchIfNeeded(
     if (isRoot()) return null;
 
     const executable = try std.process.executablePathAlloc(context.io, context.allocator);
+    const safe_executable: []const u8 = std.mem.trimEnd(u8, executable, " (deleted)");
     defer context.allocator.free(executable);
     const elevator = findElevator(context);
-    const elevated_arguments = try buildArguments(context.allocator, elevator, executable, arguments);
+    const elevated_arguments = try buildArguments(context.allocator, elevator, safe_executable, arguments);
     defer context.allocator.free(elevated_arguments);
 
     var child = try std.process.spawn(context.io, .{
@@ -50,6 +51,7 @@ pub fn runAsInvokingUser(
     const home = try invokingUserHome(context, user);
     defer context.allocator.free(home);
     const executable = try std.process.executablePathAlloc(context.io, context.allocator);
+    const safe_executable: []const u8 = std.mem.trimEnd(u8, executable, " (deleted)");
     defer context.allocator.free(executable);
     const home_environment = try std.fmt.allocPrint(context.allocator, "HOME={s}", .{home});
     defer context.allocator.free(home_environment);
@@ -63,7 +65,7 @@ pub fn runAsInvokingUser(
         context.allocator,
         findElevator(context),
         user,
-        executable,
+        safe_executable,
         home_environment,
         xdg_environment,
         arguments,

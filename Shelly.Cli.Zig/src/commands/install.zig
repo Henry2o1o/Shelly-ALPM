@@ -370,6 +370,12 @@ fn executeUi(
     try ui_operation.flush(context);
 
     runner.call(runner.data, context, &operation_context, invocation) catch |err| {
+        if (err == error.Cancelled) {
+            try output.writeInfoFrame(context, "Operation cancelled.");
+            try output.writeAlpmInfoFrame(context, "TransactionCancelled", "Installation cancelled.");
+            try ui_operation.flush(context);
+            return 0;
+        }
         const message = try std.fmt.allocPrint(context.allocator, "Installation failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);

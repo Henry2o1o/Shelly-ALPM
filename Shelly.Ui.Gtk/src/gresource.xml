@@ -11,6 +11,7 @@
     <file>dialog/ui/yn.ui</file>
     <file>dialog/ui/pkg_build.ui</file>
     <file>dialog/ui/version_history.ui</file>
+    <file>dialog/ui/plan_dialog.ui</file>
     <file>dialog/ui/multiselect.ui</file>
     <file>dialog/ui/permissions.ui</file>
     <file>ui/appimage_page.ui</file>

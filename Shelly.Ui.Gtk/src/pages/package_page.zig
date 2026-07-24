@@ -924,7 +924,7 @@ pub const PackagePage = extern struct {
 
         if (install_count == 0 and remove_count == 0) return;
         if (install_count > 0 and remove_count > 0) return;
-        if (remove_count > 0) self.confirm_remove() else self.confirm_install();
+        if (remove_count > 0) self.confirm_remove() else self.start_install();
     }
 
     fn on_grid_view_toggled(self: *Self) callconv(.c) void {
@@ -955,19 +955,6 @@ pub const PackagePage = extern struct {
         const p = self.priv();
         const active = gtk.CheckButton.getActive(check);
         gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active != 0) 0 else 1);
-    }
-
-    fn confirm_install(self: *Self) void {
-        const dialog = ConfirmDialog.new(
-            "Install Packages",
-            "Install the selected packages?",
-            &on_install_response,
-            self,
-        );
-        dialog.setButtons("Install", "Cancel");
-        if (support.getWindow(ShellyWindow, self)) |win| {
-            win.showLockout(dialog.as(gtk.Widget));
-        }
     }
 
     fn confirm_remove(self: *Self) void {
@@ -1022,11 +1009,7 @@ pub const PackagePage = extern struct {
         }
     }
 
-    fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
-        const self: *PackagePage = @ptrCast(@alignCast(ctx.?));
-        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
-        if (!confirmed) return;
-
+    fn start_install(self: *Self) void {
         const p = self.priv();
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;

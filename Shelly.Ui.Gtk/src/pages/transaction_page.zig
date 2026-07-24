@@ -12,8 +12,11 @@ const Event = @import("../services/shelly_operation.zig").Event;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const PendingQuestion = @import("../services/shelly_operation.zig").PendingQuestion;
+const TransactionQuestion = @import("../services/shelly_operation.zig").TransactionQuestion;
+const TransactionPackage = @import("../services/shelly_operation.zig").TransactionPackage;
 const MultiSelectDialog = @import("../dialog/page/multiselect.zig").MultiSelectDialog;
 const PkgbuildReviewDialog = @import("../dialog/page/pkg_build.zig").PkgbuildReviewDialog;
+const PlanDialog = @import("../dialog/page/plan.zig").PlanDialog;
 
 pub const TransactionRequest = struct {
     title: []const u8,
@@ -54,6 +57,7 @@ pub const TransactionPage = extern struct {
         on_complete_ctx: ?*anyopaque,
         operation: ?*ShellyOperation,
         finished: bool,
+        cancelled: bool,
         terminal_visible: bool,
         var offset: c_int = 0;
     };
@@ -84,6 +88,7 @@ pub const TransactionPage = extern struct {
         p.arena = null;
         p.rows = .empty;
         p.operation = null;
+        p.cancelled = false;
         p.terminal_visible = true;
     }
 
@@ -143,6 +148,7 @@ pub const TransactionPage = extern struct {
 
     fn reset(self: *Self) void {
         const p = self.priv();
+        p.cancelled = false;
         while (gtk.Widget.getFirstChild(p.rows_box.as(gtk.Widget))) |c| {
             gtk.Box.remove(p.rows_box, c);
         }
@@ -208,6 +214,8 @@ pub const TransactionPage = extern struct {
         switch (event) {
             .info => |i| {
                 append_terminal(self, i.message);
+                if (std.mem.eql(u8, i.event_type, "TransactionCancelled"))
+                    self.priv().cancelled = true;
 
                 if (std.mem.eql(u8, i.event_type, "TransactionStart")) {
                     // optionally set a global status line
@@ -334,21 +342,25 @@ pub const TransactionPage = extern struct {
         gtk.Widget.setVisible(p.close_button.as(gtk.Widget), 1);
         p.finished = true;
 
-        if (exit_code == 0) {
+        if (exit_code == 0 and !p.cancelled) {
             var it = p.rows.valueIterator();
             while (it.next()) |row_ptr| {
                 mark_row_done(row_ptr.*);
             }
-        } else {
+        } else if (!p.cancelled) {
             var it = p.rows.valueIterator();
             while (it.next()) |row_ptr| {
                 mark_row_failed(row_ptr.*);
             }
+        } else {
+            var it = p.rows.valueIterator();
+            while (it.next()) |row_ptr|
+                gtk.Label.setLabel(row_ptr.*.status_label, "Cancelled");
         }
 
         if (p.on_complete) |cb| {
             std.debug.print("on_complete set, ctx={}\n", .{p.on_complete_ctx != null});
-            if (p.on_complete_ctx) |c| cb(c, exit_code == 0);
+            if (p.on_complete_ctx) |c| cb(c, exit_code == 0 and !p.cancelled);
         } else {
             std.debug.print("on_complete is NULL\n", .{});
         }
@@ -490,7 +502,31 @@ pub const TransactionPage = extern struct {
                 }
                 dialog.present();
             },
+            .transaction => |q| {
+                pending.on_dismiss = &dismiss_question;
+                pending.dismiss_ctx = self;
+                const dialog = PlanDialog.new(q, &on_plan_response, pending);
+                gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
+                gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
+            },
         }
+    }
+
+    fn on_plan_response(ctx: ?*anyopaque, confirmed: bool) void {
+        const pending: *PendingQuestion = @ptrCast(@alignCast(ctx.?));
+        respondToTransaction(pending, confirmed);
+    }
+
+    fn respondToTransaction(pending: *PendingQuestion, accepted: bool) void {
+        if (pending.completed) return;
+        pending.completed = true;
+        pending.operation.answerTransaction(pending.questionId(), accepted) catch {
+            pending.operation.cancel();
+        };
+        if (pending.on_dismiss) |cb| {
+            if (pending.dismiss_ctx) |ctx| cb(ctx);
+        }
+        pending.destroy();
     }
 
     fn on_multiselect_response(ctx: ?*anyopaque, confirmed: bool, selected: []const usize) void {

@@ -8,6 +8,7 @@ const homograph_validator = @import("../pkgbuild/homograph_validator.zig");
 const post_install_validator = @import("../pkgbuild/post_install_validator.zig");
 const validation = @import("../pkgbuild/shared_validtor.zig");
 const operation_api = @import("operation_context");
+const MakePackageConfiguration = @import("makepackage.zig").MakePackageConfiguration;
 
 pub const models = @import("models.zig");
 pub const rpc = @import("rpc_client.zig");
@@ -203,6 +204,7 @@ pub const Manager = struct {
     cache_root: []u8,
     aur_git_base_url: []u8,
     makepkg_command: ?[]u8,
+    makepkg_config: *MakePackageConfiguration,
     vcs_store_path: []u8,
     chroot_path: []u8,
     use_chroot: bool,
@@ -219,7 +221,8 @@ pub const Manager = struct {
         const temporary_root = if (options.use_temp_path) options.temp_path else null;
         const alpm = try AlpmManager.init(allocator, environ, options.config_path, options.root, temporary_root);
         errdefer alpm.deinit();
-
+        const makepkg_config = try MakePackageConfiguration.init(alpm.io(), allocator);
+        errdefer makepkg_config.deinit();
         const cache_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_CACHE_HOME", ".cache");
         defer allocator.free(cache_home);
         const data_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_DATA_HOME", ".local/share");
@@ -263,6 +266,7 @@ pub const Manager = struct {
             .cache_root = cache_root,
             .aur_git_base_url = aur_git_base_url,
             .makepkg_command = makepkg_command,
+            .makepkg_config = makepkg_config,
             .vcs_store_path = vcs_store_path,
             .chroot_path = chroot_path,
             .use_chroot = options.use_chroot,
@@ -300,6 +304,7 @@ pub const Manager = struct {
         self.approved_pkgbuild_reviews.deinit();
         self.dispatcher.deinit();
         self.aur_client.deinit();
+        self.makepkg_config.deinit();
         self.alpm.deinit();
         allocator.free(self.cache_root);
         allocator.free(self.aur_git_base_url);
@@ -654,14 +659,16 @@ pub const Manager = struct {
         // the first review is shown. Only after every prepared checkout has
         // been approved may dependency installation or makepkg execution begin.
         try self.requireInstallPlanApprovals(plans.items);
+        for (plans.items) |*plan|
+            plan.selected_optional = try self.selectOptionalDependencies(&plan.prepared.info);
+        try self.confirmInstallPlans(plans.items);
 
         for (plans.items, 0..) |*plan, index| {
             const prepared = &plan.prepared;
             const package_name = prepared.package_name;
             const current = index + 1;
 
-            const selected_optional = try self.selectOptionalDependencies(&prepared.info);
-            defer self.allocator.free(selected_optional);
+            const selected_optional = plan.selected_optional orelse &.{};
             const backend = self.dependencyBackend();
             const build_only = try dependency_resolver.collectBuildOnlyDependencies(self.allocator, &prepared.info, self.no_check, backend);
             defer builder.deinitPaths(self.allocator, build_only);
@@ -726,7 +733,76 @@ pub const Manager = struct {
     }
 
     fn requireDependencyApprovals(self: *Self, dependencies: *const DependencyCollection) !void {
-        for (dependencies.aur.items) |*dependency| try self.requirePkgbuildApproval(dependency);
+        for (dependencies.aur.items) |*dependency| try self.requirePkgbuildApproval(&dependency.prepared);
+    }
+
+    fn confirmInstallPlans(self: *Self, plans: []const PreparedInstall) !void {
+        const operation = self.dispatcher.operation orelse return;
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var packages: std.ArrayList(operation_api.TransactionPackage) = .empty;
+        defer packages.deinit(allocator);
+
+        for (plans) |*plan| {
+            const prepared = &plan.prepared;
+            try appendTransactionPackage(&packages, allocator, .{
+                .name = prepared.package_name,
+                .version = try prepared.info.get_full_version(allocator),
+                .repository = "AUR",
+                .package_base = prepared.package_base,
+                .revision = prepared.target_commit,
+                .source = .aur,
+                .role = .requested,
+            });
+
+            for (plan.dependencies.repo.items) |dependency| {
+                try appendTransactionPackage(&packages, allocator, .{
+                    .name = dependency.name,
+                    .repository = "Repository",
+                    .source = .repository,
+                    .role = transactionRole(dependency.role),
+                });
+            }
+            for (plan.dependencies.aur.items) |*dependency| {
+                try appendTransactionPackage(&packages, allocator, .{
+                    .name = dependency.prepared.package_name,
+                    .version = try dependency.prepared.info.get_full_version(allocator),
+                    .repository = "AUR",
+                    .package_base = dependency.prepared.package_base,
+                    .revision = dependency.prepared.target_commit,
+                    .source = .aur,
+                    .role = transactionRole(dependency.role),
+                });
+            }
+
+            for (plan.selected_optional orelse &.{}) |raw| {
+                const parsed = dependency_resolver.parseOptionalDependency(raw);
+                const name_z = try allocator.dupeZ(u8, parsed.name);
+                const repository_name = self.alpm.find_remote_satisfier_for_dependency(name_z) catch null;
+                try appendTransactionPackage(&packages, allocator, .{
+                    .name = repository_name orelse parsed.name,
+                    .repository = if (repository_name != null) "Repository" else "AUR",
+                    .source = if (repository_name != null) .repository else .aur,
+                    .role = .optional_dependency,
+                });
+            }
+        }
+
+        var answer = try operation.ask(.{
+            .kind = .confirm_transaction,
+            .prompt = "Proceed with AUR package installation?",
+            .transaction_plan = .{
+                .action = .install,
+                .packages = packages.items,
+            },
+            .default_response = .accepted,
+        });
+        defer answer.deinit(self.allocator);
+        if (answer.response == .accepted) return;
+
+        operation.context.cancel();
+        return error.Cancelled;
     }
 
     pub fn removePackages(
@@ -824,9 +900,10 @@ pub const Manager = struct {
     ) !void {
         var resolution = try dependency_resolver.resolve(self.allocator, info, self.no_check, self.dependencyBackend());
         defer resolution.deinit(self.allocator);
-        for (resolution.repo_packages) |name| try collection.addRepo(name);
+        for (resolution.repo_packages) |dependency|
+            try collection.addRepo(dependency.name, dependency.role);
         for (resolution.aur_packages) |dependency| {
-            var preferred = try self.preferBinaryVariant(dependency);
+            var preferred = try self.preferBinaryVariant(dependency.dependency);
             defer preferred.deinit(self.allocator);
             var prepared = self.preparePackageForBuild(preferred.name, null) catch |err| switch (err) {
                 error.DownloadFailed => blk: {
@@ -835,7 +912,7 @@ pub const Manager = struct {
                     if (providers.len == 0) continue;
                     const chosen = self.chooseProvider(preferred.name, providers) orelse continue;
                     preferred.deinit(self.allocator);
-                    preferred = try dependency_resolver.cloneDependency(self.allocator, dependency);
+                    preferred = try dependency_resolver.cloneDependency(self.allocator, dependency.dependency);
                     self.allocator.free(preferred.name);
                     preferred.name = try self.allocator.dupe(u8, chosen);
                     break :blk try self.preparePackageForBuild(preferred.name, null);
@@ -852,14 +929,20 @@ pub const Manager = struct {
                 if (!(try version.satisfies(self.allocator, child_version, preferred.operator, preferred.version))) continue;
             }
             try self.collectDependenciesRecursive(&prepared.info, collection, visited);
-            try collection.addAur(&prepared);
+            try collection.addAur(&prepared, dependency.role);
             prepared_live = false;
         }
     }
 
     fn installCollection(self: *Self, collection: *const DependencyCollection) !void {
-        if (collection.repo.items.len > 0) try self.installRepoPackages(collection.repo.items, .{ .alldeps = true });
-        for (collection.aur.items) |*dependency| try self.buildAndInstallDependency(dependency);
+        if (collection.repo.items.len > 0) {
+            const names = try self.allocator.alloc([]const u8, collection.repo.items.len);
+            defer self.allocator.free(names);
+            for (collection.repo.items, names) |dependency, *name| name.* = dependency.name;
+            try self.installRepoPackagesConst(names, .{ .alldeps = true });
+        }
+        for (collection.aur.items) |*dependency|
+            try self.buildAndInstallDependency(&dependency.prepared);
     }
 
     fn buildAndInstallDependency(self: *Self, dependency: *PreparedPackage) !void {
@@ -871,7 +954,8 @@ pub const Manager = struct {
             self.allocator.free(key);
         }
         if (!(try self.buildPreparedPackage(dependency, false))) return error.BuildFailed;
-        const files = try builder.selectBuiltPackageFiles(self.allocator, self.io(), dependency.cache_path, dependency.package_name);
+        const cache_path = if (std.ascii.eqlIgnoreCase(self.makepkg_config.package_destination, "/home/packages")) dependency.cache_path else self.makepkg_config.package_destination;
+        const files = try builder.selectBuiltPackageFiles(self.allocator, self.io(), cache_path, dependency.package_name);
         defer builder.deinitPaths(self.allocator, files);
         if (files.len == 0) return error.NoBuiltPackages;
         const install_paths: []const []const u8 = @ptrCast(files);
@@ -1706,13 +1790,15 @@ const OperationScope = struct {
     }
 
     fn fail(self: *OperationScope) void {
-        if (self.operation) |*operation| operation.reportError(
-            if (operation.isCancelled()) error.Cancelled else error.AurOperationFailed,
-            if (operation.isCancelled()) "AUR operation cancelled" else "AUR operation failed",
-            "aur",
-            null,
-            false,
-        );
+        if (self.operation) |*operation| {
+            if (!operation.isCancelled()) operation.reportError(
+                error.AurOperationFailed,
+                "AUR operation failed",
+                "aur",
+                null,
+                false,
+            );
+        }
         const status: operation_api.CompletionStatus = if (self.operation) |*operation|
             if (operation.isCancelled()) .cancelled else .failed
         else
@@ -1881,44 +1967,72 @@ fn forwardBuildLine(data: ?*anyopaque, stream: builder.StreamKind, line: []const
 const PreparedInstall = struct {
     prepared: PreparedPackage,
     dependencies: DependencyCollection,
+    selected_optional: ?[][]const u8 = null,
 
     fn deinit(self: *PreparedInstall, allocator: std.mem.Allocator) void {
+        if (self.selected_optional) |selected| allocator.free(selected);
         self.dependencies.deinit();
         self.prepared.deinit(allocator);
         self.* = undefined;
     }
 };
 
+const CollectedRepoDependency = struct {
+    name: []u8,
+    role: dependency_resolver.Role,
+};
+
+const CollectedAurDependency = struct {
+    prepared: PreparedPackage,
+    role: dependency_resolver.Role,
+};
+
 const DependencyCollection = struct {
     allocator: std.mem.Allocator,
-    repo: std.ArrayList([]u8) = .empty,
-    aur: std.ArrayList(PreparedPackage) = .empty,
+    repo: std.ArrayList(CollectedRepoDependency) = .empty,
+    aur: std.ArrayList(CollectedAurDependency) = .empty,
 
     fn init(allocator: std.mem.Allocator) DependencyCollection {
         return .{ .allocator = allocator };
     }
 
     fn deinit(self: *DependencyCollection) void {
-        for (self.repo.items) |name| self.allocator.free(name);
+        for (self.repo.items) |dependency| self.allocator.free(dependency.name);
         self.repo.deinit(self.allocator);
-        for (self.aur.items) |*dependency| dependency.deinit(self.allocator);
+        for (self.aur.items) |*dependency| dependency.prepared.deinit(self.allocator);
         self.aur.deinit(self.allocator);
     }
 
-    fn addRepo(self: *DependencyCollection, name: []const u8) !void {
-        if (!containsMutable(self.repo.items, name)) try self.repo.append(self.allocator, try self.allocator.dupe(u8, name));
+    fn addRepo(self: *DependencyCollection, name: []const u8, role: dependency_resolver.Role) !void {
+        for (self.repo.items) |*dependency| {
+            if (!std.mem.eql(u8, dependency.name, name)) continue;
+            dependency.role = strongerDependencyRole(dependency.role, role);
+            return;
+        }
+        try self.repo.append(self.allocator, .{
+            .name = try self.allocator.dupe(u8, name),
+            .role = role,
+        });
     }
 
-    fn addAur(self: *DependencyCollection, dependency: *PreparedPackage) !void {
-        for (self.aur.items) |existing| {
-            if (std.mem.eql(u8, existing.package_base, dependency.package_base) and
-                std.mem.eql(u8, existing.target_commit, dependency.target_commit))
+    fn addAur(
+        self: *DependencyCollection,
+        dependency: *PreparedPackage,
+        role: dependency_resolver.Role,
+    ) !void {
+        for (self.aur.items) |*existing| {
+            if (std.mem.eql(u8, existing.prepared.package_base, dependency.package_base) and
+                std.mem.eql(u8, existing.prepared.target_commit, dependency.target_commit))
             {
+                existing.role = strongerDependencyRole(existing.role, role);
                 dependency.deinit(self.allocator);
                 return;
             }
         }
-        try self.aur.append(self.allocator, dependency.*);
+        try self.aur.append(self.allocator, .{
+            .prepared = dependency.*,
+            .role = role,
+        });
         dependency.* = undefined;
     }
 };
@@ -2092,6 +2206,48 @@ fn findPackage(packages: []const models.Package, name: []const u8) ?*const model
 fn containsMutable(values: []const []u8, expected: []const u8) bool {
     for (values) |value| if (std.mem.eql(u8, value, expected)) return true;
     return false;
+}
+
+fn strongerDependencyRole(
+    lhs: dependency_resolver.Role,
+    rhs: dependency_resolver.Role,
+) dependency_resolver.Role {
+    if (lhs == .runtime or rhs == .runtime) return .runtime;
+    if (lhs == .build or rhs == .build) return .build;
+    return .check;
+}
+
+fn transactionRole(role: dependency_resolver.Role) operation_api.TransactionPackageRole {
+    return switch (role) {
+        .runtime => .runtime_dependency,
+        .build => .build_dependency,
+        .check => .check_dependency,
+    };
+}
+
+fn appendTransactionPackage(
+    packages: *std.ArrayList(operation_api.TransactionPackage),
+    allocator: std.mem.Allocator,
+    package: operation_api.TransactionPackage,
+) !void {
+    for (packages.items) |*existing| {
+        if (existing.source != package.source or !std.mem.eql(u8, existing.name, package.name)) continue;
+        if (transactionRolePriority(package.role) > transactionRolePriority(existing.role))
+            existing.role = package.role;
+        return;
+    }
+    try packages.append(allocator, package);
+}
+
+fn transactionRolePriority(role: operation_api.TransactionPackageRole) u8 {
+    return switch (role) {
+        .requested => 6,
+        .runtime_dependency => 5,
+        .optional_dependency => 4,
+        .build_dependency => 3,
+        .check_dependency => 2,
+        .dependency => 1,
+    };
 }
 
 fn containsConst(values: []const []const u8, expected: []const u8) bool {
