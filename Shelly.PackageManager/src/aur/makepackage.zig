@@ -104,5 +104,14 @@ pub const MakePackageConfiguration = struct {
             defer self.scratch_allocator.free(bytes);
             self.depth += 1;
         }
+
+        fn parse_buffer(self: *Parser, bytes: []const u8) Allocator.Error!void {
+            var lines = std.mem.splitScalar(u8, bytes, '\n');
+            while (lines.next()) |raw| {
+                const line = std.mem.trim(u8, raw, " \t\r\n");
+                if (line.len == 0 or line[0] == '#') continue;
+            }
+            _ = self;2
+        }
     };
 };
