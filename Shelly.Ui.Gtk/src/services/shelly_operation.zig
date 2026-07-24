@@ -137,7 +137,7 @@ const YesNoRequest = struct {
     QuestionText: []const u8 = "",
 };
 
-const TransactionRequest = struct {
+pub const TransactionRequest = struct {
     @"$kind": []const u8 = "",
     QuestionId: []const u8 = "",
     QuestionText: []const u8 = "",
