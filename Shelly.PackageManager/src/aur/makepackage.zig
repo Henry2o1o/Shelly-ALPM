@@ -8,20 +8,26 @@ const equalIgnoreCase = std.ascii.eqlIgnoreCase;
 const max_depth: usize = 1;
 
 pub const MakePackageConfiguration = struct {
+    const Self = @This();
+    pub const default_path = "/etc/makepkg.conf";
+
+    backing_allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
+
     // Starting with architecture flags as source acquisition isn't needed
-    carch: []const u8,
-    chost: []const u8,
-    package_carch: []const u8,
-    nproc: u8,
-    cpp_flags: []const u8,
-    c_flags: []const u8,
-    cxx_flags: []const u8,
-    ld_flags: []const u8,
-    lto_flags: []const u8,
-    make_flags: []const u8,
-    ninja_flags: []const u8,
-    debug_c_flags: []const u8,
-    debug_cxx_flags: []const u8,
+    carch: []const u8 = "x86_64",
+    chost: []const u8 = "x86_64-pc-linux-gnu",
+    package_carch: []const u8 = "x86_64",
+    nproc: u8 = 2,
+    cpp_flags: []const u8 = "",
+    c_flags: []const u8 = "-march=native -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection",
+    cxx_flags: []const u8 = "-march=native -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection -Wp,-D_GLIBCXX_ASSERTIONS",
+    ld_flags: []const u8 = "-Wl,-O1 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now -Wl,-z,pack-relative-relocs",
+    lto_flags: []const u8 = "-flto=auto",
+    make_flags: []const u8 = "j2",
+    ninja_flags: []const u8 = "j2",
+    debug_c_flags: []const u8 = "-g",
+    debug_cxx_flags: []const u8 = "-g",
     // Build environment flags
     //
     // Makepkg defaults: BUILDENV=(!distcc !color !ccache check !sign)
@@ -32,11 +38,11 @@ pub const MakePackageConfiguration = struct {
     //-- ccache:   Use ccache to cache compilation
     //-- check:    Run the check() function if present in the PKGBUILD
     //-- sign:     Generate PGP signature file
-    build_environment: []const u8,
+    build_environment: []const u8 = "(!distcc color !ccache check !sign)",
     //-- If using DistCC, your MAKEFLAGS will also need modification. In addition,
     //-- specify a space-delimited list of hosts running in the DistCC cluster.
-    distributed_c_compiler_hosts: []const u8,
-    build_directory: []const u8,
+    distributed_c_compiler_hosts: []const u8 = "",
+    build_directory: []const u8 = "/tmp/makepkg",
     // Global packaging options
     // Makepkg defaults:
     // OPTIONS=(!strip docs libtool staticlibs emptydirs !zipman !purge !debug !lto !autodeps)
@@ -51,43 +57,98 @@ pub const MakePackageConfiguration = struct {
     //-- debug:      Add debugging flags as specified in DEBUG_* variables
     //-- lto:        Add compile flags for building with link time optimization
     //-- autodeps:   Automatically add depends/provides
-    options: []const u8,
+    options: []const u8 = "(strip docs !libtool !staticlibs emptydirs zipman purge !debug lto !autodeps)",
     // File integrity checks to use. Valid: md5, sha1, sha224, sha256, sha384, sha512, b2
-    integrity_check: []const u8,
-    strip_binaries: []const u8,
-    strip_static: []const u8,
-    strip_shared: []const u8,
-    man_directories: []const u8,
-    doc_directories: []const u8,
-    purge_targets: []const u8,
-    debug_source_direcctory: []const u8,
-    library_directories: []const u8,
+    integrity_check: []const u8 = "(sha256)",
+    strip_binaries: []const u8 = "--strip-all",
+    strip_static: []const u8 = "--strip-unneeded",
+    strip_shared: []const u8 = "--strip-debug",
+    man_directories: []const u8 = "(usr{,/local}{,/share}/{man,info})",
+    doc_directories: []const u8 = "(usr/{,local/}{,share/}{doc,gtk-doc})",
+    purge_targets: []const u8 = "(usr/{,share}/info/dir .packlist *.pod)",
+    debug_source_direcctory: []const u8 = "/usr/src/debug",
+    library_directories: []const u8 = "('lib:usr/lib' 'lib32:usr/lib32')",
     // Package output options
     // Destination: specify a fixed directory where all packages will be placed
-    package_destination: []const u8,
+    package_destination: []const u8 = "/home/packages",
     // Source cache: specify a fixed directory where source files will be cached
-    source_destination: []const u8,
+    source_destination: []const u8 = "/home/sources",
     // Source packages: specify a fixed directory where all src packages will be placed
-    source_package_destionation: []const u8,
+    source_package_destionation: []const u8 = "/home/srcpackages",
     // Log files: specify a fixed directory where all log files will be placed
-    log_destination: []const u8,
+    log_destination: []const u8 = "/home/makepkglogs",
     // Packager: name/email of the person or organization building packages
-    packager: []const u8,
+    packager: []const u8 = "Jane Doe <jane@doe.com>",
     // Specific gpg key to use for package signing
-    gpg_key: []const u8,
+    gpg_key: []const u8 = "",
     // Compression defaults
-    gz: []const u8,
-    bz2: []const u8,
-    xz: []const u8,
-    zst: []const u8,
-    lrz: []const u8,
-    lzo: []const u8,
-    z: []const u8,
-    lz4: []const u8,
-    lz: []const u8,
+    gz: []const u8 = "(gzip -c -f -n)",
+    bz2: []const u8 = "(bzip2 -c -f)",
+    xz: []const u8 = "(xz -c -z -)",
+    zst: []const u8 = "(zstd -c -T0 -9 -)",
+    lrz: []const u8 = "(lrzip -q)",
+    lzo: []const u8 = "(lzop -q)",
+    z: []const u8 = "(compress -c -f)",
+    lz4: []const u8 = "(lz4 -q)",
+    lz: []const u8 = "(lzip -c -f)",
     // Extension defaults
-    package_extension: []const u8,
-    source_extension: []const u8,
+    package_extension: []const u8 = ".pkg.tar.zst",
+    source_extension: []const u8 = "src.tar.gz",
+
+    pub fn init(io: Io, allocator: Allocator) Allocator.Error!*Self {
+        return initFromPath(io, allocator, default_path);
+    }
+
+    pub fn initFromPath(
+        io: Io,
+        allocator: Allocator,
+        path: []const u8,
+    ) Allocator.Error!*Self {
+        const config = try createWithDefaults(allocator);
+        errdefer config.deinit();
+
+        var parser: Parser = .{
+            .io = io,
+            .scratch_allocator = allocator,
+            .arena_allocator = config.arena.allocator(),
+            .config = config,
+        };
+        try parser.parse_file(path);
+        return config;
+    }
+
+    pub fn initFromBuffer(
+        io: Io,
+        allocator: Allocator,
+        bytes: []const u8,
+    ) Allocator.Error!*Self {
+        const config = try createWithDefaults(allocator);
+        errdefer config.deinit();
+
+        var parser: Parser = .{
+            .io = io,
+            .scratch_allocator = allocator,
+            .arena_allocator = config.arena.allocator(),
+            .config = config,
+        };
+        try parser.parse_buffer(bytes);
+        return config;
+    }
+
+    pub fn deinit(self: *Self) void {
+        const allocator = self.backing_allocator;
+        self.arena.deinit();
+        allocator.destroy(self);
+    }
+
+    fn createWithDefaults(allocator: Allocator) Allocator.Error!*Self {
+        const config = try allocator.create(Self);
+        config.* = .{
+            .backing_allocator = allocator,
+            .arena = .init(allocator),
+        };
+        return config;
+    }
 
     fn read_while_file(io: Io, alloc: Allocator, path: []const u8) ![]u8 {
         return Io.Dir.cwd().readFileAlloc(io, path, alloc, .unlimited);
@@ -102,9 +163,14 @@ pub const MakePackageConfiguration = struct {
 
         fn parse_file(self: *Parser, path: []const u8) Allocator.Error!void {
             if (self.depth >= max_depth) return;
-            const bytes = read_while_file(self.io, self.scratch_allocator, path);
+            const bytes = read_while_file(self.io, self.scratch_allocator, path) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return,
+            };
             defer self.scratch_allocator.free(bytes);
             self.depth += 1;
+            defer self.depth -= 1;
+            try self.parse_buffer(bytes);
         }
 
         fn parse_buffer(self: *Parser, bytes: []const u8) Allocator.Error!void {
@@ -268,18 +334,13 @@ pub const MakePackageConfiguration = struct {
 fn TestParser(comptime assertion: *const fn (*const MakePackageConfiguration) anyerror!void) type {
     return struct {
         fn run(input: []const u8) !void {
-            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-            defer arena.deinit();
-
-            var config: MakePackageConfiguration = undefined;
-            var parser: MakePackageConfiguration.Parser = .{
-                .io = std.testing.io,
-                .scratch_allocator = arena.allocator(),
-                .arena_allocator = arena.allocator(),
-                .config = &config,
-            };
-            try parser.parse_buffer(input);
-            try assertion(&config);
+            const config = try MakePackageConfiguration.initFromBuffer(
+                std.testing.io,
+                std.testing.allocator,
+                input,
+            );
+            defer config.deinit();
+            try assertion(config);
         }
     };
 }
@@ -330,6 +391,8 @@ test "makepkg parser ignores comments unknown keys and lines without assignments
     const Assert = struct {
         fn value(config: *const MakePackageConfiguration) !void {
             try std.testing.expectEqualStrings("-j8", config.make_flags);
+            try std.testing.expectEqualStrings("x86_64-pc-linux-gnu", config.chost);
+            try std.testing.expectEqual(@as(u8, 2), config.nproc);
         }
     };
     try TestParser(&Assert.value).run(
@@ -338,6 +401,32 @@ test "makepkg parser ignores comments unknown keys and lines without assignments
             "not-an-assignment\n" ++
             "MAKEFLAGS=\"-j8\"\n",
     );
+}
+
+test "makepkg initialization parses a file over declared defaults" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "makepkg.conf",
+        .data = "CARCH=\"aarch64\"\nNPROC=12\n",
+    });
+    const path = try temporary.dir.realPathFileAlloc(
+        std.testing.io,
+        "makepkg.conf",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(path);
+
+    const config = try MakePackageConfiguration.initFromPath(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+    );
+    defer config.deinit();
+
+    try std.testing.expectEqualStrings("aarch64", config.carch);
+    try std.testing.expectEqual(@as(u8, 12), config.nproc);
+    try std.testing.expectEqualStrings("x86_64-pc-linux-gnu", config.chost);
 }
 
 test "makepkg parser parses NPROC as an integer" {
