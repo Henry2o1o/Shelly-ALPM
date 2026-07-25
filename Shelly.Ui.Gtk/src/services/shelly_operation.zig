@@ -22,6 +22,7 @@ pub const Event = union(enum) {
         total_download: i64,
         progress_type: []const u8,
         percent: i64,
+        stage: ?[]const u8,
         message: ?[]const u8,
     },
     flatpak_progress: struct {
@@ -56,6 +57,7 @@ const AlpmProgress = struct {
     TotalDownload: i64 = 0,
     ProgressType: []const u8 = "",
     Percent: i64 = 0,
+    Stage: ?[]const u8 = null,
     Message: ?[]const u8 = null,
 };
 
@@ -80,6 +82,15 @@ pub const Question = union(enum) {
         question_id: []const u8,
         prompt: []const u8,
         options: []Option,
+    },
+    pkgbuild: struct {
+        question_id: []const u8,
+        package_name: []const u8,
+        old_pkgbuild: []const u8,
+        new_pkgbuild: []const u8,
+        warnings: []const Warning = &.{},
+        diff_lines: []const []const u8 = &.{},
+        source_files: ?[]const []const u8 = null,
     },
     transaction: TransactionQuestion,
 };
@@ -122,6 +133,25 @@ const SelectionRequest = struct {
     Options: []OptionWire = &.{},
 };
 
+pub const PkgbuildDiff = struct {
+    @"$kind": []const u8 = "",
+    QuestionId: []const u8,
+    PackageName: []const u8,
+    OldPkgbuild: []const u8,
+    NewPkgbuild: []const u8,
+    Warnings: []const Warning = &.{},
+    DiffLines: []const []const u8 = &.{},
+    SourceFiles: ?[]const []const u8 = null,
+};
+
+pub const Warning = struct {
+    Tool: []const u8 = "",
+    Severity: []const u8 = "",
+    Hook: []const u8 = "",
+    MatchedLine: []const u8 = "",
+    Message: []const u8 = "",
+};
+
 const OptionWire = struct {
     Index: usize = 0,
     Name: []const u8 = "",
@@ -137,7 +167,7 @@ const YesNoRequest = struct {
     QuestionText: []const u8 = "",
 };
 
-const TransactionRequest = struct {
+pub const TransactionRequest = struct {
     @"$kind": []const u8 = "",
     QuestionId: []const u8 = "",
     QuestionText: []const u8 = "",
@@ -173,6 +203,7 @@ pub const PendingQuestion = struct {
             .yes_no => |q| q.question_id,
             .select_many => |q| q.question_id,
             .select_one => |q| q.question_id,
+            .pkgbuild => |q| q.question_id,
             .transaction => |q| q.question_id,
         };
     }
@@ -291,6 +322,14 @@ pub const ShellyCommands = struct {
         try argv.append(alloc, "purify");
         try argv.append(alloc, "standard");
         try argv.append(alloc, "--orphans");
+        return argv.toOwnedSlice(alloc);
+    }
+
+    pub fn install_aur(alloc: std.mem.Allocator, names: []const []const u8) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "install");
+        try argv.append(alloc, "aur");
+        for (names) |n| try argv.append(alloc, n);
         return argv.toOwnedSlice(alloc);
     }
 };
@@ -467,6 +506,17 @@ pub const ShellyOperation = struct {
         try self.writeAnswerFrame(json_buf.items);
     }
 
+    pub fn answerPkgbuildDiff(self: *ShellyOperation, question_id: []const u8, accepted: bool) !void {
+        var json_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+        try json_buf.appendSlice(self.allocator, "{\"$kind\":\"a.pkgbuilddiff\",\"QuestionId\":\"");
+        try json_buf.appendSlice(self.allocator, question_id);
+        try json_buf.appendSlice(self.allocator, "\",\"ProceedWithUpdate\":");
+        try json_buf.appendSlice(self.allocator, if (accepted) "true" else "false");
+        try json_buf.append(self.allocator, '}');
+        try self.writeAnswerFrame(json_buf.items);
+    }
+
     pub fn answerProvider(self: *ShellyOperation, question_id: []const u8, selected: usize) !void {
         var json_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer json_buf.deinit(self.allocator);
@@ -518,122 +568,117 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
     const kind = env.value.@"$kind";
 
     if (std.mem.eql(u8, kind, "q.yesno")) {
-        const e = std.json.parseFromSlice(YesNoRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
-        defer e.deinit();
+        if (parseYesNo(op, msg.json) catch null) |p| op.on_question(op.ctx, p);
+    } else if (std.mem.eql(u8, kind, "q.transaction")) {
+        if (parseTransaction(op, msg.json) catch null) |p| op.on_question(op.ctx, p);
+    } else if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
+        if (parseSelection(op, msg.json, kind) catch null) |p| op.on_question(op.ctx, p);
+    } else {
+        dispatchEvent(op, alloc, msg.json, kind);
+    }
 
-        const pending = op.allocator.create(PendingQuestion) catch return 0;
-        pending.* = .{
-            .arena = std.heap.ArenaAllocator.init(op.allocator),
-            .operation = op,
-            .request = undefined,
+    return 0;
+}
+
+fn newPending(op: *ShellyOperation) !*PendingQuestion {
+    const p = try op.allocator.create(PendingQuestion);
+    p.* = .{
+        .arena = std.heap.ArenaAllocator.init(op.allocator),
+        .operation = op,
+        .request = undefined,
+    };
+    return p;
+}
+
+fn parseYesNo(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {
+    const e = try std.json.parseFromSlice(YesNoRequest, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer e.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    pending.request = .{ .yes_no = .{
+        .question_id = try qa.dupe(u8, e.value.QuestionId),
+        .question_kind = try qa.dupe(u8, e.value.QuestionKind),
+        .question_text = try qa.dupe(u8, e.value.QuestionText),
+    } };
+    return pending;
+}
+
+fn parseTransaction(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {
+    const e = try std.json.parseFromSlice(TransactionRequest, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer e.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    const packages = try qa.alloc(TransactionPackage, e.value.Packages.len);
+    for (e.value.Packages, packages) |package, *target| target.* = .{
+        .name = qa.dupe(u8, package.Name) catch "",
+        .version = dupeOptional(qa, package.Version),
+        .repository = dupeOptional(qa, package.Repository),
+        .package_base = dupeOptional(qa, package.PackageBase),
+        .revision = dupeOptional(qa, package.Revision),
+        .source = qa.dupe(u8, package.Source) catch "",
+        .role = qa.dupe(u8, package.Role) catch "",
+        .download_size = package.DownloadSize,
+        .installed_size = package.InstalledSize,
+    };
+
+    pending.request = .{ .transaction = .{
+        .question_id = try qa.dupe(u8, e.value.QuestionId),
+        .question_text = qa.dupe(u8, e.value.QuestionText) catch "",
+        .action = qa.dupe(u8, e.value.Action) catch "",
+        .packages = packages,
+        .total_download_size = e.value.TotalDownloadSize,
+        .total_installed_size = e.value.TotalInstalledSize,
+        .net_installed_size = e.value.NetInstalledSize,
+    } };
+    return pending;
+}
+
+fn parseSelection(op: *ShellyOperation, json: []const u8, kind: []const u8) !?*PendingQuestion {
+    const e = try std.json.parseFromSlice(SelectionRequest, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer e.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    const opts = try qa.alloc(Option, e.value.Options.len);
+    for (e.value.Options, 0..) |o, i| {
+        opts[i] = .{
+            .index = o.Index,
+            .name = qa.dupe(u8, o.Name) catch "",
+            .description = qa.dupe(u8, o.Description) catch "",
+            .is_installed = o.IsInstalled,
+            .is_selected = o.IsSelected,
         };
-        const qa = pending.arena.allocator();
-        pending.request = .{ .yes_no = .{
-            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
-                pending.destroy();
-                return 0;
-            },
-            .question_kind = qa.dupe(u8, e.value.QuestionKind) catch {
-                pending.destroy();
-                return 0;
-            },
-            .question_text = qa.dupe(u8, e.value.QuestionText) catch {
-                pending.destroy();
-                return 0;
-            },
+    }
+
+    const qid = try qa.dupe(u8, e.value.QuestionId);
+
+    if (std.mem.eql(u8, kind, "q.optdeps")) {
+        pending.request = .{ .select_many = .{
+            .question_id = qid,
+            .prompt = qa.dupe(u8, e.value.QuestionText) catch "",
+            .options = opts,
         } };
-
-        op.on_question(op.ctx, pending);
-        return 0;
-    }
-
-    if (std.mem.eql(u8, kind, "q.transaction")) {
-        const e = std.json.parseFromSlice(TransactionRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
-        defer e.deinit();
-
-        const pending = op.allocator.create(PendingQuestion) catch return 0;
-        pending.* = .{
-            .arena = std.heap.ArenaAllocator.init(op.allocator),
-            .operation = op,
-            .request = undefined,
-        };
-        const qa = pending.arena.allocator();
-        const packages = qa.alloc(TransactionPackage, e.value.Packages.len) catch {
-            pending.destroy();
-            return 0;
-        };
-        for (e.value.Packages, packages) |package, *target| target.* = .{
-            .name = qa.dupe(u8, package.Name) catch "",
-            .version = dupeOptional(qa, package.Version),
-            .repository = dupeOptional(qa, package.Repository),
-            .package_base = dupeOptional(qa, package.PackageBase),
-            .revision = dupeOptional(qa, package.Revision),
-            .source = qa.dupe(u8, package.Source) catch "",
-            .role = qa.dupe(u8, package.Role) catch "",
-            .download_size = package.DownloadSize,
-            .installed_size = package.InstalledSize,
-        };
-        pending.request = .{ .transaction = .{
-            .question_id = qa.dupe(u8, e.value.QuestionId) catch {
-                pending.destroy();
-                return 0;
-            },
-            .question_text = qa.dupe(u8, e.value.QuestionText) catch "",
-            .action = qa.dupe(u8, e.value.Action) catch "",
-            .packages = packages,
-            .total_download_size = e.value.TotalDownloadSize,
-            .total_installed_size = e.value.TotalInstalledSize,
-            .net_installed_size = e.value.NetInstalledSize,
+    } else {
+        pending.request = .{ .select_one = .{
+            .question_id = qid,
+            .prompt = qa.dupe(u8, e.value.DependencyName) catch "",
+            .options = opts,
         } };
-        op.on_question(op.ctx, pending);
-        return 0;
     }
+    return pending;
+}
 
-    if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
-        const e = std.json.parseFromSlice(SelectionRequest, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
-        defer e.deinit();
-
-        const pending = op.allocator.create(PendingQuestion) catch return 0;
-        pending.* = .{
-            .arena = std.heap.ArenaAllocator.init(op.allocator),
-            .operation = op,
-            .request = undefined,
-        };
-        const qa = pending.arena.allocator();
-
-        const opts = qa.alloc(Option, e.value.Options.len) catch {
-            pending.destroy();
-            return 0;
-        };
-        for (e.value.Options, 0..) |o, i| {
-            opts[i] = .{
-                .index = o.Index,
-                .name = qa.dupe(u8, o.Name) catch "",
-                .description = qa.dupe(u8, o.Description) catch "",
-                .is_installed = o.IsInstalled,
-                .is_selected = o.IsSelected,
-            };
-        }
-
-        const qid = qa.dupe(u8, e.value.QuestionId) catch {
-            pending.destroy();
-            return 0;
-        };
-
-        if (std.mem.eql(u8, kind, "q.optdeps")) {
-            const prompt = qa.dupe(u8, e.value.QuestionText) catch "";
-            pending.request = .{ .select_many = .{ .question_id = qid, .prompt = prompt, .options = opts } };
-        } else {
-            const prompt = qa.dupe(u8, e.value.DependencyName) catch "";
-            pending.request = .{ .select_one = .{ .question_id = qid, .prompt = prompt, .options = opts } };
-        }
-
-        op.on_question(op.ctx, pending);
-        return 0;
-    }
-
+fn dispatchEvent(op: *ShellyOperation, alloc: std.mem.Allocator, json: []const u8, kind: []const u8) void {
     if (std.mem.eql(u8, kind, "alpm.info")) {
-        const e = std.json.parseFromSlice(AlpmInfo, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(AlpmInfo, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .info = .{
             .event_type = e.value.EventType,
@@ -643,14 +688,15 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
             .total = e.value.TotalCount,
         } });
     } else if (std.mem.eql(u8, kind, "alpm.error")) {
-        const e = std.json.parseFromSlice(AlpmError, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(AlpmError, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .err = .{ .message = e.value.ErrorMessage } });
     } else if (std.mem.eql(u8, kind, "alpm.progress")) {
-        const e = std.json.parseFromSlice(AlpmProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(AlpmProgress, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .alpm_progress = .{
             .package_name = e.value.PackageName,
+            .stage = e.value.Stage,
             .current_download = e.value.CurrentDownload,
             .total_download = e.value.TotalDownload,
             .progress_type = e.value.ProgressType,
@@ -658,14 +704,14 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
             .message = e.value.Message,
         } });
     } else if (std.mem.eql(u8, kind, "flatpak.progress")) {
-        const e = std.json.parseFromSlice(SimpleProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(SimpleProgress, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .flatpak_progress = .{
             .status = e.value.Status,
             .percentage = clampPercent(e.value.Percentage),
         } });
     } else if (std.mem.eql(u8, kind, "appimage.progress")) {
-        const e = std.json.parseFromSlice(SimpleProgress, alloc, msg.json, .{ .ignore_unknown_fields = true }) catch return 0;
+        const e = std.json.parseFromSlice(SimpleProgress, alloc, json, .{ .ignore_unknown_fields = true }) catch return;
         defer e.deinit();
         op.on_event(op.ctx, .{ .appimage_progress = .{
             .status = e.value.Status,
@@ -674,8 +720,6 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
     } else {
         op.on_event(op.ctx, .unknown);
     }
-
-    return 0;
 }
 
 fn clampPercent(p: i64) i64 {

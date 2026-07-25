@@ -6,6 +6,7 @@ const glib = bindings.glib;
 const gobject = bindings.gobject;
 const c_string = @import("../helpers/c_string.zig");
 const support = @import("support.zig");
+const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
 const Event = @import("../services/shelly_operation.zig").Event;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
@@ -14,6 +15,8 @@ const PendingQuestion = @import("../services/shelly_operation.zig").PendingQuest
 const TransactionQuestion = @import("../services/shelly_operation.zig").TransactionQuestion;
 const TransactionPackage = @import("../services/shelly_operation.zig").TransactionPackage;
 const MultiSelectDialog = @import("../dialog/page/multiselect.zig").MultiSelectDialog;
+const PkgbuildReviewDialog = @import("../dialog/page/pkg_build.zig").PkgbuildReviewDialog;
+const PlanDialog = @import("../dialog/page/plan.zig").PlanDialog;
 
 pub const TransactionRequest = struct {
     title: []const u8,
@@ -47,6 +50,7 @@ pub const TransactionPage = extern struct {
         terminal_scroll: *gtk.ScrolledWindow,
         terminal_view: *gtk.TextView,
         question_layer: *gtk.Box,
+        status_label: *gtk.Label,
         arena: ?*std.heap.ArenaAllocator,
         rows: std.StringHashMapUnmanaged(*PackageRow),
         on_complete: ?*const fn (ctx: *anyopaque, success: bool) void,
@@ -208,14 +212,22 @@ pub const TransactionPage = extern struct {
     }
 
     fn handle_event(self: *Self, event: Event) void {
-        std.debug.print("EVENT: {any}\n", .{event});
+        //  std.debug.print("EVENT: {any}\n", .{event});
         switch (event) {
             .info => |i| {
                 append_terminal(self, i.message);
                 if (std.mem.eql(u8, i.event_type, "TransactionCancelled"))
                     self.priv().cancelled = true;
 
-                if (i.package_name) |name| {
+                if (std.mem.eql(u8, i.event_type, "TransactionStart")) {
+                    // optionally set a global status line
+                } else if (std.mem.eql(u8, i.event_type, "TransactionDone")) {
+                    var it = self.priv().rows.valueIterator();
+                    while (it.next()) |row| mark_row_done(row.*);
+                } else if (std.mem.eql(u8, i.event_type, "TransactionFailed")) {
+                    var it = self.priv().rows.valueIterator();
+                    while (it.next()) |row| mark_row_failed(row.*);
+                } else if (i.package_name) |name| {
                     if (find_row(self, name)) |row| {
                         var buf: [64]u8 = undefined;
                         const status = if (std.mem.eql(u8, i.event_type, "aur_build_output"))
@@ -251,13 +263,38 @@ pub const TransactionPage = extern struct {
                         "Downloading"
                     else
                         "Installing";
+                        
+                if (is_transaction_phase(pr.progress_type)) {
+                    var gbuf: [128]u8 = undefined;
+                    gtk.Label.setLabel(
+                        self.priv().status_label,
+                        c_string.cstr(&gbuf, phase_label(pr.progress_type)),
+                    );
+                    return;
+                }
 
-                    if (!is_download and pr.percent >= 100) {
-                        mark_row_done(row);
+                if (ensure_row(self, pr.package_name)) |row| {
+                    const is_download = std.mem.eql(u8, pr.progress_type, "PackageDownload") or
+                        std.mem.eql(u8, pr.progress_type, "AurDownload");
+                    if (is_download and pr.total_download > 0) {
+                        const fraction = @as(f64, @floatFromInt(pr.current_download)) /
+                            @as(f64, @floatFromInt(pr.total_download));
+                        gtk.ProgressBar.setFraction(row.progress, fraction);
+                        var cur_buf: [32]u8 = undefined;
+                        var tot_buf: [32]u8 = undefined;
+                        var label_buf: [96]u8 = undefined;
+                        const cur = SizeConverter.convert_null_term(&cur_buf, pr.current_download);
+                        const tot = SizeConverter.convert_null_term(&tot_buf, pr.total_download);
+                        if (std.fmt.bufPrintZ(&label_buf, "Downloading — {s} / {s}", .{ cur, tot })) |text| {
+                            gtk.Label.setLabel(row.status_label, text);
+                        } else |_| {
+                            var buf: [64]u8 = undefined;
+                            gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, phase_label(pr.progress_type)));
+                        }
                     } else {
                         var buf: [64]u8 = undefined;
-                        gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, phase));
-                        gtk.ProgressBar.setFraction(row.progress, @as(f64, @floatFromInt(pr.percent)) / 100.0);
+                        gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, phase_label(pr.progress_type)));
+                        gtk.ProgressBar.pulse(row.progress);
                     }
                 }
             },
@@ -271,6 +308,43 @@ pub const TransactionPage = extern struct {
             },
             .unknown => {},
         }
+    }
+
+    fn is_transaction_phase(progress_type: []const u8) bool {
+        return std.mem.eql(u8, progress_type, "LoadStart") or
+            std.mem.eql(u8, progress_type, "KeyringStart") or
+            std.mem.eql(u8, progress_type, "IntegrityStart") or
+            std.mem.eql(u8, progress_type, "ConflictsStart") or
+            std.mem.eql(u8, progress_type, "DiskspaceStart") or
+            std.mem.eql(u8, progress_type, "DatabaseDownload");
+    }
+
+    fn ensure_row(self: *Self, name: []const u8) ?*PackageRow {
+        const p = self.priv();
+        if (name.len == 0) return null;
+        if (std.mem.startsWith(u8, name, "http")) return null;
+        if (p.rows.get(name)) |row| return row;
+
+        const arena = p.arena orelse return null;
+        const alloc = arena.allocator();
+        const owned = alloc.dupeZ(u8, name) catch return null;
+        const row = build_row(alloc, owned) catch return null;
+        gtk.Box.append(p.rows_box, row.root.as(gtk.Widget));
+        p.rows.put(alloc, owned, row) catch return null;
+        return row;
+    }
+
+    fn phase_label(progress_type: []const u8) []const u8 {
+        if (std.mem.eql(u8, progress_type, "AurDownload")) return "Downloading";
+        if (std.mem.eql(u8, progress_type, "MakepkgBuild")) return "Building";
+        if (std.mem.eql(u8, progress_type, "MakepkgPackage")) return "Packaging";
+        if (std.mem.eql(u8, progress_type, "PackageDownload")) return "Downloading";
+        if (std.mem.eql(u8, progress_type, "AddStart")) return "Installing";
+        if (std.mem.eql(u8, progress_type, "UpgradeStart")) return "Upgrading";
+        if (std.mem.eql(u8, progress_type, "DowngradeStart")) return "Downgrading";
+        if (std.mem.eql(u8, progress_type, "ReinstallStart")) return "Reinstalling";
+        if (std.mem.eql(u8, progress_type, "RemoveStart")) return "Removing";
+        return "Working";
     }
 
     fn find_row(self: *Self, name: []const u8) ?*PackageRow {
@@ -419,198 +493,58 @@ pub const TransactionPage = extern struct {
             .select_one => |q| {
                 _ = q;
             },
+            .pkgbuild => |q| {
+                var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+                defer arena.deinit();
+                const a = arena.allocator();
+
+                const name = a.dupeZ(u8, q.package_name) catch return;
+
+                const lines = a.alloc([:0]const u8, q.diff_lines.len) catch return;
+                for (q.diff_lines, 0..) |line, i| {
+                    lines[i] = a.dupeZ(u8, line) catch return;
+                }
+
+                const warns = a.alloc(PkgbuildReviewDialog.Warning, q.warnings.len) catch return;
+                for (q.warnings, 0..) |w, i| {
+                    warns[i] = .{
+                        .tool = a.dupeZ(u8, w.Tool) catch return,
+                        .hook = a.dupeZ(u8, w.Hook) catch return,
+                        .severity = a.dupeZ(u8, w.Severity) catch return,
+                        .message = a.dupeZ(u8, w.Message) catch return,
+                        .matched_line = a.dupeZ(u8, w.MatchedLine) catch return,
+                    };
+                }
+
+                pending.on_dismiss = &dismiss_question;
+                pending.dismiss_ctx = self;
+
+                const dialog = PkgbuildReviewDialog.new(
+                    name,
+                    lines,
+                    warns,
+                    &.{},
+                    &on_pkgbuild_response,
+                    pending,
+                );
+                if (support.getWindow(ShellyWindow, self)) |win| {
+                    gtk.Window.setTransientFor(dialog.as(gtk.Window), win.as(gtk.Window));
+                }
+                dialog.present();
+            },
             .transaction => |q| {
                 pending.on_dismiss = &dismiss_question;
                 pending.dismiss_ctx = self;
-                self.addPlanRows(q.packages);
-                const dialog = buildTransactionDialog(pending, q);
+                const dialog = PlanDialog.new(q, &on_plan_response, pending);
                 gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
                 gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
             },
         }
     }
 
-    fn addPlanRows(self: *Self, packages: []const TransactionPackage) void {
-        const p = self.priv();
-        const allocator = if (p.arena) |arena| arena.allocator() else return;
-        for (packages) |package| {
-            if (p.rows.get(package.name)) |row| {
-                gtk.Label.setLabel(row.status_label, "Awaiting confirmation");
-                continue;
-            }
-            const owned = allocator.dupeZ(u8, package.name) catch continue;
-            const row = build_row(allocator, owned) catch continue;
-            gtk.Label.setLabel(row.status_label, "Awaiting confirmation");
-            gtk.Box.append(p.rows_box, row.root.as(gtk.Widget));
-            p.rows.put(allocator, owned, row) catch {};
-        }
-    }
-
-    fn buildTransactionDialog(
-        pending: *PendingQuestion,
-        question: TransactionQuestion,
-    ) *gtk.Box {
-        const card = gtk.Box.new(.vertical, 12);
-        gtk.Widget.addCssClass(card.as(gtk.Widget), "pkg-card");
-        gtk.Widget.setSizeRequest(card.as(gtk.Widget), 720, -1);
-        gtk.Widget.setMarginStart(card.as(gtk.Widget), 16);
-        gtk.Widget.setMarginEnd(card.as(gtk.Widget), 16);
-        gtk.Widget.setMarginTop(card.as(gtk.Widget), 16);
-        gtk.Widget.setMarginBottom(card.as(gtk.Widget), 16);
-
-        const title_label = gtk.Label.new("Confirm transaction");
-        gtk.Widget.setHalign(title_label.as(gtk.Widget), .start);
-        gtk.Label.setXalign(title_label, 0);
-        gtk.Widget.addCssClass(title_label.as(gtk.Widget), "detail-title");
-        gtk.Box.append(card, title_label.as(gtk.Widget));
-
-        var question_buffer: [512]u8 = undefined;
-        const prompt = gtk.Label.new(c_string.cstr(&question_buffer, question.question_text));
-        gtk.Widget.setHalign(prompt.as(gtk.Widget), .start);
-        gtk.Label.setXalign(prompt, 0);
-        gtk.Label.setWrap(prompt, 1);
-        gtk.Box.append(card, prompt.as(gtk.Widget));
-
-        const package_box = gtk.Box.new(.vertical, 8);
-        for (question.packages) |package|
-            gtk.Box.append(package_box, buildPlanPackageRow(package).as(gtk.Widget));
-
-        const scroll = gtk.ScrolledWindow.new();
-        gtk.ScrolledWindow.setMinContentHeight(scroll, 220);
-        gtk.ScrolledWindow.setMaxContentHeight(scroll, 480);
-        gtk.ScrolledWindow.setPropagateNaturalHeight(scroll, 1);
-        gtk.ScrolledWindow.setChild(scroll, package_box.as(gtk.Widget));
-        gtk.Box.append(card, scroll.as(gtk.Widget));
-
-        const totals = gtk.Box.new(.vertical, 2);
-        appendPlanTotal(totals, "Total download", question.total_download_size);
-        appendPlanTotal(totals, "Total installed", question.total_installed_size);
-        if (question.net_installed_size) |net| {
-            var text_buffer: [128]u8 = undefined;
-            const absolute: u64 = @abs(net);
-            var size_buffer: [64]u8 = undefined;
-            const text = std.fmt.bufPrint(
-                &text_buffer,
-                "Net installed-size change: {s}{s}",
-                .{ if (net < 0) "-" else "+", formatBytes(&size_buffer, absolute) },
-            ) catch "Net installed-size change: unknown";
-            var c_buffer: [128]u8 = undefined;
-            const label = gtk.Label.new(c_string.cstr(&c_buffer, text));
-            gtk.Widget.setHalign(label.as(gtk.Widget), .start);
-            gtk.Label.setXalign(label, 0);
-            gtk.Widget.addCssClass(label.as(gtk.Widget), "dim-label");
-            gtk.Box.append(totals, label.as(gtk.Widget));
-        }
-        gtk.Box.append(card, totals.as(gtk.Widget));
-
-        const buttons = gtk.Box.new(.horizontal, 8);
-        gtk.Widget.setHalign(buttons.as(gtk.Widget), .end);
-        const cancel = gtk.Button.newWithLabel("Cancel");
-        const confirm = gtk.Button.newWithLabel("Install");
-        gtk.Widget.addCssClass(confirm.as(gtk.Widget), "suggested-action");
-        _ = gtk.Button.signals.clicked.connect(cancel, *PendingQuestion, &on_transaction_cancel, pending, .{});
-        _ = gtk.Button.signals.clicked.connect(confirm, *PendingQuestion, &on_transaction_confirm, pending, .{});
-        gtk.Box.append(buttons, cancel.as(gtk.Widget));
-        gtk.Box.append(buttons, confirm.as(gtk.Widget));
-        gtk.Box.append(card, buttons.as(gtk.Widget));
-        return card;
-    }
-
-    fn buildPlanPackageRow(package: TransactionPackage) *gtk.Box {
-        const row = gtk.Box.new(.vertical, 2);
-        gtk.Widget.addCssClass(row.as(gtk.Widget), "pkg-card");
-
-        const heading = gtk.Box.new(.horizontal, 8);
-        var name_buffer: [256]u8 = undefined;
-        const name = gtk.Label.new(c_string.cstr(&name_buffer, package.name));
-        gtk.Widget.setHalign(name.as(gtk.Widget), .start);
-        gtk.Widget.setHexpand(name.as(gtk.Widget), 1);
-        gtk.Label.setXalign(name, 0);
-        gtk.Widget.addCssClass(name.as(gtk.Widget), "pkg-name");
-        gtk.Box.append(heading, name.as(gtk.Widget));
-
-        var role_buffer: [128]u8 = undefined;
-        const role_text = std.fmt.bufPrint(&role_buffer, "{s} · {s}", .{
-            displayRole(package.role),
-            displaySource(package.source),
-        }) catch package.role;
-        var role_c_buffer: [128]u8 = undefined;
-        const role = gtk.Label.new(c_string.cstr(&role_c_buffer, role_text));
-        gtk.Widget.addCssClass(role.as(gtk.Widget), "dim-label");
-        gtk.Box.append(heading, role.as(gtk.Widget));
-        gtk.Box.append(row, heading.as(gtk.Widget));
-
-        var detail_buffer: [512]u8 = undefined;
-        var download_buffer: [64]u8 = undefined;
-        var installed_buffer: [64]u8 = undefined;
-        const detail = std.fmt.bufPrint(&detail_buffer, "Version: {s}    Download: {s}    Installed: {s}", .{
-            package.version orelse if (std.mem.eql(u8, package.source, "aur"))
-                "Determined during build"
-            else
-                "Resolved by standard transaction",
-            packageSizeText(&download_buffer, package.download_size, package.source),
-            packageSizeText(&installed_buffer, package.installed_size, package.source),
-        }) catch "";
-        var detail_c_buffer: [512]u8 = undefined;
-        const details = gtk.Label.new(c_string.cstr(&detail_c_buffer, detail));
-        gtk.Widget.setHalign(details.as(gtk.Widget), .start);
-        gtk.Label.setXalign(details, 0);
-        gtk.Label.setWrap(details, 1);
-        gtk.Widget.addCssClass(details.as(gtk.Widget), "dim-label");
-        gtk.Box.append(row, details.as(gtk.Widget));
-        return row;
-    }
-
-    fn appendPlanTotal(box: *gtk.Box, label_text: []const u8, size: ?u64) void {
-        const value = size orelse return;
-        var size_buffer: [64]u8 = undefined;
-        var text_buffer: [128]u8 = undefined;
-        const text = std.fmt.bufPrint(&text_buffer, "{s}: {s}", .{
-            label_text,
-            formatBytes(&size_buffer, value),
-        }) catch return;
-        var c_buffer: [128]u8 = undefined;
-        const label = gtk.Label.new(c_string.cstr(&c_buffer, text));
-        gtk.Widget.setHalign(label.as(gtk.Widget), .start);
-        gtk.Label.setXalign(label, 0);
-        gtk.Widget.addCssClass(label.as(gtk.Widget), "dim-label");
-        gtk.Box.append(box, label.as(gtk.Widget));
-    }
-
-    fn packageSizeText(buffer: []u8, size: ?u64, source: []const u8) []const u8 {
-        if (size) |value| return formatBytes(buffer, value);
-        return if (std.mem.eql(u8, source, "aur") or std.mem.eql(u8, source, "local"))
-            "Determined during build"
-        else
-            "Resolved by standard transaction";
-    }
-
-    fn formatBytes(buffer: []u8, bytes: u64) []const u8 {
-        const mib = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
-        return std.fmt.bufPrint(buffer, "{d:.2} MiB", .{mib}) catch "?";
-    }
-
-    fn displayRole(role: []const u8) []const u8 {
-        if (std.mem.eql(u8, role, "runtime_dependency")) return "Runtime dependency";
-        if (std.mem.eql(u8, role, "build_dependency")) return "Build dependency";
-        if (std.mem.eql(u8, role, "check_dependency")) return "Check dependency";
-        if (std.mem.eql(u8, role, "optional_dependency")) return "Optional dependency";
-        if (std.mem.eql(u8, role, "requested")) return "Requested";
-        return "Dependency";
-    }
-
-    fn displaySource(source: []const u8) []const u8 {
-        if (std.mem.eql(u8, source, "aur")) return "AUR";
-        if (std.mem.eql(u8, source, "local")) return "Local";
-        return "Repository";
-    }
-
-    fn on_transaction_confirm(_: *gtk.Button, pending: *PendingQuestion) callconv(.c) void {
-        respondToTransaction(pending, true);
-    }
-
-    fn on_transaction_cancel(_: *gtk.Button, pending: *PendingQuestion) callconv(.c) void {
-        respondToTransaction(pending, false);
+    fn on_plan_response(ctx: ?*anyopaque, confirmed: bool) void {
+        const pending: *PendingQuestion = @ptrCast(@alignCast(ctx.?));
+        respondToTransaction(pending, confirmed);
     }
 
     fn respondToTransaction(pending: *PendingQuestion, accepted: bool) void {
@@ -636,6 +570,30 @@ pub const TransactionPage = extern struct {
             };
         } else {
             pending.operation.answerOptDeps(pending.questionId(), &.{}) catch {
+                pending.operation.cancel();
+            };
+        }
+
+        if (pending.on_dismiss) |cb| {
+            if (pending.dismiss_ctx) |c| cb(c);
+        }
+        pending.destroy();
+    }
+
+    fn on_pkgbuild_response(ctx: ?*anyopaque, confirmed: bool) void {
+        const pending: *PendingQuestion = @ptrCast(@alignCast(ctx.?));
+        if (pending.completed) return;
+        pending.completed = true;
+
+        if (confirmed) {
+            pending.operation.answerPkgbuildDiff(
+                pending.questionId(),
+                true,
+            ) catch {
+                pending.operation.cancel();
+            };
+        } else {
+            pending.operation.answerPkgbuildDiff(pending.questionId(), false) catch {
                 pending.operation.cancel();
             };
         }
@@ -680,6 +638,7 @@ pub const TransactionPage = extern struct {
         .{ "terminal_view", @offsetOf(Private, "terminal_view") },
         .{ "close_button", @offsetOf(Private, "close_button") },
         .{ "question_layer", @offsetOf(Private, "question_layer") },
+        .{ "status_label", @offsetOf(Private, "status_label") },
     };
 
     pub const Class = extern struct {
