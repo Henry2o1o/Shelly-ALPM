@@ -49,6 +49,8 @@ pub const UpdatePage = extern struct {
         var offset: c_int = 0;
     };
 
+    const PageState = enum { Loading, Loaded, Fail };
+
     const UpdateItem = struct {
         source: UpdateSource,
         name: []const u8,
@@ -163,15 +165,10 @@ pub const UpdatePage = extern struct {
         const p = self.priv();
         p.generation += 1;
         clear_data(self);
-        gtk.Spinner.start(p.loading_spinner);
-        gtk.Label.setLabel(p.selected_label, "Checking for updates…");
-        gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 0);
-        gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 0);
-        gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 0);
-        gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 0);
+        self.set_load(PageState.Loading);
 
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch {
-            show_error(self);
+            self.set_load(PageState.Fail);
             return;
         };
         thread.detach();
@@ -241,7 +238,7 @@ pub const UpdatePage = extern struct {
         }
         if (result.failed) {
             discard_result(result);
-            show_error(page);
+            set_load(page, PageState.Fail);
             return 0;
         }
         if (result.updates.len == 0) {
@@ -274,25 +271,44 @@ pub const UpdatePage = extern struct {
 
     fn finish_load(self: *Self, view: LoadView) void {
         const p = self.priv();
-        gtk.Spinner.stop(p.loading_spinner);
-        gtk.Stack.setVisibleChild(p.updates_stack, switch (view) {
-            .list => p.list_page.as(gtk.Widget),
-            .empty => p.empty_page.as(gtk.Widget),
-        });
-        gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
-        gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 1);
-        gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 1);
-        gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 1);
+        self.set_load(PageState.Loaded);
         if (view == .empty) gtk.Label.setLabel(p.selected_label, "No updates available");
     }
 
-    fn show_error(self: *Self) void {
+    fn set_load(self: *Self, state: PageState) void {
         const p = self.priv();
-        gtk.Spinner.stop(p.loading_spinner);
-        gtk.Label.setLabel(p.error_label, "Could not run shelly check-updates. Check the CLI output and try again.");
-        gtk.Stack.setVisibleChild(p.updates_stack, p.error_page.as(gtk.Widget));
-        gtk.Label.setLabel(p.selected_label, "Update check failed");
-        gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
+
+        switch (state) {
+            .Loading => {
+                gtk.Label.setLabel(p.selected_label, "Checking for updates…");
+                gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 0);
+                gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 0);
+                gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 0);
+                gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 0);
+                gtk.Widget.setVisible(p.loading_spinner.as(gtk.Widget), 1);
+                gtk.Spinner.start(p.loading_spinner);
+                gtk.Stack.setVisibleChild(p.updates_stack, p.loading_page.as(gtk.Widget));
+
+                return;
+            },
+            .Loaded => {
+                gtk.Stack.setVisibleChild(p.updates_stack, p.list_page.as(gtk.Widget));
+                gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 1);
+                gtk.Widget.setVisible(p.loading_spinner.as(gtk.Widget), 0);
+
+                gtk.Spinner.stop(p.loading_spinner);
+            },
+            .Fail => {
+                gtk.Label.setLabel(p.error_label, "Could not run shelly check-updates. Check the CLI output and try again.");
+                gtk.Stack.setVisibleChild(p.updates_stack, p.error_page.as(gtk.Widget));
+                gtk.Label.setLabel(p.selected_label, "Update check failed");
+                gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
+                gtk.Spinner.stop(p.loading_spinner);
+            },
+        }
     }
 
     fn update_source_labels(self: *Self) void {
@@ -425,7 +441,7 @@ pub const UpdatePage = extern struct {
     }
 
     fn refresh_updates(self: *Self) callconv(.c) void {
-        if (self.priv().loaded) start_load(self);
+        self.reload();
     }
 
     fn upgrade(self: *Self) callconv(.c) void {
@@ -482,6 +498,9 @@ pub const UpdatePage = extern struct {
     fn reload(self: *Self) void {
         const p = self.priv();
         p.generation += 1;
+
+        self.set_load(PageState.Loading);
+        p.list_store.removeAll();
 
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
         self.update_source_labels();
