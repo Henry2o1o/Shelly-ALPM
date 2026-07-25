@@ -177,6 +177,8 @@ pub const TransactionPage = extern struct {
         const status = gtk.Label.new("Pending");
         gtk.Widget.setHalign(status.as(gtk.Widget), .end);
         gtk.Label.setXalign(status, 1);
+        gtk.Label.setEllipsize(status, .end);
+        gtk.Label.setMaxWidthChars(status, 32);
         gtk.Widget.addCssClass(status.as(gtk.Widget), "pkg-status");
         gtk.Box.append(row_top, status.as(gtk.Widget));
 
@@ -216,15 +218,39 @@ pub const TransactionPage = extern struct {
                 if (i.package_name) |name| {
                     if (find_row(self, name)) |row| {
                         var buf: [64]u8 = undefined;
-                        gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, i.event_type));
+                        const status = if (std.mem.eql(u8, i.event_type, "aur_build_output"))
+                            i.message
+                        else if (std.mem.eql(u8, i.event_type, "aur_build_error"))
+                            "Build warning"
+                        else if (std.mem.eql(u8, i.event_type, "aur_build_start"))
+                            "Building"
+                        else if (std.mem.eql(u8, i.event_type, "aur_build_done"))
+                            "Built"
+                        else if (std.mem.eql(u8, i.event_type, "aur_install_start"))
+                            "Installing"
+                        else if (std.mem.eql(u8, i.event_type, "aur_install_done"))
+                            "Installed"
+                        else if (std.mem.eql(u8, i.event_type, "aur_download_start"))
+                            "Downloading"
+                        else
+                            i.event_type;
+                        gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, status));
                     }
                 }
             },
             .err => |e| append_terminal(self, e.message),
             .alpm_progress => |pr| {
                 if (find_row(self, pr.package_name)) |row| {
-                    const is_download = std.mem.eql(u8, pr.progress_type, "PackageDownload");
-                    const phase: []const u8 = if (is_download) "Downloading" else "Installing";
+                    const is_download = std.mem.eql(u8, pr.progress_type, "PackageDownload") or
+                        std.mem.eql(u8, pr.progress_type, "AurDownload");
+                    const phase: []const u8 = if (std.mem.eql(u8, pr.progress_type, "MakepkgBuild"))
+                        pr.message orelse "Building"
+                    else if (std.mem.eql(u8, pr.progress_type, "MakepkgPackage"))
+                        pr.message orelse "Packaging"
+                    else if (is_download)
+                        "Downloading"
+                    else
+                        "Installing";
 
                     if (!is_download and pr.percent >= 100) {
                         mark_row_done(row);

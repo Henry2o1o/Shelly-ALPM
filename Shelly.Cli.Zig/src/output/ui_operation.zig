@@ -21,11 +21,7 @@ pub const Reporter = struct {
 
     fn write(self: *Reporter, event: Zigalpm.OperationEvent) !void {
         switch (event) {
-            .status => |status| try output.writeAlpmInfoFrame(
-                self.context,
-                "InformationalOutput",
-                status.message,
-            ),
+            .status => |status| try output.writeOperationStatusFrame(self.context, status),
             .progress => |progress| try output.writeOperationProgressFrame(self.context, progress),
             .failure => |failure| try output.writeErrorFrame(self.context, failure.message),
             .started, .completed => {},
@@ -364,6 +360,81 @@ test "UI operation reporter preserves percentages for every progress frame shape
     }
     try std.testing.expectEqual(@as(usize, 0), (frame_iterator.next() orelse return error.MissingFrameTerminator).len);
     try std.testing.expect(frame_iterator.next() == null);
+    try std.testing.expect(!reporter.failed());
+}
+
+test "UI operation reporter preserves live makepkg package and step metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
+    defer operation_context.deinit();
+    var reporter: Reporter = .{ .context = &context };
+    const subscription = try operation_context.subscribe(.{
+        .function = Reporter.handle,
+        .data = &reporter,
+    });
+    defer _ = operation_context.unsubscribe(subscription);
+
+    var build = operation_context.begin(.{
+        .backend = .aur,
+        .kind = .build,
+        .subject = "demo",
+    });
+    build.statusWithContext(
+        .information,
+        "==> Starting build()...",
+        "aur_build_output",
+        522,
+        .{ .subject = "demo-dependency", .completed = 1, .total = 2 },
+    );
+    build.progress(.{
+        .subject = "demo-dependency",
+        .percentage = 42,
+        .message = "Compiling source files",
+        .native_code = 200,
+    });
+    build.finish(.success);
+
+    var frame_iterator = std.mem.splitSequence(u8, stdout.writer.buffered(), "[/JSON]\n");
+    const expected = [_][]const []const u8{
+        &.{
+            "\"$kind\":\"alpm.info\"",
+            "\"EventType\":\"aur_build_output\"",
+            "\"Message\":\"==> Starting build()...\"",
+            "\"PackageName\":\"demo-dependency\"",
+            "\"CurrentIndex\":1",
+            "\"TotalCount\":2",
+            "\"Source\":\"Aur\"",
+        },
+        &.{
+            "\"$kind\":\"alpm.progress\"",
+            "\"PackageName\":\"demo-dependency\"",
+            "\"ProgressType\":\"MakepkgBuild\"",
+            "\"Percent\":42",
+            "\"Message\":\"Compiling source files\"",
+        },
+    };
+    for (expected) |needles| {
+        const frame = frame_iterator.next() orelse return error.MissingMakepkgFrame;
+        const prefix = "[JSON]";
+        try std.testing.expect(std.mem.startsWith(u8, frame, prefix));
+        const encoded = frame[prefix.len..];
+        const decoded_length = try std.base64.standard.Decoder.calcSizeForSlice(encoded);
+        const decoded = try arena.allocator().alloc(u8, decoded_length);
+        try std.base64.standard.Decoder.decode(decoded, encoded);
+        for (needles) |needle|
+            try std.testing.expect(std.mem.indexOf(u8, decoded, needle) != null);
+    }
     try std.testing.expect(!reporter.failed());
 }
 

@@ -68,6 +68,44 @@ pub fn writeAlpmInfoFrame(
     event_type: []const u8,
     message: []const u8,
 ) !void {
+    return writeInfoFrameFields(
+        context,
+        event_type,
+        message,
+        null,
+        null,
+        null,
+        "Alpm",
+        "Information",
+    );
+}
+
+pub fn writeOperationStatusFrame(
+    context: *runtime.RuntimeContext,
+    status: Zigalpm.operation.StatusEvent,
+) !void {
+    try writeInfoFrameFields(
+        context,
+        status.code orelse "InformationalOutput",
+        status.message,
+        status.subject orelse status.envelope.subject,
+        status.completed,
+        status.total,
+        operationSource(status.envelope.backend),
+        operationLevel(status.level),
+    );
+}
+
+fn writeInfoFrameFields(
+    context: *runtime.RuntimeContext,
+    event_type: []const u8,
+    message: []const u8,
+    package_name: ?[]const u8,
+    current_index: ?u64,
+    total_count: ?u64,
+    source: []const u8,
+    level: []const u8,
+) !void {
     var payload = std.Io.Writer.Allocating.init(context.allocator);
     defer payload.deinit();
     var json: std.json.Stringify = .{ .writer = &payload.writer };
@@ -79,21 +117,41 @@ pub fn writeAlpmInfoFrame(
     try json.objectField("Message");
     try json.write(message);
     try json.objectField("PackageName");
-    try json.write(null);
+    try json.write(package_name);
     try json.objectField("CurrentIndex");
-    try json.write(null);
+    try json.write(current_index);
     try json.objectField("TotalCount");
-    try json.write(null);
+    try json.write(total_count);
     try json.objectField("Source");
-    try json.write("Alpm");
+    try json.write(source);
     try json.objectField("Level");
-    try json.write("Information");
+    try json.write(level);
     try json.objectField("TimeStamp");
     const time = try timestamp(context);
     defer context.allocator.free(time);
     try json.write(time);
     try json.endObject();
     try writeFrame(context, payload.writer.buffered());
+}
+
+fn operationSource(backend: Zigalpm.operation.Backend) []const u8 {
+    return switch (backend) {
+        .alpm => "Alpm",
+        .aur => "Aur",
+        .flatpak => "Flatpak",
+        .appimage => "AppImage",
+        .local_package => "LocalPackage",
+        .download => "Download",
+    };
+}
+
+fn operationLevel(level: Zigalpm.operation.StatusLevel) []const u8 {
+    return switch (level) {
+        .debug => "Debug",
+        .information => "Information",
+        .warning => "Warning",
+        .success => "Success",
+    };
 }
 
 pub fn writeOperationProgressFrame(
@@ -357,10 +415,11 @@ fn writeAlpmProgressFrame(
     const total = progress.update.bytes_total orelse
         progress.update.total orelse
         if (progress.update.percentage != null) @as(u64, 100) else 0;
-    const package_name = progress.update.message orelse
+    const package_name = progress.update.subject orelse
         progress.envelope.subject orelse
+        progress.update.message orelse
         "Unknown Package";
-    const message = progressMessage(progress.update.stage);
+    const message = progress.update.message orelse progressMessage(progress.update.stage);
 
     var payload = std.Io.Writer.Allocating.init(context.allocator);
     defer payload.deinit();

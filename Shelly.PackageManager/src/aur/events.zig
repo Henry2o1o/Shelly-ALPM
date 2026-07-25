@@ -154,8 +154,19 @@ pub const Dispatcher = struct {
                 .aur_download_done, .aur_build_done, .aur_install_done, .aur_cleanup_done, .aur_package_completed => .success,
                 else => .information,
             };
-            operation.status(level, args.message, @tagName(args.event_type), @intFromEnum(args.event_type));
+            operation.statusWithContext(
+                level,
+                args.message,
+                @tagName(args.event_type),
+                @intFromEnum(args.event_type),
+                .{
+                    .subject = args.package_name,
+                    .completed = if (args.current) |value| @intCast(value) else null,
+                    .total = if (args.total) |value| @intCast(value) else null,
+                },
+            );
             if (args.current != null or args.total != null) operation.progress(.{
+                .subject = args.package_name,
                 .stage = @tagName(args.event_type),
                 .completed = if (args.current) |value| @intCast(value) else null,
                 .total = if (args.total) |value| @intCast(value) else null,
@@ -168,6 +179,7 @@ pub const Dispatcher = struct {
 
     pub fn raiseProgress(self: *Dispatcher, args: ProgressArgs) void {
         if (self.operation) |operation| operation.progress(.{
+            .subject = args.package_name,
             .stage = @tagName(args.progress_type),
             .percentage = @floatFromInt(args.percent),
             .message = args.message orelse args.package_name,
@@ -270,6 +282,8 @@ test "AUR dispatcher forwards package stages and build progress" {
     const Capture = struct {
         info: ?InformationalArgs = null,
         progress_value: ?ProgressArgs = null,
+        operation_status: ?operation_api.StatusEvent = null,
+        operation_progress: ?operation_api.ProgressEvent = null,
 
         fn infoCallback(data: ?*anyopaque, args: InformationalArgs) void {
             const self: *@This() = @ptrCast(@alignCast(data));
@@ -280,11 +294,27 @@ test "AUR dispatcher forwards package stages and build progress" {
             const self: *@This() = @ptrCast(@alignCast(data));
             self.progress_value = args;
         }
+
+        fn operationCallback(data: ?*anyopaque, event: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data));
+            switch (event) {
+                .status => |status| self.operation_status = status,
+                .progress => |progress_value| self.operation_progress = progress_value,
+                else => {},
+            }
+        }
     };
 
+    var operation_context = operation_api.OperationContext.init(std.testing.allocator, std.testing.io);
+    defer operation_context.deinit();
     var dispatcher = Dispatcher.init(std.testing.allocator);
     defer dispatcher.deinit();
     var capture = Capture{};
+    _ = try operation_context.subscribe(.{ .function = Capture.operationCallback, .data = &capture });
+    var operation = operation_context.begin(.{ .backend = .aur, .kind = .install, .subject = "requested" });
+    defer operation.finish(.success);
+    dispatcher.setOperation(&operation);
+    defer dispatcher.setOperation(null);
     _ = try dispatcher.addInformationalHandler(.{ .function = Capture.infoCallback, .data = &capture });
     _ = try dispatcher.addProgressHandler(.{ .function = Capture.progressCallback, .data = &capture });
 
@@ -305,6 +335,11 @@ test "AUR dispatcher forwards package stages and build progress" {
     try std.testing.expectEqual(EventType.aur_build_start, capture.info.?.event_type);
     try std.testing.expectEqual(@as(?usize, 2), capture.info.?.total);
     try std.testing.expectEqual(@as(u8, 42), capture.progress_value.?.percent);
+    try std.testing.expectEqualStrings("demo", capture.operation_status.?.subject.?);
+    try std.testing.expectEqual(@as(?u64, 1), capture.operation_status.?.completed);
+    try std.testing.expectEqual(@as(?u64, 2), capture.operation_status.?.total);
+    try std.testing.expectEqualStrings("demo", capture.operation_progress.?.update.subject.?);
+    try std.testing.expectEqualStrings("compiling", capture.operation_progress.?.update.message.?);
 }
 
 test "AUR dispatcher returns provider selections" {

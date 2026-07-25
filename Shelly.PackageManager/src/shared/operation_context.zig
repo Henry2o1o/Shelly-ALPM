@@ -69,6 +69,7 @@ pub const Envelope = struct {
 };
 
 pub const ProgressUpdate = struct {
+    subject: ?[]const u8 = null,
     stage: ?[]const u8 = null,
     completed: ?u64 = null,
     total: ?u64 = null,
@@ -95,6 +96,9 @@ pub const StatusEvent = struct {
     message: []const u8,
     code: ?[]const u8 = null,
     native_code: ?i64 = null,
+    subject: ?[]const u8 = null,
+    completed: ?u64 = null,
+    total: ?u64 = null,
 };
 
 pub const ErrorEvent = struct {
@@ -572,12 +576,32 @@ pub const Operation = struct {
         code: ?[]const u8,
         native_code: ?i64,
     ) void {
+        self.statusWithContext(level, message, code, native_code, .{});
+    }
+
+    pub const StatusContext = struct {
+        subject: ?[]const u8 = null,
+        completed: ?u64 = null,
+        total: ?u64 = null,
+    };
+
+    pub fn statusWithContext(
+        self: *const Operation,
+        level: StatusLevel,
+        message: []const u8,
+        code: ?[]const u8,
+        native_code: ?i64,
+        status_context: StatusContext,
+    ) void {
         self.context.emit(.{ .status = .{
             .envelope = self.envelope,
             .level = level,
             .message = message,
             .code = code,
             .native_code = native_code,
+            .subject = status_context.subject,
+            .completed = status_context.completed,
+            .total = status_context.total,
         } });
     }
 
