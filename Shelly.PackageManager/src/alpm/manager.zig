@@ -413,13 +413,15 @@ pub const Manager = struct {
                 std.Io.Dir.cwd().deleteFile(self.io(), db_path) catch {};
                 std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
             }
-            const failed_items = std.mem.join(self.allocator, ", ", failed_dbs.items) catch return TransactionError.OutOfMemory;
-            defer self.allocator.free(failed_items);
-            const error_message = std.fmt.allocPrint(self.allocator, "Failed to verify signature for: {s}", .{failed_items}) catch return TransactionError.OutOfMemory;
-            defer self.allocator.free(error_message);
-            self.dispatcher.raiseError(.{ .message = error_message });
+            if (failed_dbs.items.len != 0) {
+                const failed_items = std.mem.join(self.allocator, ", ", failed_dbs.items) catch return TransactionError.OutOfMemory;
+                defer self.allocator.free(failed_items);
+                const error_message = std.fmt.allocPrint(self.allocator, "Failed to verify signature for: {s}", .{failed_items}) catch return TransactionError.OutOfMemory;
+                defer self.allocator.free(error_message);
+                self.dispatcher.raiseError(.{ .message = error_message });
 
-            return TransactionError.SyncDbFailed;
+                return TransactionError.SyncDbFailed;
+            }
         }
         try self.refresh();
     }
