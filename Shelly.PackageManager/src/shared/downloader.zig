@@ -339,6 +339,12 @@ pub const CoreDownloader = struct {
         if (self.isCancelled()) return DownloadError.Cancelled;
         const uri = std.Uri.parse(url) catch return DownloadError.InvalidUrl;
 
+        if (std.ascii.eqlIgnoreCase(uri.scheme, "file")) {
+            const path = parseFileUri(url) catch return DownloadError.InvalidUrl;
+            copyFile(self.io, path, destination_path) catch return DownloadError.FailedDownload;
+            return;
+        }
+
         var ims_buf: [64]u8 = undefined;
         var ims_header: [1]std.http.Header = undefined;
         var extra_headers: []const std.http.Header = &.{};
@@ -831,6 +837,36 @@ fn mapHeaderExchangeError(err: HeaderExchangeError) DownloadError {
     };
 }
 
+fn parseFileUri(uri: []const u8) DownloadError![]const u8 {
+    const prefix = "file://";
+    if (!std.mem.startsWith(u8, uri, prefix)) return DownloadError.InvalidUrl;
+
+    const path = uri[prefix.len..];
+    if (!std.fs.path.isAbsolute(path)) return DownloadError.InvalidUrl;
+    return path;
+}
+
+fn copyFile(
+    io: std.Io,
+    source_path: []const u8,
+    destination_path: []const u8,
+) !void {
+    var source = try std.Io.Dir.cwd().openFile(io, source_path, .{});
+    defer source.close(io);
+
+    var destination = try std.Io.Dir.cwd().createFile(io, destination_path, .{});
+    defer destination.close(io);
+
+    var read_buffer: [64 * 1024]u8 = undefined;
+    var reader = source.readerStreaming(io, &read_buffer);
+
+    var write_buffer: [64 * 1024]u8 = undefined;
+    var writer = destination.writerStreaming(io, &write_buffer);
+
+    _ = try reader.interface.streamRemaining(&writer.interface);
+    try writer.interface.flush();
+}
+
 // Unit tests for downloader.zig
 test "DownloadConfiguration.default() returns correct default values" {
     const config = DownloadConfiguration.default();
@@ -1088,6 +1124,58 @@ fn timeoutTestConfiguration() DownloadConfiguration {
         .max_retries = 0,
         .retry_delay_secs = 0,
     };
+}
+
+test "downloadToFile copies a file URI to the destination" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const io = std.testing.io;
+
+    {
+        var source_file = try temporary.dir.createFile(io, "nutcase.db", .{});
+        defer source_file.close(io);
+        try source_file.writeStreamingAll(io, "nutcase repository database");
+    }
+
+    var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const absolute_length = try temporary.dir.realPath(io, &absolute_buffer);
+    const root = absolute_buffer[0..absolute_length];
+    const source_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "nutcase.db" },
+    );
+    defer std.testing.allocator.free(source_path);
+    const destination_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "downloaded.db" },
+    );
+    defer std.testing.allocator.free(destination_path);
+    const file_uri = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "file://{s}",
+        .{source_path},
+    );
+    defer std.testing.allocator.free(file_uri);
+
+    var downloader = CoreDownloader.init(std.testing.allocator, io, .{
+        .max_retries = 0,
+    });
+    defer downloader.deinit();
+    downloader.quiet = true;
+
+    switch (downloader.downloadToFile(file_uri, destination_path, true)) {
+        .succes => {},
+        else => return error.ExpectedSuccessfulFileDownload,
+    }
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        destination_path,
+        std.testing.allocator,
+        .limited(1024),
+    );
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("nutcase repository database", contents);
 }
 
 test "response header timeout interrupts a server that never responds" {

@@ -400,12 +400,12 @@ pub const Manager = struct {
         if (failed) return TransactionError.UpdateFetchFailed;
 
         if (enforce_signature_verification) {
-            const failed_dbs: std.ArrayList([]const u8) = .empty;
+            var failed_dbs: std.ArrayList([]const u8) = .empty;
             defer failed_dbs.deinit(self.allocator);
             for (self.sync_dbs.items) |db| {
                 if (db.verify()) continue;
-                failed_dbs.append(self.allocator, db.name()) catch return TransactionError.OutOfMemory;
                 const name = db.name() orelse continue;
+                failed_dbs.append(self.allocator, name) catch return TransactionError.OutOfMemory;
                 const db_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ syncDirectory, name }) catch continue;
                 defer self.allocator.free(db_path);
                 const sig_path = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_path}) catch continue;
@@ -413,8 +413,8 @@ pub const Manager = struct {
                 std.Io.Dir.cwd().deleteFile(self.io(), db_path) catch {};
                 std.Io.Dir.cwd().deleteFile(self.io(), sig_path) catch {};
             }
-            const failed_items = std.mem.join(self.allocator, ", ", failed_dbs.items);
-            defer self.allocator.free(failed);
+            const failed_items = std.mem.join(self.allocator, ", ", failed_dbs.items) catch return TransactionError.OutOfMemory;
+            defer self.allocator.free(failed_items);
             const error_message = std.fmt.allocPrint(self.allocator, "Failed to verify signature for: {s}", .{failed_items}) catch return TransactionError.OutOfMemory;
             defer self.allocator.free(error_message);
             self.dispatcher.raiseError(.{ .message = error_message });
