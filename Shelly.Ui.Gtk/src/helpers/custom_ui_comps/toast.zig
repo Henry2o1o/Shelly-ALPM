@@ -3,6 +3,7 @@ const bindings = @import("Shelly_Ui_Gtk");
 const gtk = bindings.gtk;
 const gobject = bindings.gobject;
 const glib = bindings.glib;
+const translations = @import("../translations.zig");
 
 pub const ToastKind = enum {
     info,
@@ -126,7 +127,7 @@ pub const Toast = extern struct {
         gtk.Widget.addCssClass(close_button.as(gtk.Widget), "circular");
         gtk.Widget.addCssClass(close_button.as(gtk.Widget), "flat");
         gtk.Widget.setFocusOnClick(close_button.as(gtk.Widget), 0);
-        gtk.Widget.setTooltipText(close_button.as(gtk.Widget), "Dismiss");
+        gtk.Widget.setTooltipText(close_button.as(gtk.Widget), translations._("Dismiss"));
         gtk.Box.append(card, close_button.as(gtk.Widget));
         p.close_button = close_button;
 

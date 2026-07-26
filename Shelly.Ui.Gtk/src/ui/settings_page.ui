@@ -295,7 +295,7 @@
                                     </child>
                                     <child>
                                       <object class="GtkLabel">
-                                        <property name="label">:</property>
+                                        <property name="label" translatable="yes">:</property>
                                       </object>
                                     </child>
                                     <child>
@@ -656,7 +656,7 @@
                       <object class="GtkLabel" id="version_label">
                         <property name="margin-start">20</property>
                         <property name="margin-end">20</property>
-                        <property name="label">v0.0.0</property>
+                                    <property name="label" translatable="yes">v0.0.0</property>
                         <style>
                           <class name="dim-label"/>
                         </style>

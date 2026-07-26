@@ -12,6 +12,7 @@ const Package = @import("../models/packages.zig").Package;
 const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
+const translations = @import("../helpers/translations.zig");
 
 pub const PackageDetail = extern struct {
     parent_instance: Parent,
@@ -120,7 +121,7 @@ pub const PackageDetail = extern struct {
         }
         var buf: [256]u8 = undefined;
         gtk.Label.setLabel(p.name_label, c_string.cstr(&buf, name));
-        gtk.Label.setLabel(p.description_label, "Loading...");
+        gtk.Label.setLabel(p.description_label, translations._("Loading..."));
         clear_box(p.spec_box);
         clear_box(p.sections_box);
         gio.SimpleAction.setEnabled(p.reinstall_action, @intFromBool(is_installed));
@@ -218,23 +219,23 @@ pub const PackageDetail = extern struct {
         var sbuf: [32]u8 = undefined;
 
         clear_box(p.spec_box);
-        add_spec_row(p.spec_box, "Version", package.Version);
-        add_spec_row(p.spec_box, "Repository", package.Repository);
-        add_spec_row(p.spec_box, "Installed Size", SizeConverter.convert_null_term(&sbuf, package.InstalledSize));
-        if (package.DownloadSize > 0) add_spec_size(p.spec_box, "Download Size", package.DownloadSize);
-        if (package.BuildDate.len > 0) add_spec_row(p.spec_box, "Build Date", package.BuildDate);
-        if (package.InstallReason.len > 0) add_spec_row(p.spec_box, "Install Reason", package.InstallReason);
+        add_spec_row(p.spec_box, translations._("Version"), package.Version);
+        add_spec_row(p.spec_box, translations._("Repository"), package.Repository);
+        add_spec_row(p.spec_box, translations._("Installed Size"), SizeConverter.convert_null_term(&sbuf, package.InstalledSize));
+        if (package.DownloadSize > 0) add_spec_size(p.spec_box, translations._("Download Size"), package.DownloadSize);
+        if (package.BuildDate.len > 0) add_spec_row(p.spec_box, translations._("Build Date"), package.BuildDate);
+        if (package.InstallReason.len > 0) add_spec_row(p.spec_box, translations._("Install Reason"), package.InstallReason);
 
         clear_box(p.sections_box);
         const alloc = (p.arena orelse return).allocator();
 
-        add_spec_list(p.spec_box, alloc, "Licenses", package.Licenses);
-        add_spec_list(p.spec_box, alloc, "Provides", package.Provides);
-        add_spec_list(p.spec_box, alloc, "Conflicts", package.Conflicts);
+        add_spec_list(p.spec_box, alloc, translations._("Licenses"), package.Licenses);
+        add_spec_list(p.spec_box, alloc, translations._("Provides"), package.Provides);
+        add_spec_list(p.spec_box, alloc, translations._("Conflicts"), package.Conflicts);
 
-        add_list_section(p.sections_box, self, "Depends", package.Depends);
-        add_list_section(p.sections_box, self, "Optional Depends", package.OptDepends);
-        add_list_section(p.sections_box, self, "Required By", package.RequiredBy);
+        add_list_section(p.sections_box, self, translations._("Depends"), package.Depends);
+        add_list_section(p.sections_box, self, translations._("Optional Depends"), package.OptDepends);
+        add_list_section(p.sections_box, self, translations._("Required By"), package.RequiredBy);
     }
 
     fn add_spec_row(box: *gtk.Box, label: []const u8, value: []const u8) void {
@@ -299,7 +300,7 @@ pub const PackageDetail = extern struct {
         if (items.len == 0) return;
 
         var buf: [64]u8 = undefined;
-        const header = std.fmt.bufPrintZ(&buf, "{s} ({d})", .{ title, items.len }) catch "Section";
+        const header = std.fmt.bufPrintZ(&buf, "{s} ({d})", .{ title, items.len }) catch translations._("Section");
         const expander = gtk.Expander.new(header);
         gtk.Expander.setExpanded(expander, 0);
         gtk.Widget.addCssClass(expander.as(gtk.Widget), "spec-expander");
@@ -438,7 +439,7 @@ pub const PackageDetail = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Reinstalling package",
+                .title = translations._("Reinstalling package"),
                 .argv = argv.items,
                 .packages = &.{&p.pending_name},
                 .on_complete = &on_reinstall_complete,
@@ -459,7 +460,7 @@ pub const PackageDetail = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Adding to package ignore",
+                .title = translations._("Adding to package ignore"),
                 .argv = argv.items,
                 .packages = &.{&p.pending_name},
                 .on_complete = &on_reinstall_complete,
@@ -480,7 +481,7 @@ pub const PackageDetail = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Adding to package to hold",
+                .title = translations._("Adding to package to hold"),
                 .argv = argv.items,
                 .packages = &.{&p.pending_name},
                 .on_complete = &on_reinstall_complete,
@@ -500,7 +501,7 @@ pub const PackageDetail = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Making Package Explicit",
+                .title = translations._("Making Package Explicit"),
                 .argv = argv.items,
                 .packages = &.{&p.pending_name},
                 .on_complete = &on_reinstall_complete,
@@ -520,7 +521,7 @@ pub const PackageDetail = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Making Package Dependency",
+                .title = translations._("Making Package Dependency"),
                 .argv = argv.items,
                 .packages = &.{&p.pending_name},
                 .on_complete = &on_reinstall_complete,

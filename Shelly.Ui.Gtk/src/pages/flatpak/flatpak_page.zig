@@ -9,6 +9,7 @@ const FlatpakRemoveView = @import("flatpak_remove_view.zig").FlatpakRemoveView;
 const FlatpakRemotesView = @import("flatpak_remotes_view.zig").FlatpakRemotesView;
 const FlatpakInstallLocalView = @import("flatpak_install_local_view.zig").FlatpakInstallLocalView;
 const Category = @import("../../models/flatpak.zig").Category;
+const translations = @import("../../helpers/translations.zig");
 
 pub const FlatpakPage = extern struct {
     parent_instance: Parent,
@@ -124,8 +125,8 @@ pub const FlatpakPage = extern struct {
         const category: Category = @enumFromInt(index);
 
         const header_text: ?[:0]const u8 = switch (category) {
-            .@"All Applications" => "Discover",
-            .@"Audio & Video" => "Categories",
+            .@"All Applications" => translations._("Discover"),
+            .@"Audio & Video" => translations._("Categories"),
             else => null,
         };
 
@@ -191,7 +192,7 @@ pub const FlatpakPage = extern struct {
             gtk.Widget.setValign(icon.as(gtk.Widget), .center);
             gtk.Box.append(box, icon.as(gtk.Widget));
 
-            const label = gtk.Label.new(app.toDisplayString());
+            const label = gtk.Label.new(category_label(app));
             gtk.Widget.setHalign(label.as(gtk.Widget), .start);
             gtk.Widget.setHexpand(label.as(gtk.Widget), 1);
             gtk.Label.setXalign(label, 0);
@@ -221,6 +222,26 @@ pub const FlatpakPage = extern struct {
             .Science => "applications-science-symbolic",
             .System => "applications-system-symbolic",
             .Utility => "applications-utilities-symbolic",
+        };
+    }
+
+    fn category_label(category: Category) [:0]const u8 {
+        return switch (category) {
+            .@"All Applications" => translations._("All Applications"),
+            .Recommended => translations._("Recommended"),
+            .@"Most Wanted" => translations._("Most Wanted"),
+            .@"Recently Added" => translations._("Recently Added"),
+            .@"Recently Updated" => translations._("Recently Updated"),
+            .@"Audio & Video" => translations._("Audio & Video"),
+            .Development => translations._("Development"),
+            .Education => translations._("Education"),
+            .Game => translations._("Game"),
+            .Graphics => translations._("Graphics"),
+            .Network => translations._("Network"),
+            .Office => translations._("Office"),
+            .Science => translations._("Science"),
+            .System => translations._("System"),
+            .Utility => translations._("Utility"),
         };
     }
 

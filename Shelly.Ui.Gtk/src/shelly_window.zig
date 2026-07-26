@@ -13,6 +13,7 @@ const SettingsPage = @import("pages/settings_page.zig").SettingsPage;
 const TransactionPage = @import("pages/transaction_page.zig").TransactionPage;
 const TransactionRequest = @import("pages/transaction_page.zig").TransactionRequest;
 const runtime = @import("services/runtime.zig");
+const translations = @import("helpers/translations.zig");
 
 const NavButton = struct {
     button: *gtk.Button,
@@ -175,11 +176,11 @@ pub const ShellyWindow = extern struct {
         _ = gtk.Button.signals.clicked.connect(chevron, *ShellyWindow, &on_chevron, self, .{});
         gtk.Box.append(rail, chevron.as(gtk.Widget));
 
-        add_nav_button(self, rail, stack, "package", PackagePage.icon_name, PackagePage.title);
-        add_nav_button(self, rail, stack, "aur", AurPage.icon_name, AurPage.title);
-        add_nav_button(self, rail, stack, "flatpak", FlatpakPage.icon_name, FlatpakPage.title);
-        add_nav_button(self, rail, stack, "appimage", AppImagePage.icon_name, AppImagePage.title);
-        add_nav_button(self, rail, stack, "update", UpdatePage.icon_name, UpdatePage.title);
+        add_nav_button(self, rail, stack, "package", PackagePage.icon_name, translations._("Package"));
+        add_nav_button(self, rail, stack, "aur", AurPage.icon_name, translations._("AUR"));
+        add_nav_button(self, rail, stack, "flatpak", FlatpakPage.icon_name, translations._("Flatpak"));
+        add_nav_button(self, rail, stack, "appimage", AppImagePage.icon_name, translations._("AppImage"));
+        add_nav_button(self, rail, stack, "update", UpdatePage.icon_name, translations._("Update"));
 
         const sep = gtk.Box.new(.horizontal, 0);
         gtk.Widget.setVexpand(sep.as(gtk.Widget), 1);
@@ -193,12 +194,12 @@ pub const ShellyWindow = extern struct {
 
         const menu_box = gtk.Box.new(.vertical, 4);
 
-        const utils_btn = gtk.Button.newWithLabel("Utilities");
+        const utils_btn = gtk.Button.newWithLabel(translations._("Utilities"));
         gtk.Widget.addCssClass(utils_btn.as(gtk.Widget), "flat");
         //    _ = gtk.Button.signals.clicked.connect(utils_btn, *ShellyWindow, &on_utils, self, .{});
         gtk.Box.append(menu_box, utils_btn.as(gtk.Widget));
 
-        const sp_btn = gtk.Button.newWithLabel("Settings");
+        const sp_btn = gtk.Button.newWithLabel(translations._("Settings"));
         gtk.Widget.addCssClass(sp_btn.as(gtk.Widget), "flat");
         _ = gtk.Button.signals.clicked.connect(sp_btn, *ShellyWindow, &on_settings, self, .{});
         gtk.Box.append(menu_box, sp_btn.as(gtk.Widget));
@@ -283,27 +284,27 @@ pub const ShellyWindow = extern struct {
         const stack = self.private().content_stack;
 
         const pp = PackagePage.new();
-        const pp_page = gtk.Stack.addTitled(stack, pp.as(gtk.Widget), "package", PackagePage.title);
+        const pp_page = gtk.Stack.addTitled(stack, pp.as(gtk.Widget), "package", translations._("Package"));
         gtk.StackPage.setIconName(pp_page, PackagePage.icon_name);
 
         const fp = FlatpakPage.new();
-        const fp_page = gtk.Stack.addTitled(stack, fp.as(gtk.Widget), "flatpak", FlatpakPage.title);
+        const fp_page = gtk.Stack.addTitled(stack, fp.as(gtk.Widget), "flatpak", translations._("Flatpak"));
         gtk.StackPage.setIconName(fp_page, FlatpakPage.icon_name);
 
         const ai = AppImagePage.new();
-        const ai_page = gtk.Stack.addTitled(stack, ai.as(gtk.Widget), "appimage", AppImagePage.title);
+        const ai_page = gtk.Stack.addTitled(stack, ai.as(gtk.Widget), "appimage", translations._("AppImage"));
         gtk.StackPage.setIconName(ai_page, AppImagePage.icon_name);
 
         const au = AurPage.new();
-        const au_page = gtk.Stack.addTitled(stack, au.as(gtk.Widget), "aur", AurPage.title);
+        const au_page = gtk.Stack.addTitled(stack, au.as(gtk.Widget), "aur", translations._("AUR"));
         gtk.StackPage.setIconName(au_page, AurPage.icon_name);
 
         const up = UpdatePage.new();
-        const up_page = gtk.Stack.addTitled(stack, up.as(gtk.Widget), "update", UpdatePage.title);
+        const up_page = gtk.Stack.addTitled(stack, up.as(gtk.Widget), "update", translations._("Update"));
         gtk.StackPage.setIconName(up_page, UpdatePage.icon_name);
 
         const sp = SettingsPage.new();
-        const sp_page = gtk.Stack.addTitled(stack, sp.as(gtk.Widget), "settings", SettingsPage.title);
+        const sp_page = gtk.Stack.addTitled(stack, sp.as(gtk.Widget), "settings", translations._("Settings"));
         gtk.StackPage.setIconName(sp_page, SettingsPage.icon_name);
     }
 

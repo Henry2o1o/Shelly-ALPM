@@ -3,6 +3,7 @@ const bindings = @import("Shelly_Ui_Gtk");
 const gtk = bindings.gtk;
 const gobject = bindings.gobject;
 const support = @import("../../pages/support.zig");
+const translations = @import("../../helpers/translations.zig");
 
 pub const PermissionsDialog = extern struct {
     parent_instance: Parent,
@@ -98,14 +99,14 @@ pub const PermissionsDialog = extern struct {
     }
 
     fn label_for_category(category: []const u8) [:0]const u8 {
-        if (std.mem.eql(u8, category, "filesystems")) return "Filesystem";
-        if (std.mem.eql(u8, category, "devices")) return "Devices";
-        if (std.mem.eql(u8, category, "sockets")) return "Sockets";
-        if (std.mem.eql(u8, category, "shared")) return "Shared";
-        if (std.mem.eql(u8, category, "unset-environment")) return "Environment";
-        if (std.mem.eql(u8, category, "session-bus")) return "Session bus";
-        if (std.mem.eql(u8, category, "system-bus")) return "System bus";
-        return "Other";
+        if (std.mem.eql(u8, category, "filesystems")) return translations._("Filesystem");
+        if (std.mem.eql(u8, category, "devices")) return translations._("Devices");
+        if (std.mem.eql(u8, category, "sockets")) return translations._("Sockets");
+        if (std.mem.eql(u8, category, "shared")) return translations._("Shared");
+        if (std.mem.eql(u8, category, "unset-environment")) return translations._("Environment");
+        if (std.mem.eql(u8, category, "session-bus")) return translations._("Session bus");
+        if (std.mem.eql(u8, category, "system-bus")) return translations._("System bus");
+        return translations._("Other");
     }
 
     fn make_row(perm: Permission) *gtk.Widget {

@@ -18,6 +18,7 @@ const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const ViewType = @import("../models/shelly_config.zig").ViewType;
 const RecommendCategory = @import("../models/recommendation.zig").RecommendCategory;
 const recommendations = @import("../services/recommendations.zig");
+const translations = @import("../helpers/translations.zig");
 
 const Event = @import("../services/shelly_operation.zig").Event;
 const PackageDetail = @import("package_detail.zig").PackageDetail;
@@ -233,7 +234,7 @@ pub const PackagePage = extern struct {
                 gtk.Box.append(box, label.as(gtk.Widget));
 
                 const installed_icon = gtk.Image.newFromIconName("object-select-symbolic");
-                gtk.Widget.setTooltipText(installed_icon.as(gtk.Widget), "Installed");
+                gtk.Widget.setTooltipText(installed_icon.as(gtk.Widget), translations._("Installed"));
                 gtk.Box.append(box, installed_icon.as(gtk.Widget));
 
                 gtk.ColumnViewCell.setChild(cell, box.as(gtk.Widget));
@@ -381,7 +382,7 @@ pub const PackagePage = extern struct {
                 gtk.Widget.setValign(installed_check.as(gtk.Widget), .center);
                 gtk.Widget.setHalign(installed_check.as(gtk.Widget), .start);
                 gtk.Widget.setHexpand(installed_check.as(gtk.Widget), 0);
-                gtk.Widget.setTooltipText(installed_check.as(gtk.Widget), "Package is already installed");
+                gtk.Widget.setTooltipText(installed_check.as(gtk.Widget), translations._("Package is already installed"));
 
                 const title_grid = gtk.Grid.new();
                 gtk.Grid.setColumnSpacing(title_grid, 4);
@@ -815,9 +816,9 @@ pub const PackagePage = extern struct {
             p.recommend_idx = std.math.maxInt(u32);
 
             const strings = gtk.StringList.new(null);
-            gtk.StringList.append(strings, "Any");
+            gtk.StringList.append(strings, translations._("Any"));
             if (result.recommend_categories.len > 0) {
-                gtk.StringList.append(strings, "Recommendations");
+                gtk.StringList.append(strings, translations._("Recommendations"));
                 p.recommend_idx = 1;
 
                 const alloc = result.arena.allocator();
@@ -958,7 +959,7 @@ pub const PackagePage = extern struct {
             const row_btn = gtk.Button.new();
             gtk.Widget.addCssClass(row_btn.as(gtk.Widget), "flat");
             gtk.Widget.setHexpand(row_btn.as(gtk.Widget), 1);
-            gtk.Widget.setTooltipText(row_btn.as(gtk.Widget), "Remove from selection");
+            gtk.Widget.setTooltipText(row_btn.as(gtk.Widget), translations._("Remove from selection"));
 
             const row = gtk.Box.new(.horizontal, 8);
             gtk.Widget.setHexpand(row.as(gtk.Widget), 1);
@@ -971,7 +972,7 @@ pub const PackagePage = extern struct {
             gtk.Label.setMaxWidthChars(name_label, 24);
             gtk.Box.append(row, name_label.as(gtk.Widget));
 
-            const tag = gtk.Label.new(if (installed) "remove" else "install");
+            const tag = gtk.Label.new(if (installed) translations._("remove") else translations._("install"));
             gtk.Widget.addCssClass(tag.as(gtk.Widget), "caption");
             gtk.Widget.addCssClass(tag.as(gtk.Widget), if (installed) "error" else "success");
             gtk.Widget.setHalign(tag.as(gtk.Widget), .end);
@@ -992,7 +993,7 @@ pub const PackagePage = extern struct {
         }
 
         if (install_count == 0 and remove_count == 0) {
-            const empty = gtk.Label.new("No packages selected");
+            const empty = gtk.Label.new(translations._("No packages selected"));
             gtk.Widget.addCssClass(empty.as(gtk.Widget), "dim-label");
             gtk.Widget.setHalign(empty.as(gtk.Widget), .start);
             gtk.Box.append(p.cart_items_box, empty.as(gtk.Widget));
@@ -1000,27 +1001,27 @@ pub const PackagePage = extern struct {
 
         const total = install_count + remove_count;
         var cart_buf: [32]u8 = undefined;
-        gtk.Label.setLabel(p.cart_label, std.fmt.bufPrintZ(&cart_buf, "{d} Selected", .{total}) catch "0 Selected");
+        gtk.Label.setLabel(p.cart_label, std.fmt.bufPrintZ(&cart_buf, "{d} {s}", .{ total, translations._("Selected") }) catch translations._("0 Selected"));
 
         const btn = p.install_button.as(gtk.Widget);
         gtk.Widget.removeCssClass(btn, "suggested-action");
         gtk.Widget.removeCssClass(btn, "destructive-action");
 
         if (total == 0) {
-            gtk.Button.setLabel(p.install_button, "Install Selected");
+            gtk.Button.setLabel(p.install_button, translations._("Install Selected"));
             gtk.Widget.setSensitive(btn, 0);
             gtk.Widget.setTooltipText(btn, null);
         } else if (install_count > 0 and remove_count > 0) {
-            gtk.Button.setLabel(p.install_button, "Mixed selection");
+            gtk.Button.setLabel(p.install_button, translations._("Mixed selection"));
             gtk.Widget.setSensitive(btn, 0);
-            gtk.Widget.setTooltipText(btn, "Select only installed packages to remove, or only available ones to install.");
+            gtk.Widget.setTooltipText(btn, translations._("Select only installed packages to remove, or only available ones to install."));
         } else if (remove_count > 0) {
-            gtk.Button.setLabel(p.install_button, "Remove Selected ");
+            gtk.Button.setLabel(p.install_button, translations._("Remove Selected"));
             gtk.Widget.setSensitive(btn, 1);
             gtk.Widget.addCssClass(btn, "destructive-action");
             gtk.Widget.setTooltipText(btn, null);
         } else {
-            gtk.Button.setLabel(p.install_button, "Install Selected ");
+            gtk.Button.setLabel(p.install_button, translations._("Install Selected"));
             gtk.Widget.setSensitive(btn, 1);
             gtk.Widget.addCssClass(btn, "suggested-action");
             gtk.Widget.setTooltipText(btn, null);
@@ -1123,12 +1124,12 @@ pub const PackagePage = extern struct {
 
     fn confirm_remove(self: *Self) void {
         const dialog = ConfirmDialog.new(
-            "Remove Packages",
-            "Remove the selected packages?",
+            translations._("Remove Packages"),
+            translations._("Remove the selected packages?"),
             &on_remove_response,
             self,
         );
-        dialog.setButtons("Remove", "Cancel");
+        dialog.setButtons(translations._("Remove"), translations._("Cancel"));
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.showLockout(dialog.as(gtk.Widget));
         }
@@ -1163,7 +1164,7 @@ pub const PackagePage = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Removing packages",
+                .title = translations._("Removing packages"),
                 .argv = argv.items,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,
@@ -1201,7 +1202,7 @@ pub const PackagePage = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Installing packages",
+                .title = translations._("Installing packages"),
                 .argv = argv.items,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,
