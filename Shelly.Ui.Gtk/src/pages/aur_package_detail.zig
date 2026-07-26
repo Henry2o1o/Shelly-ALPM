@@ -21,7 +21,7 @@ pub const PackageDetail = extern struct {
 
     const Private = struct {
         content_box: *gtk.Box,
-        icon: *gtk.Image,
+
         name_label: *gtk.Label,
         description_label: *gtk.Label,
         spec_box: *gtk.Box,
@@ -35,7 +35,7 @@ pub const PackageDetail = extern struct {
     };
 
     pub const getGObjectType = gobject.ext.defineClass(Self, .{
-        .name = "ShellyPackageDetail",
+        .name = "ShellyAurPackageDetail",
         .instanceInit = &init,
         .classInit = &Class.init,
         .parent_class = &Class.parent,
@@ -53,7 +53,7 @@ pub const PackageDetail = extern struct {
     fn init(self: *Self, _: *Class) callconv(.c) void {
         gtk.Widget.initTemplate(self.as(gtk.Widget));
         const p = self.priv();
-        p.generation = 0;
+
         p.arena = null;
 
         p.pending_len = 0;
@@ -68,37 +68,78 @@ pub const PackageDetail = extern struct {
         return gobject.ext.newInstance(Self, .{});
     }
 
-    pub fn showPackage(self: *Self, package: AurPackage) void {
-        self.populate(package);
+    pub fn showPackage(self: *Self, package: *const AurPackage) void {
+        const p = self.priv();
+
+        if (p.arena) |old| {
+            old.deinit();
+            std.heap.c_allocator.destroy(old);
+        }
+
+        const arena_ptr = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
+        arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        p.arena = arena_ptr;
+
+        self.populate(package.*);
     }
 
     fn populate(self: *Self, package: AurPackage) void {
         const p = self.priv();
         var buf: [512]u8 = undefined;
+        var time_buf: [64]u8 = undefined;
 
         gtk.Label.setLabel(p.name_label, c_string.cstr(&buf, package.Name));
         p.name_label.setSelectable(1);
-        gtk.Label.setLabel(p.description_label, c_string.cstr(&buf, package.Description));
+        gtk.Label.setLabel(p.description_label, if (package.Description) |desc| c_string.cstr(&buf, desc) else "");
 
         clear_box(p.spec_box);
-        add_spec_row(p.spec_box, "Version", package.Version);
-        add_spec_row(p.spec_box, "Votes", package.NumVotes);
-        add_spec_row(p.spec_box, "Popularity", package.Popularity);
-        add_spec_row(p.spec_box, "Maintainer", package.Maintainer);
-        add_spec_row(p.spec_box, "Last Modified", package.LastModified);
-        add_spec_row(p.spec_box, "First Submitted", package.FirstSubmitted);
-        add_spec_row(p.spec_box, "License", package.License);
-
         clear_box(p.sections_box);
+        add_spec_row(p.spec_box, "Version", package.Version);
+        add_spec_row(p.spec_box, "Votes", votes_text(&buf, package.NumVotes));
+        add_spec_row(p.spec_box, "Popularity", popularity_text(&buf, package.Popularity));
 
-        add_list_section(p.sections_box, self, "Depends", package.Depends);
-        add_list_section(p.sections_box, self, "Optional Depends", package.OptDepends);
-        add_list_section(p.sections_box, self, "Required By", package.RequiredBy);
+        add_spec_row(p.spec_box, "Maintainer", if (package.Maintainer) |maintainer| c_string.cstr(&buf, maintainer) else "");
+        add_spec_row(p.spec_box, "Last Modified", c_string.cstr(&buf, formatIsoDateTime(&time_buf, package.LastModified) catch ""));
+        add_spec_row(p.spec_box, "First Submitted", c_string.cstr(&buf, formatIsoDateTime(&time_buf, package.FirstSubmitted) catch ""));
+
+        const alloc = (p.arena orelse return).allocator();
+        add_spec_list(p.spec_box, alloc, "Licenses", if (package.License) |license| license else &.{});
+
+        add_list_section(p.sections_box, self, "Depends", if (package.Depends) |deps| deps else &.{});
+        add_list_section(p.sections_box, self, "Optional Depends", if (package.OptDepends) |optDeps| optDeps else &.{});
+        add_list_section(p.sections_box, self, "Make Depends", if (package.MakeDepends) |make| make else &.{});
     }
 
-    fn add_spec_row(box: *gtk.Box, label: []const u8, value: []const u8) void {
+    fn votes_text(buf: []u8, votes: u32) [:0]const u8 {
+        return std.fmt.bufPrintZ(buf, "{d}", .{votes}) catch "";
+    }
+
+    fn popularity_text(buf: []u8, popularity: f64) [:0]const u8 {
+        return std.fmt.bufPrintZ(buf, "{d:.2}", .{popularity}) catch "";
+    }
+
+    fn formatIsoDateTime(buffer: []u8, seconds: i64) ![]const u8 {
+        if (seconds < 0) return std.fmt.bufPrint(buffer, "1970-01-01T00:00:00", .{});
+        const epoch: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
+        const year_day = epoch.getEpochDay().calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
+        const day_seconds = epoch.getDaySeconds();
+        return std.fmt.bufPrint(
+            buffer,
+            "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}",
+            .{
+                year_day.year,
+                month_day.month.numeric(),
+                month_day.day_index + 1,
+                day_seconds.getHoursIntoDay(),
+                day_seconds.getMinutesIntoHour(),
+                day_seconds.getSecondsIntoMinute(),
+            },
+        );
+    }
+
+    fn add_spec_row(box: *gtk.Box, label: []const u8, value: [:0]const u8) void {
         var lbuf: [64]u8 = undefined;
-        var vbuf: [512]u8 = undefined;
         const row = gtk.Box.new(.horizontal, 8);
         gtk.Widget.setMarginTop(row.as(gtk.Widget), 10);
         gtk.Widget.setMarginBottom(row.as(gtk.Widget), 10);
@@ -108,7 +149,7 @@ pub const PackageDetail = extern struct {
         gtk.Label.setXalign(key, 0);
         gtk.Widget.addCssClass(key.as(gtk.Widget), "dim-label");
         gtk.Box.append(row, key.as(gtk.Widget));
-        const val = gtk.Label.new(c_string.cstr(&vbuf, value));
+        const val = gtk.Label.new(value);
         gtk.Widget.setHalign(val.as(gtk.Widget), .end);
         gtk.Widget.setHexpand(val.as(gtk.Widget), 1);
         gtk.Label.setXalign(val, 1);
@@ -118,7 +159,7 @@ pub const PackageDetail = extern struct {
         gtk.Box.append(box, row.as(gtk.Widget));
     }
 
-    fn add_spec_list(box: *gtk.Box, allocator: std.mem.Allocator, label: []const u8, items: []const []const u8) void {
+    fn add_spec_list(box: *gtk.Box, allocator: std.mem.Allocator, label: []const u8, items: []const [:0]const u8) void {
         if (items.len == 0) return;
         var joined: std.ArrayListUnmanaged(u8) = .empty;
         defer joined.deinit(allocator);
@@ -154,7 +195,7 @@ pub const PackageDetail = extern struct {
         gtk.Box.append(box, row.as(gtk.Widget));
     }
 
-    fn add_list_section(box: *gtk.Box, page: *PackageDetail, title: []const u8, items: []const []const u8) void {
+    fn add_list_section(box: *gtk.Box, page: *PackageDetail, title: []const u8, items: []const [:0]const u8) void {
         if (items.len == 0) return;
 
         var buf: [64]u8 = undefined;
@@ -176,8 +217,8 @@ pub const PackageDetail = extern struct {
                 gtk.Widget.addCssClass(row_btn.as(gtk.Widget), "flat");
                 gtk.Widget.addCssClass(row_btn.as(gtk.Widget), "dep-row");
                 gtk.Widget.setHalign(row_btn.as(gtk.Widget), .fill);
-                var ibuf: [256]u8 = undefined;
-                const lbl = gtk.Label.new(c_string.cstr(&ibuf, item));
+
+                const lbl = gtk.Label.new(item);
                 gtk.Widget.setHalign(lbl.as(gtk.Widget), .start);
                 gtk.Label.setXalign(lbl, 0);
                 gtk.Label.setEllipsize(lbl, .end);
@@ -186,11 +227,9 @@ pub const PackageDetail = extern struct {
                 const name_owned = std.heap.c_allocator.dupeZ(u8, dep_name) catch continue;
                 gobject.Object.setDataFull(row_btn.as(gobject.Object), "dep-name", name_owned.ptr, &free_dep_name);
                 gobject.Object.setData(row_btn.as(gobject.Object), "page", page);
-                _ = gtk.Button.signals.clicked.connect(row_btn, ?*anyopaque, &on_dep_clicked, null, .{});
                 gtk.Box.append(list, row_btn.as(gtk.Widget));
             } else {
-                var ibuf: [256]u8 = undefined;
-                const lbl = gtk.Label.new(c_string.cstr(&ibuf, item));
+                const lbl = gtk.Label.new(item);
                 gtk.Widget.setHalign(lbl.as(gtk.Widget), .start);
                 gtk.Label.setXalign(lbl, 0);
                 gtk.Label.setEllipsize(lbl, .end);
@@ -221,6 +260,20 @@ pub const PackageDetail = extern struct {
         std.heap.c_allocator.free(std.mem.span(p));
     }
 
+    fn strip_version(item: []const u8) []const u8 {
+        const desc_end = std.mem.indexOfScalar(u8, item, ':') orelse item.len;
+        var name = std.mem.trim(u8, item[0..desc_end], " ");
+
+        const ops = [_][]const u8{ ">=", "<=", "=", ">", "<" };
+        var cut: usize = name.len;
+        for (ops) |op| {
+            if (std.mem.indexOf(u8, name, op)) |idx| {
+                if (idx < cut) cut = idx;
+            }
+        }
+        return std.mem.trim(u8, name[0..cut], " ");
+    }
+
     fn clear_box(box: *gtk.Box) void {
         while (gtk.Widget.getFirstChild(box.as(gtk.Widget))) |child| {
             gtk.Box.remove(box, child);
@@ -240,7 +293,6 @@ pub const PackageDetail = extern struct {
     }
 
     const template_children = .{
-        .{ "icon", @offsetOf(Private, "icon") },
         .{ "name_label", @offsetOf(Private, "name_label") },
         .{ "description_label", @offsetOf(Private, "description_label") },
         .{ "spec_box", @offsetOf(Private, "spec_box") },
