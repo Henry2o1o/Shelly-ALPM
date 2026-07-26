@@ -12,6 +12,7 @@ const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const AurPackage = @import("../models/aur_package.zig").AurPackage;
 const runtime = @import("../services/runtime.zig");
 const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
+const AurPackageDetail = @import("aur_package_detail.zig").PackageDetail;
 
 pub const AurPage = extern struct {
     parent_instance: Parent,
@@ -44,6 +45,11 @@ pub const AurPage = extern struct {
         version_column: *gtk.ColumnViewColumn,
         chroot_check: *gtk.CheckButton,
         run_checks_check: *gtk.CheckButton,
+        views_and_detail_hbox: *gtk.Box,
+        detail_revealer: *gtk.Revealer,
+        aur_detail: *AurPackageDetail,
+        show_detail_pane_check: *gtk.CheckButton,
+        show_detail_pane: bool,
         arena: ?*std.heap.ArenaAllocator,
         generation: u64,
         loaded: bool,
@@ -114,9 +120,17 @@ pub const AurPage = extern struct {
         gtk.ColumnViewColumn.setFactory(p.check_column, check_factory.as(gtk.ListItemFactory));
 
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
+        _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
 
         _ = gtk.CheckButton.signals.toggled.connect(p.chroot_check, *Self, &on_chroot_toggled, self, .{});
         _ = gtk.CheckButton.signals.toggled.connect(p.run_checks_check, *Self, &on_run_checks_toggled, self, .{});
+
+        const detail = AurPackageDetail.new();
+        p.aur_detail = detail;
+        p.show_detail_pane = true;
+        gtk.Revealer.setChild(p.detail_revealer, detail.as(gtk.Widget));
+
+        _ = gtk.CheckButton.signals.toggled.connect(p.show_detail_pane_check, *Self, &on_detail_pane, self, .{});
 
         self.update_selection_ui();
         support.connectLifecycle(Self, self);
@@ -215,6 +229,19 @@ pub const AurPage = extern struct {
 
     fn popularity_text(buf: []u8, pkg: *const AurPackageObject) [:0]const u8 {
         return std.fmt.bufPrintZ(buf, "{d:.2}", .{pkg.getPopularity()}) catch "";
+    }
+
+    fn on_selection_changed(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const obj = gtk.SingleSelection.getSelectedItem(p.selection) orelse {
+            gtk.Revealer.setRevealChild(p.detail_revealer, 0);
+            return;
+        };
+        const pkg_obj = gobject.ext.cast(AurPackageObject, obj) orelse return;
+        p.aur_detail.showPackage(pkg_obj.getPackage());
+        if (p.show_detail_pane) {
+            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
+        }
     }
 
     fn setup_number_column(
@@ -358,21 +385,37 @@ pub const AurPage = extern struct {
 
         const page_ptr = gobject.Object.getData(check.as(gobject.Object), "page") orelse return;
         const self: *Self = @ptrCast(@alignCast(page_ptr));
+        const p = self.priv();
+
+        p.aur_detail.showPackage(pkg.getPackage());
+        if (p.show_detail_pane) {
+            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
+        }
+
         self.update_selection_ui();
     }
 
     fn on_row_activated(_: *gtk.ColumnView, position: c_uint, self: *Self) callconv(.c) void {
         const p = self.priv();
 
-        const obj = gio.ListModel.getObject(p.selection.as(gio.ListModel), position) orelse return;
-        defer obj.unref();
-        const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
+        _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), position, @intCast(position + 1));
 
-        const new_state = !pkg.isSelected();
-        pkg.setSelected(new_state);
-        if (p.check_map.get(pkg)) |check| set_sync_active(check, new_state);
+        const obj = gtk.SingleSelection.getSelectedItem(p.selection) orelse return;
+        const pkg_obj = gobject.ext.cast(AurPackageObject, obj) orelse return;
+        pkg_obj.setSelected(true);
 
-        self.update_selection_ui();
+        p.aur_detail.showPackage(pkg_obj.getPackage());
+        if (p.show_detail_pane) {
+            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
+        }
+    }
+
+    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_detail_pane = active;
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active) 0 else 1);
     }
 
     fn selection_count(self: *Self) u32 {
@@ -635,6 +678,15 @@ pub const AurPage = extern struct {
         page.set_state(.results);
         page.update_selection_ui();
 
+        page.set_state(.results);
+        page.update_selection_ui();
+        page.set_state(.results);
+        page.update_selection_ui();
+
+        if (result.packages.len > 0) {
+            _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), 0, 1);
+        }
+
         finish(result);
         return 0;
     }
@@ -804,12 +856,16 @@ pub const AurPage = extern struct {
         .{ "version_column", @offsetOf(Private, "version_column") },
         .{ "chroot_check", @offsetOf(Private, "chroot_check") },
         .{ "run_checks_check", @offsetOf(Private, "run_checks_check") },
+        .{ "views_and_detail_hbox", @offsetOf(Private, "views_and_detail_hbox") },
+        .{ "detail_revealer", @offsetOf(Private, "detail_revealer") },
+        .{ "show_detail_pane_check", @offsetOf(Private, "show_detail_pane_check") },
     };
 
     const template_callbacks = .{
         .{ "on_search_activate", &on_search_activate },
         .{ "on_installed_toggled", &on_installed_toggled },
         .{ "on_install_clicked", &on_install_clicked },
+        .{ "on_detail_pane", &on_detail_pane },
     };
 
     pub const Class = extern struct {
