@@ -378,6 +378,8 @@ fn writeAlpmProgressFrame(
     try json.write(progressType(progress));
     try json.objectField("Percent");
     try json.write(percent);
+    try json.objectField("Stage");
+    try json.write(progress.update.stage);
     try json.objectField("Message");
     try json.write(message);
     try json.objectField("Source");
