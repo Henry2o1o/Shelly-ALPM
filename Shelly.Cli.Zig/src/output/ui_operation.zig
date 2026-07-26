@@ -322,7 +322,7 @@ test "UI operation reporter preserves percentages for every progress frame shape
     defer _ = operation_context.unsubscribe(subscription);
 
     var alpm = operation_context.begin(.{ .backend = .alpm, .kind = .install, .subject = "demo" });
-    alpm.progress(.{ .completed = 37, .total = 100, .percentage = 37, .native_code = 100 });
+    alpm.progress(.{ .stage = "transaction", .completed = 37, .total = 100, .percentage = 37, .native_code = 100 });
     alpm.finish(.success);
     var flatpak = operation_context.begin(.{ .backend = .flatpak, .kind = .install, .subject = "org.demo.App" });
     flatpak.progress(.{ .stage = "Downloading", .percentage = 64 });
@@ -339,6 +339,7 @@ test "UI operation reporter preserves percentages for every progress frame shape
             "\"TotalDownload\":100",
             "\"ProgressType\":\"PackageDownload\"",
             "\"Percent\":37",
+            "\"Stage\":\"transaction\"",
         },
         &.{
             "\"$kind\":\"flatpak.progress\"",

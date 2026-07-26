@@ -46,7 +46,7 @@ build() {
   dotnet publish Shelly.Gtk/Shelly.Gtk.csproj -c Release -r linux-x64 -o out --nologo -p:InstructionSet=${INSTRUCTIONS:=x86-64}
   meson setup --prefix=/usr build-notify Shelly.Notifications
   meson compile -C build-notify
-  (cd Shelly.Key && zig build -p ../out-key)
+  (cd Shelly.Key && zig build --verbose -p ../out-key)
 
   # Generate shell completions from the freshly built CLI binary
   ./out-cli/shelly completions fish > shelly.fish

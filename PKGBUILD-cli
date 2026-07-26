@@ -48,7 +48,7 @@ pkgver() {
 build() {
   cd "${srcdir}/${pkgname}/Shelly.Cli.Zig"
 
-  zig build \
+  zig build --verbose \
     --prefix "${srcdir}/zig-out" \
     -Dcpu=baseline \
     -Doptimize=ReleaseSmall
