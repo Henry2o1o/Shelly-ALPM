@@ -4,7 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Pull in the zsn dependency (which itself depends on goose).
     const zsn_dep = b.dependency("zsn", .{
         .target = target,
         .optimize = optimize,
