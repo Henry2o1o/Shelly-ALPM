@@ -4,9 +4,7 @@ const gtk = bindings.gtk;
 const gdk = bindings.gdk;
 const glib = bindings.glib;
 const gobject = bindings.gobject;
-const c_string = @import("../helpers/c_string.zig");
 const support = @import("support.zig");
-const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
 const Event = @import("../services/shelly_operation.zig").Event;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
@@ -32,6 +30,7 @@ const PackageRow = struct {
     root: *gtk.Box,
     status_label: *gtk.Label,
     progress: *gtk.ProgressBar,
+    stage: ?[]const u8 = null,
 };
 
 pub const TransactionPage = extern struct {
@@ -107,8 +106,7 @@ pub const TransactionPage = extern struct {
         p.arena = arena_ptr;
         const alloc = arena_ptr.allocator();
 
-        var buf: [256]u8 = undefined;
-        gtk.Label.setLabel(p.title_label, c_string.cstr(&buf, request.title));
+        setLabel(p.title_label, request.title);
 
         for (request.packages) |name| {
             const owned = alloc.dupeZ(u8, name) catch continue;
@@ -144,6 +142,14 @@ pub const TransactionPage = extern struct {
             std.heap.c_allocator.destroy(op);
             p.operation = null;
         };
+    }
+
+    fn rowStageChanged(self: *Self, row: *PackageRow, stage: []const u8) bool {
+        if (!stageChanged(row.stage, stage)) return false;
+
+        const arena = self.priv().arena orelse return false;
+        row.stage = arena.allocator().dupe(u8, stage) catch return false;
+        return true;
     }
 
     fn reset(self: *Self) void {
@@ -227,54 +233,49 @@ pub const TransactionPage = extern struct {
                     while (it.next()) |row| mark_row_failed(row.*);
                 } else if (i.package_name) |name| {
                     if (find_row(self, name)) |row| {
-                        var buf: [64]u8 = undefined;
-                        gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, i.event_type));
+                        setLabel(row.status_label, i.event_type);
                     }
                 }
             },
             .err => |e| append_terminal(self, e.message),
             .alpm_progress => |pr| {
+                appendAlpmProgress(self, pr);
+
                 if (is_transaction_phase(pr.progress_type)) {
-                    var gbuf: [128]u8 = undefined;
-                    gtk.Label.setLabel(
-                        self.priv().status_label,
-                        c_string.cstr(&gbuf, phase_label(pr.progress_type)),
-                    );
+                    setLabel(self.priv().status_label, phase_label(pr.progress_type));
                     return;
                 }
 
-                if (ensure_row(self, pr.package_name)) |row| {
-                    const is_download = std.mem.eql(u8, pr.progress_type, "PackageDownload") or
-                        std.mem.eql(u8, pr.progress_type, "AurDownload");
-                    if (is_download and pr.total_download > 0) {
-                        const fraction = @as(f64, @floatFromInt(pr.current_download)) /
-                            @as(f64, @floatFromInt(pr.total_download));
-                        gtk.ProgressBar.setFraction(row.progress, fraction);
-                        var cur_buf: [32]u8 = undefined;
-                        var tot_buf: [32]u8 = undefined;
-                        var label_buf: [96]u8 = undefined;
-                        const cur = SizeConverter.convert_null_term(&cur_buf, pr.current_download);
-                        const tot = SizeConverter.convert_null_term(&tot_buf, pr.total_download);
-                        if (std.fmt.bufPrintZ(&label_buf, "Downloading — {s} / {s}", .{ cur, tot })) |text| {
-                            gtk.Label.setLabel(row.status_label, text);
-                        } else |_| {
-                            var buf: [64]u8 = undefined;
-                            gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, phase_label(pr.progress_type)));
-                        }
-                    } else {
-                        var buf: [64]u8 = undefined;
-                        gtk.Label.setLabel(row.status_label, c_string.cstr(&buf, phase_label(pr.progress_type)));
-                        gtk.ProgressBar.pulse(row.progress);
+                const is_database = std.mem.eql(u8, pr.progress_type, "DatabaseDownload");
+                if (is_database) {
+                    setLabel(self.priv().status_label, "Synchronizing databases");
+                }
+
+                const display_name = if (is_database)
+                    std.fs.path.basename(pr.package_name)
+                else
+                    pr.package_name;
+
+                if (ensure_row_named(self, pr.package_name, display_name)) |row| {
+                    const stage = nonEmpty(pr.stage) orelse pr.progress_type;
+                    if (rowStageChanged(self, row, stage)) {
+                        gtk.ProgressBar.setFraction(row.progress, 0.0);
                     }
+
+                    gtk.ProgressBar.setFraction(row.progress, progressFraction(
+                        pr.progress_type,
+                        pr.percent,
+                        pr.current_download,
+                        pr.total_download,
+                    ));
+                    setLabel(row.status_label, nonEmpty(pr.message) orelse phase_label(pr.progress_type));
                 }
             },
             .flatpak_progress => |pr| {
-                if (pr.status) |s| append_terminal(self, s);
-                _ = pr.percentage;
+                handleSimpleProgress(self, "Flatpak", pr.status, pr.percentage);
             },
             .appimage_progress => |pr| {
-                if (pr.status) |s| append_terminal(self, s);
-                _ = pr.percentage;
+                handleSimpleProgress(self, "AppImage", pr.status, pr.percentage);
             },
             .unknown => {},
         }
@@ -285,22 +286,22 @@ pub const TransactionPage = extern struct {
             std.mem.eql(u8, progress_type, "KeyringStart") or
             std.mem.eql(u8, progress_type, "IntegrityStart") or
             std.mem.eql(u8, progress_type, "ConflictsStart") or
-            std.mem.eql(u8, progress_type, "DiskspaceStart") or
-            std.mem.eql(u8, progress_type, "DatabaseDownload");
+            std.mem.eql(u8, progress_type, "DiskspaceStart");
     }
 
-    fn ensure_row(self: *Self, name: []const u8) ?*PackageRow {
+    fn ensure_row_named(self: *Self, key: []const u8, display: []const u8) ?*PackageRow {
         const p = self.priv();
-        if (name.len == 0) return null;
-        if (std.mem.startsWith(u8, name, "http")) return null;
-        if (p.rows.get(name)) |row| return row;
+        if (key.len == 0) return null;
+        if (p.rows.get(key)) |row| return row;
 
         const arena = p.arena orelse return null;
         const alloc = arena.allocator();
-        const owned = alloc.dupeZ(u8, name) catch return null;
-        const row = build_row(alloc, owned) catch return null;
+        const owned_key = alloc.dupeZ(u8, key) catch return null;
+        const owned_display = alloc.dupeZ(u8, display) catch return null;
+        const row = build_row(alloc, owned_display) catch return null;
+
         gtk.Box.append(p.rows_box, row.root.as(gtk.Widget));
-        p.rows.put(alloc, owned, row) catch return null;
+        p.rows.put(alloc, owned_key, row) catch return null;
         return row;
     }
 
@@ -309,12 +310,55 @@ pub const TransactionPage = extern struct {
         if (std.mem.eql(u8, progress_type, "MakepkgBuild")) return "Building";
         if (std.mem.eql(u8, progress_type, "MakepkgPackage")) return "Packaging";
         if (std.mem.eql(u8, progress_type, "PackageDownload")) return "Downloading";
+        if (std.mem.eql(u8, progress_type, "DatabaseDownload")) return "Downloading";
         if (std.mem.eql(u8, progress_type, "AddStart")) return "Installing";
         if (std.mem.eql(u8, progress_type, "UpgradeStart")) return "Upgrading";
         if (std.mem.eql(u8, progress_type, "DowngradeStart")) return "Downgrading";
         if (std.mem.eql(u8, progress_type, "ReinstallStart")) return "Reinstalling";
         if (std.mem.eql(u8, progress_type, "RemoveStart")) return "Removing";
         return "Working";
+    }
+
+    fn fractionFromPercent(percent: i64) f64 {
+        const clamped = if (percent < 0)
+            0
+        else if (percent > 100)
+            100
+        else
+            percent;
+
+        return @as(f64, @floatFromInt(clamped)) / 100.0;
+    }
+
+    fn progressFraction(
+        progress_type: []const u8,
+        percent: i64,
+        current: i64,
+        total: i64,
+    ) f64 {
+        if (isDownloadProgress(progress_type) and total > 0) {
+            const safe_current = @max(current, 0);
+            const fraction = @as(f64, @floatFromInt(safe_current)) /
+                @as(f64, @floatFromInt(total));
+            return @min(fraction, 1.0);
+        }
+        return fractionFromPercent(percent);
+    }
+
+    fn isDownloadProgress(progress_type: []const u8) bool {
+        return std.mem.eql(u8, progress_type, "PackageDownload") or
+            std.mem.eql(u8, progress_type, "DatabaseDownload") or
+            std.mem.eql(u8, progress_type, "AurDownload");
+    }
+
+    fn stageChanged(previous: ?[]const u8, current: []const u8) bool {
+        const old = previous orelse return true;
+        return !std.mem.eql(u8, old, current);
+    }
+
+    fn nonEmpty(value: ?[]const u8) ?[]const u8 {
+        const text = value orelse return null;
+        return if (text.len == 0) null else text;
     }
 
     fn find_row(self: *Self, name: []const u8) ?*PackageRow {
@@ -373,21 +417,88 @@ pub const TransactionPage = extern struct {
         }
     }
 
+    fn appendAlpmProgress(self: *Self, pr: anytype) void {
+        const line = formatAlpmProgress(std.heap.c_allocator, pr) catch return;
+        defer std.heap.c_allocator.free(line);
+
+        append_terminal(self, line);
+    }
+
+    fn formatAlpmProgress(allocator: std.mem.Allocator, pr: anytype) ![]u8 {
+        const message = nonEmpty(pr.message) orelse
+            nonEmpty(pr.stage) orelse
+            phase_label(pr.progress_type);
+        const display_name = if (std.mem.eql(u8, pr.progress_type, "DatabaseDownload"))
+            std.fs.path.basename(pr.package_name)
+        else
+            pr.package_name;
+        return std.fmt.allocPrint(
+            allocator,
+            "[{s}] {s} — {s} ({d}%)",
+            .{ pr.progress_type, display_name, message, pr.percent },
+        );
+    }
+
+    fn handleSimpleProgress(
+        self: *Self,
+        backend: []const u8,
+        status: ?[]const u8,
+        percentage: i64,
+    ) void {
+        const message = nonEmpty(status) orelse "Working";
+        if (formatSimpleProgress(std.heap.c_allocator, backend, status, percentage)) |line| {
+            defer std.heap.c_allocator.free(line);
+            append_terminal(self, line);
+        } else |_| {}
+
+        if (ensure_row_named(self, backend, backend)) |row| {
+            setLabel(row.status_label, message);
+            gtk.ProgressBar.setFraction(row.progress, fractionFromPercent(percentage));
+        }
+    }
+
+    fn formatSimpleProgress(
+        allocator: std.mem.Allocator,
+        backend: []const u8,
+        status: ?[]const u8,
+        percentage: i64,
+    ) ![]u8 {
+        return std.fmt.allocPrint(
+            allocator,
+            "[{s}] {s} ({d}%)",
+            .{ backend, nonEmpty(status) orelse "Working", percentage },
+        );
+    }
+
+    fn setLabel(label: *gtk.Label, text: []const u8) void {
+        const value = std.heap.c_allocator.dupeZ(u8, text) catch return;
+        defer std.heap.c_allocator.free(value);
+        gtk.Label.setLabel(label, value);
+    }
+
     fn append_terminal(self: *Self, text: []const u8) void {
         const p = self.priv();
         const buffer = gtk.TextView.getBuffer(p.terminal_view);
         var end: gtk.TextIter = undefined;
         gtk.TextBuffer.getEndIter(buffer, &end);
 
-        var buf: [1024]u8 = undefined;
-        const line = std.fmt.bufPrintZ(&buf, "{s}\n", .{text}) catch {
-            return;
-        };
-        gtk.TextBuffer.insert(buffer, &end, line.ptr, @intCast(line.len));
+        const normalized = normalizeTerminalText(text);
+        const normalized_z = std.heap.c_allocator.dupeZ(u8, normalized) catch return;
+        defer std.heap.c_allocator.free(normalized_z);
+        gtk.TextBuffer.insert(buffer, &end, normalized_z, @intCast(normalized.len));
+        gtk.TextBuffer.insert(buffer, &end, "\n", 1);
 
         gtk.TextBuffer.getEndIter(buffer, &end);
         const mark = gtk.TextBuffer.createMark(buffer, null, &end, 0);
         gtk.TextView.scrollToMark(p.terminal_view, mark, 0, 1, 0, 1);
+    }
+
+    fn normalizeTerminalText(text: []const u8) []const u8 {
+        var end = text.len;
+        while (end > 0 and (text[end - 1] == '\r' or text[end - 1] == '\n')) {
+            end -= 1;
+        }
+        return text[0..end];
     }
 
     fn on_terminal_toggle(self: *Self) callconv(.c) void {
@@ -647,3 +758,93 @@ pub const TransactionPage = extern struct {
         gobject.Object.virtual_methods.finalize.call(parent_class, self.as(gobject.Object));
     }
 };
+
+test "transaction progress helpers preserve determinate percentages" {
+    try std.testing.expectEqual(@as(f64, 0.0), TransactionPage.fractionFromPercent(-1));
+    try std.testing.expectEqual(@as(f64, 0.0), TransactionPage.fractionFromPercent(0));
+    try std.testing.expectEqual(@as(f64, 0.37), TransactionPage.fractionFromPercent(37));
+    try std.testing.expectEqual(@as(f64, 1.0), TransactionPage.fractionFromPercent(100));
+    try std.testing.expectEqual(@as(f64, 1.0), TransactionPage.fractionFromPercent(101));
+
+    try std.testing.expectEqual(
+        @as(f64, 0.5),
+        TransactionPage.progressFraction("PackageDownload", 10, 50, 100),
+    );
+    try std.testing.expectEqual(
+        @as(f64, 1.0),
+        TransactionPage.progressFraction("DatabaseDownload", 10, 150, 100),
+    );
+    try std.testing.expectEqual(
+        @as(f64, 0.0),
+        TransactionPage.progressFraction("AurDownload", 10, -1, 100),
+    );
+    try std.testing.expectEqual(
+        @as(f64, 0.37),
+        TransactionPage.progressFraction("AddStart", 37, 0, 0),
+    );
+}
+
+test "database downloads use independent downloading rows" {
+    try std.testing.expect(!TransactionPage.is_transaction_phase("DatabaseDownload"));
+    try std.testing.expectEqualStrings("Downloading", TransactionPage.phase_label("DatabaseDownload"));
+}
+
+test "transaction rows detect progress stage changes" {
+    try std.testing.expect(TransactionPage.stageChanged(null, "download"));
+    try std.testing.expect(!TransactionPage.stageChanged("download", "download"));
+    try std.testing.expect(TransactionPage.stageChanged("download", "transaction"));
+}
+
+test "progress console lines include backend stage and percentage" {
+    const database_line = try TransactionPage.formatAlpmProgress(std.testing.allocator, .{
+        .progress_type = "DatabaseDownload",
+        .package_name = "/var/lib/pacman/sync/extra.db",
+        .message = @as(?[]const u8, null),
+        .stage = @as(?[]const u8, "download"),
+        .percent = 52,
+    });
+    defer std.testing.allocator.free(database_line);
+    try std.testing.expectEqualStrings(
+        "[DatabaseDownload] extra.db — download (52%)",
+        database_line,
+    );
+
+    const install_line = try TransactionPage.formatAlpmProgress(std.testing.allocator, .{
+        .progress_type = "AddStart",
+        .package_name = "demo",
+        .message = @as(?[]const u8, "Installing files"),
+        .stage = @as(?[]const u8, "transaction"),
+        .percent = 37,
+    });
+    defer std.testing.allocator.free(install_line);
+    try std.testing.expectEqualStrings(
+        "[AddStart] demo — Installing files (37%)",
+        install_line,
+    );
+
+    const simple_line = try TransactionPage.formatSimpleProgress(
+        std.testing.allocator,
+        "Flatpak",
+        "Updating runtime",
+        68,
+    );
+    defer std.testing.allocator.free(simple_line);
+    try std.testing.expectEqualStrings("[Flatpak] Updating runtime (68%)", simple_line);
+
+    const fallback_line = try TransactionPage.formatSimpleProgress(
+        std.testing.allocator,
+        "AppImage",
+        null,
+        0,
+    );
+    defer std.testing.allocator.free(fallback_line);
+    try std.testing.expectEqualStrings("[AppImage] Working (0%)", fallback_line);
+}
+
+test "terminal normalization preserves long and multiline output" {
+    var long_text: [2048]u8 = undefined;
+    @memset(&long_text, 'x');
+    const normalized_long = TransactionPage.normalizeTerminalText(&long_text);
+    try std.testing.expectEqual(@as(usize, long_text.len), normalized_long.len);
+    try std.testing.expectEqualStrings("first\nsecond", TransactionPage.normalizeTerminalText("first\nsecond\r\n"));
+}

@@ -789,3 +789,11 @@ fn onDoneIdle(data: ?*anyopaque) callconv(.c) c_int {
     op.on_done(op.ctx, code);
     return 0;
 }
+
+test "progress percentages are clamped to the GTK protocol range" {
+    try std.testing.expectEqual(@as(i64, 0), clampPercent(-1));
+    try std.testing.expectEqual(@as(i64, 0), clampPercent(0));
+    try std.testing.expectEqual(@as(i64, 37), clampPercent(37));
+    try std.testing.expectEqual(@as(i64, 100), clampPercent(100));
+    try std.testing.expectEqual(@as(i64, 100), clampPercent(101));
+}
