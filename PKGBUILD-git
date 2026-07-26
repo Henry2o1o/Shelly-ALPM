@@ -49,21 +49,21 @@ pkgver() {
 build() {
   cd "$srcdir/${pkgname}"
 
-  (cd Shelly.Ui.Gtk && zig build \
+  (cd Shelly.Ui.Gtk && zig build --verbose \
     --prefix "${srcdir}/${pkgname}/out" \
     --cache-dir "${srcdir}/zig-cache" \
     --global-cache-dir "${srcdir}/zig-global-cache" \
     -Dcpu=baseline \
     -Doptimize=ReleaseSafe)
 
-  (cd Shelly.Cli.Zig && zig build \
+  (cd Shelly.Cli.Zig && zig build --verbose \
     --prefix "${srcdir}/${pkgname}/out-cli" \
     --cache-dir "${srcdir}/zig-cache" \
     --global-cache-dir "${srcdir}/zig-global-cache" \
     -Dcpu=baseline \
     -Doptimize=ReleaseSmall)
 
-  (cd Shelly.Key && zig build \
+  (cd Shelly.Key && zig build --verbose \
     --prefix "${srcdir}/${pkgname}/out-key" \
     --cache-dir "${srcdir}/zig-cache" \
     --global-cache-dir "${srcdir}/zig-global-cache" \
