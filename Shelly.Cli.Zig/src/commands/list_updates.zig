@@ -722,7 +722,7 @@ fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
         .show_hidden_packages = show_hidden,
     });
     defer manager.deinit();
-    const native_updates = try manager.getPackagesNeedingUpdate(false);
+    const native_updates = try manager.getPackagesNeedingUpdate(true);
     defer Zigalpm.aur.models.Update.deinitSlice(context.allocator, native_updates);
 
     const arena = try context.allocator.create(std.heap.ArenaAllocator);
