@@ -554,6 +554,8 @@ pub const Manager = struct {
                 vcs_store_changed = true;
                 continue;
             }
+            if (try backfillMissingVcsBaselines(&self.vcs_store, candidate))
+                vcs_store_changed = true;
             if (!candidate.needs_update) continue;
             const local = installed.items[candidate.installed_index];
             const metadata = findPackage(response.results, local.name);
@@ -1911,14 +1913,24 @@ fn runVcsCheck(
     fetcher: VcsRemoteFetcher,
 ) void {
     for (candidate.entries, candidate.remote_shas) |entry, *remote_sha| {
-        if (!candidate.first_seen and entry.commit_sha.len == 0) continue;
         const fetched = fetcher.function(fetcher.data, io, environ, entry.url, entry.branch) catch continue;
         remote_sha.* = fetched orelse continue;
-        if (!candidate.first_seen and !std.mem.eql(u8, remote_sha.slice(), entry.commit_sha)) {
+        if (!candidate.first_seen and entry.commit_sha.len != 0 and
+            !std.mem.eql(u8, remote_sha.slice(), entry.commit_sha))
+        {
             candidate.needs_update = true;
-            return;
         }
     }
+}
+
+fn backfillMissingVcsBaselines(store: *vcs.Store, candidate: *const VcsCheckCandidate) !bool {
+    var changed = false;
+    for (candidate.entries, candidate.remote_shas, 0..) |entry, *remote_sha, source_index| {
+        const sha = remote_sha.slice();
+        if (entry.commit_sha.len != 0 or sha.len == 0) continue;
+        if (try store.setCommitSha(candidate.package_name, source_index, sha)) changed = true;
+    }
+    return changed;
 }
 
 fn runVcsChecksConcurrently(
@@ -2811,6 +2823,88 @@ test "VCS package checks execute concurrently and retain per-package results" {
     try std.testing.expect(candidates[1].needs_update);
     try std.testing.expectEqualStrings("new", candidates[0].remote_shas[0].slice());
     try std.testing.expectEqualStrings("new", candidates[1].remote_shas[0].slice());
+}
+
+test "VCS checks retry and baseline transiently failed sources" {
+    const Probe = struct {
+        sha: ?[]const u8,
+        calls: usize = 0,
+
+        fn fetch(
+            data: ?*anyopaque,
+            _: std.Io,
+            _: std.process.Environ,
+            _: []const u8,
+            _: []const u8,
+        ) anyerror!?RemoteSha {
+            const probe: *@This() = @ptrCast(@alignCast(data));
+            probe.calls += 1;
+            return if (probe.sha) |sha| RemoteSha.fromSlice(sha) else null;
+        }
+    };
+
+    var source = (try vcs.parseSource(
+        std.testing.allocator,
+        "git+https://example.invalid/demo.git",
+        null,
+    )).?;
+    defer source.deinit(std.testing.allocator);
+    var store = vcs.Store.init(std.testing.allocator);
+    defer store.deinit();
+    try store.set("demo-git", &.{source});
+
+    var failed_probe = Probe{ .sha = null };
+    var failed_candidate = try VcsCheckCandidate.init(
+        std.testing.allocator,
+        "demo-git",
+        0,
+        store.get("demo-git"),
+        null,
+    );
+    defer failed_candidate.deinit(std.testing.allocator);
+    runVcsCheck(std.testing.io, .empty, &failed_candidate, .{
+        .function = Probe.fetch,
+        .data = &failed_probe,
+    });
+    try std.testing.expectEqual(@as(usize, 1), failed_probe.calls);
+    try std.testing.expect(!failed_candidate.needs_update);
+    try std.testing.expect(!(try backfillMissingVcsBaselines(&store, &failed_candidate)));
+    try std.testing.expectEqualStrings("", store.get("demo-git")[0].commit_sha);
+
+    var baseline_probe = Probe{ .sha = "baseline" };
+    var baseline_candidate = try VcsCheckCandidate.init(
+        std.testing.allocator,
+        "demo-git",
+        0,
+        store.get("demo-git"),
+        null,
+    );
+    defer baseline_candidate.deinit(std.testing.allocator);
+    runVcsCheck(std.testing.io, .empty, &baseline_candidate, .{
+        .function = Probe.fetch,
+        .data = &baseline_probe,
+    });
+    try std.testing.expectEqual(@as(usize, 1), baseline_probe.calls);
+    try std.testing.expect(!baseline_candidate.needs_update);
+    try std.testing.expect(try backfillMissingVcsBaselines(&store, &baseline_candidate));
+    try std.testing.expectEqualStrings("baseline", store.get("demo-git")[0].commit_sha);
+
+    var changed_probe = Probe{ .sha = "changed" };
+    var changed_candidate = try VcsCheckCandidate.init(
+        std.testing.allocator,
+        "demo-git",
+        0,
+        store.get("demo-git"),
+        null,
+    );
+    defer changed_candidate.deinit(std.testing.allocator);
+    runVcsCheck(std.testing.io, .empty, &changed_candidate, .{
+        .function = Probe.fetch,
+        .data = &changed_probe,
+    });
+    try std.testing.expect(changed_candidate.needs_update);
+    try std.testing.expect(!(try backfillMissingVcsBaselines(&store, &changed_candidate)));
+    try std.testing.expectEqualStrings("baseline", store.get("demo-git")[0].commit_sha);
 }
 
 test {
