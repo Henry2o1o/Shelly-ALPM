@@ -52,6 +52,7 @@ pub const TransactionPage = extern struct {
         status_label: *gtk.Label,
         arena: ?*std.heap.ArenaAllocator,
         rows: std.StringHashMapUnmanaged(*PackageRow),
+        terminal_lines: std.StringHashMapUnmanaged(void),
         on_complete: ?*const fn (ctx: *anyopaque, success: bool) void,
         on_complete_ctx: ?*anyopaque,
         operation: ?*ShellyOperation,
@@ -86,6 +87,7 @@ pub const TransactionPage = extern struct {
         p.on_complete_ctx = null;
         p.arena = null;
         p.rows = .empty;
+        p.terminal_lines = .empty;
         p.operation = null;
         p.cancelled = false;
         p.terminal_visible = true;
@@ -159,6 +161,7 @@ pub const TransactionPage = extern struct {
             gtk.Box.remove(p.rows_box, c);
         }
         p.rows.clearRetainingCapacity();
+        p.terminal_lines = .empty;
         const buffer = gtk.TextView.getBuffer(p.terminal_view);
         gtk.TextBuffer.setText(buffer, "", 0);
         if (p.arena) |a| {
@@ -478,11 +481,15 @@ pub const TransactionPage = extern struct {
 
     fn append_terminal(self: *Self, text: []const u8) void {
         const p = self.priv();
+        const normalized = normalizeTerminalText(text);
+        if (p.arena) |arena| {
+            if (!rememberTerminalLine(arena.allocator(), &p.terminal_lines, normalized)) return;
+        }
+
         const buffer = gtk.TextView.getBuffer(p.terminal_view);
         var end: gtk.TextIter = undefined;
         gtk.TextBuffer.getEndIter(buffer, &end);
 
-        const normalized = normalizeTerminalText(text);
         const normalized_z = std.heap.c_allocator.dupeZ(u8, normalized) catch return;
         defer std.heap.c_allocator.free(normalized_z);
         gtk.TextBuffer.insert(buffer, &end, normalized_z, @intCast(normalized.len));
@@ -491,6 +498,21 @@ pub const TransactionPage = extern struct {
         gtk.TextBuffer.getEndIter(buffer, &end);
         const mark = gtk.TextBuffer.createMark(buffer, null, &end, 0);
         gtk.TextView.scrollToMark(p.terminal_view, mark, 0, 1, 0, 1);
+    }
+
+    fn rememberTerminalLine(
+        allocator: std.mem.Allocator,
+        lines: *std.StringHashMapUnmanaged(void),
+        line: []const u8,
+    ) bool {
+        if (lines.contains(line)) return false;
+
+        const owned = allocator.dupe(u8, line) catch return true;
+        lines.put(allocator, owned, {}) catch {
+            allocator.free(owned);
+            return true;
+        };
+        return true;
     }
 
     fn normalizeTerminalText(text: []const u8) []const u8 {
@@ -847,4 +869,36 @@ test "terminal normalization preserves long and multiline output" {
     const normalized_long = TransactionPage.normalizeTerminalText(&long_text);
     try std.testing.expectEqual(@as(usize, long_text.len), normalized_long.len);
     try std.testing.expectEqualStrings("first\nsecond", TransactionPage.normalizeTerminalText("first\nsecond\r\n"));
+}
+
+test "terminal output suppresses duplicate lines and preserves unique updates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var lines: std.StringHashMapUnmanaged(void) = .empty;
+
+    try std.testing.expect(TransactionPage.rememberTerminalLine(
+        arena.allocator(),
+        &lines,
+        "Downloading firefox (10%)",
+    ));
+    try std.testing.expect(!TransactionPage.rememberTerminalLine(
+        arena.allocator(),
+        &lines,
+        "Downloading firefox (10%)",
+    ));
+    try std.testing.expect(TransactionPage.rememberTerminalLine(
+        arena.allocator(),
+        &lines,
+        "Downloading firefox (11%)",
+    ));
+    try std.testing.expect(TransactionPage.rememberTerminalLine(
+        arena.allocator(),
+        &lines,
+        "Downloading linux (10%)",
+    ));
+    try std.testing.expect(!TransactionPage.rememberTerminalLine(
+        arena.allocator(),
+        &lines,
+        "Downloading firefox (10%)",
+    ));
 }
