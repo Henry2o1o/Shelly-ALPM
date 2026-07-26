@@ -165,11 +165,16 @@ pub fn runStreamingWithEnvironmentOperation(
 }
 
 fn drainLines(reader: *std.Io.Reader, stream: StreamKind, flush_tail: bool, line_handler: LineHandler) void {
-    while (std.mem.indexOfScalar(u8, reader.buffered(), '\n')) |line_end| {
-        const line = std.mem.trimEnd(u8, reader.buffered()[0..line_end], "\r");
-        if (line.len != 0) line_handler.call(stream, line);
+    while (std.mem.indexOfAny(u8, reader.buffered(), "\r\n")) |line_end| {
+        const line = reader.buffered()[0..line_end];
+
+        if (std.mem.trim(u8, line, " \t").len != 0) {
+            line_handler.call(stream, line);
+        }
+
         reader.toss(line_end + 1);
     }
+
     if (flush_tail and reader.bufferedLen() != 0) {
         const len = reader.bufferedLen();
         const line = std.mem.trimEnd(u8, reader.buffered(), "\r");
