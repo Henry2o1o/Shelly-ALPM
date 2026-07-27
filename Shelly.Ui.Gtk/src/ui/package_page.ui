@@ -5,6 +5,7 @@
         <property name="orientation">vertical</property>
         <property name="hexpand">true</property>
         <property name="vexpand">true</property>
+         <property name="margin-bottom">10</property>
         <child>
             <object class="GtkOverlay" id="PackageWindow">
                 <property name="hexpand">true</property>
@@ -110,9 +111,7 @@
                                 </child>
                             </object>
                         </child>
-                        <child>
-                            <object class="GtkSeparator"/>
-                        </child>
+
                         <child>
                             <object class="GtkBox" id="views_and_detail_hbox">
                                 <property name="hexpand">true</property>
