@@ -7,19 +7,15 @@ const glib = bindings.glib;
 const gobject = bindings.gobject;
 const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
 const runtime = @import("services/runtime.zig");
-
-extern fn bindtextdomain(domainname: [*:0]const u8, dirname: [*:0]const u8) ?[*:0]const u8;
-extern fn bind_textdomain_codeset(domainname: [*:0]const u8, codeset: [*:0]const u8) ?[*:0]const u8;
-extern fn textdomain(domainname: [*:0]const u8) ?[*:0]const u8;
+const translations = @import("helpers/translations.zig");
 
 pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
     runtime.environ_map = init.environ_map;
 
-    //hook up translations
-    _ = bindtextdomain("shelly-ui", "/usr/share/locale");
-    _ = bind_textdomain_codeset("shelly-ui", "UTF-8");
-    _ = textdomain("shelly-ui");
+    if (!translations.init()) {
+        std.log.warn("translations: failed to initialize gettext", .{});
+    }
 
     const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();

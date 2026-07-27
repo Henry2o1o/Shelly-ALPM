@@ -14,6 +14,7 @@ const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const UpdateObject = @import("../g_objects/update_object.zig").UpdateObject;
 const UpdateSource = @import("../g_objects/update_object.zig").UpdateSource;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
+const translations = @import("../helpers/translations.zig");
 
 pub const UpdatePage = extern struct {
     parent_instance: Parent,
@@ -199,15 +200,15 @@ pub const UpdatePage = extern struct {
         var index: usize = 0;
 
         for (response.Packages) |package| {
-            updates[index] = .{ .source = .package, .name = package.Name, .description = "System package update", .old_version = package.CurrentVersion, .new_version = package.NewVersion, .size = package.DownloadSize };
+            updates[index] = .{ .source = .package, .name = package.Name, .description = translations._("System package update"), .old_version = package.CurrentVersion, .new_version = package.NewVersion, .size = package.DownloadSize };
             index += 1;
         }
         for (response.Aur) |package| {
-            updates[index] = .{ .source = .aur, .name = package.Name, .description = "AUR package update", .old_version = package.Version, .new_version = package.NewVersion, .size = package.DownloadSize };
+            updates[index] = .{ .source = .aur, .name = package.Name, .description = translations._("AUR package update"), .old_version = package.Version, .new_version = package.NewVersion, .size = package.DownloadSize };
             index += 1;
         }
         for (response.Flatpak) |package| {
-            updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = package.Version, .new_version = "Installed", .size = 0 };
+            updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = package.Version, .new_version = translations._("Installed"), .size = 0 };
             index += 1;
         }
         return updates;
@@ -272,7 +273,7 @@ pub const UpdatePage = extern struct {
 
         switch (state) {
             .Loading => {
-                gtk.Label.setLabel(p.selected_label, "Checking for updates…");
+                gtk.Label.setLabel(p.selected_label, translations._("Checking for updates…"));
                 gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 0);
                 gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 0);
                 gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 0);
@@ -295,9 +296,9 @@ pub const UpdatePage = extern struct {
                 gtk.Spinner.stop(p.loading_spinner);
             },
             .Fail => {
-                gtk.Label.setLabel(p.error_label, "Could not run shelly check-updates. Check the CLI output and try again.");
+                gtk.Label.setLabel(p.error_label, translations._("Could not run shelly check-updates. Check the CLI output and try again."));
                 gtk.Stack.setVisibleChild(p.updates_stack, p.error_page.as(gtk.Widget));
-                gtk.Label.setLabel(p.selected_label, "Update check failed");
+                gtk.Label.setLabel(p.selected_label, translations._("Update check failed"));
                 gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
                 gtk.Widget.setSensitive(p.upgrade_button.as(gtk.Widget), 0);
                 gtk.Spinner.stop(p.loading_spinner);
@@ -333,9 +334,9 @@ pub const UpdatePage = extern struct {
         var system_buffer: [64]u8 = undefined;
         var aur_buffer: [64]u8 = undefined;
         var flatpak_buffer: [64]u8 = undefined;
-        gtk.Button.setLabel(p.native_toggle.as(gtk.Button), std.fmt.bufPrintZ(&system_buffer, "System · {d}", .{system_count}) catch "System");
-        gtk.Button.setLabel(p.aur_toggle.as(gtk.Button), std.fmt.bufPrintZ(&aur_buffer, "AUR · {d}", .{aur_count}) catch "AUR");
-        gtk.Button.setLabel(p.flatpak_toggle.as(gtk.Button), std.fmt.bufPrintZ(&flatpak_buffer, "Flatpak · {d}", .{flatpak_count}) catch "Flatpak");
+        gtk.Button.setLabel(p.native_toggle.as(gtk.Button), std.fmt.bufPrintZ(&system_buffer, "{s} · {d}", .{ translations._("System"), system_count }) catch translations._("System"));
+        gtk.Button.setLabel(p.aur_toggle.as(gtk.Button), std.fmt.bufPrintZ(&aur_buffer, "{s} · {d}", .{ translations._("AUR"), aur_count }) catch translations._("AUR"));
+        gtk.Button.setLabel(p.flatpak_toggle.as(gtk.Button), std.fmt.bufPrintZ(&flatpak_buffer, "{s} · {d}", .{ translations._("Flatpak"), flatpak_count }) catch translations._("Flatpak"));
     }
 
     fn on_row_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: *Self) callconv(.c) void {
@@ -435,7 +436,11 @@ pub const UpdatePage = extern struct {
         }
 
         var buffer: [96]u8 = undefined;
-        const text = std.fmt.bufPrintZ(&buffer, "{d} of {d} updates included", .{ included, count }) catch "Updates included";
+        const text = std.fmt.bufPrintZ(
+            &buffer,
+            "{d} {s} {d} {s}",
+            .{ included, translations._("of"), count, translations._("updates included") },
+        ) catch translations._("Updates included");
         gtk.Label.setLabel(p.selected_label, text);
     }
 
@@ -478,7 +483,7 @@ pub const UpdatePage = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Upgrading packages",
+                .title = translations._("Upgrading packages"),
                 .argv = argv,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,

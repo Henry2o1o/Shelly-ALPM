@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<interface>
+<interface domain="shelly-ui">
   <template class="ShellyTransactionPage" parent="GtkBox">
     <property name="orientation">vertical</property>
     <property name="hexpand">true</property>
@@ -36,7 +36,7 @@
                 <child>
                   <object class="GtkButton" id="terminal_toggle">
                     <property name="icon-name">utilities-terminal-symbolic</property>
-                    <property name="tooltip-text">Toggle output</property>
+                    <property name="tooltip-text" translatable="yes">Toggle output</property>
                     <signal name="clicked" handler="on_terminal_toggle" swapped="true"/>
                     <style><class name="flat"/></style>
                   </object>
@@ -44,7 +44,7 @@
                 <child>
                   <object class="GtkButton" id="close_button">
                     <property name="icon-name">window-close-symbolic</property>
-                    <property name="tooltip-text">Close</property>
+                    <property name="tooltip-text" translatable="yes">Close</property>
                     <property name="visible">false</property>
                     <signal name="clicked" handler="on_close" swapped="true"/>
                     <style><class name="flat"/></style>
