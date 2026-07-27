@@ -44,10 +44,11 @@ pub const WelcomePage = extern struct {
         btn_back: *gtk.Button,
         btn_next: *gtk.Button,
         btn_finish: *gtk.Button,
+        // Built programmatically in init — not template-bound.
+        welcome_scrim: ?*gtk.Box,
+        welcome_dialog_host: ?*gtk.Box,
         current_step: u8,
         loaded: bool,
-        // Prevents the notify::active callbacks from re-entering when we
-        // programmatically re-check a box after the user confirms a warning.
         suppress_warnings: bool,
         var offset: c_int = 0;
     };
@@ -79,8 +80,11 @@ pub const WelcomePage = extern struct {
         p.current_step = 0;
         p.loaded = false;
         p.suppress_warnings = false;
+        p.welcome_scrim = null;
+        p.welcome_dialog_host = null;
 
-        // Warn before enabling AUR or Recommended — both have external/community risk.
+        build_internal_overlay(self);
+
         _ = gobject.Object.signals.notify.connect(
             p.source_aur.as(gobject.Object),
             *Self,
@@ -99,6 +103,46 @@ pub const WelcomePage = extern struct {
         support.connectLifecycle(Self, self);
     }
 
+    fn build_internal_overlay(self: *Self) void {
+        const p = self.priv();
+
+        const overlay = gtk.Overlay.new();
+        gtk.Widget.setHexpand(overlay.as(gtk.Widget), 1);
+        gtk.Widget.setVexpand(overlay.as(gtk.Widget), 1);
+        const inner = gtk.Box.new(.vertical, 0);
+        gtk.Widget.setHexpand(inner.as(gtk.Widget), 1);
+        gtk.Widget.setVexpand(inner.as(gtk.Widget), 1);
+
+        gtk.Box.remove(self.as(gtk.Box), p.welcome_stack.as(gtk.Widget));
+        gtk.Box.remove(self.as(gtk.Box), p.nav_bar.as(gtk.Widget));
+        gtk.Box.append(inner, p.welcome_stack.as(gtk.Widget));
+        gtk.Box.append(inner, p.nav_bar.as(gtk.Widget));
+
+        gtk.Overlay.setChild(overlay, inner.as(gtk.Widget));
+
+        const scrim = gtk.Box.new(.vertical, 0);
+        gtk.Widget.addCssClass(scrim.as(gtk.Widget), "lockout-scrim");
+        gtk.Widget.setHexpand(scrim.as(gtk.Widget), 1);
+        gtk.Widget.setVexpand(scrim.as(gtk.Widget), 1);
+        gtk.Widget.setHalign(scrim.as(gtk.Widget), .fill);
+        gtk.Widget.setValign(scrim.as(gtk.Widget), .fill);
+        gtk.Widget.setVisible(scrim.as(gtk.Widget), 0);
+
+        const host = gtk.Box.new(.vertical, 0);
+        gtk.Widget.setHalign(host.as(gtk.Widget), .center);
+        gtk.Widget.setValign(host.as(gtk.Widget), .center);
+        gtk.Widget.setHexpand(host.as(gtk.Widget), 1);
+        gtk.Widget.setVexpand(host.as(gtk.Widget), 1);
+        gtk.Box.append(scrim, host.as(gtk.Widget));
+
+        gtk.Overlay.addOverlay(overlay, scrim.as(gtk.Widget));
+
+        p.welcome_scrim = scrim;
+        p.welcome_dialog_host = host;
+
+        gtk.Box.append(self.as(gtk.Box), overlay.as(gtk.Widget));
+    }
+
     pub fn onMap(self: *Self) void {
         _ = self;
     }
@@ -107,14 +151,30 @@ pub const WelcomePage = extern struct {
         _ = self;
     }
 
-    // ── AUR warning ──────────────────────────────────────────────────────────
+    fn showInternalDialog(self: *Self, dialog: *ConfirmDialog) void {
+        const p = self.priv();
+        const scrim = p.welcome_scrim orelse return;
+        const host = p.welcome_dialog_host orelse return;
+        while (gtk.Widget.getFirstChild(host.as(gtk.Widget))) |c|
+            gtk.Box.remove(host, c);
+        gtk.Box.append(host, dialog.as(gtk.Widget));
+        gtk.Widget.setVisible(scrim.as(gtk.Widget), 1);
+    }
+
+    fn hideInternalDialog(self: *Self) void {
+        const p = self.priv();
+        const scrim = p.welcome_scrim orelse return;
+        const host = p.welcome_dialog_host orelse return;
+        while (gtk.Widget.getFirstChild(host.as(gtk.Widget))) |c|
+            gtk.Box.remove(host, c);
+        gtk.Widget.setVisible(scrim.as(gtk.Widget), 0);
+    }
 
     fn on_aur_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         const p = self.priv();
         if (p.suppress_warnings) return;
         if (gtk.CheckButton.getActive(p.source_aur) == 0) return;
 
-        // Uncheck immediately; re-check only if the user confirms.
         gtk.CheckButton.setActive(p.source_aur, 0);
 
         const dialog = ConfirmDialog.new(
@@ -124,21 +184,18 @@ pub const WelcomePage = extern struct {
             self,
         );
         dialog.setButtons("Enable", "Cancel");
-        if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dialog.as(gtk.Widget));
+        self.showInternalDialog(dialog);
     }
 
     fn on_aur_response(ctx: ?*anyopaque, confirmed: bool) void {
         const self: *Self = @ptrCast(@alignCast(ctx.?));
-        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
+        self.hideInternalDialog();
         if (!confirmed) return;
         const p = self.priv();
         p.suppress_warnings = true;
         gtk.CheckButton.setActive(p.source_aur, 1);
         p.suppress_warnings = false;
     }
-
-    // ── Recommended warning ──────────────────────────────────────────────────
-
     fn on_recommended_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         const p = self.priv();
         if (p.suppress_warnings) return;
@@ -153,20 +210,18 @@ pub const WelcomePage = extern struct {
             self,
         );
         dialog.setButtons("Enable", "Cancel");
-        if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dialog.as(gtk.Widget));
+        self.showInternalDialog(dialog);
     }
 
     fn on_recommended_response(ctx: ?*anyopaque, confirmed: bool) void {
         const self: *Self = @ptrCast(@alignCast(ctx.?));
-        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
+        self.hideInternalDialog();
         if (!confirmed) return;
         const p = self.priv();
         p.suppress_warnings = true;
         gtk.CheckButton.setActive(p.source_recommended, 1);
         p.suppress_warnings = false;
     }
-
-    // ── Wizard navigation ────────────────────────────────────────────────────
 
     fn on_back(self: *Self) callconv(.c) void {
         const p = self.priv();
@@ -195,17 +250,15 @@ pub const WelcomePage = extern struct {
             return;
         };
 
-        // Collect all wizard values into an updated config in one shot.
         var updated = cfg.*;
         updated.AurEnabled = gtk.CheckButton.getActive(p.source_aur) != 0;
-        // If the user enabled AUR they already confirmed the warning dialog.
         updated.AurWarningConfirmed = updated.AurEnabled;
-        updated.FlatPackEnabled = gtk.CheckButton.getActive(p.source_flatpak) != 0;
+        updated
+            .FlatPackEnabled = gtk.CheckButton.getActive(p.source_flatpak) != 0;
         updated.AppImageEnabled = gtk.CheckButton.getActive(p.source_appimage) != 0;
         updated.RecommendedEnabled = gtk.CheckButton.getActive(p.source_recommended) != 0;
         updated.NavMode = if (gtk.CheckButton.getActive(p.nav_topbar) != 0) NavMode.topbar else NavMode.sidebar;
         updated.TrayEnabled = gtk.Switch.getActive(p.tray_enabled) != 0;
-        // Mark first-start setup as complete.
         updated.NewInstall = false;
         updated.NewInstallInitSettings = true;
 
@@ -226,8 +279,6 @@ pub const WelcomePage = extern struct {
         const p = self.priv();
         p.current_step = step;
 
-        // Navigate by widget pointer — GtkStackPage names are not set in the UI
-        // file, so setVisibleChildName won't work. setVisibleChild does.
         const pages = [num_steps]*gtk.Widget{
             p.page_welcome.as(gtk.Widget),
             p.page_sources.as(gtk.Widget),
@@ -235,16 +286,12 @@ pub const WelcomePage = extern struct {
         };
         gtk.Stack.setVisibleChild(p.welcome_stack, pages[step]);
 
-        // Back is only available from step 1 onwards.
         gtk.Widget.setSensitive(p.btn_back.as(gtk.Widget), @intFromBool(step > 0));
 
-        // Show Next on all steps except the last; show Finish only on the last.
         const on_last = step == num_steps - 1;
         gtk.Widget.setVisible(p.btn_next.as(gtk.Widget), @intFromBool(!on_last));
         gtk.Widget.setVisible(p.btn_finish.as(gtk.Widget), @intFromBool(on_last));
     }
-
-    // ── Template ─────────────────────────────────────────────────────────────
 
     const template_children = .{
         .{ "welcome_stack", @offsetOf(Private, "welcome_stack") },
