@@ -747,6 +747,7 @@ fn populateDropdowns(p: *ShellySettingsPage.Private) void {
     const page_strings = gtk.StringList.new(null);
     inline for (default_page_entries) |entry| {
         const label = switch (entry.value) {
+            .recommend => translations._("Recommended"),
             .packages => translations._("Packages"),
             .aur => translations._("AUR"),
             .flatpak => translations._("Flatpak"),
