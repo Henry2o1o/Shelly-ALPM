@@ -2,6 +2,10 @@
   background-color: alpha(black, 0.6);
 }
 
+.welcome-screen {
+  background-color: @window_bg_color;
+}
+
 .lockout-card {
   background-color: @theme_bg_color;
   border-radius: 12px;

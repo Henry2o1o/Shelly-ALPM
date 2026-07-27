@@ -9,6 +9,7 @@ const PackagePage = @import("pages/package_page.zig").PackagePage;
 const AurPage = @import("pages/aur_page.zig").AurPage;
 const UpdatePage = @import("pages/update_page.zig").UpdatePage;
 const RecommendPage = @import("pages/recommend_page.zig").RecommendPage;
+const WelcomePage = @import("pages/welcome.zig").WelcomePage;
 const SupportPage = @import("pages/support.zig");
 const SettingsPage = @import("pages/settings_page.zig").SettingsPage;
 const TransactionPage = @import("pages/transaction_page.zig").TransactionPage;
@@ -80,6 +81,7 @@ pub const ShellyWindow = extern struct {
         build_shell(self);
         populate_stack(self);
         applyConfig(self);
+        showWelcomeIfFirstStart(self);
         _ = gtk.Window.signals.close_request.connect(self.as(gtk.Window), *ShellyWindow, &on_close_request, self, .{});
     }
 
@@ -117,6 +119,14 @@ pub const ShellyWindow = extern struct {
             svc.save() catch return 0;
         }
         return 0;
+    }
+
+    fn showWelcomeIfFirstStart(self: *ShellyWindow) void {
+        const svc = runtime.config orelse return;
+        const cfg = svc.get() catch return;
+        if (!cfg.NewInstall) return;
+        const wp = WelcomePage.new();
+        self.showLockout(wp.as(gtk.Widget));
     }
 
     fn setNavEnabled(self: *ShellyWindow, name: [:0]const u8, enabled: bool) void {
@@ -391,7 +401,7 @@ pub const ShellyWindow = extern struct {
     fn populate_stack(self: *ShellyWindow) void {
         const stack = self.private().content_stack;
 
-        const rp = RecommendPage.new();
+        const rp = WelcomePage.new();
         const rp_page = gtk.Stack.addTitled(stack, rp.as(gtk.Widget), "recommend", RecommendPage.title);
         gtk.StackPage.setIconName(rp_page, RecommendPage.icon_name);
 
