@@ -5,6 +5,7 @@ const glib = bindings.glib;
 const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
+const translations = @import("../helpers/translations.zig");
 const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const runtime = @import("../services/runtime.zig");
@@ -17,7 +18,7 @@ pub const WelcomePage = extern struct {
     const Self = @This();
     pub const Parent = gtk.Box;
 
-    pub const title: [:0]const u8 = "Welcome";
+    pub const title: [:0]const u8 = translations._("Welcome");
     pub const icon_name: [:0]const u8 = "software-update-available-symbolic";
     const resource_path = "/com/shellyorg/shelly/ui/welcome.ui";
 
@@ -178,12 +179,12 @@ pub const WelcomePage = extern struct {
         gtk.CheckButton.setActive(p.source_aur, 0);
 
         const dialog = ConfirmDialog.new(
-            "Enable AUR?",
-            "The Arch User Repository is community-maintained. Packages are not officially vetted — only enable if you trust what you install.",
+            translations._("Enable AUR?"),
+            translations._("The Arch User Repository is community-maintained. Packages are not officially vetted — only enable if you trust what you install."),
             &on_aur_response,
             self,
         );
-        dialog.setButtons("Enable", "Cancel");
+        dialog.setButtons(translations._("Enable"), translations._("Cancel"));
         self.showInternalDialog(dialog);
     }
 
@@ -204,12 +205,12 @@ pub const WelcomePage = extern struct {
         gtk.CheckButton.setActive(p.source_recommended, 0);
 
         const dialog = ConfirmDialog.new(
-            "Enable Recommended?",
-            "Recommended shows curated package suggestions based on your installed software. Package data is fetched from external sources.",
+            translations._("Enable Recommended?"),
+            translations._("Recommended shows curated package suggestions based on your installed software. Package data is fetched from external sources."),
             &on_recommended_response,
             self,
         );
-        dialog.setButtons("Enable", "Cancel");
+        dialog.setButtons(translations._("Enable"), translations._("Cancel"));
         self.showInternalDialog(dialog);
     }
 
