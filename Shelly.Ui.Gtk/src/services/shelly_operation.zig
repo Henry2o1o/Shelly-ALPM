@@ -92,7 +92,7 @@ pub const Question = union(enum) {
         new_pkgbuild: []const u8,
         warnings: []const Warning = &.{},
         diff_lines: []const []const u8 = &.{},
-        source_files: ?[]const []const u8 = null,
+        source_files: []const SourceFile = &.{},
     },
     transaction: TransactionQuestion,
 };
@@ -135,6 +135,11 @@ const SelectionRequest = struct {
     Options: []OptionWire = &.{},
 };
 
+pub const SourceFile = struct {
+    name: []const u8,
+    content: []const u8,
+};
+
 pub const PkgbuildDiff = struct {
     @"$kind": []const u8 = "",
     QuestionId: []const u8,
@@ -143,7 +148,7 @@ pub const PkgbuildDiff = struct {
     NewPkgbuild: []const u8,
     Warnings: []const Warning = &.{},
     DiffLines: []const []const u8 = &.{},
-    SourceFiles: ?[]const []const u8 = null,
+    SourceFiles: ?std.json.ArrayHashMap([]const u8) = null,
 };
 
 pub const Warning = struct {
@@ -620,6 +625,10 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
         if (parseTransaction(op, msg.json) catch null) |p| op.on_question(op.ctx, p);
     } else if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
         if (parseSelection(op, msg.json, kind) catch null) |p| op.on_question(op.ctx, p);
+    } else if (std.mem.eql(u8, kind, "q.pkgbuilddiff")) {
+        if (parsePkgbuildDiff(op, msg.json) catch null) |p| {
+            op.on_question(op.ctx, p);
+        }
     } else {
         dispatchEvent(op, alloc, msg.json, kind);
     }
@@ -635,6 +644,60 @@ fn newPending(op: *ShellyOperation) !*PendingQuestion {
         .request = undefined,
     };
     return p;
+}
+
+fn parsePkgbuildDiff(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {
+    const parsed = try std.json.parseFromSlice(PkgbuildDiff, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    const warnings = try qa.alloc(Warning, parsed.value.Warnings.len);
+    for (parsed.value.Warnings, warnings) |warning, *target| {
+        target.* = .{
+            .Tool = try qa.dupe(u8, warning.Tool),
+            .Severity = try qa.dupe(u8, warning.Severity),
+            .Hook = try qa.dupe(u8, warning.Hook),
+            .MatchedLine = try qa.dupe(u8, warning.MatchedLine),
+            .Message = try qa.dupe(u8, warning.Message),
+        };
+    }
+    const diff_lines = try qa.alloc([]const u8, parsed.value.DiffLines.len);
+    for (parsed.value.DiffLines, diff_lines) |line, *target| {
+        target.* = try qa.dupe(u8, line);
+    }
+
+    const source_count = if (parsed.value.SourceFiles) |files|
+        files.map.count()
+    else
+        0;
+
+    const source_files = try qa.alloc(SourceFile, source_count);
+    if (parsed.value.SourceFiles) |files_values| {
+        var files = files_values;
+        var file_iterator = files.map.iterator();
+        var index: usize = 0;
+        while (file_iterator.next()) |entry| : (index += 1) {
+            source_files[index] = SourceFile{
+                .name = try qa.dupe(u8, entry.key_ptr.*),
+                .content = try qa.dupe(u8, entry.value_ptr.*),
+            };
+        }
+    }
+
+    pending.request = .{ .pkgbuild = .{
+        .question_id = try qa.dupe(u8, parsed.value.QuestionId),
+        .package_name = try qa.dupe(u8, parsed.value.PackageName),
+        .old_pkgbuild = try qa.dupe(u8, parsed.value.OldPkgbuild),
+        .new_pkgbuild = try qa.dupe(u8, parsed.value.NewPkgbuild),
+        .warnings = warnings,
+        .diff_lines = diff_lines,
+        .source_files = source_files,
+    } };
+
+    return pending;
 }
 
 fn parseYesNo(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {

@@ -623,11 +623,23 @@ pub const TransactionPage = extern struct {
                 pending.on_dismiss = &dismiss_question;
                 pending.dismiss_ctx = self;
 
+                const sources = a.alloc(
+                    PkgbuildReviewDialog.SourceFile,
+                    q.source_files.len,
+                ) catch return;
+
+                for (q.source_files, sources) |source, *target| {
+                    target.* = .{
+                        .name = a.dupeZ(u8, source.name) catch return,
+                        .content = a.dupeZ(u8, source.content) catch return,
+                    };
+                }
+
                 const dialog = PkgbuildReviewDialog.new(
                     name,
                     lines,
                     warns,
-                    &.{},
+                    sources,
                     &on_pkgbuild_response,
                     pending,
                 );

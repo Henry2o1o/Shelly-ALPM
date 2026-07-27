@@ -82,6 +82,7 @@ pub const ShellyWindow = extern struct {
         populate_stack(self);
         applyConfig(self);
         showWelcomeIfFirstStart(self);
+        _ = gtk.Window.signals.close_request.connect(self.as(gtk.Window), *ShellyWindow, &on_close_request, self, .{});
     }
 
     pub fn applyConfig(self: *ShellyWindow) void {
@@ -95,6 +96,29 @@ pub const ShellyWindow = extern struct {
 
         self.changeNav(cfg.NavMode);
         applyDefaultPage(self);
+
+        if (cfg.WindowLastWidth > 0 and cfg.WindowLastHeight > 0) {
+            gtk.Window.setDefaultSize(
+                self.as(gtk.Window),
+                @intCast(cfg.WindowLastWidth),
+                @intCast(cfg.WindowLastHeight),
+            );
+        }
+    }
+
+    fn on_close_request(_: *gtk.Window, self: *ShellyWindow) callconv(.c) c_int {
+        const svc = runtime.config orelse return 0;
+        const w = gtk.Widget.getWidth(self.as(gtk.Widget));
+        const h = gtk.Widget.getHeight(self.as(gtk.Widget));
+        if (w > 0 and h > 0) {
+            const cfg = svc.get() catch return 0;
+            var updated = cfg.*;
+            updated.WindowLastWidth = w;
+            updated.WindowLastHeight = h;
+            svc.set(updated) catch return 0;
+            svc.save() catch return 0;
+        }
+        return 0;
     }
 
     fn showWelcomeIfFirstStart(self: *ShellyWindow) void {
