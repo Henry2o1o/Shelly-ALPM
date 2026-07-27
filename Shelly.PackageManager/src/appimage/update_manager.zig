@@ -614,6 +614,7 @@ pub const UpdateManager = struct {
         for (assets_val.array.items) |asset| {
             const name_val = asset.object.get("name") orelse continue;
             if (name_val != .string) continue;
+            if (!std.ascii.eqlIgnoreCase(std.fs.path.stem(name_val.string), app_name)) continue;
             if (endsWithIgnoreCase(name_val.string, ".AppImage")) {
                 try appimage_assets.append(allocator, asset);
             }
@@ -1137,21 +1138,23 @@ test "parse_github_response: picks single AppImage asset (ppy/osu style)" {
     try std.testing.expect(result.?.is_update_available);
 }
 
-test "parse_github_response: picks arch-matching asset when multiple AppImages present" {
+test "parse_github_response: picks exact installed basename when multiple AppImages present" {
     const body =
         \\[{
         \\  "tag_name": "2025.630.0",
         \\  "prerelease": false,
         \\  "assets": [
-        \\    {"name":"osu-aarch64.AppImage","browser_download_url":"https://example.com/osu-aarch64.AppImage"},
-        \\    {"name":"osu-x86_64.AppImage","browser_download_url":"https://example.com/osu-x86_64.AppImage"}
+        \\    {"name":"DuckStation-arm64.AppImage","browser_download_url":"https://example.com/DuckStation-arm64.AppImage"},
+        \\    {"name":"DuckStation-armhf.AppImage","browser_download_url":"https://example.com/DuckStation-armhf.AppImage"},
+        \\    {"name":"DuckStation-x64-SSE2.AppImage","browser_download_url":"https://example.com/DuckStation-x64-SSE2.AppImage"},
+        \\    {"name":"DuckStation-x64.AppImage","browser_download_url":"https://example.com/DuckStation-x64.AppImage"}
         \\  ]
         \\}]
     ;
-    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "osu", "0.0.0", false);
+    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "DuckStation-x64", "0.0.0", false);
     defer if (result) |r| r.deinit(std.testing.allocator);
     try std.testing.expect(result != null);
-    try std.testing.expectEqualStrings("https://example.com/osu-x86_64.AppImage", result.?.download_url);
+    try std.testing.expectEqualStrings("https://example.com/DuckStation-x64.AppImage", result.?.download_url);
 }
 
 test "parse_github_response: is_update_available false when version matches" {
@@ -1260,10 +1263,10 @@ test "parse_github_response: codeberg/forgejo style response (same shape as gith
         \\  ]
         \\}]
     ;
-    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "myapp", "0.0.0", false);
+    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "myapp-x86_64", "0.0.0", false);
     defer if (result) |r| r.deinit(std.testing.allocator);
     try std.testing.expect(result != null);
-    try std.testing.expectEqualStrings("myapp", result.?.name);
+    try std.testing.expectEqualStrings("myapp-x86_64", result.?.name);
     try std.testing.expectEqualStrings("v1.2.3", result.?.version);
     try std.testing.expectEqualStrings("https://codeberg.org/user/myapp/releases/download/v1.2.3/myapp-x86_64.AppImage", result.?.download_url);
     try std.testing.expect(result.?.is_update_available);
