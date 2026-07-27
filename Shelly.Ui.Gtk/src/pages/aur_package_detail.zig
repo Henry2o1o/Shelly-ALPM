@@ -13,7 +13,6 @@ const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
 const PkgbuildReviewDialog = @import("../dialog/page/preview_pkgbuild.zig").PkgbuildReviewDialog;
-const translations = @import("../helpers/translations.zig").translations;
 
 pub const PackageDetail = extern struct {
     parent_instance: Parent,
