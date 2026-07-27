@@ -614,6 +614,7 @@ pub const UpdateManager = struct {
         for (assets_val.array.items) |asset| {
             const name_val = asset.object.get("name") orelse continue;
             if (name_val != .string) continue;
+            if (!std.ascii.eqlIgnoreCase(std.fs.path.stem(name_val.string), app_name)) continue;
             if (endsWithIgnoreCase(name_val.string, ".AppImage")) {
                 try appimage_assets.append(allocator, asset);
             }
