@@ -80,6 +80,7 @@ pub const ShellyWindow = extern struct {
         build_shell(self);
         populate_stack(self);
         applyConfig(self);
+        _ = gtk.Window.signals.close_request.connect(self.as(gtk.Window), *ShellyWindow, &on_close_request, self, .{});
     }
 
     pub fn applyConfig(self: *ShellyWindow) void {
@@ -93,6 +94,29 @@ pub const ShellyWindow = extern struct {
 
         self.changeNav(cfg.NavMode);
         applyDefaultPage(self);
+
+        if (cfg.WindowLastWidth > 0 and cfg.WindowLastHeight > 0) {
+            gtk.Window.setDefaultSize(
+                self.as(gtk.Window),
+                @intCast(cfg.WindowLastWidth),
+                @intCast(cfg.WindowLastHeight),
+            );
+        }
+    }
+
+    fn on_close_request(_: *gtk.Window, self: *ShellyWindow) callconv(.c) c_int {
+        const svc = runtime.config orelse return 0;
+        const w = gtk.Widget.getWidth(self.as(gtk.Widget));
+        const h = gtk.Widget.getHeight(self.as(gtk.Widget));
+        if (w > 0 and h > 0) {
+            const cfg = svc.get() catch return 0;
+            var updated = cfg.*;
+            updated.WindowLastWidth = w;
+            updated.WindowLastHeight = h;
+            svc.set(updated) catch return 0;
+            svc.save() catch return 0;
+        }
+        return 0;
     }
 
     fn setNavEnabled(self: *ShellyWindow, name: [:0]const u8, enabled: bool) void {
@@ -209,12 +233,12 @@ pub const ShellyWindow = extern struct {
         _ = gtk.Button.signals.clicked.connect(chevron, *ShellyWindow, &on_chevron, self, .{});
         gtk.Box.append(rail, chevron.as(gtk.Widget));
 
-        add_nav_button(self, rail, stack, "recommend", RecommendPage.icon_name,  translations._(RecommendPage.title));
-        add_nav_button(self, rail, stack, "package", PackagePage.icon_name,  translations._(PackagePage.title));
-        add_nav_button(self, rail, stack, "aur", AurPage.icon_name,  translations._(AurPage.title));
-        add_nav_button(self, rail, stack, "flatpak", FlatpakPage.icon_name,  translations._(FlatpakPage.title));
-        add_nav_button(self, rail, stack, "appimage", AppImagePage.icon_name,  translations._(AppImagePage.title));
-        add_nav_button(self, rail, stack, "update", UpdatePage.icon_name,  translations._(UpdatePage.title));
+        add_nav_button(self, rail, stack, "recommend", RecommendPage.icon_name, translations._(RecommendPage.title));
+        add_nav_button(self, rail, stack, "package", PackagePage.icon_name, translations._(PackagePage.title));
+        add_nav_button(self, rail, stack, "aur", AurPage.icon_name, translations._(AurPage.title));
+        add_nav_button(self, rail, stack, "flatpak", FlatpakPage.icon_name, translations._(FlatpakPage.title));
+        add_nav_button(self, rail, stack, "appimage", AppImagePage.icon_name, translations._(AppImagePage.title));
+        add_nav_button(self, rail, stack, "update", UpdatePage.icon_name, translations._(UpdatePage.title));
 
         const sep = gtk.Box.new(.horizontal, 0);
         gtk.Widget.setVexpand(sep.as(gtk.Widget), 1);

@@ -20,15 +20,34 @@ pub fn main(init: std.process.Init) void {
     const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();
 
-    _ = gio.Application.signals.activate.connect(app, ?*anyopaque, &activate, null, .{});
+    const gapp = gobject.ext.as(gio.Application, app);
 
-    const status = gio.Application.run(gobject.ext.as(gio.Application, app), 0, null);
+    const registered = gio.Application.register(gapp, null, null);
+    std.debug.print("registered = {}\n", .{registered});
+    std.debug.print("is_remote = {}\n", .{
+        gio.Application.getIsRemote(gapp),
+    });
+
+    _ = gio.Application.signals.activate.connect(
+        app,
+        ?*anyopaque,
+        &activate,
+        null,
+        .{},
+    );
+
+    const status = gio.Application.run(gapp, 0, null);
+
     runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
 }
 
 fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
-    //load custom css
+    if (gtk.Application.getActiveWindow(app)) |window| {
+        gtk.Window.present(window);
+        return;
+    }
+
     const provider = gtk.CssProvider.new();
     gtk.CssProvider.loadFromResource(provider, "/com/shellyorg/shelly/style.css");
     gtk.StyleContext.addProviderForDisplay(

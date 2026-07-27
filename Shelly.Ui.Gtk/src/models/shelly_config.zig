@@ -49,6 +49,9 @@ pub const ShellyConfig = struct {
     // Window & View
     DefaultPageDropDown: ShellyTabs = .packages,
     NavMode: NavMode = .sidebar,
+    // Internal: persisted window geometry, not exposed in settings UI
+    WindowLastWidth: i32 = 0,
+    WindowLastHeight: i32 = 0,
 
     // Package Page
     PackageInstallView: ViewType = .list,
