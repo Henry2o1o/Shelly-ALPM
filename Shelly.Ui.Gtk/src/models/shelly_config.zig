@@ -3,12 +3,18 @@ pub const ViewType = enum(u8) {
     list = 1,
 };
 
+pub const NavMode = enum(u8) {
+    sidebar = 0,
+    topbar = 1,
+};
+
 pub const ShellyTabs = enum(u8) {
     packages = 0,
     aur = 1,
     flatpak = 2,
     app_image = 3,
     shelly_search = 4,
+    recommend = 5,
 };
 
 pub const DayOfWeek = enum(u8) {
@@ -42,6 +48,7 @@ pub const ShellyConfig = struct {
 
     // Window & View
     DefaultPageDropDown: ShellyTabs = .packages,
+    NavMode: NavMode = .sidebar,
 
     // Package Page
     PackageInstallView: ViewType = .list,
@@ -59,6 +66,7 @@ pub const ShellyConfig = struct {
     // AUR Page
     AurInstallUseChroot: bool = false,
     AurInstallRunChecks: bool = false,
+    AurInstallShowDetailPane: bool = false,
 
     AurRemoveCascadeDelete: bool = true,
     AurRemoveShowHidden: bool = false,
