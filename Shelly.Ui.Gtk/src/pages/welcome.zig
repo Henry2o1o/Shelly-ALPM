@@ -11,6 +11,7 @@ const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const runtime = @import("../services/runtime.zig");
 const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const NavMode = @import("../models/shelly_config.zig").NavMode;
+const TrayService = @import("../services/tray_service.zig");
 
 pub const WelcomePage = extern struct {
     parent_instance: Parent,
@@ -262,6 +263,10 @@ pub const WelcomePage = extern struct {
         updated.TrayEnabled = gtk.Switch.getActive(p.tray_enabled) != 0;
         updated.NewInstall = false;
         updated.NewInstallInitSettings = true;
+
+        if (gtk.Switch.getActive(p.tray_enabled) != 0) {
+            TrayService.start();
+        }
 
         svc.set(updated) catch |err| {
             std.log.err("welcome: failed to apply config: {}", .{err});
