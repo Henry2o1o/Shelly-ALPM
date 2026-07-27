@@ -17,6 +17,7 @@ const Toast = @import("../helpers/custom_ui_comps/toast.zig").Toast;
 const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const appimage_icon = @import("../helpers/appimage_icon.zig");
 const c_string = @import("../helpers/c_string.zig");
+const translations = @import("../helpers/translations.zig");
 
 pub const AppImagePage = extern struct {
     parent_instance: Parent,
@@ -29,15 +30,6 @@ pub const AppImagePage = extern struct {
     const resource_path = "/com/shellyorg/shelly/ui/appimage_page.ui";
 
     const fallback_icon = "application-x-executable-symbolic";
-
-    const update_type_labels = [_][:0]const u8{
-        "None",
-        "Static URL",
-        "GitHub",
-        "GitLab",
-        "Codeberg",
-        "Forgejo",
-    };
 
     const Private = struct {
         app_list: *gtk.ListBox,
@@ -115,7 +107,14 @@ pub const AppImagePage = extern struct {
         p.toast = toast;
 
         const type_strings = gtk.StringList.new(null);
-        inline for (update_type_labels) |label| {
+        for ([_][:0]const u8{
+            translations._("None"),
+            translations._("Static URL"),
+            translations._("GitHub"),
+            translations._("GitLab"),
+            translations._("Codeberg"),
+            translations._("Forgejo"),
+        }) |label| {
             gtk.StringList.append(type_strings, label);
         }
         gtk.DropDown.setModel(p.update_type_drop, type_strings.as(gio.ListModel));
@@ -226,7 +225,7 @@ pub const AppImagePage = extern struct {
             gtk.ListBox.append(p.app_list, row);
             if (findUpdateFor(p.updates, app)) |update| {
                 var buf: [128]u8 = undefined;
-                const text = std.fmt.bufPrintSentinel(&buf, "Update Available: {s}", .{update.Version}, 0) catch continue;
+                const text = std.fmt.bufPrintSentinel(&buf, "{s}: {s}", .{ translations._("Update Available"), update.Version }, 0) catch continue;
                 set_row_update_badge(row, text);
             }
         }
@@ -393,7 +392,7 @@ pub const AppImagePage = extern struct {
         gtk.Label.setLabel(p.detail_title, c_string.cstr(&buf, display_name));
 
         var vbuf: [128]u8 = undefined;
-        gtk.Label.setLabel(p.detail_version, std.fmt.bufPrintSentinel(&vbuf, "Version {s}", .{app.Version}, 0) catch "Version ?");
+        gtk.Label.setLabel(p.detail_version, std.fmt.bufPrintSentinel(&vbuf, "{s} {s}", .{ translations._("Version"), app.Version }, 0) catch translations._("Version ?"));
 
         gtk.Label.setLabel(p.detail_description, c_string.cstr(&buf, app.Description));
 
@@ -448,12 +447,12 @@ pub const AppImagePage = extern struct {
                     trimmed[0] != '/' and trimmed[trimmed.len - 1] != '/' and
                     std.mem.count(u8, trimmed, "/") == 1;
                 if (!valid) {
-                    error_text = "Invalid format. Use owner/repo (e.g. seafoam-labs/shelly-alpm)";
+                    error_text = translations._("Invalid format. Use owner/repo (e.g. seafoam-labs/shelly-alpm)");
                 }
             },
             .Forgejo, .StaticUrl => {
                 if (!std.ascii.startsWithIgnoreCase(trimmed, "http")) {
-                    error_text = "Invalid URL. Must start with http:// or https://";
+                    error_text = translations._("Invalid URL. Must start with http:// or https://");
                 }
             },
         }
@@ -472,10 +471,10 @@ pub const AppImagePage = extern struct {
 
     fn install_appimage(self: *Self) callconv(.c) void {
         const dialog = gtk.FileDialog.new();
-        gtk.FileDialog.setTitle(dialog, "Choose an AppImage file");
+        gtk.FileDialog.setTitle(dialog, translations._("Choose an AppImage file"));
 
         const filter = gtk.FileFilter.new();
-        gtk.FileFilter.setName(filter, "AppImage files");
+        gtk.FileFilter.setName(filter, translations._("AppImage files"));
         gtk.FileFilter.addSuffix(filter, "AppImage");
         gtk.FileFilter.addSuffix(filter, "appimage");
 
@@ -508,7 +507,7 @@ pub const AppImagePage = extern struct {
     fn installFromPath(self: *Self, path: []const u8) void {
         const p = self.priv();
         if (!std.ascii.endsWithIgnoreCase(path, ".appimage")) {
-            p.toast.show(.warning, "Only .AppImage files can be installed");
+            p.toast.show(.warning, translations._("Only .AppImage files can be installed"));
             return;
         }
 
@@ -521,7 +520,7 @@ pub const AppImagePage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Installing AppImage",
+            .title = translations._("Installing AppImage"),
             .argv = argv,
             .packages = names.items,
             .on_complete = &on_op_complete,
@@ -557,7 +556,7 @@ pub const AppImagePage = extern struct {
     fn upgrade_appimage(self: *Self) callconv(.c) void {
         const p = self.priv();
         if (p.updates.len == 0) {
-            p.toast.show(.info, "No AppImages need to be upgraded");
+            p.toast.show(.info, translations._("No AppImages need to be upgraded"));
             return;
         }
 
@@ -566,7 +565,7 @@ pub const AppImagePage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Upgrading AppImages",
+            .title = translations._("Upgrading AppImages"),
             .argv = argv,
             .packages = &.{},
             .on_complete = &on_op_complete,
@@ -581,7 +580,7 @@ pub const AppImagePage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Syncing AppImages",
+            .title = translations._("Syncing AppImages"),
             .argv = argv,
             .packages = &.{},
             .on_complete = &on_op_complete,
@@ -604,7 +603,7 @@ pub const AppImagePage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Syncing AppImage",
+            .title = translations._("Syncing AppImage"),
             .argv = argv,
             .packages = names.items,
             .on_complete = &on_op_complete,
@@ -637,7 +636,7 @@ pub const AppImagePage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Saving update configuration",
+            .title = translations._("Saving update configuration"),
             .argv = argv,
             .packages = names.items,
             .on_complete = &on_op_complete,
@@ -652,9 +651,14 @@ pub const AppImagePage = extern struct {
         const app = p.apps[index];
 
         var buf: [512]u8 = undefined;
-        const message = std.fmt.bufPrintSentinel(&buf, "Remove {s}? Configuration files will be kept.", .{app.Name}, 0) catch "Remove this AppImage?";
-        const dialog = ConfirmDialog.new("Remove AppImage", message, &on_remove_response, self);
-        dialog.setButtons("Remove", "Cancel");
+        const message = std.fmt.bufPrintSentinel(
+            &buf,
+            "{s} {s}? {s}",
+            .{ translations._("Remove"), app.Name, translations._("Configuration files will be kept.") },
+            0,
+        ) catch translations._("Remove this AppImage?");
+        const dialog = ConfirmDialog.new(translations._("Remove AppImage"), message, &on_remove_response, self);
+        dialog.setButtons(translations._("Remove"), translations._("Cancel"));
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.showLockout(dialog.as(gtk.Widget));
         }
@@ -678,7 +682,7 @@ pub const AppImagePage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Removing AppImage",
+            .title = translations._("Removing AppImage"),
             .argv = argv,
             .packages = names.items,
             .on_complete = &on_op_complete,
@@ -691,11 +695,11 @@ pub const AppImagePage = extern struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         const p = self.priv();
         if (success) {
-            p.toast.show(.success, "Operation completed successfully");
+            p.toast.show(.success, translations._("Operation completed successfully"));
             show_list(self);
             self.reload();
         } else {
-            p.toast.show(.@"error", "Operation failed");
+            p.toast.show(.@"error", translations._("Operation failed"));
         }
     }
 

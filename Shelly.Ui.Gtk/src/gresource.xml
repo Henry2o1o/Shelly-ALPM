@@ -4,6 +4,11 @@
     <file alias="flatpak-symbolic.svg" preprocess="xml-stripblanks">assets/icons/flatpak-symbolic.svg</file>
     <file alias="arch-symbolic.svg" preprocess="xml-stripblanks">assets/icons/arch-symbolic.svg</file>
     <file alias="update-symbolic.svg" preprocess="xml-stripblanks">assets/icons/update-symbolic.svg</file>
+    <file alias="star-filled-rounded-symbolic.svg" preprocess="xml-stripblanks">assets/icons/star-filled-rounded-symbolic.svg</file>
+    <file alias="package-x-generic-symbolic.svg" preprocess="xml-stripblanks">assets/icons/package-x-generic-symbolic.svg</file>
+    <file alias="settings-symbolic.svg" preprocess="xml-stripblanks">assets/icons/settings-symbolic.svg</file>
+    <file alias="application-x-executable-symbolic.svg" preprocess="xml-stripblanks">assets/icons/application-x-executable-symbolic.svg</file>
+    <file alias="software-update-available-symbolic.svg" preprocess="xml-stripblanks">assets/icons/software-update-available-symbolic.svg</file>
   </gresource>
   <gresource prefix="/com/shellyorg/shelly">
     <file>ui/main_window.ui</file>
@@ -19,6 +24,7 @@
     <file>dialog/ui/plan_dialog.ui</file>
     <file>dialog/ui/multiselect.ui</file>
     <file>dialog/ui/permissions.ui</file>
+    <file>dialog/ui/preview_pkgbuild.ui</file>
     <file>ui/appimage_page.ui</file>
     <file>ui/transaction_page.ui</file>
     <file>ui/package_page.ui</file>
@@ -26,6 +32,7 @@
     <file>ui/package_detail.ui</file>
     <file>ui/aur_package_detail.ui</file>
     <file>ui/update_page.ui</file>
+    <file>ui/recommend_page.ui</file>
     <file>style.css</file>
   </gresource>
 </gresources>

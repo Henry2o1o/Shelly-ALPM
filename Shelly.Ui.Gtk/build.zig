@@ -62,6 +62,11 @@ pub fn build(b: *std.Build) void {
     gresource.addFileInput(b.path("src/assets/icons/flatpak-symbolic.svg"));
     gresource.addFileInput(b.path("src/assets/icons/arch-symbolic.svg"));
     gresource.addFileInput(b.path("src/assets/icons/update-symbolic.svg"));
+    gresource.addFileInput(b.path("src/assets/icons/star-filled-rounded-symbolic.svg"));
+    gresource.addFileInput(b.path("src/assets/icons/package-x-generic-symbolic.svg"));
+    gresource.addFileInput(b.path("src/assets/icons/settings-symbolic.svg"));
+    gresource.addFileInput(b.path("src/assets/icons/application-x-executable-symbolic.svg"));
+    gresource.addFileInput(b.path("src/assets/icons/software-update-available-symbolic.svg"));
     gresource.addFileInput(b.path("src/ui/main_window.ui"));
     gresource.addFileInput(b.path("src/ui/settings_page.ui"));
     gresource.addFileInput(b.path("src/ui/flatpak/flatpak_page.ui"));
@@ -74,6 +79,7 @@ pub fn build(b: *std.Build) void {
     gresource.addFileInput(b.path("src/ui/package_detail.ui"));
     gresource.addFileInput(b.path("src/ui/aur_package_detail.ui"));
     gresource.addFileInput(b.path("src/ui/transaction_page.ui"));
+    gresource.addFileInput(b.path("src/ui/recommend_page.ui"));
     gresource.addFileInput(b.path("src/ui/flatpak/flatpak_install_view.ui"));
     gresource.addFileInput(b.path("src/ui/flatpak/flatpak_remove_view.ui"));
     gresource.addFileInput(b.path("src/ui/flatpak/flatpak_remotes_view.ui"));
@@ -82,6 +88,7 @@ pub fn build(b: *std.Build) void {
     gresource.addFileInput(b.path("src/dialog/ui/permissions.ui"));
     gresource.addFileInput(b.path("src/dialog/ui/pkg_build.ui"));
     gresource.addFileInput(b.path("src/dialog/ui/plan_dialog.ui"));
+    gresource.addFileInput(b.path("src/dialog/ui/preview_pkgbuild.ui"));
 
     // Link the generated resource C into the exe.
     exe.root_module.addCSourceFile(.{ .file = resources_c });

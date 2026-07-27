@@ -15,6 +15,7 @@ const TransactionPackage = @import("../services/shelly_operation.zig").Transacti
 const MultiSelectDialog = @import("../dialog/page/multiselect.zig").MultiSelectDialog;
 const PkgbuildReviewDialog = @import("../dialog/page/pkg_build.zig").PkgbuildReviewDialog;
 const PlanDialog = @import("../dialog/page/plan.zig").PlanDialog;
+const translations = @import("../helpers/translations.zig");
 
 pub const TransactionRequest = struct {
     title: []const u8,
@@ -139,7 +140,7 @@ pub const TransactionPage = extern struct {
 
         const started = if (request.privileged) op.startPrivileged(argv) else op.start(argv);
         started catch {
-            append_terminal(self, "Failed to start operation.");
+            append_terminal(self, translations._("Failed to start operation."));
             op.threaded.deinit();
             std.heap.c_allocator.destroy(op);
             p.operation = null;
@@ -187,7 +188,7 @@ pub const TransactionPage = extern struct {
         gtk.Label.setEllipsize(name_label, .end);
         gtk.Box.append(row_top, name_label.as(gtk.Widget));
 
-        const status = gtk.Label.new("Pending");
+        const status = gtk.Label.new(translations._("Pending"));
         gtk.Widget.setHalign(status.as(gtk.Widget), .end);
         gtk.Label.setXalign(status, 1);
         gtk.Widget.addCssClass(status.as(gtk.Widget), "pkg-status");
@@ -251,7 +252,7 @@ pub const TransactionPage = extern struct {
 
                 const is_database = std.mem.eql(u8, pr.progress_type, "DatabaseDownload");
                 if (is_database) {
-                    setLabel(self.priv().status_label, "Synchronizing databases");
+                    setLabel(self.priv().status_label, translations._("Synchronizing databases"));
                 }
 
                 const display_name = if (is_database)
@@ -275,10 +276,10 @@ pub const TransactionPage = extern struct {
                 }
             },
             .flatpak_progress => |pr| {
-                handleSimpleProgress(self, "Flatpak", pr.status, pr.percentage);
+                handleSimpleProgress(self, translations._("Flatpak"), pr.status, pr.percentage);
             },
             .appimage_progress => |pr| {
-                handleSimpleProgress(self, "AppImage", pr.status, pr.percentage);
+                handleSimpleProgress(self, translations._("AppImage"), pr.status, pr.percentage);
             },
             .unknown => {},
         }
@@ -309,17 +310,17 @@ pub const TransactionPage = extern struct {
     }
 
     fn phase_label(progress_type: []const u8) []const u8 {
-        if (std.mem.eql(u8, progress_type, "AurDownload")) return "Downloading";
-        if (std.mem.eql(u8, progress_type, "MakepkgBuild")) return "Building";
-        if (std.mem.eql(u8, progress_type, "MakepkgPackage")) return "Packaging";
-        if (std.mem.eql(u8, progress_type, "PackageDownload")) return "Downloading";
-        if (std.mem.eql(u8, progress_type, "DatabaseDownload")) return "Downloading";
-        if (std.mem.eql(u8, progress_type, "AddStart")) return "Installing";
-        if (std.mem.eql(u8, progress_type, "UpgradeStart")) return "Upgrading";
-        if (std.mem.eql(u8, progress_type, "DowngradeStart")) return "Downgrading";
-        if (std.mem.eql(u8, progress_type, "ReinstallStart")) return "Reinstalling";
-        if (std.mem.eql(u8, progress_type, "RemoveStart")) return "Removing";
-        return "Working";
+        if (std.mem.eql(u8, progress_type, "AurDownload")) return translations._("Downloading");
+        if (std.mem.eql(u8, progress_type, "MakepkgBuild")) return translations._("Building");
+        if (std.mem.eql(u8, progress_type, "MakepkgPackage")) return translations._("Packaging");
+        if (std.mem.eql(u8, progress_type, "PackageDownload")) return translations._("Downloading");
+        if (std.mem.eql(u8, progress_type, "DatabaseDownload")) return translations._("Downloading");
+        if (std.mem.eql(u8, progress_type, "AddStart")) return translations._("Installing");
+        if (std.mem.eql(u8, progress_type, "UpgradeStart")) return translations._("Upgrading");
+        if (std.mem.eql(u8, progress_type, "DowngradeStart")) return translations._("Downgrading");
+        if (std.mem.eql(u8, progress_type, "ReinstallStart")) return translations._("Reinstalling");
+        if (std.mem.eql(u8, progress_type, "RemoveStart")) return translations._("Removing");
+        return translations._("Working");
     }
 
     fn fractionFromPercent(percent: i64) f64 {
@@ -369,13 +370,13 @@ pub const TransactionPage = extern struct {
     }
 
     fn mark_row_done(row: *PackageRow) void {
-        gtk.Label.setLabel(row.status_label, "Done");
+        gtk.Label.setLabel(row.status_label, translations._("Done"));
         gtk.ProgressBar.setFraction(row.progress, 1.0);
         gtk.Widget.addCssClass(row.status_label.as(gtk.Widget), "status-done");
     }
 
     fn mark_row_failed(row: *PackageRow) void {
-        gtk.Label.setLabel(row.status_label, "Failed");
+        gtk.Label.setLabel(row.status_label, translations._("Failed"));
         gtk.ProgressBar.setFraction(row.progress, 1.0);
         gtk.Widget.addCssClass(row.status_label.as(gtk.Widget), "status-failed");
     }
@@ -383,7 +384,7 @@ pub const TransactionPage = extern struct {
     fn handle_done(self: *Self, exit_code: u8) void {
         const p = self.priv();
         var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Finished (exit {d})", .{exit_code}) catch "Finished";
+        const msg = std.fmt.bufPrint(&buf, "{s} ({s} {d})", .{ translations._("Finished"), translations._("exit"), exit_code }) catch translations._("Finished");
         append_terminal(self, msg);
 
         gtk.Widget.setVisible(p.close_button.as(gtk.Widget), 1);
@@ -402,7 +403,7 @@ pub const TransactionPage = extern struct {
         } else {
             var it = p.rows.valueIterator();
             while (it.next()) |row_ptr|
-                gtk.Label.setLabel(row_ptr.*.status_label, "Cancelled");
+                gtk.Label.setLabel(row_ptr.*.status_label, translations._("Cancelled"));
         }
 
         if (p.on_complete) |cb| {
@@ -448,7 +449,7 @@ pub const TransactionPage = extern struct {
         status: ?[]const u8,
         percentage: i64,
     ) void {
-        const message = nonEmpty(status) orelse "Working";
+        const message = nonEmpty(status) orelse translations._("Working");
         if (formatSimpleProgress(std.heap.c_allocator, backend, status, percentage)) |line| {
             defer std.heap.c_allocator.free(line);
             append_terminal(self, line);
@@ -469,7 +470,7 @@ pub const TransactionPage = extern struct {
         return std.fmt.allocPrint(
             allocator,
             "[{s}] {s} ({d}%)",
-            .{ backend, nonEmpty(status) orelse "Working", percentage },
+            .{ backend, nonEmpty(status) orelse translations._("Working"), percentage },
         );
     }
 
@@ -568,8 +569,8 @@ pub const TransactionPage = extern struct {
                 pending.on_dismiss = &dismiss_question;
                 pending.dismiss_ctx = self;
 
-                const dialog = ConfirmDialog.new("Confirm", text_z, &on_yesno_response, pending);
-                dialog.setButtons("Yes", "No");
+                const dialog = ConfirmDialog.new(translations._("Confirm"), text_z, &on_yesno_response, pending);
+                dialog.setButtons(translations._("Yes"), translations._("No"));
 
                 gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
                 gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
@@ -622,11 +623,23 @@ pub const TransactionPage = extern struct {
                 pending.on_dismiss = &dismiss_question;
                 pending.dismiss_ctx = self;
 
+                const sources = a.alloc(
+                    PkgbuildReviewDialog.SourceFile,
+                    q.source_files.len,
+                ) catch return;
+
+                for (q.source_files, sources) |source, *target| {
+                    target.* = .{
+                        .name = a.dupeZ(u8, source.name) catch return,
+                        .content = a.dupeZ(u8, source.content) catch return,
+                    };
+                }
+
                 const dialog = PkgbuildReviewDialog.new(
                     name,
                     lines,
                     warns,
-                    &.{},
+                    sources,
                     &on_pkgbuild_response,
                     pending,
                 );

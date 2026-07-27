@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<interface>
+<interface domain="shelly-ui">
   <template class="ShellyMultiSelectDialog" parent="GtkBox">
     <property name="orientation">vertical</property>
     <property name="halign">center</property>
@@ -50,14 +50,14 @@
                 <property name="margin-top">8</property>
                 <child>
                   <object class="GtkButton" id="confirm_button">
-                    <property name="label">Confirm</property>
+                    <property name="label" translatable="yes">Confirm</property>
                     <signal name="clicked" handler="on_confirm" swapped="true"/>
                     <style><class name="suggested-action"/></style>
                   </object>
                 </child>
                 <child>
                   <object class="GtkButton" id="cancel_button">
-                    <property name="label">Skip</property>
+                    <property name="label" translatable="yes">Skip</property>
                     <signal name="clicked" handler="on_cancel" swapped="true"/>
                   </object>
                 </child>

@@ -7,32 +7,47 @@ const glib = bindings.glib;
 const gobject = bindings.gobject;
 const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
 const runtime = @import("services/runtime.zig");
-
-extern fn bindtextdomain(domainname: [*:0]const u8, dirname: [*:0]const u8) ?[*:0]const u8;
-extern fn bind_textdomain_codeset(domainname: [*:0]const u8, codeset: [*:0]const u8) ?[*:0]const u8;
-extern fn textdomain(domainname: [*:0]const u8) ?[*:0]const u8;
+const translations = @import("helpers/translations.zig");
 
 pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
     runtime.environ_map = init.environ_map;
 
-    //hook up translations
-    _ = bindtextdomain("shelly-ui", "/usr/share/locale");
-    _ = bind_textdomain_codeset("shelly-ui", "UTF-8");
-    _ = textdomain("shelly-ui");
+    if (!translations.init()) {
+        std.log.warn("translations: failed to initialize gettext", .{});
+    }
 
     const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();
 
-    _ = gio.Application.signals.activate.connect(app, ?*anyopaque, &activate, null, .{});
+    const gapp = gobject.ext.as(gio.Application, app);
 
-    const status = gio.Application.run(gobject.ext.as(gio.Application, app), 0, null);
+    const registered = gio.Application.register(gapp, null, null);
+    std.debug.print("registered = {}\n", .{registered});
+    std.debug.print("is_remote = {}\n", .{
+        gio.Application.getIsRemote(gapp),
+    });
+
+    _ = gio.Application.signals.activate.connect(
+        app,
+        ?*anyopaque,
+        &activate,
+        null,
+        .{},
+    );
+
+    const status = gio.Application.run(gapp, 0, null);
+
     runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
 }
 
 fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
-    //load custom css
+    if (gtk.Application.getActiveWindow(app)) |window| {
+        gtk.Window.present(window);
+        return;
+    }
+
     const provider = gtk.CssProvider.new();
     gtk.CssProvider.loadFromResource(provider, "/com/shellyorg/shelly/style.css");
     gtk.StyleContext.addProviderForDisplay(

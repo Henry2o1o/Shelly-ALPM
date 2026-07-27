@@ -616,7 +616,7 @@ fn runStandard(
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
 
-    try manager.sync(false);
+    try manager.sync(true);
     const updates = try manager.get_updates_available();
     defer Zigalpm.alpm.OwnedPackageWithUpdate.deinitSlice(context.allocator, updates);
     if (updates.len == 0) {

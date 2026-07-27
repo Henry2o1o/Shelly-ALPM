@@ -13,6 +13,7 @@ const AurPackage = @import("../models/aur_package.zig").AurPackage;
 const runtime = @import("../services/runtime.zig");
 const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const AurPackageDetail = @import("aur_package_detail.zig").PackageDetail;
+const translations = @import("../helpers/translations.zig");
 
 pub const AurPage = extern struct {
     parent_instance: Parent,
@@ -102,6 +103,7 @@ pub const AurPage = extern struct {
         p.installed_mode = false;
         p.last_query_len = 0;
         p.check_map = .empty;
+        p.show_detail_pane = false;
 
         p.list_store = gio.ListStore.new(AurPackageObject.getGObjectType());
         p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
@@ -127,10 +129,7 @@ pub const AurPage = extern struct {
 
         const detail = AurPackageDetail.new();
         p.aur_detail = detail;
-        p.show_detail_pane = true;
         gtk.Revealer.setChild(p.detail_revealer, detail.as(gtk.Widget));
-
-        _ = gtk.CheckButton.signals.toggled.connect(p.show_detail_pane_check, *Self, &on_detail_pane, self, .{});
 
         self.update_selection_ui();
         support.connectLifecycle(Self, self);
@@ -179,9 +178,9 @@ pub const AurPage = extern struct {
                 gtk.Widget.setVisible(p.placeholder_box.as(gtk.Widget), 0);
                 gtk.Spinner.stop(p.loading_spinner);
             },
-            .prompt => self.show_placeholder("system-search-symbolic", "Search the AUR", "The AUR has no browsable index — type a package name to begin."),
-            .empty => self.show_placeholder("edit-find-symbolic", "No packages found", "Try a shorter or more general keyword."),
-            .err => self.show_placeholder("dialog-error-symbolic", "Could not reach the AUR", "Check your connection and try again."),
+            .prompt => self.show_placeholder("system-search-symbolic", translations._("Search the AUR"), translations._("The AUR has no browsable index — type a package name to begin.")),
+            .empty => self.show_placeholder("edit-find-symbolic", translations._("No packages found"), translations._("Try a shorter or more general keyword.")),
+            .err => self.show_placeholder("dialog-error-symbolic", translations._("Could not reach the AUR"), translations._("Check your connection and try again.")),
         }
     }
 
@@ -239,9 +238,7 @@ pub const AurPage = extern struct {
         };
         const pkg_obj = gobject.ext.cast(AurPackageObject, obj) orelse return;
         p.aur_detail.showPackage(pkg_obj.getPackage());
-        if (p.show_detail_pane) {
-            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-        }
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
     }
 
     fn setup_number_column(
@@ -289,11 +286,11 @@ pub const AurPage = extern struct {
                 gtk.Box.append(title_box, name_label.as(gtk.Widget));
 
                 const ood_icon = gtk.Image.newFromIconName("dialog-warning-symbolic");
-                gtk.Widget.setTooltipText(ood_icon.as(gtk.Widget), "Flagged out of date");
+                gtk.Widget.setTooltipText(ood_icon.as(gtk.Widget), translations._("Flagged out of date"));
                 gtk.Box.append(title_box, ood_icon.as(gtk.Widget));
 
                 const installed_icon = gtk.Image.newFromIconName("object-select-symbolic");
-                gtk.Widget.setTooltipText(installed_icon.as(gtk.Widget), "Installed");
+                gtk.Widget.setTooltipText(installed_icon.as(gtk.Widget), translations._("Installed"));
                 gtk.Box.append(title_box, installed_icon.as(gtk.Widget));
 
                 gtk.Box.append(box, title_box.as(gtk.Widget));
@@ -388,9 +385,7 @@ pub const AurPage = extern struct {
         const p = self.priv();
 
         p.aur_detail.showPackage(pkg.getPackage());
-        if (p.show_detail_pane) {
-            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-        }
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
 
         self.update_selection_ui();
     }
@@ -405,17 +400,7 @@ pub const AurPage = extern struct {
         pkg_obj.setSelected(true);
 
         p.aur_detail.showPackage(pkg_obj.getPackage());
-        if (p.show_detail_pane) {
-            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-        }
-    }
-
-    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
-        const p = self.priv();
-        if (p.applying_config) return;
-        const active = gtk.CheckButton.getActive(check) != 0;
-        p.show_detail_pane = active;
-        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active) 0 else 1);
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
     }
 
     fn selection_count(self: *Self) u32 {
@@ -472,13 +457,13 @@ pub const AurPage = extern struct {
 
         var buf: [64]u8 = undefined;
         if (count == 0) {
-            gtk.Button.setLabel(p.install_button, if (p.installed_mode) "Remove Selected" else "Install Selected");
+            gtk.Button.setLabel(p.install_button, if (p.installed_mode) translations._("Remove Selected") else translations._("Install Selected"));
             gtk.Widget.setSensitive(btn, 0);
-            gtk.Widget.setTooltipText(btn, "Select one or more packages");
+            gtk.Widget.setTooltipText(btn, translations._("Select one or more packages"));
         } else if (p.installed_mode) {
             gtk.Button.setLabel(
                 p.install_button,
-                std.fmt.bufPrintZ(&buf, "Remove {d} Package(s)", .{count}) catch "Remove Selected",
+                std.fmt.bufPrintZ(&buf, "{s} {d} {s}", .{ translations._("Remove"), count, translations._("Package(s)") }) catch translations._("Remove Selected"),
             );
             gtk.Widget.setSensitive(btn, 1);
             gtk.Widget.addCssClass(btn, "destructive-action");
@@ -486,7 +471,7 @@ pub const AurPage = extern struct {
         } else {
             gtk.Button.setLabel(
                 p.install_button,
-                std.fmt.bufPrintZ(&buf, "Install {d} Package(s)", .{count}) catch "Install Selected",
+                std.fmt.bufPrintZ(&buf, "{s} {d} {s}", .{ translations._("Install"), count, translations._("Package(s)") }) catch translations._("Install Selected"),
             );
             gtk.Widget.setSensitive(btn, 1);
             gtk.Widget.addCssClass(btn, "suggested-action");
@@ -511,6 +496,9 @@ pub const AurPage = extern struct {
         defer p.applying_config = false;
         gtk.CheckButton.setActive(p.chroot_check, @intFromBool(cfg.AurInstallUseChroot));
         gtk.CheckButton.setActive(p.run_checks_check, @intFromBool(cfg.AurInstallRunChecks));
+        p.show_detail_pane = cfg.AurInstallShowDetailPane;
+        gtk.CheckButton.setActive(p.show_detail_pane_check, @intFromBool(cfg.AurInstallShowDetailPane));
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (cfg.AurInstallShowDetailPane) 0 else 1);
     }
 
     fn on_chroot_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
@@ -740,23 +728,32 @@ pub const AurPage = extern struct {
 
         if (p.installed_mode) {
             const dialog = ConfirmDialog.new(
-                "Remove Packages",
-                "Remove the selected AUR packages?",
+                translations._("Remove Packages"),
+                translations._("Remove the selected AUR packages?"),
                 &on_remove_response,
                 self,
             );
-            dialog.setButtons("Remove", "Cancel");
+            dialog.setButtons(translations._("Remove"), translations._("Cancel"));
             if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dialog.as(gtk.Widget));
         } else {
             const dialog = ConfirmDialog.new(
-                "Build from AUR",
-                "Build and install the selected packages? This may take a while.",
+                translations._("Build from AUR"),
+                translations._("Build and install the selected packages? This may take a while."),
                 &on_install_response,
                 self,
             );
-            dialog.setButtons("Build", "Cancel");
+            dialog.setButtons(translations._("Build"), translations._("Cancel"));
             if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dialog.as(gtk.Widget));
         }
+    }
+
+    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_detail_pane = active;
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active) 0 else 1);
+        updateConfigField(.AurInstallShowDetailPane, active);
     }
 
     fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
@@ -785,7 +782,7 @@ pub const AurPage = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Installing AUR packages",
+                .title = translations._("Installing AUR packages"),
                 .argv = argv.items,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,
@@ -813,7 +810,7 @@ pub const AurPage = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Removing AUR packages",
+                .title = translations._("Removing AUR packages"),
                 .argv = argv.items,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,

@@ -11,6 +11,7 @@ const AppImageUpdate = @import("../models/appimage.zig").AppImageUpdate;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const RunResult = std.process.RunResult;
 const AurPackage = @import("../models/aur_package.zig").AurPackage;
+const PkgBuild = @import("../models/pkgbuild.zig").PkgBuild;
 const runtime = @import("runtime.zig");
 const builtin = @import("builtin");
 
@@ -216,6 +217,18 @@ pub const ShellyCli = struct {
         }
 
         return error.NoDataFrame;
+    }
+
+    pub fn fetch_pkgbuild(self: ShellyCli, name: []const u8) !std.json.Parsed([]PkgBuild) {
+        const result = try self.run(&.{ "search", "aur", name, "--pkgbuild" });
+        defer self.allocator.free(result.stderr);
+        defer self.allocator.free(result.stdout);
+
+        if (result.stderr.len > 0) return error.FetchPkgbuildFailed;
+
+        std.debug.print("result.stdout: {s}\n", .{result.stdout});
+
+        return JsonPackFrame.decode([]PkgBuild, self.allocator, result.stdout);
     }
 };
 

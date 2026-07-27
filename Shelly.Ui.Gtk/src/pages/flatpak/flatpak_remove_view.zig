@@ -14,6 +14,7 @@ const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const FlatpakObject = @import("../../g_objects/flatpak_object.zig").FlatpakObject;
 const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
+const translations = @import("../../helpers/translations.zig");
 
 pub const FlatpakRemoveView = extern struct {
     parent_instance: Parent,
@@ -197,7 +198,7 @@ pub const FlatpakRemoveView = extern struct {
         if (path) |pp| {
             gtk.Image.setFromFile(icon, pp);
         } else {
-            gtk.Image.setFromIconName(icon, "application-x-executable");
+            gtk.Image.setFromIconName(icon, "package-x-generic");
         }
     }
 
@@ -216,7 +217,7 @@ pub const FlatpakRemoveView = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Removing remote",
+                .title = translations._("Removing Flatpak"),
                 .argv = argv,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,

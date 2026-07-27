@@ -122,7 +122,9 @@ msgid "Run checks"
 msgstr "Kontrolleri Çalıştır"
 
 msgid "Run the --check function during package build (installs checkdepends)"
-msgstr "Paket derlemesi sırasında --check işlevini çalıştır (checkdepends bağımlılıklarını kurar)"
+msgstr ""
+"Paket derlemesi sırasında --check işlevini çalıştır (checkdepends "
+"bağımlılıklarını kurar)"
 
 msgid "refresh"
 msgstr "Yenile"
@@ -143,15 +145,22 @@ msgid "Update Aur Package(s)"
 msgstr "AUR Paketlerini Güncelle"
 
 #
-msgid "Run the --check function during package build (installs checkdepends)\n                         "
-msgstr "Paket derlemesi sırasında --check işlevini çalıştır (checkdepends bağımlılıklarını kurar)\n                         "
+msgid ""
+"Run the --check function during package build (installs checkdepends)\n"
+"                         "
+msgstr ""
+"Paket derlemesi sırasında --check işlevini çalıştır (checkdepends "
+"bağımlılıklarını kurar)\n"
+"                         "
 
 msgid "Search..."
 msgstr "Ara..."
 
 #
 msgid "Sync metadata for all AppImages. Useful if AppImage self updated."
-msgstr "Tüm AppImage'lar için üst verileri eşitle. AppImage kendini güncellediyse kullanışlıdır."
+msgstr ""
+"Tüm AppImage'lar için üst verileri eşitle. AppImage kendini güncellediyse "
+"kullanışlıdır."
 
 msgid "Sync All"
 msgstr "Tümünü Eşitle"
@@ -175,8 +184,12 @@ msgid "AppImage Migration"
 msgstr "AppImage Geçişi"
 
 #
-msgid "To continue managing your AppImages with shelly a confirmation is required to switch to the new v2 implementation."
-msgstr "AppImage'larınızı shelly ile yönetmeye devam etmek için yeni v2 uygulamasına geçiş onayı gereklidir."
+msgid ""
+"To continue managing your AppImages with shelly a confirmation is required "
+"to switch to the new v2 implementation."
+msgstr ""
+"AppImage'larınızı shelly ile yönetmeye devam etmek için yeni v2 uygulamasına "
+"geçiş onayı gereklidir."
 
 msgid "Migrate Now"
 msgstr "Şimdi Geçiş Yap"
@@ -422,8 +435,12 @@ msgid "Size"
 msgstr "Boyut"
 
 #
-msgid "Had an issue loading your packages.\nCheck if you have a db lock."
-msgstr "Paketleriniz yüklenirken bir sorun oluştu.\nVeritabanı kilidi olup olmadığını kontrol edin."
+msgid ""
+"Had an issue loading your packages.\n"
+"Check if you have a db lock."
+msgstr ""
+"Paketleriniz yüklenirken bir sorun oluştu.\n"
+"Veritabanı kilidi olup olmadığını kontrol edin."
 
 msgid "Remove Configs"
 msgstr "Yapılandırmaları Kaldır"
@@ -431,7 +448,8 @@ msgstr "Yapılandırmaları Kaldır"
 msgid "Remove Optional Deps"
 msgstr "İsteğe Bağlı Bağımlılıkları Kaldır"
 
-msgid "Also remove orphaned optional dependencies installed with these packages."
+msgid ""
+"Also remove orphaned optional dependencies installed with these packages."
 msgstr "Bu paketlerle kurulan sahipsiz isteğe bağlı bağımlılıkları da kaldır."
 
 msgid "Install Local Packages"
@@ -586,8 +604,12 @@ msgid "Fix Permissions"
 msgstr "İzinleri Düzelt"
 
 #
-msgid "Restores correct user ownership of Shelly configuration and cache folders if they were accidentally created by root."
-msgstr "Shelly yapılandırma ve önbellek klasörleri yanlışlıkla root tarafından oluşturulmuşsa doğru kullanıcı sahipliğini geri yükler."
+msgid ""
+"Restores correct user ownership of Shelly configuration and cache folders if "
+"they were accidentally created by root."
+msgstr ""
+"Shelly yapılandırma ve önbellek klasörleri yanlışlıkla root tarafından "
+"oluşturulmuşsa doğru kullanıcı sahipliğini geri yükler."
 
 msgid "Purify Packages"
 msgstr "Paketleri Arındır"
@@ -614,23 +636,35 @@ msgid "Enable AUR Support"
 msgstr "AUR Desteğini Etkinleştir"
 
 #
-msgid "Access the Arch User Repository for a vast collection of community-maintained packages. AUR packages can contain malicous software, so please use caution when using the AUR."
-msgstr "Topluluk tarafından sürdürülen geniş bir paket koleksiyonu için Arch Kullanıcı Deposu'na erişin. AUR paketleri kötü amaçlı yazılım içerebilir, bu nedenle AUR'u kullanırken lütfen dikkatli olun."
+msgid ""
+"Access the Arch User Repository for a vast collection of community-"
+"maintained packages. AUR packages can contain malicous software, so please "
+"use caution when using the AUR."
+msgstr ""
+"Topluluk tarafından sürdürülen geniş bir paket koleksiyonu için Arch "
+"Kullanıcı Deposu'na erişin. AUR paketleri kötü amaçlı yazılım içerebilir, bu "
+"nedenle AUR'u kullanırken lütfen dikkatli olun."
 
 msgid "Enable Flatpak Support"
 msgstr "Flatpak Desteğini Etkinleştir"
 
 msgid "Enable support for Flatpak applications from Flathub and other remotes."
-msgstr "Flathub ve diğer uzak kaynaklardaki Flatpak uygulamaları için desteği etkinleştir."
+msgstr ""
+"Flathub ve diğer uzak kaynaklardaki Flatpak uygulamaları için desteği "
+"etkinleştir."
 
 msgid "Enable AppImage Support"
 msgstr "AppImage Desteğini Etkinleştir"
 
 msgid "Manage and configure updates for AppImage applications easily."
-msgstr "AppImage uygulamaları için güncellemeleri kolayca yönetin ve yapılandırın."
+msgstr ""
+"AppImage uygulamaları için güncellemeleri kolayca yönetin ve yapılandırın."
 
-msgid "Show a status icon in your system tray for quick access and notifications."
-msgstr "Hızlı erişim ve bildirimler için sistem tepsinizde bir durum simgesi gösterin."
+msgid ""
+"Show a status icon in your system tray for quick access and notifications."
+msgstr ""
+"Hızlı erişim ve bildirimler için sistem tepsinizde bir durum simgesi "
+"gösterin."
 
 msgid "Tray Icon Autostart"
 msgstr "Tepsi Simgesini Otomatik Başlat"
@@ -647,7 +681,9 @@ msgstr "Gezinme stilini dikey veya yatay olarak değiştirin."
 msgid "Finish Setup"
 msgstr "Kurulumu Bitir"
 
-msgid "Any required installations will run after the Finish button has been accepted."
+msgid ""
+"Any required installations will run after the Finish button has been "
+"accepted."
 msgstr "Gerekli tüm kurulumlar Bitir düğmesi onaylandıktan sonra çalışacaktır."
 
 #
@@ -791,8 +827,12 @@ msgid "Forgejo"
 msgstr "Forgejo"
 
 #
-msgid "Invalid URL.\nMust start with http:// or https://"
-msgstr "Geçersiz URL.\nhttp:// veya https:// ile başlamalıdır"
+msgid ""
+"Invalid URL.\n"
+"Must start with http:// or https://"
+msgstr ""
+"Geçersiz URL.\n"
+"http:// veya https:// ile başlamalıdır"
 
 msgid "Select AppImage to Install"
 msgstr "Kurulacak AppImage'ı Seç"
@@ -958,8 +998,14 @@ msgstr "AUR kurulumu başarısız"
 
 #
 #, csharp-format
-msgid "Shelly couldn't finish building or installing the selected AUR {0}.\nExport the logs and attach them to your report so the team can check whether the issue came from the PKGBUILD or from Shelly."
-msgstr "Shelly, seçilen AUR {0} paketini derlemeyi veya kurmayı bitiremedi.\nEkibin sorunun PKGBUILD'den mi yoksa Shelly'den mi kaynaklandığını kontrol edebilmesi için günlükleri dışa aktarın ve raporunuza ekleyin."
+msgid ""
+"Shelly couldn't finish building or installing the selected AUR {0}.\n"
+"Export the logs and attach them to your report so the team can check whether "
+"the issue came from the PKGBUILD or from Shelly."
+msgstr ""
+"Shelly, seçilen AUR {0} paketini derlemeyi veya kurmayı bitiremedi.\n"
+"Ekibin sorunun PKGBUILD'den mi yoksa Shelly'den mi kaynaklandığını kontrol "
+"edebilmesi için günlükleri dışa aktarın ve raporunuza ekleyin."
 
 msgid "Recent output"
 msgstr "Son Çıktı"
@@ -971,8 +1017,12 @@ msgid "Export Logs"
 msgstr "Günlükleri Dışa Aktar"
 
 #, csharp-format
-msgid "Cache directory: {0}\nTotal cached files: {1} ({2})"
-msgstr "Önbellek dizini: {0}\nToplam önbelleğe alınmış dosya: {1} ({2})"
+msgid ""
+"Cache directory: {0}\n"
+"Total cached files: {1} ({2})"
+msgstr ""
+"Önbellek dizini: {0}\n"
+"Toplam önbelleğe alınmış dosya: {1} ({2})"
 
 msgid "Keep versions:"
 msgstr "Sürümleri Koru:"
@@ -1063,8 +1113,12 @@ msgid "Authenticate"
 msgstr "Kimlik Doğrula"
 
 #
-msgid "Incorrect password.\nTry again."
-msgstr "Yanlış parola.\nTekrar deneyin."
+msgid ""
+"Incorrect password.\n"
+"Try again."
+msgstr ""
+"Yanlış parola.\n"
+"Tekrar deneyin."
 
 msgid "Review PKGBUILD changes"
 msgstr "PKGBUILD Değişikliklerini Gözden Geçir"
@@ -1074,8 +1128,12 @@ msgid "Review PKGBUILD changes for {0}"
 msgstr "{0} için PKGBUILD değişikliklerini gözden geçir"
 
 #
-msgid "These commands fetch and execute code outside of pacman's control.\nReview them before continuing."
-msgstr "Bu komutlar, pacman'in kontrolü dışında kod getirir ve çalıştırır.\nDevam etmeden önce bunları gözden geçirin."
+msgid ""
+"These commands fetch and execute code outside of pacman's control.\n"
+"Review them before continuing."
+msgstr ""
+"Bu komutlar, pacman'in kontrolü dışında kod getirir ve çalıştırır.\n"
+"Devam etmeden önce bunları gözden geçirin."
 
 msgid "Install Anyway"
 msgstr "Yine de Kur"
@@ -1107,8 +1165,14 @@ msgstr "Paket kurulumu başarısız"
 
 #
 #, csharp-format
-msgid "Shelly couldn't finish building or installing the selected {0}.\nExport the logs and attach them to your report so the team can check whether the issue came from the PKGBUILD or from Shelly."
-msgstr "Shelly, seçilen {0} paketini derlemeyi veya kurmayı bitiremedi.\nEkibin sorunun PKGBUILD'den mi yoksa Shelly'den mi kaynaklandığını kontrol edebilmesi için günlükleri dışa aktarın ve raporunuza ekleyin."
+msgid ""
+"Shelly couldn't finish building or installing the selected {0}.\n"
+"Export the logs and attach them to your report so the team can check whether "
+"the issue came from the PKGBUILD or from Shelly."
+msgstr ""
+"Shelly, seçilen {0} paketini derlemeyi veya kurmayı bitiremedi.\n"
+"Ekibin sorunun PKGBUILD'den mi yoksa Shelly'den mi kaynaklandığını kontrol "
+"edebilmesi için günlükleri dışa aktarın ve raporunuza ekleyin."
 
 msgid "Name and URL are required"
 msgstr "Ad ve URL gereklidir"
@@ -1258,8 +1322,12 @@ msgid "Failed to load packages."
 msgstr "Paketler yüklenemedi."
 
 #
-msgid "--- Packages \nto Upgrade ---"
-msgstr "--- Yükseltilecek \nPaketler ---"
+msgid ""
+"--- Packages \n"
+"to Upgrade ---"
+msgstr ""
+"--- Yükseltilecek \n"
+"Paketler ---"
 
 msgid "Export Shelly install log"
 msgstr "Shelly Kurulum Günlüğünü Dışa Aktar"
@@ -1320,29 +1388,52 @@ msgid "Partial Update Warning"
 msgstr "Kısmi Güncelleme Uyarısı"
 
 #
-msgid "It is not advised you do partial system updates.\nAre you sure you want to continue?"
-msgstr "Kısmi sistem güncellemeleri yapmanız tavsiye edilmez.\nDevam etmek istediğinizden emin misiniz?"
+msgid ""
+"It is not advised you do partial system updates.\n"
+"Are you sure you want to continue?"
+msgstr ""
+"Kısmi sistem güncellemeleri yapmanız tavsiye edilmez.\n"
+"Devam etmek istediğinizden emin misiniz?"
 
 #
-msgid "It is unadvised to not update all packages at once.\nAre you sure you want to continue?"
-msgstr "Tüm paketleri aynı anda güncellememek tavsiye edilmez.\nDevam etmek istediğinizden emin misiniz?"
+msgid ""
+"It is unadvised to not update all packages at once.\n"
+"Are you sure you want to continue?"
+msgstr ""
+"Tüm paketleri aynı anda güncellememek tavsiye edilmez.\n"
+"Devam etmek istediğinizden emin misiniz?"
 
 msgid "Reboot Required"
 msgstr "Yeniden Başlatma Gerekiyor"
 
-msgid "A full system reboot is required for updates to take effect.\n\nWould you like to reboot now?"
-msgstr "Güncellemelerin etkili olması için tam bir sistem yeniden başlatması gereklidir.\n\nŞimdi yeniden başlatmak ister misiniz?"
+msgid ""
+"A full system reboot is required for updates to take effect.\n"
+"\n"
+"Would you like to reboot now?"
+msgstr ""
+"Güncellemelerin etkili olması için tam bir sistem yeniden başlatması "
+"gereklidir.\n"
+"\n"
+"Şimdi yeniden başlatmak ister misiniz?"
 
 msgid "Service Restart Failures"
 msgstr "Hizmet Yeniden Başlatma Hataları"
 
 #, csharp-format
-msgid "The following services failed to restart automatically:\n{0}"
-msgstr "Aşağıdaki hizmetler otomatik olarak yeniden başlatılamadı:\n{0}"
+msgid ""
+"The following services failed to restart automatically:\n"
+"{0}"
+msgstr ""
+"Aşağıdaki hizmetler otomatik olarak yeniden başlatılamadı:\n"
+"{0}"
 
 #
-msgid "No recommendations found.\nPlease check your internet connection and try again."
-msgstr "Öneri bulunamadı.\nLütfen internet bağlantınızı kontrol edin ve tekrar deneyin."
+msgid ""
+"No recommendations found.\n"
+"Please check your internet connection and try again."
+msgstr ""
+"Öneri bulunamadı.\n"
+"Lütfen internet bağlantınızı kontrol edin ve tekrar deneyin."
 
 msgid "Package is already installed"
 msgstr "Paket zaten kurulu"
@@ -1387,8 +1478,13 @@ msgid "Enable AUR?"
 msgstr "AUR Etkinleştirilsin mi?"
 
 #
-msgid "The Arch User Repository (AUR) is a community-driven repository.\nPackages are user-produced and may contain risks. Do you want to enable it?"
-msgstr "Arch Kullanıcı Deposu (AUR), topluluk odaklı bir depodur.\nPaketler kullanıcılar tarafından üretilir ve riskler içerebilir. Etkinleştirmek istiyor musunuz?"
+msgid ""
+"The Arch User Repository (AUR) is a community-driven repository.\n"
+"Packages are user-produced and may contain risks. Do you want to enable it?"
+msgstr ""
+"Arch Kullanıcı Deposu (AUR), topluluk odaklı bir depodur.\n"
+"Paketler kullanıcılar tarafından üretilir ve riskler içerebilir. "
+"Etkinleştirmek istiyor musunuz?"
 
 msgid "Missing Flatpak"
 msgstr "Eksik Flatpak"
@@ -1481,3 +1577,699 @@ msgstr "Paketler kaldırılamadı: {0}"
 
 msgid "App Permissions"
 msgstr "Uygulama İzinleri"
+
+msgid "Show Runtimes"
+msgstr ""
+
+msgid "Install source"
+msgstr ""
+
+msgid "Show more"
+msgstr ""
+
+msgid "Install a local Flatpak"
+msgstr ""
+
+msgid ""
+"Choose a .flatpak bundle from your system and install it for the current "
+"user or system-wide."
+msgstr ""
+
+msgid "Bundle"
+msgstr ""
+
+msgid "Choose file…"
+msgstr ""
+
+msgid "Install for"
+msgstr ""
+
+msgid "Browse"
+msgstr ""
+
+msgid "Shelly"
+msgstr ""
+
+msgid "Reinstall"
+msgstr ""
+
+msgid "Add Ignore"
+msgstr ""
+
+msgid "Add Hold"
+msgstr ""
+
+msgid "Make Explicit"
+msgstr ""
+
+msgid "Mark Dependency"
+msgstr ""
+
+msgid "Package actions"
+msgstr ""
+
+msgid "Information"
+msgstr ""
+
+msgid "7 of 7 updates included"
+msgstr ""
+
+msgid "Check all enabled sources again"
+msgstr ""
+
+msgid "Check Again"
+msgstr ""
+
+msgid "Upgrade"
+msgstr ""
+
+msgid "Checking for updates…"
+msgstr ""
+
+msgid "Your system is up to date"
+msgstr ""
+
+msgid "Could not check for updates"
+msgstr ""
+
+msgid "Installed Only"
+msgstr ""
+
+msgid "Show only installed packages"
+msgstr ""
+
+msgid "Selected Packages"
+msgstr ""
+
+msgid "0 Selected"
+msgstr ""
+
+msgid "Grid View"
+msgstr ""
+
+msgid "List View"
+msgstr ""
+
+msgid "Had an issue loading your packages. Check if you have a db lock."
+msgstr ""
+
+msgid "Show Explicit Only"
+msgstr ""
+
+msgid "Show only explicitly installed packages"
+msgstr ""
+
+msgid "Hide Detail Pane"
+msgstr ""
+
+msgid "Toggle output"
+msgstr ""
+
+msgid "Invalid format. Use owner/repo (e.g., seafoam-labs/shelly-alpm)"
+msgstr ""
+
+msgid "Language"
+msgstr ""
+
+msgid "Enable Recommended"
+msgstr ""
+
+msgid ":"
+msgstr ""
+
+msgid ""
+"If enabled, Shelly will use appstream icons in the package list and details "
+"pages."
+msgstr ""
+
+msgid ""
+"If enabled, Shelly will use a symbolic svg icon instead of the default image "
+"one."
+msgstr ""
+
+msgid "Force a synchronization of the package database."
+msgstr ""
+
+msgid ""
+"Removes the db.lck file if it was left behind by an interrupted alpm process."
+msgstr ""
+
+msgid "Remove corrupted/orphaned packages."
+msgstr ""
+
+msgid "v0.0.0"
+msgstr ""
+
+msgid "Search the AUR by name or keyword"
+msgstr ""
+
+msgid "Show only packages already installed on this system"
+msgstr ""
+
+msgid "Search the AUR"
+msgstr ""
+
+msgid "The AUR has no browsable index type a package name to begin."
+msgstr ""
+
+msgid "Run the --check function during package build"
+msgstr ""
+
+msgid "Hide the detail pane on the right"
+msgstr ""
+
+msgid "Skip"
+msgstr ""
+
+msgid "No special permissions requested"
+msgstr ""
+
+msgid "Changes"
+msgstr ""
+
+msgid "Warnings"
+msgstr ""
+
+msgid ""
+"These commands fetch and execute code outside of shelly and libalpm's "
+"control. Review them before continuing."
+msgstr ""
+
+msgid "Source Files"
+msgstr ""
+
+msgid "Removing Remote"
+msgstr ""
+
+msgid "Adding Remote"
+msgstr ""
+
+msgid "Removing Flatpak"
+msgstr ""
+
+msgid "Choose a Flatpak file"
+msgstr ""
+
+msgid "Flatpak files"
+msgstr ""
+
+msgid "Unsupported file type. Choose a .flatpak or .flatpakref file."
+msgstr ""
+
+msgid "Installing local flatpak"
+msgstr ""
+
+msgid "Installation failed."
+msgstr ""
+
+msgid "Installation complete."
+msgstr ""
+
+msgid "Choose file..."
+msgstr ""
+
+msgid "Discover"
+msgstr ""
+
+msgid "Categories"
+msgstr ""
+
+msgid "Verified"
+msgstr ""
+
+msgid "Show less"
+msgstr ""
+
+msgid "Installing flatpak"
+msgstr ""
+
+msgid "Permissions"
+msgstr ""
+
+msgid "Unknown developer"
+msgstr ""
+
+msgid "Version: Unknown"
+msgstr ""
+
+msgid "Size: Loading..."
+msgstr ""
+
+msgid "Size: Unknown"
+msgstr ""
+
+msgid "License"
+msgstr ""
+
+msgid "License: Unknown"
+msgstr ""
+
+msgid "No summary available"
+msgstr ""
+
+msgid "Size: Unavailable"
+msgstr ""
+
+msgid "Unable to load screenshot"
+msgstr ""
+
+msgid "Unable to download screenshot"
+msgstr ""
+
+msgid "Unable to display screenshot"
+msgstr ""
+
+msgid "Open link in browser"
+msgstr ""
+
+msgid "Homepage"
+msgstr ""
+
+msgid "Bug tracker"
+msgstr ""
+
+msgid "Donation"
+msgstr ""
+
+msgid "FAQ"
+msgstr ""
+
+msgid "Help"
+msgstr ""
+
+msgid "Vcs-browser"
+msgstr ""
+
+msgid "Contact"
+msgstr ""
+
+msgid "Translate"
+msgstr ""
+
+msgid "Unable to allocate memory while loading Flatpak data."
+msgstr ""
+
+msgid "Unable to start the Flatpak data loader."
+msgstr ""
+
+msgid "Unable to load Flatpak applications."
+msgstr ""
+
+msgid "No Flatpak applications are available."
+msgstr ""
+
+msgid "Download Size"
+msgstr ""
+
+msgid "Install Reason"
+msgstr ""
+
+msgid "Optional Depends"
+msgstr ""
+
+msgid "Section"
+msgstr ""
+
+msgid "Reinstalling package"
+msgstr ""
+
+msgid "Adding to package ignore"
+msgstr ""
+
+msgid "Adding to package to hold"
+msgstr ""
+
+msgid "Making Package Explicit"
+msgstr ""
+
+msgid "Making Package Dependency"
+msgstr ""
+
+msgid "Failed to start operation."
+msgstr ""
+
+msgid "Pending"
+msgstr ""
+
+msgid "Synchronizing databases"
+msgstr ""
+
+msgid "Downloading"
+msgstr ""
+
+msgid "Building"
+msgstr ""
+
+msgid "Packaging"
+msgstr ""
+
+msgid "Installing"
+msgstr ""
+
+msgid "Upgrading"
+msgstr ""
+
+msgid "Downgrading"
+msgstr ""
+
+msgid "Reinstalling"
+msgstr ""
+
+msgid "Removing"
+msgstr ""
+
+msgid "Working"
+msgstr ""
+
+msgid "Done"
+msgstr ""
+
+msgid "Failed"
+msgstr ""
+
+msgid "Finished"
+msgstr ""
+
+msgid "exit"
+msgstr ""
+
+msgid "Cancelled"
+msgstr ""
+
+msgid "Static URL"
+msgstr ""
+
+msgid "Update Available"
+msgstr ""
+
+msgid "Version ?"
+msgstr ""
+
+msgid "Invalid URL. Must start with http:// or https://"
+msgstr ""
+
+msgid "Choose an AppImage file"
+msgstr ""
+
+msgid "AppImage files"
+msgstr ""
+
+msgid "Only .AppImage files can be installed"
+msgstr ""
+
+msgid "Installing AppImage"
+msgstr ""
+
+msgid "Upgrading AppImages"
+msgstr ""
+
+msgid "Syncing AppImages"
+msgstr ""
+
+msgid "Syncing AppImage"
+msgstr ""
+
+msgid "Saving update configuration"
+msgstr ""
+
+msgid "Configuration files will be kept."
+msgstr ""
+
+msgid "Remove this AppImage?"
+msgstr ""
+
+msgid "Remove AppImage"
+msgstr ""
+
+msgid "Removing AppImage"
+msgstr ""
+
+msgid "Operation completed successfully"
+msgstr ""
+
+msgid "Operation failed"
+msgstr ""
+
+msgid "System package update"
+msgstr ""
+
+msgid "AUR package update"
+msgstr ""
+
+msgid "Could not run shelly check-updates. Check the CLI output and try again."
+msgstr ""
+
+msgid "Update check failed"
+msgstr ""
+
+msgid "of"
+msgstr ""
+
+msgid "updates included"
+msgstr ""
+
+msgid "Updates included"
+msgstr ""
+
+msgid "Upgrading packages"
+msgstr ""
+
+msgid "Recommendations"
+msgstr ""
+
+msgid "Remove from selection"
+msgstr ""
+
+msgid "remove"
+msgstr ""
+
+msgid "install"
+msgstr ""
+
+msgid "No packages selected"
+msgstr ""
+
+msgid "Selected"
+msgstr ""
+
+msgid "Mixed selection"
+msgstr ""
+
+msgid ""
+"Select only installed packages to remove, or only available ones to install."
+msgstr ""
+
+msgid "Remove Packages"
+msgstr ""
+
+msgid "Remove the selected packages?"
+msgstr ""
+
+msgid "Removing packages"
+msgstr ""
+
+msgid "Installing packages"
+msgstr ""
+
+msgid "Failed to save settings"
+msgstr ""
+
+msgid "Settings saved"
+msgstr ""
+
+msgid "Changelog"
+msgstr ""
+
+msgid "Select Tray Icon"
+msgstr ""
+
+msgid "Select Icon"
+msgstr ""
+
+msgid "Select Tray Updates Icon"
+msgstr ""
+
+msgid "Refreshing package databases"
+msgstr ""
+
+msgid "Database lock removed successfully"
+msgstr ""
+
+msgid "Failed to remove database lock"
+msgstr ""
+
+msgid "Fixing permissions"
+msgstr ""
+
+msgid "Purifying packages"
+msgstr ""
+
+msgid ""
+"The Arch User Repository (AUR) is a community-driven repository. Packages "
+"are user-produced and may contain risks. Do you want to enable it?"
+msgstr ""
+
+msgid "Enable"
+msgstr ""
+
+msgid "AUR enabled"
+msgstr ""
+
+msgid "System Default"
+msgstr ""
+
+msgid "English"
+msgstr ""
+
+msgid "Bulgarian"
+msgstr ""
+
+msgid "Català"
+msgstr ""
+
+msgid "Deutsch"
+msgstr ""
+
+msgid "Español"
+msgstr ""
+
+msgid "Français"
+msgstr ""
+
+msgid "Magyar"
+msgstr ""
+
+msgid "日本語"
+msgstr ""
+
+msgid "Polski"
+msgstr ""
+
+msgid "Português (Brasil)"
+msgstr ""
+
+msgid "Português (Portugal)"
+msgstr ""
+
+msgid "Русский"
+msgstr ""
+
+msgid "Türkçe"
+msgstr ""
+
+msgid "中文（简体）"
+msgstr ""
+
+msgid "The AUR has no browsable index — type a package name to begin."
+msgstr ""
+
+msgid "No packages found"
+msgstr ""
+
+msgid "Try a shorter or more general keyword."
+msgstr ""
+
+msgid "Could not reach the AUR"
+msgstr ""
+
+msgid "Check your connection and try again."
+msgstr ""
+
+msgid "Flagged out of date"
+msgstr ""
+
+msgid "Select one or more packages"
+msgstr ""
+
+msgid "Package(s)"
+msgstr ""
+
+msgid "Remove the selected AUR packages?"
+msgstr ""
+
+msgid "Build from AUR"
+msgstr ""
+
+msgid "Build and install the selected packages? This may take a while."
+msgstr ""
+
+msgid "Build"
+msgstr ""
+
+msgid "Installing AUR packages"
+msgstr ""
+
+msgid "Removing AUR packages"
+msgstr ""
+
+msgid "Dismiss"
+msgstr ""
+
+msgid "Filesystem"
+msgstr ""
+
+msgid "Devices"
+msgstr ""
+
+msgid "Sockets"
+msgstr ""
+
+msgid "Shared"
+msgstr ""
+
+msgid "Environment"
+msgstr ""
+
+msgid "Session bus"
+msgstr ""
+
+msgid "System bus"
+msgstr ""
+
+msgid "Other"
+msgstr ""
+
+msgid "Review PKGBUILD changes for"
+msgstr ""
+
+msgid "Review Changes"
+msgstr ""
+
+msgid "Security scan completed -"
+msgstr ""
+
+msgid "warning(s) found."
+msgstr ""
+
+msgid "Security scan completed - warnings found."
+msgstr ""
+
+msgid "Security scan completed - no issues found."
+msgstr ""
+
+msgid "used in"
+msgstr ""
+
+msgid "Warning"
+msgstr ""
+
+msgid "package(s)"
+msgstr ""
+
+msgid "to"
+msgstr ""
+
+msgid "download"
+msgstr ""
+
+msgid "net"
+msgstr ""
+
+msgid "Package"
+msgstr ""
+
+msgid "Update"
+msgstr ""
+
+msgid "Utilities"
+msgstr ""

@@ -7,6 +7,7 @@ const shelly_operation = @import("../../services/shelly_operation.zig");
 const TransactionQuestion = shelly_operation.TransactionQuestion;
 const TransactionPackage = shelly_operation.TransactionPackage;
 const SizeConverter = @import("../../helpers/size_converts.zig").SizeConverter;
+const translations = @import("../../helpers/translations.zig");
 
 pub const PlanDialog = extern struct {
     parent_instance: Parent,
@@ -81,8 +82,17 @@ pub const PlanDialog = extern struct {
 
         const text = std.fmt.bufPrintZ(
             &buf,
-            "{d} package(s) to {s} — {s} download, {s} net",
-            .{ q.packages.len, q.action, dl, net },
+            "{d} {s} {s} {s} — {s} {s}, {s} {s}",
+            .{
+                q.packages.len,
+                translations._("package(s)"),
+                translations._("to"),
+                q.action,
+                dl,
+                translations._("download"),
+                net,
+                translations._("net"),
+            },
         ) catch "";
         gtk.Label.setLabel(p.summary_label, text);
     }
