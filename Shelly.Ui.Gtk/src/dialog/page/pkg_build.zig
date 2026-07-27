@@ -4,6 +4,7 @@ const gtk = bindings.gtk;
 const glib = bindings.glib;
 const gobject = bindings.gobject;
 const support = @import("../../pages/support.zig");
+const translations = @import("../../helpers/translations.zig");
 
 pub const PkgbuildReviewDialog = extern struct {
     parent_instance: Parent,
@@ -90,7 +91,7 @@ pub const PkgbuildReviewDialog = extern struct {
         p.ctx = ctx;
 
         var heading_buffer: [512]u8 = undefined;
-        const heading = std.fmt.bufPrintZ(&heading_buffer, "Review PKGBUILD changes for {s}", .{package_name}) catch "Review PKGBUILD changes";
+        const heading = std.fmt.bufPrintZ(&heading_buffer, "{s} {s}", .{ translations._("Review PKGBUILD changes for"), package_name }) catch translations._("Review PKGBUILD changes");
         gtk.Label.setLabel(p.heading_label, heading);
 
         for (diff_lines) |raw| {
@@ -137,7 +138,7 @@ pub const PkgbuildReviewDialog = extern struct {
 
         p.changes_reviewed = !has_warnings;
         if (has_warnings) {
-            gtk.Button.setLabel(p.proceed_button, "Review Changes");
+            gtk.Button.setLabel(p.proceed_button, translations._("Review Changes"));
         }
 
         return self;
@@ -159,15 +160,15 @@ pub const PkgbuildReviewDialog = extern struct {
             var buffer: [128]u8 = undefined;
             const text = std.fmt.bufPrintZ(
                 &buffer,
-                "Security scan completed - {d} warning(s) found.",
-                .{count},
-            ) catch "Security scan completed - warnings found.";
+                "{s} {d} {s}",
+                .{ translations._("Security scan completed -"), count, translations._("warning(s) found.") },
+            ) catch translations._("Security scan completed - warnings found.");
             gtk.Label.setLabel(p.scan_label, text);
             gtk.Widget.removeCssClass(p.scan_label.as(gtk.Widget), "success");
             gtk.Widget.addCssClass(p.scan_label.as(gtk.Widget), "warning");
         } else {
             gtk.Image.setFromIconName(p.scan_icon, "security-high-symbolic");
-            gtk.Label.setLabel(p.scan_label, "Security scan completed - no issues found.");
+            gtk.Label.setLabel(p.scan_label, translations._("Security scan completed - no issues found."));
         }
     }
 
@@ -207,9 +208,9 @@ pub const PkgbuildReviewDialog = extern struct {
         var title_buffer: [512]u8 = undefined;
         const title_text = std.fmt.bufPrintZ(
             &title_buffer,
-            "{s} used in {s}",
-            .{ warning.tool, warning.hook },
-        ) catch "Warning";
+            "{s} {s} {s}",
+            .{ warning.tool, translations._("used in"), warning.hook },
+        ) catch translations._("Warning");
         const title = gtk.Label.new(title_text);
         gtk.Label.setXalign(title, 0);
         gtk.Widget.addCssClass(title.as(gtk.Widget), "heading");
@@ -280,7 +281,7 @@ pub const PkgbuildReviewDialog = extern struct {
         p.changes_reviewed = true;
         gtk.Widget.removeCssClass(p.proceed_button.as(gtk.Widget), "suggested-action");
         gtk.Widget.addCssClass(p.proceed_button.as(gtk.Widget), "destructive-action");
-        gtk.Button.setLabel(p.proceed_button, "Install Anyway");
+        gtk.Button.setLabel(p.proceed_button, translations._("Install Anyway"));
     }
 
     fn respond(self: *Self, confirmed: bool) void {

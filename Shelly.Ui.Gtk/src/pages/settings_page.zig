@@ -19,6 +19,7 @@ const Toast = @import("../helpers/custom_ui_comps/toast.zig").Toast;
 const VersionHistoryDialog = @import("../dialog/page/version_history.zig").VersionHistoryDialog;
 const HistoryEntry = @import("../dialog/page/version_history.zig").Entry;
 const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
+const translations = @import("../helpers/translations.zig");
 const options = @import("options");
 
 pub const SettingsPage = ShellySettingsPage;
@@ -206,10 +207,10 @@ pub const ShellySettingsPage = extern struct {
     fn on_save_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         self.save() catch |err| {
             std.log.err("settings: save failed: {t}", .{err});
-            self.priv().toast.show(.@"error", "Failed to save settings");
+            self.priv().toast.show(.@"error", translations._("Failed to save settings"));
             return;
         };
-        self.priv().toast.show(.success, "Settings saved");
+        self.priv().toast.show(.success, translations._("Settings saved"));
     }
 
     fn save(self: *Self) !void {
@@ -278,7 +279,7 @@ pub const ShellySettingsPage = extern struct {
         const releases = parsed.value;
 
         if (releases.len == 0) {
-            self.priv().toast.show(.info, "No changelog entries found");
+            self.priv().toast.show(.info, translations._("No changelog entries found"));
             return;
         }
 
@@ -299,7 +300,7 @@ pub const ShellySettingsPage = extern struct {
                 c.free(version);
                 continue;
             };
-            const note = c.dupeSentinel(u8, if (release.body.len > 0) release.body else "No details for this release", 0) catch {
+            const note = c.dupeSentinel(u8, if (release.body.len > 0) release.body else translations._("No details for this release"), 0) catch {
                 c.free(version);
                 c.free(date);
                 continue;
@@ -313,12 +314,12 @@ pub const ShellySettingsPage = extern struct {
         }
 
         if (entries.items.len == 0) {
-            self.priv().toast.show(.@"error", "Failed to load changelog");
+            self.priv().toast.show(.@"error", translations._("Failed to load changelog"));
             return;
         }
 
         const owned = entries.toOwnedSlice(c) catch return;
-        const dlg = VersionHistoryDialog.new("Changelog", "Shelly", owned, &on_close_changelog, self);
+        const dlg = VersionHistoryDialog.new(translations._("Changelog"), translations._("Shelly"), owned, &on_close_changelog, self);
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.showLockout(dlg.as(gtk.Widget));
@@ -328,7 +329,7 @@ pub const ShellySettingsPage = extern struct {
     fn on_changelog_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         self.showChangelog() catch |err| {
             std.log.err("settings: failed to load changelog: {any}", .{err});
-            self.priv().toast.show(.@"error", "Failed to load changelog");
+            self.priv().toast.show(.@"error", translations._("Failed to load changelog"));
         };
     }
 
@@ -339,7 +340,7 @@ pub const ShellySettingsPage = extern struct {
 
     fn on_pick_tray_icon(_: *gtk.Button, self: *Self) callconv(.c) void {
         const dialog = gtk.FileDialog.new();
-        gtk.FileDialog.setTitle(dialog, "Select Tray Icon");
+        gtk.FileDialog.setTitle(dialog, translations._("Select Tray Icon"));
 
         const root = gtk.Widget.getRoot(self.as(gtk.Widget));
         const parent: ?*gtk.Window = if (root) |r| gobject.ext.cast(gtk.Window, r) else null;
@@ -387,14 +388,14 @@ pub const ShellySettingsPage = extern struct {
 
     fn on_clear_tray_icon(_: *gtk.Button, self: *Self) callconv(.c) void {
         const p = self.priv();
-        gtk.Button.setLabel(p.tray_icon_button, "Select Icon");
+        gtk.Button.setLabel(p.tray_icon_button, translations._("Select Icon"));
 
         updateConfigField(.TrayIconPath, "");
     }
 
     fn on_pick_tray_updates_icon(_: *gtk.Button, self: *Self) callconv(.c) void {
         const dialog = gtk.FileDialog.new();
-        gtk.FileDialog.setTitle(dialog, "Select Tray Updates Icon");
+        gtk.FileDialog.setTitle(dialog, translations._("Select Tray Updates Icon"));
 
         const root = gtk.Widget.getRoot(self.as(gtk.Widget));
         const parent: ?*gtk.Window = if (root) |r| gobject.ext.cast(gtk.Window, r) else null;
@@ -442,14 +443,14 @@ pub const ShellySettingsPage = extern struct {
 
     fn on_clear_tray_updates_icon(_: *gtk.Button, self: *Self) callconv(.c) void {
         const p = self.priv();
-        gtk.Button.setLabel(p.tray_updates_icon_button, "Select Icon");
+        gtk.Button.setLabel(p.tray_updates_icon_button, translations._("Select Icon"));
 
         updateConfigField(.TrayUpdatesIconPath, "");
     }
 
     fn on_pick_appimage_install_path(_: *gtk.Button, self: *Self) callconv(.c) void {
         const dialog = gtk.FileDialog.new();
-        gtk.FileDialog.setTitle(dialog, "Select AppImage Install Directory");
+        gtk.FileDialog.setTitle(dialog, translations._("Select AppImage Install Directory"));
 
         const root = gtk.Widget.getRoot(self.as(gtk.Widget));
         const parent: ?*gtk.Window = if (root) |r| gobject.ext.cast(gtk.Window, r) else null;
@@ -501,7 +502,7 @@ pub const ShellySettingsPage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Refreshing package databases",
+            .title = translations._("Refreshing package databases"),
             .argv = argv,
             .packages = &.{},
             .on_complete = &on_transaction_complete,
@@ -525,9 +526,9 @@ pub const ShellySettingsPage = extern struct {
 
         const response = parsed.value;
         if (response.isSuccess()) {
-            self.priv().toast.show(.success, "Database lock removed successfully");
+            self.priv().toast.show(.success, translations._("Database lock removed successfully"));
         } else {
-            self.priv().toast.show(.@"error", "Failed to remove database lock");
+            self.priv().toast.show(.@"error", translations._("Failed to remove database lock"));
         }
     }
 
@@ -537,7 +538,7 @@ pub const ShellySettingsPage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Fixing permissions",
+            .title = translations._("Fixing permissions"),
             .argv = argv,
             .packages = &.{},
             .on_complete = &on_transaction_complete,
@@ -552,7 +553,7 @@ pub const ShellySettingsPage = extern struct {
 
         const win = support.getWindow(ShellyWindow, self) orelse return;
         win.startTransaction(.{
-            .title = "Purifying packages",
+            .title = translations._("Purifying packages"),
             .argv = argv,
             .packages = &.{},
             .on_complete = &on_transaction_complete,
@@ -564,9 +565,9 @@ pub const ShellySettingsPage = extern struct {
     fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
         if (success) {
-            self.priv().toast.show(.success, "Operation completed successfully");
+            self.priv().toast.show(.success, translations._("Operation completed successfully"));
         } else {
-            self.priv().toast.show(.@"error", "Operation failed");
+            self.priv().toast.show(.@"error", translations._("Operation failed"));
         }
     }
 
@@ -593,13 +594,12 @@ pub const ShellySettingsPage = extern struct {
         gtk.Switch.setActive(p.aur_switch, 0);
 
         const dialog = ConfirmDialog.new(
-            "Enable AUR?",
-            "The Arch User Repository (AUR) is a community-driven repository. " ++
-                "Packages are user-produced and may contain risks. Do you want to enable it?",
+            translations._("Enable AUR?"),
+            translations._("The Arch User Repository (AUR) is a community-driven repository. Packages are user-produced and may contain risks. Do you want to enable it?"),
             &on_aur_confirmation_response,
             self,
         );
-        dialog.setButtons("Enable", "Cancel");
+        dialog.setButtons(translations._("Enable"), translations._("Cancel"));
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.showLockout(dialog.as(gtk.Widget));
         }
@@ -614,7 +614,7 @@ pub const ShellySettingsPage = extern struct {
 
         const p = self.priv();
         gtk.Switch.setActive(p.aur_switch, 1);
-        p.toast.show(.success, "AUR enabled");
+        p.toast.show(.success, translations._("AUR enabled"));
     }
 
     const template_children = .{
@@ -746,7 +746,15 @@ const language_entries = [_]struct {
 fn populateDropdowns(p: *ShellySettingsPage.Private) void {
     const page_strings = gtk.StringList.new(null);
     inline for (default_page_entries) |entry| {
-        gtk.StringList.append(page_strings, entry.label);
+        const label = switch (entry.value) {
+            .recommend => translations._("Recommended"),
+            .packages => translations._("Packages"),
+            .aur => translations._("AUR"),
+            .flatpak => translations._("Flatpak"),
+            .app_image => translations._("AppImage"),
+            .shelly_search => translations._("Shelly Search"),
+        };
+        gtk.StringList.append(page_strings, label);
     }
     gtk.DropDown.setModel(p.default_page_drop, page_strings.as(gio.ListModel));
 
@@ -757,8 +765,26 @@ fn populateDropdowns(p: *ShellySettingsPage.Private) void {
     gtk.DropDown.setModel(p.nav_mode_drop, nav_strings.as(gio.ListModel));
 
     const lang_strings = gtk.StringList.new(null);
-    inline for (language_entries) |entry| {
-        gtk.StringList.append(lang_strings, entry.label);
+    inline for (language_entries, 0..) |_, index| {
+        const label = switch (index) {
+            0 => translations._("System Default"),
+            1 => translations._("English"),
+            2 => translations._("Bulgarian"),
+            3 => translations._("Català"),
+            4 => translations._("Deutsch"),
+            5 => translations._("Español"),
+            6 => translations._("Français"),
+            7 => translations._("Magyar"),
+            8 => translations._("日本語"),
+            9 => translations._("Polski"),
+            10 => translations._("Português (Brasil)"),
+            11 => translations._("Português (Portugal)"),
+            12 => translations._("Русский"),
+            13 => translations._("Türkçe"),
+            14 => translations._("中文（简体）"),
+            else => unreachable,
+        };
+        gtk.StringList.append(lang_strings, label);
     }
     gtk.DropDown.setModel(p.language_drop, lang_strings.as(gio.ListModel));
 }
@@ -815,8 +841,8 @@ fn populateFromConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
     gtk.DropDown.setSelected(p.nav_mode_drop, navModeIndex(cfg.NavMode));
     gtk.DropDown.setSelected(p.language_drop, languageIndex(cfg.Culture));
 
-    setButtonLabel(p.tray_icon_button, std.heap.c_allocator, cfg.TrayIconPath, "Select Icon");
-    setButtonLabel(p.tray_updates_icon_button, std.heap.c_allocator, cfg.TrayUpdatesIconPath, "Select Icon");
+    setButtonLabel(p.tray_icon_button, std.heap.c_allocator, cfg.TrayIconPath, translations._("Select Icon"));
+    setButtonLabel(p.tray_updates_icon_button, std.heap.c_allocator, cfg.TrayUpdatesIconPath, translations._("Select Icon"));
 
     // Advanced
     setSwitch(p.no_confirm_switch, cfg.NoConfirm);
@@ -825,7 +851,7 @@ fn populateFromConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
     setSwitch(p.remove_cache_switch, cfg.PackageManagementRemoveConfigs);
     setSwitch(p.webview_switch, cfg.WebviewEnabled);
 
-    setButtonLabel(p.appimage_install_path_button, std.heap.c_allocator, cfg.AppImageInstallPath, "Select Directory");
+    setButtonLabel(p.appimage_install_path_button, std.heap.c_allocator, cfg.AppImageInstallPath, translations._("Select Directory"));
 }
 
 fn setButtonLabel(b: *gtk.Button, allocator: std.mem.Allocator, value: []const u8, default: [:0]const u8) void {

@@ -10,6 +10,7 @@ const cstr = @import("../../helpers/c_string.zig").cstr;
 const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const Remote = @import("../../models/flatpak.zig").Remote;
 const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
+const translations = @import("../../helpers/translations.zig");
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 
 pub const FlatpakInstallLocalView = extern struct {
@@ -76,10 +77,10 @@ pub const FlatpakInstallLocalView = extern struct {
 
     fn on_choose_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const dialog = gtk.FileDialog.new();
-        gtk.FileDialog.setTitle(dialog, "Choose a Flatpak file");
+        gtk.FileDialog.setTitle(dialog, translations._("Choose a Flatpak file"));
 
         const filter = gtk.FileFilter.new();
-        gtk.FileFilter.setName(filter, "Flatpak files");
+        gtk.FileFilter.setName(filter, translations._("Flatpak files"));
         gtk.FileFilter.addSuffix(filter, "flatpak");
         gtk.FileFilter.addSuffix(filter, "flatpakref");
 
@@ -114,7 +115,7 @@ pub const FlatpakInstallLocalView = extern struct {
         if (p.selected_path) |old| std.heap.c_allocator.free(old);
         p.selected_path = std.heap.c_allocator.dupeZ(u8, path) catch {
             p.selected_path = null;
-            gtk.Label.setLabel(p.chosen_file_label, "Choose file…");
+            gtk.Label.setLabel(p.chosen_file_label, translations._("Choose file…"));
             gtk.Widget.setSensitive(p.install_button.as(gtk.Widget), 0);
             return;
         };
@@ -140,7 +141,7 @@ pub const FlatpakInstallLocalView = extern struct {
         else if (std.ascii.endsWithIgnoreCase(path, ".flatpak"))
             .bundle
         else {
-            self.show_status("Unsupported file type. Choose a .flatpak or .flatpakref file.");
+            self.show_status(translations._("Unsupported file type. Choose a .flatpak or .flatpakref file."));
             return;
         };
 
@@ -158,7 +159,7 @@ pub const FlatpakInstallLocalView = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Installing local flatpak",
+                .title = translations._("Installing local flatpak"),
                 .argv = argv,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,
@@ -175,15 +176,15 @@ pub const FlatpakInstallLocalView = extern struct {
         const p = self.priv();
         if (p.disposed) return;
         if (!success) {
-            self.show_status("Installation failed.");
+            self.show_status(translations._("Installation failed."));
             return;
         }
-        self.show_status("Installation complete.");
+        self.show_status(translations._("Installation complete."));
         if (p.selected_path) |old| {
             std.heap.c_allocator.free(old);
             p.selected_path = null;
         }
-        gtk.Label.setLabel(p.chosen_file_label, "Choose file...");
+        gtk.Label.setLabel(p.chosen_file_label, translations._("Choose file..."));
         gtk.Widget.setSensitive(p.install_button.as(gtk.Widget), 0);
     }
 

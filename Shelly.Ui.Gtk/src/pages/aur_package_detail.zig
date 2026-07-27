@@ -6,6 +6,7 @@ const glib = bindings.glib;
 const gobject = bindings.gobject;
 const gdk = bindings.gdk;
 const c_string = @import("../helpers/c_string.zig");
+const translations = @import("../helpers/translations.zig");
 const support = @import("support.zig");
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const AurPackage = @import("../models/aur_package.zig").AurPackage;
@@ -98,20 +99,20 @@ pub const PackageDetail = extern struct {
 
         clear_box(p.spec_box);
         clear_box(p.sections_box);
-        add_spec_row(p.spec_box, "Version", package.Version);
-        add_spec_row(p.spec_box, "Votes", votes_text(&buf, package.NumVotes));
-        add_spec_row(p.spec_box, "Popularity", popularity_text(&buf, package.Popularity));
+        add_spec_row(p.spec_box, translations._("Version"), package.Version);
+        add_spec_row(p.spec_box, translations._("Votes"), votes_text(&buf, package.NumVotes));
+        add_spec_row(p.spec_box, translations._("Popularity"), popularity_text(&buf, package.Popularity));
 
-        add_spec_row(p.spec_box, "Maintainer", if (package.Maintainer) |maintainer| c_string.cstr(&buf, maintainer) else "");
-        add_spec_row(p.spec_box, "Last Modified", c_string.cstr(&buf, formatIsoDateTime(&time_buf, package.LastModified) catch ""));
-        add_spec_row(p.spec_box, "First Submitted", c_string.cstr(&buf, formatIsoDateTime(&time_buf, package.FirstSubmitted) catch ""));
+        add_spec_row(p.spec_box, translations._("Maintainer"), if (package.Maintainer) |maintainer| c_string.cstr(&buf, maintainer) else "");
+        add_spec_row(p.spec_box, translations._("Last Modified"), c_string.cstr(&buf, formatIsoDateTime(&time_buf, package.LastModified) catch ""));
+        add_spec_row(p.spec_box, translations._("First Submitted"), c_string.cstr(&buf, formatIsoDateTime(&time_buf, package.FirstSubmitted) catch ""));
 
         const alloc = (p.arena orelse return).allocator();
-        add_spec_list(p.spec_box, alloc, "Licenses", if (package.License) |license| license else &.{});
+        add_spec_list(p.spec_box, alloc, translations._("Licenses"), if (package.License) |license| license else &.{});
 
-        add_list_section(p.sections_box, self, "Depends", if (package.Depends) |deps| deps else &.{});
-        add_list_section(p.sections_box, self, "Optional Depends", if (package.OptDepends) |optDeps| optDeps else &.{});
-        add_list_section(p.sections_box, self, "Make Depends", if (package.MakeDepends) |make| make else &.{});
+        add_list_section(p.sections_box, self, translations._("Depends"), if (package.Depends) |deps| deps else &.{});
+        add_list_section(p.sections_box, self, translations._("Optional Depends"), if (package.OptDepends) |optDeps| optDeps else &.{});
+        add_list_section(p.sections_box, self, translations._("Make Depends"), if (package.MakeDepends) |make| make else &.{});
     }
 
     fn votes_text(buf: []u8, votes: u32) [:0]const u8 {
@@ -203,7 +204,7 @@ pub const PackageDetail = extern struct {
         if (items.len == 0) return;
 
         var buf: [64]u8 = undefined;
-        const header = std.fmt.bufPrintZ(&buf, "{s} ({d})", .{ title, items.len }) catch "Section";
+        const header = std.fmt.bufPrintZ(&buf, "{s} ({d})", .{ title, items.len }) catch translations._("Section");
         const expander = gtk.Expander.new(header);
         gtk.Expander.setExpanded(expander, 0);
         gtk.Widget.addCssClass(expander.as(gtk.Widget), "spec-expander");

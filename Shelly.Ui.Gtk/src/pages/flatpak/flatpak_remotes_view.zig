@@ -11,6 +11,7 @@ const ShellyCli = @import("../../services/shelly_cli.zig").ShellyCli;
 const Remote = @import("../../models/flatpak.zig").Remote;
 const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyCommands;
 const ShellyWindow = @import("../../shelly_window.zig").ShellyWindow;
+const translations = @import("../../helpers/translations.zig");
 
 pub const FlatpakRemotesView = extern struct {
     parent_instance: Parent,
@@ -210,7 +211,7 @@ pub const FlatpakRemotesView = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Removing Remote",
+                .title = translations._("Removing Remote"),
                 .argv = argv,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,
@@ -245,7 +246,7 @@ pub const FlatpakRemotesView = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
-                .title = "Adding Remote",
+                .title = translations._("Adding Remote"),
                 .argv = argv,
                 .packages = names.items,
                 .on_complete = &on_transaction_complete,

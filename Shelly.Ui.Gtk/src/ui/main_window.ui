@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<interface>
+<interface domain="shelly-ui">
  <template class="ShellyWindow" parent="GtkApplicationWindow">
-  <property name="title">Shelly</property>
+  <property name="title" translatable="yes">Shelly</property>
   <property name="default-width">700</property>
   <property name="default-height">450</property>
   <child>
