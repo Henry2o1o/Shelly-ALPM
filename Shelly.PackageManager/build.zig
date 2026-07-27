@@ -209,6 +209,23 @@ pub fn build(b: *std.Build) void {
     );
     makepackage_test_step.dependOn(&run_makepackage_tests.step);
 
+    const build_root_tests = b.addTest(.{
+        .name = "isolated-build-root-test",
+        .root_module = mod,
+        .filters = &.{
+            "isolated config redirects every mutable ALPM path",
+            "phase0 makepkg arguments cannot request dependency or package installation",
+            "isolated layout rejects the filesystem root",
+        },
+    });
+    const run_build_root_tests = b.addRunArtifact(build_root_tests);
+    test_step.dependOn(&run_build_root_tests.step);
+    const build_root_test_step = b.step(
+        "isolated-build-root-test",
+        "Run safe unit tests for the Shelly-managed isolated build root",
+    );
+    build_root_test_step.dependOn(&run_build_root_tests.step);
+
     // Local package tests are isolated from the package manager's live-system
     // integration tests and use only temporary configured roots.
     const local_test_module = b.createModule(.{

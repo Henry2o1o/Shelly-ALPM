@@ -60,6 +60,7 @@ pub const alpm = struct {
 };
 
 pub const aur = @import("aur/manager.zig");
+pub const isolated_build_root = @import("aur/build_root.zig");
 
 pub const flatpak = struct {
     pub const manager = @import("flatpak/manager.zig");
