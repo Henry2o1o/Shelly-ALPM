@@ -37,6 +37,7 @@ pub const ShellyWindow = extern struct {
         lockout_content: *gtk.Box,
         content_stack: *gtk.Stack,
         rail: ?*gtk.Box,
+        switcher: ?*gtk.StackSwitcher,
         chevron_img: ?*gtk.Image,
         nav_buttons: std.ArrayListUnmanaged(*NavButton),
 
@@ -68,6 +69,7 @@ pub const ShellyWindow = extern struct {
         gtk.Widget.initTemplate(self.as(gtk.Widget));
         const p = self.private();
         p.rail = null;
+        p.switcher = null;
         p.chevron_img = null;
         p.nav_buttons = .empty;
         p.collapsed = true;
@@ -132,28 +134,60 @@ pub const ShellyWindow = extern struct {
         gtk.Widget.setVexpand(stack.as(gtk.Widget), 1);
         p.content_stack = stack;
 
+        _ = build_rail(self, stack);
+
         switch (mode) {
             .sidebar => {
                 gtk.Orientable.setOrientation(p.shell_box.as(gtk.Orientable), .horizontal);
-                const rail = build_rail(self, stack);
                 if (p.nav_buttons.items.len > 0) {
                     set_active_nav(self, p.nav_buttons.items[0]);
                 }
-                const sep = gtk.Separator.new(.vertical);
-                gtk.Box.append(p.shell_box, rail.as(gtk.Widget));
-                gtk.Box.append(p.shell_box, sep.as(gtk.Widget));
+                if (p.rail) |rail| {
+                    gtk.Box.append(p.shell_box, rail.as(gtk.Widget));
+                }
                 gtk.Box.append(p.shell_box, stack.as(gtk.Widget));
             },
             .topbar => {
                 gtk.Orientable.setOrientation(p.shell_box.as(gtk.Orientable), .vertical);
+                p.switcher = gtk.StackSwitcher.new();
+                if (p.switcher) |switcher| {
+                    gtk.StackSwitcher.setStack(switcher, stack);
+                    gtk.Orientable.setOrientation(switcher.as(gtk.Orientable), .horizontal);
+                    gtk.Box.append(p.shell_box, switcher.as(gtk.Widget));
+                    gtk.Box.append(p.shell_box, stack.as(gtk.Widget));
+                }
+            },
+        }
+    }
+
+    pub fn changeNav(self: *ShellyWindow, mode: NavMode) void {
+        const p = self.private();
+        switch (mode) {
+            .sidebar => {
+                gtk.Box.remove(p.shell_box, p.content_stack.as(gtk.Widget));
+                if (p.switcher) |switcher| {
+                    gtk.Box.remove(p.shell_box, switcher.as(gtk.Widget));
+                }
+                gtk.Orientable.setOrientation(p.shell_box.as(gtk.Orientable), .horizontal);
+                if (p.rail) |rail| {
+                    gtk.Box.append(p.shell_box, rail.as(gtk.Widget));
+                } else {
+                    std.debug.print("failed to append rail", .{});
+                }
+                gtk.Box.append(p.shell_box, p.content_stack.as(gtk.Widget));
+            },
+            .topbar => {
+                gtk.Box.remove(p.shell_box, p.content_stack.as(gtk.Widget));
+                if (p.rail) |rail| {
+                    gtk.Box.remove(p.shell_box, @ptrCast(rail));
+                }
+                gtk.Orientable.setOrientation(p.shell_box.as(gtk.Orientable), .vertical);
                 const switcher = gtk.StackSwitcher.new();
-                gtk.StackSwitcher.setStack(switcher, stack);
+                gtk.StackSwitcher.setStack(switcher, p.content_stack);
                 gtk.Orientable.setOrientation(switcher.as(gtk.Orientable), .horizontal);
-                const sep = gtk.Separator.new(.horizontal);
 
                 gtk.Box.append(p.shell_box, switcher.as(gtk.Widget));
-                gtk.Box.append(p.shell_box, sep.as(gtk.Widget));
-                gtk.Box.append(p.shell_box, stack.as(gtk.Widget));
+                gtk.Box.append(p.shell_box, p.content_stack.as(gtk.Widget));
             },
         }
     }
