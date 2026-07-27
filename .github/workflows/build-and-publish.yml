@@ -19,19 +19,28 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm zig flatpak base-devel gtk4 clang glibc git vala meson ninja json-glib
+          pacman -S --needed --noconfirm zig flatpak base-devel gtk4 clang glibc git libarchive vala meson ninja json-glib
 
       # Checkout only after git is installed
       - uses: actions/checkout@v6
 
       - name: Build cli & test
-        run: cd Shelly.Cli.Zig && zig build test
+        run: |
+          cd Shelly.Cli.Zig
+          zig build
+          zig build test
 
       - name: Build gtk gui & test
-        run: cd Shelly.Ui.Gtk && zig build test
+        run: |
+          cd Shelly.Ui.Gtk
+          zig build
+          zig build test
 
       - name: Build keys & test
-        run: cd Shelly.Key && zig build test
+        run: |
+          cd Shelly.Key
+          zig build
+          zig build test
 
       - name: Build Shelly.Notifications
         run: |

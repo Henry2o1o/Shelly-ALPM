@@ -103,6 +103,7 @@ pub const AurPage = extern struct {
         p.installed_mode = false;
         p.last_query_len = 0;
         p.check_map = .empty;
+        p.show_detail_pane = false;
 
         p.list_store = gio.ListStore.new(AurPackageObject.getGObjectType());
         p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
@@ -128,10 +129,7 @@ pub const AurPage = extern struct {
 
         const detail = AurPackageDetail.new();
         p.aur_detail = detail;
-        p.show_detail_pane = true;
         gtk.Revealer.setChild(p.detail_revealer, detail.as(gtk.Widget));
-
-        _ = gtk.CheckButton.signals.toggled.connect(p.show_detail_pane_check, *Self, &on_detail_pane, self, .{});
 
         self.update_selection_ui();
         support.connectLifecycle(Self, self);
@@ -240,9 +238,7 @@ pub const AurPage = extern struct {
         };
         const pkg_obj = gobject.ext.cast(AurPackageObject, obj) orelse return;
         p.aur_detail.showPackage(pkg_obj.getPackage());
-        if (p.show_detail_pane) {
-            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-        }
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
     }
 
     fn setup_number_column(
@@ -389,9 +385,7 @@ pub const AurPage = extern struct {
         const p = self.priv();
 
         p.aur_detail.showPackage(pkg.getPackage());
-        if (p.show_detail_pane) {
-            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-        }
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
 
         self.update_selection_ui();
     }
@@ -406,17 +400,7 @@ pub const AurPage = extern struct {
         pkg_obj.setSelected(true);
 
         p.aur_detail.showPackage(pkg_obj.getPackage());
-        if (p.show_detail_pane) {
-            gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-        }
-    }
-
-    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
-        const p = self.priv();
-        if (p.applying_config) return;
-        const active = gtk.CheckButton.getActive(check) != 0;
-        p.show_detail_pane = active;
-        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active) 0 else 1);
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
     }
 
     fn selection_count(self: *Self) u32 {
@@ -512,6 +496,9 @@ pub const AurPage = extern struct {
         defer p.applying_config = false;
         gtk.CheckButton.setActive(p.chroot_check, @intFromBool(cfg.AurInstallUseChroot));
         gtk.CheckButton.setActive(p.run_checks_check, @intFromBool(cfg.AurInstallRunChecks));
+        p.show_detail_pane = cfg.AurInstallShowDetailPane;
+        gtk.CheckButton.setActive(p.show_detail_pane_check, @intFromBool(cfg.AurInstallShowDetailPane));
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (cfg.AurInstallShowDetailPane) 0 else 1);
     }
 
     fn on_chroot_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
@@ -758,6 +745,15 @@ pub const AurPage = extern struct {
             dialog.setButtons(translations._("Build"), translations._("Cancel"));
             if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dialog.as(gtk.Widget));
         }
+    }
+
+    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_detail_pane = active;
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active) 0 else 1);
+        updateConfigField(.AurInstallShowDetailPane, active);
     }
 
     fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {

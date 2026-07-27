@@ -5,6 +5,7 @@
     <property name="orientation">vertical</property>
     <property name="hexpand">true</property>
     <property name="vexpand">true</property>
+    <property name="margin-bottom">10</property>
 
     <child>
       <object class="GtkBox">
@@ -49,10 +50,6 @@
           </object>
         </child>
       </object>
-    </child>
-
-    <child>
-      <object class="GtkSeparator"/>
     </child>
 
     <child>
@@ -193,7 +190,7 @@
           <object class="GtkCheckButton" id="show_detail_pane_check">
             <property name="label" translatable="yes">Hide Detail Pane</property>
             <property name="tooltip-text" translatable="yes">Hide the detail pane on the right</property>
-            <signal name="toggled" handler="on_detail_pane" swapped="true"/>
+            <signal name="toggled" handler="on_detail_pane"/>
           </object>
         </child>
       </object>

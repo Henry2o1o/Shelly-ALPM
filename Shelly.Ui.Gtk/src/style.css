@@ -46,11 +46,14 @@
 .nav-btn {
   padding: 6px 4px;
   margin: 2px 4px;
-
 }
 
 .nav-btn:hover {
   background-color: alpha(@theme_fg_color, 0.06);
+}
+
+.nav-selected {
+    background-color: alpha(@theme_fg_color, 0.04);
 }
 
 .nav-selected label {
@@ -161,7 +164,6 @@
     padding-left: 0;
     min-width: 16px;
 }
-
 
 .drop-zone {
   border: 3px dashed @insensitive_fg_color;
