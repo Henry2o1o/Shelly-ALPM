@@ -44,7 +44,7 @@ pub const WelcomePage = extern struct {
         btn_back: *gtk.Button,
         btn_next: *gtk.Button,
         btn_finish: *gtk.Button,
-        // Built programmatically in init — not template-bound.
+
         welcome_scrim: ?*gtk.Box,
         welcome_dialog_host: ?*gtk.Box,
         current_step: u8,
