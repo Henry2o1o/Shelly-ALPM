@@ -58,6 +58,12 @@
               </object>
             </child>
             <child>
+              <object class="GtkButton" id="preivew_pkg_build">
+                <property name="label" translatable="yes">Preview Pkgbuild</property>
+                 <signal name="clicked" handler="preview_package_build" swapped="true"/>
+              </object>
+            </child>
+            <child>
               <object class="GtkBox" id="sections_box">
                 <property name="orientation">vertical</property>
               </object>

@@ -12,6 +12,8 @@ const AurPackage = @import("../models/aur_package.zig").AurPackage;
 const SizeConverter = @import("../helpers/size_converts.zig").SizeConverter;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
+const PkgbuildReviewDialog = @import("../dialog/page/preview_pkgbuild.zig").PkgbuildReviewDialog;
+const translations = @import("../helpers/translations.zig").translations;
 
 pub const PackageDetail = extern struct {
     parent_instance: Parent,
@@ -21,7 +23,7 @@ pub const PackageDetail = extern struct {
 
     const Private = struct {
         content_box: *gtk.Box,
-
+        preview_button: *gtk.Button,
         name_label: *gtk.Label,
         description_label: *gtk.Label,
         spec_box: *gtk.Box,
@@ -87,6 +89,9 @@ pub const PackageDetail = extern struct {
         const p = self.priv();
         var buf: [512]u8 = undefined;
         var time_buf: [64]u8 = undefined;
+        const len = @min(package.Name.len, p.pending_name.len);
+        @memcpy(p.pending_name[0..len], package.Name[0..len]);
+        p.pending_len = len;
 
         gtk.Label.setLabel(p.name_label, c_string.cstr(&buf, package.Name));
         p.name_label.setSelectable(1);
@@ -280,6 +285,15 @@ pub const PackageDetail = extern struct {
         }
     }
 
+    fn on_preview_package_build(self: *Self) callconv(.c) void {
+        const dialog = PkgbuildReviewDialog.new();
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            gtk.Window.setTransientFor(dialog.as(gtk.Window), win.as(gtk.Window));
+        }
+        dialog.showPreview(self.priv().pending_name[0..self.priv().pending_len]);
+        dialog.present();
+    }
+
     fn finalize(self: *Self) callconv(.c) void {
         const p = self.priv();
 
@@ -311,6 +325,7 @@ pub const PackageDetail = extern struct {
             inline for (template_children) |c| {
                 support.bindChild(class, Private.offset, c[0], c[1]);
             }
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "preview_package_build", @ptrCast(&on_preview_package_build));
             gobject.Object.virtual_methods.finalize.implement(class, &finalize);
         }
     };
