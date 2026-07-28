@@ -343,6 +343,7 @@ pub const UpdatePage = extern struct {
                 gtk.Spinner.stop(p.loading_spinner);
             },
             .NoUpdates => {
+                self.update_source_labels();
                 gtk.Stack.setVisibleChild(p.updates_stack, p.empty_page.as(gtk.Widget));
                 gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
                 gtk.Widget.setSensitive(p.upgrade_button.as(gtk.Widget), 0);

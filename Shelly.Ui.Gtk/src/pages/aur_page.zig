@@ -14,6 +14,7 @@ const runtime = @import("../services/runtime.zig");
 const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const AurPackageDetail = @import("aur_package_detail.zig").PackageDetail;
 const translations = @import("../helpers/translations.zig");
+const sorters = @import("../helpers/sorters.zig");
 
 pub const AurPage = extern struct {
     parent_instance: Parent,
@@ -106,12 +107,16 @@ pub const AurPage = extern struct {
         p.show_detail_pane = false;
 
         p.list_store = gio.ListStore.new(AurPackageObject.getGObjectType());
-        p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
-        p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
+
+        const sort_model = gtk.SortListModel.new(p.list_store.as(gio.ListModel), null);
+
+        p.selection = gtk.SingleSelection.new(sort_model.as(gio.ListModel));
         gtk.SingleSelection.setAutoselect(p.selection, 0);
         gtk.SingleSelection.setCanUnselect(p.selection, 1);
 
         gtk.ColumnView.setModel(p.package_grid, p.selection.as(gtk.SelectionModel));
+
+        gtk.SortListModel.setSorter(sort_model, gtk.ColumnView.getSorter(p.package_grid));
 
         setup_name_column(p.name_column);
         setup_text_column(p.version_column, &AurPackageObject.getVersion, .start);
@@ -126,13 +131,17 @@ pub const AurPage = extern struct {
 
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
-
         _ = gtk.CheckButton.signals.toggled.connect(p.chroot_check, *Self, &on_chroot_toggled, self, .{});
         _ = gtk.CheckButton.signals.toggled.connect(p.run_checks_check, *Self, &on_run_checks_toggled, self, .{});
 
         const detail = AurPackageDetail.new();
         p.aur_detail = detail;
         gtk.Revealer.setChild(p.detail_revealer, detail.as(gtk.Widget));
+
+        attachSorter(p.name_column, sorters.stringSorter(AurPackageObject, &AurPackageObject.getName));
+        attachSorter(p.version_column, sorters.stringSorter(AurPackageObject, &AurPackageObject.getVersion));
+        attachSorter(p.votes_column, sorters.numericSorter(AurPackageObject, &AurPackageObject.getNumVotes));
+        attachSorter(p.popularity_column, sorters.numericSorter(AurPackageObject, &AurPackageObject.getPopularity));
 
         self.update_selection_ui();
         support.connectLifecycle(Self, self);
@@ -148,6 +157,11 @@ pub const AurPage = extern struct {
         }
         gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
         Class.parent.as(gobject.Object.Class).f_dispose.?(self.as(gobject.Object));
+    }
+
+    fn attachSorter(column: *gtk.ColumnViewColumn, sorter: *gtk.Sorter) void {
+        gtk.ColumnViewColumn.setSorter(column, sorter);
+        sorter.as(gobject.Object).unref();
     }
 
     const State = enum {

@@ -20,6 +20,7 @@ const runtime = @import("services/runtime.zig");
 const NavMode = @import("models/shelly_config.zig").NavMode;
 const ShellyTabs = @import("models/shelly_config.zig").ShellyTabs;
 const translations = @import("helpers/translations.zig");
+const ConfirmDialog = @import("dialog/page/yn_dialog.zig").ConfirmDialog;
 
 const NavButton = struct {
     button: *gtk.Button,
@@ -507,15 +508,31 @@ pub const ShellyWindow = extern struct {
             gtk.Box.remove(p.lockout_content, c);
         }
         gtk.Box.append(p.lockout_content, content);
+
+        gtk.Widget.setSensitive(p.content_stack.as(gtk.Widget), 0);
+        if (p.rail) |r| gtk.Widget.setSensitive(r.as(gtk.Widget), 0);
+        if (p.topnav) |t| gtk.Widget.setSensitive(t.as(gtk.Widget), 0);
+
         gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 1);
+
+        if (gobject.ext.cast(ConfirmDialog, content)) |dlg| {
+            dlg.focusConfirm();
+        } else {
+            _ = gtk.Widget.grabFocus(content);
+        }
     }
 
     pub fn hideLockout(self: *ShellyWindow) void {
         const p = self.private();
+        gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 0);
+
+        gtk.Widget.setSensitive(p.content_stack.as(gtk.Widget), 1);
+        if (p.rail) |r| gtk.Widget.setSensitive(r.as(gtk.Widget), 1);
+        if (p.topnav) |t| gtk.Widget.setSensitive(t.as(gtk.Widget), 1);
+
         while (gtk.Widget.getFirstChild(p.lockout_content.as(gtk.Widget))) |c| {
             gtk.Box.remove(p.lockout_content, c);
         }
-        gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 0);
     }
 
     pub fn startTransaction(self: *ShellyWindow, request: TransactionRequest) void {

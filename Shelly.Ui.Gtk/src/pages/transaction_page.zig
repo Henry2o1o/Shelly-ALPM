@@ -473,6 +473,8 @@ pub const TransactionPage = extern struct {
         const msg = std.fmt.bufPrint(&buf, "{s} ({s} {d})", .{ translations._("Finished"), translations._("exit"), exit_code }) catch translations._("Finished");
         append_terminal(self, msg);
 
+        setLabel(p.title_label, "Done");
+
         gtk.Widget.setVisible(p.close_button.as(gtk.Widget), 1);
         p.finished = true;
 
