@@ -34,6 +34,7 @@ const Settings = struct {
 };
 
 const Bar = struct {
+    operation_id: u64,
     name: []const u8,
     action: []const u8,
     current: f64,
@@ -42,6 +43,7 @@ const Bar = struct {
 };
 
 const FinalizedBar = struct {
+    operation_id: u64,
     name: []const u8,
     action: []const u8,
 };
@@ -209,7 +211,8 @@ pub const Renderer = struct {
             .failure => |failure| {
                 try self.writeColoredLine(.red, "error: {s}", .{failure.message});
             },
-            .started, .completed => {},
+            .completed => |completed| try self.completeOperation(completed.envelope.operation_id),
+            .started => {},
         }
         try self.flush();
     }
@@ -257,6 +260,11 @@ pub const Renderer = struct {
     fn writeProgress(self: *Renderer, progress: anytype) !void {
         const update = progress.update;
         if (update.stage) |stage| {
+            // AUR RPC and cgit responses are metadata requests, not package
+            // downloads. They are commonly chunked without a Content-Length,
+            // so exposing them as download bars produces a misleading 0/0
+            // PackageDownload entry.
+            if (std.mem.eql(u8, stage, "aur-http")) return;
             if (std.mem.eql(u8, stage, "hook")) {
                 const line = update.message orelse "";
                 if (line.len == 0) {
@@ -294,6 +302,7 @@ pub const Renderer = struct {
         const total = if (has_byte_counts) convertSize(self.settings.size_display, raw_total) else @as(f64, @floatFromInt(raw_total));
         const percentage = progressPercentage(update, raw_current, raw_total);
         try self.updateBar(.{
+            .operation_id = progress.envelope.operation_id,
             .name = name,
             .action = action,
             .current = current,
@@ -304,8 +313,8 @@ pub const Renderer = struct {
 
     fn updateBar(self: *Renderer, bar: Bar) !void {
         if (!self.animate) {
-            if (bar.percentage < 100 or self.wasFinalized(bar.name, bar.action)) return;
-            try self.appendFinalized(bar.name, bar.action);
+            if (bar.percentage < 100 or self.wasFinalized(bar.operation_id, bar.name, bar.action)) return;
+            try self.appendFinalized(bar.operation_id, bar.name, bar.action);
             try self.writeBarLine(bar);
             return;
         }
@@ -313,15 +322,17 @@ pub const Renderer = struct {
         try self.clearBars();
         var found: ?usize = null;
         for (self.bars.items, 0..) |candidate, index| {
-            if (std.mem.eql(u8, candidate.name, bar.name)) {
+            if (candidate.operation_id == bar.operation_id and
+                std.mem.eql(u8, candidate.name, bar.name))
+            {
                 found = index;
                 break;
             }
         }
         if (bar.percentage >= 100) {
-            if (!self.wasFinalized(bar.name, bar.action)) {
+            if (!self.wasFinalized(bar.operation_id, bar.name, bar.action)) {
                 try self.writeBarLine(bar);
-                try self.appendFinalized(bar.name, bar.action);
+                try self.appendFinalized(bar.operation_id, bar.name, bar.action);
             }
             if (found) |index| _ = self.bars.orderedRemove(index);
         } else if (found) |index| {
@@ -341,6 +352,7 @@ pub const Renderer = struct {
     fn ownedBar(self: *Renderer, bar: Bar) !Bar {
         const allocator = self.owned_data.allocator();
         return .{
+            .operation_id = bar.operation_id,
             .name = try allocator.dupe(u8, bar.name),
             .action = try allocator.dupe(u8, bar.action),
             .current = bar.current,
@@ -349,19 +361,45 @@ pub const Renderer = struct {
         };
     }
 
-    fn appendFinalized(self: *Renderer, name: []const u8, action: []const u8) !void {
+    fn appendFinalized(self: *Renderer, operation_id: u64, name: []const u8, action: []const u8) !void {
         const allocator = self.owned_data.allocator();
         try self.finalized.append(self.context.allocator, .{
+            .operation_id = operation_id,
             .name = try allocator.dupe(u8, name),
             .action = try allocator.dupe(u8, action),
         });
     }
 
-    fn wasFinalized(self: *const Renderer, name: []const u8, action: []const u8) bool {
+    fn wasFinalized(self: *const Renderer, operation_id: u64, name: []const u8, action: []const u8) bool {
         for (self.finalized.items) |item| {
-            if (std.mem.eql(u8, item.name, name) and std.mem.eql(u8, item.action, action)) return true;
+            if (item.operation_id == operation_id and
+                std.mem.eql(u8, item.name, name) and
+                std.mem.eql(u8, item.action, action)) return true;
         }
         return false;
+    }
+
+    fn completeOperation(self: *Renderer, operation_id: u64) !void {
+        if (!self.animate) return;
+        var has_bars = false;
+        for (self.bars.items) |bar| {
+            if (bar.operation_id == operation_id) {
+                has_bars = true;
+                break;
+            }
+        }
+        if (!has_bars) return;
+
+        try self.clearBars();
+        var index: usize = 0;
+        while (index < self.bars.items.len) {
+            if (self.bars.items[index].operation_id == operation_id) {
+                _ = self.bars.orderedRemove(index);
+            } else {
+                index += 1;
+            }
+        }
+        try self.drawBars();
     }
 
     fn clearBars(self: *Renderer) !void {
@@ -916,6 +954,83 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
     try std.testing.expect(std.mem.indexOf(u8, rendered, "MakepkgBuild aur-demo") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, ":: Transaction complete.") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, " 50%") == null);
+}
+
+test "single-pane clears unknown-length bars on completion and suppresses AUR metadata" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const absolute_length = try temporary.dir.realPath(std.testing.io, &absolute_buffer);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var environment = std.process.Environ.Map.init(arena.allocator());
+    try environment.put("XDG_CONFIG_HOME", absolute_buffer[0..absolute_length]);
+    try environment.put("COLUMNS", "80");
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .environment = &environment,
+        .stdin_is_tty = true,
+        .stdout_is_tty = true,
+    };
+    var renderer = try Renderer.init(&context, true);
+    var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
+    defer {
+        renderer.detach();
+        operation_context.deinit();
+        renderer.deinit();
+    }
+    try renderer.attach(&operation_context);
+
+    var first = operation_context.begin(.{
+        .backend = .download,
+        .kind = .download,
+        .subject = "same-name.pkg.tar.zst",
+    });
+    first.progress(.{
+        .stage = "download",
+        .bytes_completed = 4096,
+    });
+    try std.testing.expectEqual(@as(usize, 1), renderer.bars.items.len);
+    try std.testing.expectEqual(first.envelope.operation_id, renderer.bars.items[0].operation_id);
+
+    var second = operation_context.begin(.{
+        .backend = .download,
+        .kind = .download,
+        .subject = "same-name.pkg.tar.zst",
+    });
+    second.progress(.{
+        .stage = "download",
+        .bytes_completed = 8192,
+    });
+    try std.testing.expectEqual(@as(usize, 2), renderer.bars.items.len);
+
+    first.finish(.success);
+    try std.testing.expectEqual(@as(usize, 1), renderer.bars.items.len);
+    try std.testing.expectEqual(second.envelope.operation_id, renderer.bars.items[0].operation_id);
+
+    var rpc = operation_context.begin(.{
+        .backend = .download,
+        .kind = .download,
+        .subject = "https://aur.archlinux.org/rpc/",
+    });
+    rpc.progress(.{
+        .stage = "aur-http",
+        .bytes_completed = 512,
+    });
+    rpc.finish(.success);
+    try std.testing.expectEqual(@as(usize, 1), renderer.bars.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "PackageDownload rpc") == null);
+
+    second.finish(.success);
+    try std.testing.expectEqual(@as(usize, 0), renderer.bars.items.len);
 }
 
 test "single-pane no-confirm uses the shared automatic question policy" {
