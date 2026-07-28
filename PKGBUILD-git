@@ -35,6 +35,7 @@ build() {
     --prefix "${srcdir}/${pkgname}/out" \
     --cache-dir "${srcdir}/zig-cache" \
     --global-cache-dir "${srcdir}/zig-global-cache" \
+    -Dflatpak-backend-package=shelly-flatpak-backend-git \
     -Dcpu=baseline \
     -Doptimize=ReleaseSafe)
 

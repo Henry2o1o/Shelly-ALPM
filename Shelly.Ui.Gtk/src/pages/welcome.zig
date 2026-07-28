@@ -9,6 +9,8 @@ const translations = @import("../helpers/translations.zig");
 const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const runtime = @import("../services/runtime.zig");
+const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
+const support_packages = @import("../services/support_packages.zig");
 const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const NavMode = @import("../models/shelly_config.zig").NavMode;
 const TrayService = @import("../services/tray_service.zig");
@@ -24,6 +26,12 @@ pub const WelcomePage = extern struct {
     const resource_path = "/com/shellyorg/shelly/ui/welcome.ui";
 
     const num_steps: u8 = 3;
+
+    const SupportInstallContext = struct {
+        window: *ShellyWindow,
+        flatpak: bool,
+        appimage: bool,
+    };
 
     const Private = struct {
         arena: ?*std.heap.ArenaAllocator,
@@ -252,11 +260,14 @@ pub const WelcomePage = extern struct {
             return;
         };
 
+        const flatpak_selected = gtk.CheckButton.getActive(p.source_flatpak) != 0;
+        const appimage_selected = gtk.CheckButton.getActive(p.source_appimage) != 0;
+
         var updated = cfg.*;
         updated.AurEnabled = gtk.CheckButton.getActive(p.source_aur) != 0;
         updated.AurWarningConfirmed = updated.AurEnabled;
-        updated.FlatPackEnabled = gtk.CheckButton.getActive(p.source_flatpak) != 0;
-        updated.AppImageEnabled = gtk.CheckButton.getActive(p.source_appimage) != 0;
+        updated.FlatPackEnabled = false;
+        updated.AppImageEnabled = false;
         updated.RecommendedEnabled = gtk.CheckButton.getActive(p.source_recommended) != 0;
         updated.NavMode = if (gtk.CheckButton.getActive(p.nav_topbar) != 0) NavMode.topbar else NavMode.sidebar;
         updated.TrayEnabled = gtk.Switch.getActive(p.tray_enabled) != 0;
@@ -274,9 +285,71 @@ pub const WelcomePage = extern struct {
         };
 
         if (win) |w| {
-            w.hideLockout();
             w.applyConfig();
+            if (flatpak_selected or appimage_selected) {
+                startSupportInstall(w, flatpak_selected, appimage_selected);
+            } else {
+                w.hideLockout();
+            }
         }
+    }
+
+    fn startSupportInstall(window: *ShellyWindow, flatpak: bool, appimage: bool) void {
+        var package_buffer: [3][]const u8 = undefined;
+        const packages = support_packages.selected(&package_buffer, flatpak, appimage);
+        const argv = ShellyCommands.install(std.heap.c_allocator, packages) catch {
+            window.hideLockout();
+            return;
+        };
+        defer std.heap.c_allocator.free(argv);
+
+        const ctx = std.heap.c_allocator.create(SupportInstallContext) catch {
+            window.hideLockout();
+            return;
+        };
+        ctx.* = .{
+            .window = window,
+            .flatpak = flatpak,
+            .appimage = appimage,
+        };
+
+        window.startTransaction(.{
+            .title = supportInstallTitle(flatpak, appimage),
+            .argv = argv,
+            .packages = packages,
+            .privileged = true,
+            .on_complete = &on_support_install_complete,
+            .ctx = ctx,
+        });
+    }
+
+    fn on_support_install_complete(raw_ctx: *anyopaque, success: bool) void {
+        const ctx: *SupportInstallContext = @ptrCast(@alignCast(raw_ctx));
+        defer std.heap.c_allocator.destroy(ctx);
+        if (!success) return;
+
+        const svc = runtime.config orelse return;
+        const cfg = svc.get() catch return;
+        var updated = cfg.*;
+        if (ctx.flatpak) updated.FlatPackEnabled = true;
+        if (ctx.appimage) updated.AppImageEnabled = true;
+        svc.set(updated) catch |err| {
+            std.log.err("welcome: failed to enable installed support: {}", .{err});
+            return;
+        };
+        svc.save() catch |err| {
+            std.log.err("welcome: failed to save installed support: {}", .{err});
+            return;
+        };
+        ctx.window.applyConfig();
+    }
+
+    fn supportInstallTitle(flatpak: bool, appimage: bool) [:0]const u8 {
+        if (flatpak and appimage)
+            return translations._("Installing Flatpak and AppImage support");
+        if (flatpak)
+            return translations._("Installing Flatpak support");
+        return translations._("Installing AppImage support");
     }
 
     fn go_to_step(self: *Self, step: u8) void {
