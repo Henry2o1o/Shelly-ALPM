@@ -198,6 +198,15 @@ pub const ShellyCli = struct {
         return JsonPackFrame.decode([]AppImageUpdate, self.allocator, result.stdout);
     }
 
+    pub fn sync_remote_appstream_flatpak(self: ShellyCli) !void {
+        const result = try self.run(&.{
+            "sync",
+            "flatpak",
+        });
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+    }
+
     pub fn check_updates(self: ShellyCli) !std.json.Parsed(CheckUpdates) {
         const result = try self.run(&.{"-P"});
         defer self.allocator.free(result.stdout);
