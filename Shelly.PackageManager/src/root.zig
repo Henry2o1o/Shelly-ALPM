@@ -1,6 +1,7 @@
 //! By convention, root.zig is the root source file when making a package.
 const std = @import("std");
 const Io = std.Io;
+const flatpak_backend_loader = @import("flatpak/backend_loader.zig");
 
 pub const alpm = struct {
     pub const manager = @import("alpm/manager.zig");
@@ -68,7 +69,6 @@ pub const flatpak = struct {
     pub const appstream_parser = @import("flatpak/appstream_parser.zig");
     pub const events = @import("flatpak/events.zig");
     pub const types = @import("flatpak/types.zig");
-    pub const backend_loader = @import("flatpak/backend_loader.zig");
     pub const errors = @import("flatpak/errors.zig");
 
     pub const Manager = manager.Manager;
@@ -91,9 +91,9 @@ pub const flatpak = struct {
     pub const AppstreamScreenshot = types.AppstreamScreenshot;
     pub const AppstreamRelease = types.AppstreamRelease;
     pub const AppstreamApp = types.AppstreamApp;
-    pub const BackendInfo = backend_loader.BackendInfo;
-    pub const BackendStatus = backend_loader.BackendStatus;
-    pub const backendStatus = backend_loader.backendStatus;
+    pub const BackendInfo = flatpak_backend_loader.BackendInfo;
+    pub const BackendStatus = flatpak_backend_loader.BackendStatus;
+    pub const backendStatus = flatpak_backend_loader.backendStatus;
     pub const FlatpakEventDispatcher = events.Dispatcher;
     pub const FlatpakEventType = events.EventType;
     pub const FlatpakStatusArgs = events.StatusArgs;
@@ -488,6 +488,7 @@ test {
 
 test "Flatpak public facade does not expose generated native bindings" {
     try std.testing.expect(!@hasDecl(flatpak, "bindings"));
+    try std.testing.expect(!@hasDecl(flatpak, "backend_loader"));
     try std.testing.expect(!@hasDecl(flatpak.manager, "bindings"));
     _ = flatpak.Scope;
     _ = flatpak.RefKind;

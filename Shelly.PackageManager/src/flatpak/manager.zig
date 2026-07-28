@@ -460,6 +460,7 @@ pub const Manager = struct {
             .dispatcher = self.dispatcher,
             .context = self.operation_context,
             .cancellation = self.cancellation,
+            .failure_reported = &scope.failure_reported,
         };
         return (client_api.Client{
             .allocator = self.allocator,

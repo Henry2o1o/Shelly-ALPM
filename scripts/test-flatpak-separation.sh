@@ -4,13 +4,27 @@ set -euo pipefail
 unset LD_PRELOAD
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_root="${SHELLY_FLATPAK_BUILD_ROOT:-$(mktemp -d /tmp/shelly-flatpak-separation.XXXXXX)}"
 keep_build_root="${SHELLY_FLATPAK_KEEP_BUILD_ROOT:-0}"
+owns_build_root=0
+if [[ -n "${SHELLY_FLATPAK_BUILD_ROOT:-}" ]]; then
+    build_root="${SHELLY_FLATPAK_BUILD_ROOT}"
+else
+    build_root="$(mktemp -d /tmp/shelly-flatpak-separation.XXXXXX)"
+    owns_build_root=1
+fi
 
 cleanup() {
-    if [[ "${keep_build_root}" != "1" ]]; then
-        rm -rf -- "${build_root}"
+    if [[ "${owns_build_root}" != "1" || "${keep_build_root}" == "1" ]]; then
+        return
     fi
+    case "${build_root}" in
+        /tmp/shelly-flatpak-separation.*)
+            rm -rf -- "${build_root}"
+            ;;
+        *)
+            echo "warning: refusing to remove unexpected build root: ${build_root}" >&2
+            ;;
+    esac
 }
 trap cleanup EXIT
 

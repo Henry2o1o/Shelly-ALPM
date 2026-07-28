@@ -229,6 +229,7 @@ pub const CancellationBridge = struct {
     pub fn deinit(self: *CancellationBridge) void {
         if (self.context) |context| {
             if (self.subscription) |subscription| _ = context.unsubscribeCancellation(subscription);
+            context.waitForCancellationCallbacks();
         }
         self.* = undefined;
     }

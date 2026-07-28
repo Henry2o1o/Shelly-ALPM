@@ -155,6 +155,10 @@ pub fn parseResponse(
         return error.UnsupportedSchema;
     if ((parsed.value.result == null) == (parsed.value.@"error" == null))
         return error.InvalidResponseShape;
+    if (parsed.value.@"error") |backend_error| {
+        if (backend_error.code.len == 0 or backend_error.message.len == 0)
+            return error.InvalidResponseShape;
+    }
     return parsed;
 }
 
@@ -435,6 +439,13 @@ test "response and event parsers reject malformed truncated oversized and ambigu
         parseResponse(
             std.testing.allocator,
             "{\"schema\":1,\"operation_id\":9,\"result\":{},\"error\":{\"code\":\"x\",\"message\":\"x\"}}",
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidResponseShape,
+        parseResponse(
+            std.testing.allocator,
+            "{\"schema\":1,\"operation_id\":9,\"error\":{\"code\":\"\",\"message\":\"failed\"}}",
         ),
     );
     if (parseResponse(std.testing.allocator, "{\"schema\":1")) |parsed| {

@@ -144,6 +144,7 @@ pub fn build(b: *std.Build) void {
             "installed Flatpak resolution matches IDs and friendly names",
             "Flatpak manager exposes strict-parity operations",
             "shared cancellation propagates to GLib cancellables",
+            "cancellation unsubscribe drain protects borrowed callback state",
             "Flatpak dispatcher forwards typed status and progress",
             "native Flatpak remote manager exposes backend parity operations",
             "native Flatpak AppStream manager exposes backend parity operations",
@@ -160,6 +161,8 @@ pub fn build(b: *std.Build) void {
         .name = "flatpak-backend-live-test",
         .root_module = backend_module,
         .filters = &.{
+            "test installFlatpak",
+            "test listFlatpak",
             "test laucnhFlatpak",
             "test searchremoteref",
             "test getAllFlatpaksFromRemotes",

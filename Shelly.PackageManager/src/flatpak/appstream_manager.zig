@@ -208,6 +208,7 @@ pub const AppstreamManager = struct {
                 else
                     null,
                 .context = self.operation_context,
+                .failure_reported = &scope.failure_reported,
             },
         );
     }

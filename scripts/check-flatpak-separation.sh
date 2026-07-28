@@ -52,9 +52,18 @@ if rg -n --glob '*.zig' \
     echo "error: native Flatpak declarations escaped the backend project" >&2
     exit 1
 fi
+if rg -n --glob '*.zig' \
+    'flatpak\.bindings|bindings\.libflatpak|@import\("flatpak"\)|Shelly_Flatpak_Protocol|shelly_flatpak_backend_get_api' \
+    "${repo_root}/Shelly.Ui.Gtk" \
+    "${repo_root}/Shelly.Tui"; then
+    echo "error: a UI consumer bypasses the PackageManager Flatpak facade" >&2
+    exit 1
+fi
 if rg -n 'linkSystemLibrary\("flatpak"' \
     "${repo_root}/Shelly.PackageManager/build.zig" \
-    "${repo_root}/Shelly.Cli.Zig/build.zig"; then
+    "${repo_root}/Shelly.Cli.Zig/build.zig" \
+    "${repo_root}/Shelly.Ui.Gtk/build.zig" \
+    "${repo_root}/Shelly.Tui/build.zig"; then
     echo "error: the base build graph still links libflatpak" >&2
     exit 1
 fi

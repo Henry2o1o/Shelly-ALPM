@@ -15,6 +15,7 @@ pub const EventTarget = struct {
     dispatcher: ?*events.Dispatcher = null,
     context: ?*operation_api.OperationContext = null,
     cancellation: ?events.Cancellation = null,
+    failure_reported: ?*std.atomic.Value(bool) = null,
 };
 
 pub const Client = struct {
@@ -57,6 +58,8 @@ pub const Client = struct {
         const create_fn = loaded.api.create orelse
             return errors.Error.FlatpakBackendInvalid;
         try errors.fromStatus(create_fn(&host, &execute_context.handle));
+        if (execute_context.handle == null)
+            return errors.Error.FlatpakBackendCreateFailed;
         defer (loaded.api.destroy orelse unreachable)(
             execute_context.handle,
         );
@@ -74,6 +77,7 @@ pub const Client = struct {
             if (context) |operation_context| {
                 if (subscription) |id|
                     _ = operation_context.unsubscribeCancellation(id);
+                operation_context.waitForCancellationCallbacks();
             }
         }
         if (context) |operation_context| {
@@ -181,6 +185,7 @@ fn emitEvent(
 }
 
 fn forwardEvent(target: EventTarget, event: wire.EventEnvelope) void {
+    if (event.kind == .failure and !claimFailure(target)) return;
     if (target.dispatcher) |dispatcher| {
         switch (event.kind) {
             .status => dispatcher.raiseStatus(.{
@@ -231,6 +236,7 @@ fn reportBackendError(
     target: EventTarget,
     backend_error: wire.ErrorPayload,
 ) void {
+    if (!claimFailure(target)) return;
     if (target.dispatcher) |dispatcher| {
         dispatcher.raiseStatus(.{
             .event_type = .err,
@@ -245,6 +251,11 @@ fn reportBackendError(
             false,
         );
     }
+}
+
+fn claimFailure(target: EventTarget) bool {
+    const reported = target.failure_reported orelse return true;
+    return !reported.swap(true, .acq_rel);
 }
 
 fn eventType(level: wire.EventLevel) events.EventType {

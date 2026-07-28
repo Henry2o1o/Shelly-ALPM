@@ -109,7 +109,9 @@ cannot be unloaded during an operation or callback.
 
 `destroy` must not race an active `execute`. `cancel` is idempotent: cancelling
 an unknown or already-completed operation succeeds without touching stale
-state.
+state. Both sides unsubscribe borrowed cancellation handlers and drain any
+callbacks that were already snapshotted before destroying the backend handle
+or its `GCancellable`.
 
 ## Wire schema 1
 

@@ -57,7 +57,7 @@ pub fn backendStatus() BackendStatus {
     } };
 }
 
-pub fn probePath(path: []const u8) BackendStatus {
+fn probePath(path: []const u8) BackendStatus {
     var loaded = openAndValidate(path) catch |err| return switch (err) {
         errors.Error.FlatpakBackendIncompatible => .{ .incompatible = protocol.abi_version },
         else => .unavailable,
@@ -85,7 +85,7 @@ fn openAndValidate(path: []const u8) errors.Error!Loaded {
         .user_data = null,
         .emit_event = discardEvent,
     };
-    var api: protocol.BackendApiV1 = undefined;
+    var api = std.mem.zeroes(protocol.BackendApiV1);
     const status = get_api(protocol.abi_version, &host, &api);
     if (status == .incompatible)
         return errors.Error.FlatpakBackendIncompatible;

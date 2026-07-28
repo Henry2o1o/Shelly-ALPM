@@ -404,6 +404,7 @@ pub fn build(b: *std.Build) void {
             "installed Flatpak resolution matches IDs and friendly names",
             "Flatpak manager exposes strict-parity operations",
             "shared cancellation propagates to GLib cancellables",
+            "cancellation unsubscribe drain protects borrowed callback state",
             "AppStream manager exposes one and all remote catalog retrieval",
             "Flatpak remote operations honor shared cancellation",
             "Flatpak remote operation-hooked public APIs compile",

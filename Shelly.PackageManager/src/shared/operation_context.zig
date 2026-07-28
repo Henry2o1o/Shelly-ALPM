@@ -324,6 +324,7 @@ pub const OperationContext = struct {
     next_question_id: std.atomic.Value(u64) = .init(1),
     next_subscription_id: std.atomic.Value(u64) = .init(1),
     active_operations: std.atomic.Value(usize) = .init(0),
+    active_cancellation_dispatches: std.atomic.Value(usize) = .init(0),
     cancelled: std.atomic.Value(bool) = .init(false),
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) OperationContext {
@@ -338,6 +339,9 @@ pub const OperationContext = struct {
     /// only valid after all operations and callbacks have completed.
     pub fn deinit(self: *OperationContext) void {
         std.debug.assert(self.active_operations.load(.acquire) == 0);
+        std.debug.assert(
+            self.active_cancellation_dispatches.load(.acquire) == 0,
+        );
 
         self.mutex.lockUncancelable(self.io);
         var pending = self.pending_questions.valueIterator();
@@ -405,6 +409,23 @@ pub const OperationContext = struct {
         return false;
     }
 
+    /// Waits for cancellation callbacks that were snapshotted before an
+    /// unsubscribe to return. Call this after removing a borrowed cancellation
+    /// handler and before destroying the handler's data.
+    pub fn waitForCancellationCallbacks(
+        self: *const OperationContext,
+    ) void {
+        var spins: usize = 0;
+        while (self.active_cancellation_dispatches.load(.acquire) != 0) {
+            if (spins < 64) {
+                std.atomic.spinLoopHint();
+                spins += 1;
+            } else {
+                std.Thread.yield() catch {};
+            }
+        }
+    }
+
     /// Begins an owned operation value. Its descriptor slices must remain valid
     /// until `finish` returns.
     pub fn begin(self: *OperationContext, descriptor: OperationDescriptor) Operation {
@@ -441,6 +462,11 @@ pub const OperationContext = struct {
 
     pub fn cancel(self: *OperationContext) void {
         if (self.cancelled.swap(true, .acq_rel)) return;
+        _ = self.active_cancellation_dispatches.fetchAdd(1, .acq_rel);
+        defer _ = self.active_cancellation_dispatches.fetchSub(
+            1,
+            .acq_rel,
+        );
 
         const snapshot = self.snapshotCancellationHandlers() catch &.{};
         defer if (snapshot.len != 0) self.allocator.free(snapshot);
@@ -739,6 +765,63 @@ test "cancellation notifies adapters and cancels operations" {
     try std.testing.expectError(error.Cancelled, operation.checkCancelled());
     try std.testing.expect(capture.called);
     operation.finish(.cancelled);
+}
+
+test "cancellation unsubscribe drain protects borrowed callback state" {
+    const Capture = struct {
+        entered: std.atomic.Value(bool) = .init(false),
+        release: std.atomic.Value(bool) = .init(false),
+        returned: std.atomic.Value(bool) = .init(false),
+
+        fn cancel(data: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.entered.store(true, .release);
+            while (!self.release.load(.acquire)) {
+                std.atomic.spinLoopHint();
+                std.Thread.yield() catch {};
+            }
+            self.returned.store(true, .release);
+        }
+    };
+    const Canceller = struct {
+        fn run(context: *OperationContext) void {
+            context.cancel();
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = OperationContext.init(
+        std.testing.allocator,
+        threaded.io(),
+    );
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribeCancellation(.{
+        .function = Capture.cancel,
+        .data = &capture,
+    });
+    const thread = try std.Thread.spawn(.{}, Canceller.run, .{&context});
+    defer {
+        capture.release.store(true, .release);
+        thread.join();
+    }
+    while (!capture.entered.load(.acquire)) {
+        std.atomic.spinLoopHint();
+        std.Thread.yield() catch {};
+    }
+
+    try std.testing.expect(context.unsubscribeCancellation(subscription));
+    try std.testing.expect(
+        context.active_cancellation_dispatches.load(.acquire) != 0,
+    );
+    capture.release.store(true, .release);
+    context.waitForCancellationCallbacks();
+    try std.testing.expect(capture.returned.load(.acquire));
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        context.active_cancellation_dispatches.load(.acquire),
+    );
 }
 
 test "subscription identifiers remain stable after removals" {

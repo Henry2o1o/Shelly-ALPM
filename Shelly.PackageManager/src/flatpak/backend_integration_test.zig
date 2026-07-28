@@ -3,6 +3,7 @@ const client_api = @import("client.zig");
 const events = @import("events.zig");
 const errors = @import("errors.zig");
 const loader = @import("backend_loader.zig");
+const operation_api = @import("operation_context");
 
 const SuccessResult = struct {
     ok: bool,
@@ -49,6 +50,19 @@ const ConcurrentCall = struct {
         ) catch return;
         defer result.deinit();
         self.completed.store(result.value.ok, .release);
+    }
+};
+
+const FailureCapture = struct {
+    failures: std.atomic.Value(u64) = .init(0),
+
+    fn receive(data: ?*anyopaque, event: operation_api.Event) void {
+        const self: *FailureCapture =
+            @ptrCast(@alignCast(data orelse return));
+        switch (event) {
+            .failure => _ = self.failures.fetchAdd(1, .acq_rel),
+            else => {},
+        }
     }
 };
 
@@ -131,4 +145,49 @@ test "process-wide loader supports concurrent clients and remains loaded" {
     try std.testing.expect(first.completed.load(.acquire));
     try std.testing.expect(second.completed.load(.acquire));
     try std.testing.expect(loader.backendStatus() == .available);
+}
+
+test "backend failure events responses and facade cleanup report once" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(
+        std.testing.allocator,
+        threaded.io(),
+    );
+    defer context.deinit();
+    var capture: FailureCapture = .{};
+    _ = try context.subscribe(.{
+        .function = FailureCapture.receive,
+        .data = &capture,
+    });
+    var scope = events.OperationScope.init(
+        &context,
+        null,
+        null,
+        .update,
+        "fake",
+    );
+    scope.attach();
+    defer scope.finish(.failed);
+    const operation = if (scope.operation) |*value| value else return error.ExpectedOperation;
+    const client: client_api.Client = .{ .allocator = std.heap.c_allocator };
+    try std.testing.expectError(
+        errors.Error.Cancelled,
+        client.call(
+            SuccessResult,
+            "fake.wait",
+            .{},
+            .{
+                .operation = operation,
+                .context = &context,
+                .cancellation = .{ .function = EventCapture.cancelled },
+                .failure_reported = &scope.failure_reported,
+            },
+        ),
+    );
+    scope.fail();
+    try std.testing.expectEqual(
+        @as(u64, 1),
+        capture.failures.load(.acquire),
+    );
 }

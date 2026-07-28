@@ -60,6 +60,12 @@ jobs:
           zig build
           zig build test
 
+      - name: Build TUI and test
+        run: |
+          cd Shelly.Tui
+          zig build
+          zig build test
+
       - name: Build keys & test
         run: |
           cd Shelly.Key

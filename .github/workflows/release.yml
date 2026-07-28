@@ -65,6 +65,12 @@ jobs:
             publish/shelly-cli/shelly \
             publish/shelly-flatpak-backend/libshelly-flatpak-backend.so.1
 
+      - name: Test TUI consumer
+        run: |
+          cd Shelly.Tui
+          zig build
+          zig build test
+
       - name: Publish Shelly.Gtk
         run: |
           mkdir -p publish/shelly-ui

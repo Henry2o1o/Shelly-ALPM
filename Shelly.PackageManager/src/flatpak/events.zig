@@ -191,6 +191,7 @@ pub const OperationScope = struct {
     operation: ?operations.Operation = null,
     previous: ?*operations.Operation = null,
     attached: bool = false,
+    failure_reported: std.atomic.Value(bool) = .init(false),
 
     pub fn init(
         context: ?*operations.OperationContext,
@@ -234,19 +235,21 @@ pub const OperationScope = struct {
     }
 
     pub fn fail(self: *OperationScope) void {
-        if (self.operation) |*operation| operation.reportError(
-            if (operation.isCancelled())
-                error.Cancelled
-            else
-                error.FlatpakOperationFailed,
-            if (operation.isCancelled())
-                "Flatpak operation cancelled"
-            else
-                "Flatpak operation failed",
-            "flatpak",
-            null,
-            false,
-        );
+        if (!self.failure_reported.swap(true, .acq_rel)) {
+            if (self.operation) |*operation| operation.reportError(
+                if (operation.isCancelled())
+                    error.Cancelled
+                else
+                    error.FlatpakOperationFailed,
+                if (operation.isCancelled())
+                    "Flatpak operation cancelled"
+                else
+                    "Flatpak operation failed",
+                "flatpak",
+                null,
+                false,
+            );
+        }
         self.finish(if (self.operation) |*operation|
             if (operation.isCancelled()) .cancelled else .failed
         else
