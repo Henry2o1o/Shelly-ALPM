@@ -32,6 +32,15 @@ pub fn build(b: *std.Build) void {
 
     const options = b.addOptions();
     options.addOption(std.SemanticVersion, "version", version);
+    options.addOption(
+        []const u8,
+        "flatpak_backend_package",
+        b.option(
+            []const u8,
+            "flatpak-backend-package",
+            "Package containing the Flatpak backend for this Shelly build",
+        ) orelse "shelly-flatpak-backend",
+    );
 
     const exe = b.addExecutable(.{
         .name = "Shelly_Ui_Gtk",

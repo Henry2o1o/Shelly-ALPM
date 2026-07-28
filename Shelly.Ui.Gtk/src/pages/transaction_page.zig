@@ -151,6 +151,11 @@ pub const TransactionPage = extern struct {
             op.threaded.deinit();
             std.heap.c_allocator.destroy(op);
             p.operation = null;
+            p.finished = true;
+            gtk.Widget.setVisible(p.close_button.as(gtk.Widget), 1);
+            if (p.on_complete) |cb| {
+                if (p.on_complete_ctx) |ctx| cb(ctx, false);
+            }
         };
     }
 

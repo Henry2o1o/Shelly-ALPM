@@ -74,7 +74,7 @@ jobs:
       - name: Publish Shelly.Gtk
         run: |
           mkdir -p publish/shelly-ui
-          (cd Shelly.Ui.Gtk && zig build --prefix ../publish/build-ui -Dcpu=baseline -Doptimize=ReleaseSafe)
+          (cd Shelly.Ui.Gtk && zig build --prefix ../publish/build-ui -Dflatpak-backend-package=shelly-flatpak-backend-bin -Dcpu=baseline -Doptimize=ReleaseSafe)
           install -Dm755 publish/build-ui/bin/Shelly_Ui_Gtk publish/shelly-ui/shelly-ui
           install -m644 assets/shellylogo.png publish/shelly-ui/
           install -m644 assets/shellylogo-tray.png publish/shelly-ui/
