@@ -35,6 +35,20 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
+    // libostree is exposed via a committed, statically generated binding
+    // (`src/ostree/ostree.zig`) rather than a build-time translate-c step.
+    // Zig 0.16's arocc-based translate-c cannot yet handle GLib/GObject headers
+    // (the `_Pragma`/`__builtin_constant_p` macros), so `ostree.zig` was
+    // generated once and checked in. See `src/ostree/ostree_include.h` for the
+    // regeneration command and `ostree.zig`'s header for the manual fixups.
+    // Actual linking of the system library happens on the consuming module below.
+    const ostree_mod = b.createModule(.{
+        .root_source_file = b.path("src/flatpak/ostree.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     // libalpm is exposed via a committed, statically generated binding
     // (`src/alpm/alpm.zig`), same approach as flatpak. Regenerate from the
     // src/alpm directory with:
@@ -78,8 +92,11 @@ pub fn build(b: *std.Build) void {
     mod.addImport("operation_context", operation_context_mod);
     mod.linkSystemLibrary("alpm", .{});
     mod.addImport("flatpak", flatpak_mod);
+    mod.addImport("ostree", ostree_mod);
     mod.linkSystemLibrary("flatpak", .{});
     mod.linkSystemLibrary("archive", .{});
+    mod.linkSystemLibrary("ostree", .{});
+
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
