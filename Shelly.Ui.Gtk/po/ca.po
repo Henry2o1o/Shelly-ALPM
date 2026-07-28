@@ -2067,3 +2067,147 @@ msgstr ""
 
 msgid "Utilities"
 msgstr ""
+
+msgid "Recommended Packages"
+msgstr ""
+
+msgid "Curated suggestions from Seafoam Labs"
+msgstr ""
+
+msgid "Refresh the recommended packages list from the network"
+msgstr ""
+
+msgid "Loading Recommended Packages..."
+msgstr ""
+
+msgid "Preview Pkgbuild"
+msgstr ""
+
+msgid "Show Dependency Only"
+msgstr ""
+
+msgid "Show dependency packages on;y"
+msgstr ""
+
+msgid "Welcome to Shelly v3"
+msgstr ""
+
+msgid ""
+"Shelly is a modern package manager for Arch Linux. Configure your sources "
+"and preferences to get started. We have recently rewritte both the GUI and "
+"CLI in zig with a new modified UI off our previous designs."
+msgstr ""
+
+msgid "Select Your Sources"
+msgstr ""
+
+msgid ""
+"Choose which package sources you want to browse. You can always change this "
+"later in settings."
+msgstr ""
+
+msgid "Arch User Repository community packages"
+msgstr ""
+
+msgid "Sandboxed universal Linux applications"
+msgstr ""
+
+msgid "Portable self-contained application bundles"
+msgstr ""
+
+msgid "Curated picks based on your installed software"
+msgstr ""
+
+msgid "Look and Feel"
+msgstr ""
+
+msgid ""
+"Customize how Shelly looks and behaves. All of these can be changed later in "
+"preferences."
+msgstr ""
+
+msgid "Navigation Style"
+msgstr ""
+
+msgid "Sidebar"
+msgstr ""
+
+msgid "Vertical icon rail on the left"
+msgstr ""
+
+msgid "Top Bar"
+msgstr ""
+
+msgid "Horizontal tab switcher at the top"
+msgstr ""
+
+msgid "System Tray"
+msgstr ""
+
+msgid "Run in system tray when minimized"
+msgstr ""
+
+msgid "Next"
+msgstr ""
+
+msgid "Start Shelly"
+msgstr ""
+
+msgid "Navigation style"
+msgstr ""
+
+msgid "Maintenance and repair tools for your Shelly installation."
+msgstr ""
+
+msgid "Run"
+msgstr ""
+
+msgid "Clean Package Cache"
+msgstr ""
+
+msgid ""
+"Removes old cached package versions, keeping the selected number per package."
+msgstr ""
+
+msgid "Keep"
+msgstr ""
+
+msgid "Number of cached versions to keep per package"
+msgstr ""
+
+msgid "Review PKGBUILD"
+msgstr ""
+
+msgid "Tray enabled"
+msgstr ""
+
+msgid "Tray disabled, but autostart service remains"
+msgstr ""
+
+msgid "Tray disabled"
+msgstr ""
+
+msgid "Failed to add systemd startup service"
+msgstr ""
+
+msgid "Failed to remove systemd startup service"
+msgstr ""
+
+msgid "Cleaning package cache"
+msgstr ""
+
+msgid "Welcome"
+msgstr ""
+
+msgid ""
+"The Arch User Repository is community-maintained. Packages are not "
+"officially vetted — only enable if you trust what you install."
+msgstr ""
+
+msgid "Enable Recommended?"
+msgstr ""
+
+msgid ""
+"Recommended shows curated package suggestions based on your installed "
+"software. Package data is fetched from external sources."
+msgstr ""
