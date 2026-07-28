@@ -454,6 +454,7 @@ pub const FlatpakInstallView = extern struct {
         const strings = gtk.StringList.new(null);
         defer strings.as(gobject.Object).unref();
         const remotes = app.getRemotes();
+        std.log.debug("remotes {d}", .{remotes.len});
         for (remotes) |remote| {
             var buffer: [512]u8 = undefined;
             const label = std.fmt.bufPrintZ(
