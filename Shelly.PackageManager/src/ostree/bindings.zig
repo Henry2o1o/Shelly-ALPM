@@ -5,7 +5,7 @@ const std = @import("std");
 // Repo
 // --
 // ostree_repo_fsck_object() x
-// ostree_repo_delete_object()
+// ostree_repo_delete_object() 
 // ostree_repo_load_variant()
 // ostree_repo_load_commit()
 // ostree_repo_list_refs()
@@ -87,9 +87,26 @@ pub const libostree = struct {
                     null,
                     &err,
                 );
-
                 if(ok == 0) try mapError(err);
+            }    
 
-            }
-    };
+        pub fn deleteObject(
+            self: Repo, 
+            object_type: ostree.OstreeObjectType, 
+            checksum: [:0]const u8) OstreeError!void {
+
+                var err: ?*ostree.GError = null;
+
+                defer if (err) |e| ostree.g_error_free(e);
+
+                const ok = ostree.ostree_repo_delete_object(
+                    self.ptr,
+                    object_type,
+                    checksum.ptr,
+                    null,
+                    &err,
+                );
+                if(ok == 0) try mapError(err);
+            }       
+};
 };
