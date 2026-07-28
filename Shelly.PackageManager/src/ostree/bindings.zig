@@ -9,7 +9,7 @@ const std = @import("std");
 // ostree_repo_load_variant() x
 // ostree_repo_load_commit() x
 // ostree_repo_list_refs() x
-// ostree_repo_set_ref_immediate()
+// ostree_repo_set_ref_immediate() x
 // ostree_repo_mark_commit_partial_reason()
 // --
 // Commit traversal
@@ -157,7 +157,6 @@ pub const libostree = struct {
                     .state = state,
                 };
             }
-    };
 
         pub fn listRefs(
             self: Repo,
@@ -176,6 +175,25 @@ pub const libostree = struct {
                 );
                 if (ok == 0) try mapError(err);
                 return refs orelse error.Unknown;
+            }              
+          
+        pub fn setRefImmediate(
+            self: Repo,
+            remote: ?[:0]const u8,
+            ref: [:0]const u8,
+            checksum: [:0]const u8) OstreeError!void {
+                var err: ?*ostree.GError = null;
+                defer if (err) |e| ostree.g_error_free(e);
+        
+                const ok = ostree.ostree_repo_set_ref_immediate(
+                    self.ptr,
+                    if (remote) |r| r.ptr else null,
+                    ref.ptr,
+                    checksum.ptr,
+                    null,
+                    &err,
+                );
+                if (ok == 0) try mapError(err);
             }    
-    
+        };
     };
