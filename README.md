@@ -64,7 +64,9 @@ paru -Rns shelly
 - **Package Management**: Supports searching and filtering for, installing, updating, and removing packages.
 - **Repository Management**: Synchronizes with official repositories to keep package lists up to date.
 - **AUR Support**: Integration with the Arch User Repository for a wider range of software.
-- **Flatpak Support**: Manage Flatpak applications alongside native packages.
+- **Optional Flatpak Support**: Install `shelly-flatpak-backend` to manage
+  Flatpak applications alongside native packages without making Flatpak a
+  runtime dependency of the base Shelly package.
 
 ## Roadmap
 
@@ -86,7 +88,10 @@ Upcoming features and development targets:
 
 #### Optional Prerequisites
 
-- **Flatpak**: Can be installed via shelly inside settings by turning flatpak on.
+- **Flatpak support**: Install both `flatpak` and
+  `shelly-flatpak-backend`. The backend is loaded only for a Flatpak operation.
+  A base-only Shelly installation keeps ALPM, AUR, AppImage, help, version, and
+  completion commands available.
 
 ## Installation
 
@@ -102,12 +107,19 @@ makepkg -si
 
 ### Manual Build
 
-You can also build the project manually using the .NET CLI:
+The native Zig components can be built and tested independently:
 
 ```bash
-dotnet publish Shelly.Gtk/Shelly.Gtk.csproj -c Release -o publish/shelly-ui
-dotnet publish Shelly-CLI/Shelly-CLI.csproj -c Release -o publish/shelly-cli
-dotnet publish Shelly-CLI/Shelly-CLI.csproj -c Release -o publish/shelly-notifications
+(cd Shelly.Flatpak.Backend && zig build integration-test)
+(cd Shelly.PackageManager && zig build test)
+(cd Shelly.Cli.Zig && zig build test)
+(cd Shelly.Ui.Gtk && zig build test)
+```
+
+To build both optional configurations and verify their ELF boundaries:
+
+```bash
+scripts/test-flatpak-separation.sh
 ```
 
 alternatively, you can run
@@ -167,23 +179,30 @@ These are listed on the [Shelly Configuration](https://www.seafoam-labs.org/shel
 
 Shelly is structured into several components:
 
-- **Shelly.Gtk**: The main GUI desktop application.
-- **Shelly-CLI**: Command-line interface for terminal-based package management.
+- **Shelly.Ui.Gtk**: The native GTK4 desktop application.
+- **Shelly.Cli.Zig**: Command-line interface for terminal and UI operations.
+- **Shelly.Flatpak.Backend**: Optional versioned shared library containing all
+  libflatpak/GLib-native implementation details.
 - **Shelly-Notifications**: Tray service to manage notifactions the Shelly-UI.
-- **PackageManager**: The core logic library providing bindings and abstractions for `libalpm`.
-- **PackageManager.Tests**: Comprehensive tests for the package management logic.
+- **Shelly.PackageManager**: Core libalpm/AUR/AppImage logic plus the
+  backend-neutral Flatpak facade and secure loader.
 
 ### Building for Development
 
 ```bash
-dotnet build
+scripts/test-flatpak-separation.sh
 ```
 
 ### Running Tests
 
 ```bash
-dotnet test
+(cd Shelly.Flatpak.Backend && zig build test abi-test parity-test integration-test)
+(cd Shelly.PackageManager && zig build test)
+(cd Shelly.Cli.Zig && zig build test)
 ```
+
+The backend ABI, memory ownership, discovery rules, and version-bump procedure
+are documented in [docs/flatpak-backend-abi.md](docs/flatpak-backend-abi.md).
 
 ### Generate CLI References
 
@@ -194,5 +213,3 @@ dotnet run --file help_compiler.cs
 ## License
 
 This project is licensed under the GPL-3.0 License – see the [LICENSE](LICENSE) file for details.
-
-

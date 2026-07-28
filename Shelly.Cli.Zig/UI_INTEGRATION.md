@@ -264,6 +264,25 @@ Removes installed AUR packages through ALPM. `--cascade`, `--opt-deps`, and `--r
 
 Flatpak operations may target system or user installations. When an installed target is supplied, update, repair, and removal resolve its existing scope rather than assuming one.
 
+Flatpak support is optional and is provided by
+`shelly-flatpak-backend`. The CLI loads ABI 1 only from
+`/usr/lib/shelly/libshelly-flatpak-backend.so.1`, and only after a Flatpak
+operation starts. UI startup, help, command parsing, and every non-Flatpak page
+must not probe the backend.
+
+When the backend is absent, a direct Flatpak command exits nonzero with:
+
+```text
+Flatpak support is unavailable. Install shelly-flatpak-backend and Flatpak.
+```
+
+An incompatible backend asks the user to upgrade Shelly and the backend
+together. Treat either condition as a capability state, not as a CLI crash.
+Aggregate update/upgrade operations continue and emit an `alpm.info` frame with
+`EventType: "WarningOutput"`, `Source: "Flatpak"`, and `Level: "Warning"`.
+Keep successful results from other backends. Backup similarly warns and omits
+Flatpak records.
+
 ### `shelly search flatpak <query>`
 
 Searches cached AppStream catalogs from all configured system and user remotes. `--limit <n>` and `--page <n>` provide one-based local pagination.
@@ -392,11 +411,11 @@ Launches an installed AppImage resolved by name or path. `--kill` stops its trac
 
 ### `shelly list-updates all`
 
-Queries standard, AUR, AppImage, and Flatpak updates, concatenating their structured rows into one result array. `--show-hidden` affects AUR visibility. Backend failures are independent: successful rows are still returned, error frames identify failed backends, and the final exit code is nonzero if any backend failed.
+Queries standard, AUR, AppImage, and Flatpak updates, concatenating their structured rows into one result array. `--show-hidden` affects AUR visibility. Backend failures are independent: successful rows are still returned, error frames identify failed backends, and the final exit code is nonzero if any backend failed. A missing or incompatible optional Flatpak backend is a warning/skip and does not make the aggregate command fail.
 
 ### `shelly upgrade all`
 
-Builds an invoking-user update plan, confirms it, and upgrades all selected backends. Standard and AUR planning each synchronize and read the invoking user's XDG-cached ALPM database; this also works when either backend is skipped or fails independently. The elevated transaction separately synchronizes and uses the root/system ALPM database for package resolution and downloads. The AUR portion includes VCS/development revision checks so every package selected by execution is represented in the plan. Independent backends continue after another backend fails; the overall exit is nonzero if any selected backend fails.
+Builds an invoking-user update plan, confirms it, and upgrades all selected backends. Standard and AUR planning each synchronize and read the invoking user's XDG-cached ALPM database; this also works when either backend is skipped or fails independently. The elevated transaction separately synchronizes and uses the root/system ALPM database for package resolution and downloads. The AUR portion includes VCS/development revision checks so every package selected by execution is represented in the plan. Independent backends continue after another backend fails; the overall exit is nonzero if any selected backend fails. Missing/incompatible Flatpak support is reported as skipped and does not change the aggregate exit code.
 
 In terminal mode the prepared-upgrade confirmation defaults to yes (`Y/n`); pressing Enter proceeds. An explicit `n` cancels before elevation or mutation.
 
