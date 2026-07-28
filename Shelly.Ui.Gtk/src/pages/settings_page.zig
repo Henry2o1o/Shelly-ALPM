@@ -10,6 +10,7 @@ const DayOfWeek = @import("../models/shelly_config.zig").DayOfWeek;
 const NavMode = @import("../models/shelly_config.zig").NavMode;
 const ConfigResolver = @import("../services/config_resolver.zig").ConfigResolver;
 const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
+const support_packages = @import("../services/support_packages.zig");
 const runtime = @import("../services/runtime.zig");
 const systemd_tray = @import("../services/systemd_tray.zig");
 const tray_service = @import("../services/tray_service.zig");
@@ -30,7 +31,7 @@ pub const ShellySettingsPage = extern struct {
 
     const Self = @This();
     pub const Parent = gtk.Box;
-    const SupportFeature = enum { flatpak, appimage };
+    const SupportFeature = support_packages.Feature;
 
     pub const title: [:0]const u8 = "Settings";
     pub const icon_name: [:0]const u8 = "settings-symbolic";
@@ -483,10 +484,7 @@ pub const ShellySettingsPage = extern struct {
     }
 
     fn supportPackages(feature: SupportFeature) []const []const u8 {
-        return switch (feature) {
-            .flatpak => &flatpak_support_packages,
-            .appimage => &appimage_support_packages,
-        };
+        return support_packages.forFeature(feature);
     }
 
     fn supportInstallTitle(feature: SupportFeature) [:0]const u8 {
@@ -1108,9 +1106,6 @@ fn persistFeatureEnabled(
     try svc.save();
 }
 
-const flatpak_support_packages = [_][]const u8{ "flatpak", options.flatpak_backend_package };
-const appimage_support_packages = [_][]const u8{"fuse2"};
-
 fn applyConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
     setSwitch(p.aur_switch, cfg.AurEnabled);
     setSwitch(p.flatpak_switch, cfg.FlatPackEnabled);
@@ -1213,7 +1208,7 @@ fn collectIntoConfig(p: *ShellySettingsPage.Private, allocator: std.mem.Allocato
 }
 
 test "Flatpak support uses libflatpak and the configured companion backend" {
-    const packages = flatpak_support_packages;
+    const packages = support_packages.forFeature(.flatpak);
     try std.testing.expectEqualStrings("flatpak", packages[0]);
     try std.testing.expectEqualStrings(options.flatpak_backend_package, packages[1]);
 
@@ -1227,7 +1222,7 @@ test "Flatpak support uses libflatpak and the configured companion backend" {
 }
 
 test "AppImage support installs fuse2" {
-    const packages = appimage_support_packages;
+    const packages = support_packages.forFeature(.appimage);
     try std.testing.expectEqualStrings("fuse2", packages[0]);
 
     const argv = try ShellyCommands.install(std.testing.allocator, &packages);
