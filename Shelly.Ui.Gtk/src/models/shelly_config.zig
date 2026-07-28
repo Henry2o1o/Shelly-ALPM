@@ -64,6 +64,7 @@ pub const ShellyConfig = struct {
     PackageInstallUpgrade: bool = false,
     PackageInstallShowHidden: bool = false,
     PackageInstallShowExplicitOnly: bool = false,
+    PackageInstallShowDependsOnly: bool = false,
     PackageInstallShowDetailPane: bool = false,
 
     // AUR Page

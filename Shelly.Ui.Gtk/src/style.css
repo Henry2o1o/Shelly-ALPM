@@ -3,7 +3,7 @@
 }
 
 .welcome-screen {
-  background-color: @window_bg_color;
+  background-color: @theme_bg_color;
 }
 
 .lockout-card {
@@ -65,7 +65,7 @@
 }
 
 .transaction-page {
-  background-color: @window_bg_color;
+  background-color: @theme_bg_color;
 }
 
 .trans-header {
