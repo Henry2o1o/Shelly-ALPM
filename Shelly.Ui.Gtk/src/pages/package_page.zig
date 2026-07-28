@@ -139,6 +139,8 @@ pub const PackagePage = extern struct {
         p.filter = gtk.CustomFilter.new(&filter_func, self, null);
         p.filter_model = gtk.FilterListModel.new(p.list_store.as(gio.ListModel), p.filter.as(gtk.Filter));
         p.selection = gtk.SingleSelection.new(p.filter_model.as(gio.ListModel));
+        gtk.SingleSelection.setAutoselect(p.selection, 0);
+        gtk.SingleSelection.setCanUnselect(p.selection, 1);
 
         gtk.ColumnView.setModel(p.column_view, p.selection.as(gtk.SelectionModel));
 
