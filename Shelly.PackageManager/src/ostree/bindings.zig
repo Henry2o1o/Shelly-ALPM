@@ -6,8 +6,8 @@ const std = @import("std");
 // --
 // ostree_repo_fsck_object() x
 // ostree_repo_delete_object() x
-// ostree_repo_load_variant()
-// ostree_repo_load_commit()
+// ostree_repo_load_variant() x
+// ostree_repo_load_commit() x
 // ostree_repo_list_refs()
 // ostree_repo_set_ref_immediate()
 // ostree_repo_mark_commit_partial_reason()
@@ -42,6 +42,11 @@ pub const libostree = struct {
         Unknown,
     };
 
+    pub const CommitResult = struct {
+        variant: *ostree.GVariant,
+        state: ostree.OstreeRepoCommitState,
+    };
+    
     fn mapError(err: ?*ostree.GError) OstreeError!void {
         if (err == null)
             return error.Unknown;
@@ -109,26 +114,50 @@ pub const libostree = struct {
                 if(ok == 0) try mapError(err);
             }       
 
-            pub fn loadVariant(
-                self: Repo, 
-                object_type: ostree.OstreeObjectType, 
-                checksum: [:0]const u8) OstreeError!*ostree.GVariant {
+        pub fn loadVariant(
+            self: Repo, 
+            object_type: ostree.OstreeObjectType, 
+            checksum: [:0]const u8) OstreeError!*ostree.GVariant {
 
-                    var variant: ?*ostree.GVariant = null;
-                    var err: ?*ostree.GError = null;
-    
-                    defer if (err) |e| ostree.g_error_free(e);
-    
-                    const ok = ostree.ostree_repo_load_variant(
-                        self.ptr,
-                        object_type,
-                        checksum.ptr,
-                        &variant,
-                        &err,
-                    );
-                    if(ok == 0) try mapError(err);
-                    return variant orelse error.Unknown;
-                }       
-            
-};
+                var variant: ?*ostree.GVariant = null;
+                var err: ?*ostree.GError = null;
+
+                defer if (err) |e| ostree.g_error_free(e);
+
+                const ok = ostree.ostree_repo_load_variant(
+                    self.ptr,
+                    object_type,
+                    checksum.ptr,
+                    &variant,
+                    &err,
+                );
+                if(ok == 0) try mapError(err);
+                return variant orelse error.Unknown;
+            }       
+
+        pub fn loadCommit(
+            self: Repo,
+            checksum: [:0]const u8) OstreeError!CommitResult {
+                var variant: ?*ostree.GVariant = null;
+                var state: ostree.OstreeRepoCommitState = 0;
+                var err: ?*ostree.GError = null;
+        
+                defer if (err) |e| ostree.g_error_free(e);
+        
+                const ok = ostree.ostree_repo_load_commit(
+                    self.ptr,
+                    checksum.ptr,
+                    &variant,
+                    &state,
+                    &err,
+                );
+                if (ok == 0) try mapError(err);
+                return .{
+                    .variant = variant orelse return error.Unknown,
+                    .state = state,
+                };
+            }
+        
+    };
+
 };
