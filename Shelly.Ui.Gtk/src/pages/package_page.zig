@@ -336,6 +336,7 @@ pub const PackagePage = extern struct {
         const c = struct {
             fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, self_setup: *Self) callconv(.c) void {
                 const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
+                gtk.ListItem.setActivatable(list_item, 1);
 
                 const content_grid = gtk.Grid.new();
                 gtk.Widget.setMarginStart(content_grid.as(gtk.Widget), 10);
@@ -800,6 +801,9 @@ pub const PackagePage = extern struct {
         result.arena.deinit();
         std.heap.c_allocator.destroy(result.arena);
         std.heap.c_allocator.destroy(result);
+
+        _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), 0, 1);
+
         hide_loading(page);
         return 0;
     }
