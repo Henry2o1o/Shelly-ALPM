@@ -5,6 +5,7 @@ const glib = bindings.glib;
 const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
+const TrayDBus = @import("../services/dbus.zig").TrayDBus;
 const size_helper = @import("../helpers/size_converts.zig").SizeConverter;
 
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
@@ -531,6 +532,9 @@ pub const UpdatePage = extern struct {
     fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
         const self: *UpdatePage = @ptrCast(@alignCast(ctx));
         if (!success) return;
+        var tray = TrayDBus{};
+        defer tray.deinit();
+        tray.updatesMadeInUi();
         self.reload();
     }
 

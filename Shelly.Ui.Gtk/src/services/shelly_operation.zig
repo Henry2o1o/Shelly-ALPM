@@ -4,7 +4,6 @@ const glib = bindings.glib;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const Scope = @import("../models/flatpak.zig").InstallLevel;
 const UpdateType = @import("../models/appimage.zig").UpdateType;
-const TrayDBus = @import("dbus.zig").TrayDBus;
 const builtin = @import("builtin");
 const runtime = @import("runtime.zig");
 
@@ -509,9 +508,7 @@ pub const ShellyOperation = struct {
             .exited => |c| @intCast(c),
             else => 255,
         };
-        var tray = TrayDBus{};
-        defer tray.deinit();
-        tray.updatesMadeInUi();
+
         post_done(self, code);
     }
 
