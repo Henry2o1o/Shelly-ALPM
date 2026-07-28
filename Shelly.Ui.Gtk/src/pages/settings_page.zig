@@ -32,6 +32,11 @@ pub const ShellySettingsPage = extern struct {
     const Self = @This();
     pub const Parent = gtk.Box;
     const SupportFeature = support_packages.Feature;
+    const SupportInstallStage = enum {
+        dependencies,
+        backend_standard,
+        backend_aur,
+    };
 
     pub const title: [:0]const u8 = "Settings";
     pub const icon_name: [:0]const u8 = "settings-symbolic";
@@ -99,6 +104,7 @@ pub const ShellySettingsPage = extern struct {
         save_guard: bool,
         save_source: c_uint,
         support_install_pending: ?SupportFeature,
+        support_install_stage: SupportInstallStage,
 
         var offset: c_int = 0;
     };
@@ -130,6 +136,7 @@ pub const ShellySettingsPage = extern struct {
         p.save_guard = false;
         p.save_source = 0;
         p.support_install_pending = null;
+        p.support_install_stage = .dependencies;
 
         populateDropdowns(p);
 
@@ -415,7 +422,7 @@ pub const ShellySettingsPage = extern struct {
             return;
         };
 
-        const packages = supportPackages(feature);
+        const packages = supportDependencies(feature);
         const argv = ShellyCommands.install(std.heap.c_allocator, packages) catch {
             self.restoreSupportSwitch(feature, false);
             p.toast.show(.@"error", supportStartFailureMessage(feature));
@@ -424,6 +431,7 @@ pub const ShellySettingsPage = extern struct {
         defer std.heap.c_allocator.free(argv);
 
         p.support_install_pending = feature;
+        p.support_install_stage = .dependencies;
         win.startTransaction(.{
             .title = supportInstallTitle(feature),
             .argv = argv,
@@ -438,6 +446,68 @@ pub const ShellySettingsPage = extern struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         const p = self.priv();
         const feature = p.support_install_pending orelse return;
+
+        switch (p.support_install_stage) {
+            .dependencies => {
+                if (!success) return self.finishSupportInstall(feature, false);
+                if (feature == .flatpak) {
+                    p.support_install_stage = .backend_standard;
+                    _ = glib.idleAdd(&start_support_backend_idle, self);
+                    return;
+                }
+            },
+            .backend_standard => {
+                if (!success) {
+                    p.support_install_stage = .backend_aur;
+                    _ = glib.idleAdd(&start_support_backend_idle, self);
+                    return;
+                }
+            },
+            .backend_aur => if (!success) return self.finishSupportInstall(feature, false),
+        }
+
+        self.finishSupportInstall(feature, true);
+    }
+
+    fn start_support_backend_idle(data: ?*anyopaque) callconv(.c) c_int {
+        const self: *Self = @ptrCast(@alignCast(data.?));
+        self.startSupportBackend();
+        return 0;
+    }
+
+    fn startSupportBackend(self: *Self) void {
+        const p = self.priv();
+        const feature = p.support_install_pending orelse return;
+        const package = support_packages.flatpakBackendPackage();
+        const packages = &.{package};
+        const argv = switch (p.support_install_stage) {
+            .backend_standard => ShellyCommands.install(std.heap.c_allocator, packages),
+            .backend_aur => ShellyCommands.install_aur(std.heap.c_allocator, packages),
+            .dependencies => unreachable,
+        } catch {
+            p.support_install_pending = null;
+            self.restoreSupportSwitch(feature, false);
+            p.toast.show(.@"error", supportStartFailureMessage(feature));
+            return;
+        };
+        defer std.heap.c_allocator.free(argv);
+
+        const win = support.getWindow(ShellyWindow, self) orelse {
+            self.finishSupportInstall(feature, false);
+            return;
+        };
+        win.startTransaction(.{
+            .title = supportInstallTitle(feature),
+            .argv = argv,
+            .packages = packages,
+            .privileged = true,
+            .on_complete = &on_support_install_complete,
+            .ctx = self,
+        });
+    }
+
+    fn finishSupportInstall(self: *Self, feature: SupportFeature, success: bool) void {
+        const p = self.priv();
         p.support_install_pending = null;
 
         if (!success) {
@@ -483,8 +553,8 @@ pub const ShellySettingsPage = extern struct {
         };
     }
 
-    fn supportPackages(feature: SupportFeature) []const []const u8 {
-        return support_packages.forFeature(feature);
+    fn supportDependencies(feature: SupportFeature) []const []const u8 {
+        return support_packages.dependenciesForFeature(feature);
     }
 
     fn supportInstallTitle(feature: SupportFeature) [:0]const u8 {
@@ -1208,21 +1278,37 @@ fn collectIntoConfig(p: *ShellySettingsPage.Private, allocator: std.mem.Allocato
 }
 
 test "Flatpak support uses libflatpak and the configured companion backend" {
-    const packages = support_packages.forFeature(.flatpak);
+    const packages = support_packages.dependenciesForFeature(.flatpak);
     try std.testing.expectEqualStrings("flatpak", packages[0]);
-    try std.testing.expectEqualStrings(options.flatpak_backend_package, packages[1]);
 
     const argv = try ShellyCommands.install(std.testing.allocator, &packages);
     defer std.testing.allocator.free(argv);
     try std.testing.expectEqualSlices(
         []const u8,
-        &.{ "install", "standard", "flatpak", options.flatpak_backend_package },
+        &.{ "install", "standard", "flatpak" },
         argv,
+    );
+
+    const backend = &.{support_packages.flatpakBackendPackage()};
+    const standard_argv = try ShellyCommands.install(std.testing.allocator, backend);
+    defer std.testing.allocator.free(standard_argv);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &.{ "install", "standard", options.flatpak_backend_package },
+        standard_argv,
+    );
+
+    const aur_argv = try ShellyCommands.install_aur(std.testing.allocator, backend);
+    defer std.testing.allocator.free(aur_argv);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &.{ "install", "aur", options.flatpak_backend_package },
+        aur_argv,
     );
 }
 
 test "AppImage support installs fuse2" {
-    const packages = support_packages.forFeature(.appimage);
+    const packages = support_packages.dependenciesForFeature(.appimage);
     try std.testing.expectEqualStrings("fuse2", packages[0]);
 
     const argv = try ShellyCommands.install(std.testing.allocator, &packages);

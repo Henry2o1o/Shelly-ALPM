@@ -31,6 +31,11 @@ pub const WelcomePage = extern struct {
         window: *ShellyWindow,
         flatpak: bool,
         appimage: bool,
+        stage: enum {
+            dependencies,
+            backend_standard,
+            backend_aur,
+        } = .dependencies,
     };
 
     const Private = struct {
@@ -295,8 +300,8 @@ pub const WelcomePage = extern struct {
     }
 
     fn startSupportInstall(window: *ShellyWindow, flatpak: bool, appimage: bool) void {
-        var package_buffer: [3][]const u8 = undefined;
-        const packages = support_packages.selected(&package_buffer, flatpak, appimage);
+        var package_buffer: [2][]const u8 = undefined;
+        const packages = support_packages.selectedDependencies(&package_buffer, flatpak, appimage);
         const argv = ShellyCommands.install(std.heap.c_allocator, packages) catch {
             window.hideLockout();
             return;
@@ -325,8 +330,62 @@ pub const WelcomePage = extern struct {
 
     fn on_support_install_complete(raw_ctx: *anyopaque, success: bool) void {
         const ctx: *SupportInstallContext = @ptrCast(@alignCast(raw_ctx));
+
+        switch (ctx.stage) {
+            .dependencies => {
+                if (!success) {
+                    std.heap.c_allocator.destroy(ctx);
+                    return;
+                }
+                if (ctx.flatpak) {
+                    ctx.stage = .backend_standard;
+                    _ = glib.idleAdd(&start_support_backend_idle, ctx);
+                    return;
+                }
+            },
+            .backend_standard => {
+                if (!success) {
+                    ctx.stage = .backend_aur;
+                    _ = glib.idleAdd(&start_support_backend_idle, ctx);
+                    return;
+                }
+            },
+            .backend_aur => if (!success) {
+                std.heap.c_allocator.destroy(ctx);
+                return;
+            },
+        }
+
+        finishSupportInstall(ctx);
+    }
+
+    fn start_support_backend_idle(data: ?*anyopaque) callconv(.c) c_int {
+        const ctx: *SupportInstallContext = @ptrCast(@alignCast(data.?));
+        const package = support_packages.flatpakBackendPackage();
+        const packages = &.{package};
+        const argv = switch (ctx.stage) {
+            .backend_standard => ShellyCommands.install(std.heap.c_allocator, packages),
+            .backend_aur => ShellyCommands.install_aur(std.heap.c_allocator, packages),
+            .dependencies => unreachable,
+        } catch {
+            std.heap.c_allocator.destroy(ctx);
+            return 0;
+        };
+        defer std.heap.c_allocator.free(argv);
+
+        ctx.window.startTransaction(.{
+            .title = supportInstallTitle(true, false),
+            .argv = argv,
+            .packages = packages,
+            .privileged = true,
+            .on_complete = &on_support_install_complete,
+            .ctx = ctx,
+        });
+        return 0;
+    }
+
+    fn finishSupportInstall(ctx: *SupportInstallContext) void {
         defer std.heap.c_allocator.destroy(ctx);
-        if (!success) return;
 
         const svc = runtime.config orelse return;
         const cfg = svc.get() catch return;
