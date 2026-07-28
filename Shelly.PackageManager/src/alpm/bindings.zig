@@ -96,6 +96,14 @@ pub const libalpm = struct {
         }
     };
 
+    pub const DatabaseOperation = enum {
+        all,
+        sync,
+        search,
+        install,
+        upgrade,
+    };
+
     pub const Database = struct {
         ptr: *alpm.alpm_db_t,
 
@@ -105,6 +113,14 @@ pub const libalpm = struct {
 
         pub fn name(self: Database) ?[:0]const u8 {
             return str(alpm.alpm_db_get_name(self.ptr));
+        }
+
+        pub fn allowUsage(self: Database, required: DatabaseUsage) bool {
+            var usage: c_int = 0;
+
+            if (alpm.alpm_db_get_usage(self.ptr, &usage) != 0) return false;
+
+            return (usage & @as(c_int, @intCast(@intFromEnum(required)))) != 0;
         }
 
         pub fn getPackage(self: Database, pkg_name: [:0]const u8) ?Package {
