@@ -456,6 +456,7 @@ test {
     _ = @import("flatpak/events.zig");
     _ = @import("appimage/manager.zig");
     _ = @import("shared/downloader.zig");
+    _ = @import("shared/user_identity.zig");
     _ = @import("appimage/update_manager.zig");
     _ = @import("pkgbuild/pkgbuild_parser.zig");
     _ = @import("pkgbuild/post_install_validator.zig");
