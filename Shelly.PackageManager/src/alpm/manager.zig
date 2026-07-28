@@ -700,8 +700,6 @@ pub const Manager = struct {
                 while (node != null) : (node = node.*.next) {
                     const db_data: ?*anyopaque = node.*.data;
                     const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
-                    const database = libalpm.Database.from(db_ptr) orelse continue;
-                    if (!database.allowUsage(.install)) continue;
                     const db_name = libalpm.str(rawLibalpm.alpm_db_get_name(db_ptr)) orelse continue;
                     if (!std.ascii.eqlIgnoreCase(repo, db_name)) continue;
                     found = rawLibalpm.alpm_db_get_pkg(db_ptr, name.ptr);
@@ -2041,7 +2039,6 @@ pub const Manager = struct {
             while (dbs != null) : (dbs = dbs.*.next) {
                 const data = dbs.*.data orelse continue;
                 const sync_db = libalpm.Database.from(data) orelse continue;
-                if (!sync_db.allowUsage(.search)) continue;
                 const name = sync_db.name() orelse continue;
                 if (std.ascii.eqlIgnoreCase(databaseName, name)) break :blk sync_db;
             }
