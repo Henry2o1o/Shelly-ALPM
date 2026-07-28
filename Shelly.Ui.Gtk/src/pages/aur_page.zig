@@ -45,7 +45,6 @@ pub const AurPage = extern struct {
         votes_column: *gtk.ColumnViewColumn,
         popularity_column: *gtk.ColumnViewColumn,
         version_column: *gtk.ColumnViewColumn,
-        chroot_check: *gtk.CheckButton,
         run_checks_check: *gtk.CheckButton,
         views_and_detail_hbox: *gtk.Box,
         detail_revealer: *gtk.Revealer,
@@ -131,7 +130,6 @@ pub const AurPage = extern struct {
 
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
-        _ = gtk.CheckButton.signals.toggled.connect(p.chroot_check, *Self, &on_chroot_toggled, self, .{});
         _ = gtk.CheckButton.signals.toggled.connect(p.run_checks_check, *Self, &on_run_checks_toggled, self, .{});
 
         const detail = AurPackageDetail.new();
@@ -513,17 +511,10 @@ pub const AurPage = extern struct {
         const p = self.priv();
         p.applying_config = true;
         defer p.applying_config = false;
-        gtk.CheckButton.setActive(p.chroot_check, @intFromBool(cfg.AurInstallUseChroot));
         gtk.CheckButton.setActive(p.run_checks_check, @intFromBool(cfg.AurInstallRunChecks));
         p.show_detail_pane = cfg.AurInstallShowDetailPane;
         gtk.CheckButton.setActive(p.show_detail_pane_check, @intFromBool(cfg.AurInstallShowDetailPane));
         gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (cfg.AurInstallShowDetailPane) 0 else 1);
-    }
-
-    fn on_chroot_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
-        const p = self.priv();
-        if (p.applying_config) return;
-        updateConfigField(.AurInstallUseChroot, gtk.CheckButton.getActive(check) != 0);
     }
 
     fn on_run_checks_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
@@ -792,9 +783,6 @@ pub const AurPage = extern struct {
         argv.append(std.heap.c_allocator, "install") catch return;
         argv.append(std.heap.c_allocator, "aur") catch return;
         for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
-        if (gtk.CheckButton.getActive(p.chroot_check) != 0) {
-            argv.append(std.heap.c_allocator, "--chroot") catch return;
-        }
         if (gtk.CheckButton.getActive(p.run_checks_check) != 0) {
             argv.append(std.heap.c_allocator, "--check") catch return;
         }
@@ -878,7 +866,6 @@ pub const AurPage = extern struct {
         .{ "votes_column", @offsetOf(Private, "votes_column") },
         .{ "popularity_column", @offsetOf(Private, "popularity_column") },
         .{ "version_column", @offsetOf(Private, "version_column") },
-        .{ "chroot_check", @offsetOf(Private, "chroot_check") },
         .{ "run_checks_check", @offsetOf(Private, "run_checks_check") },
         .{ "views_and_detail_hbox", @offsetOf(Private, "views_and_detail_hbox") },
         .{ "detail_revealer", @offsetOf(Private, "detail_revealer") },
