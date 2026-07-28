@@ -5,12 +5,17 @@ const glib = bindings.glib;
 const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
+const TrayDBus = @import("../services/dbus.zig").TrayDBus;
 const size_helper = @import("../helpers/size_converts.zig").SizeConverter;
 
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
+const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
 const CheckUpdates = @import("../models/sync.zig").CheckUpdates;
 const UpdateObject = @import("../g_objects/update_object.zig").UpdateObject;
 const UpdateSource = @import("../g_objects/update_object.zig").UpdateSource;
+const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
+const translations = @import("../helpers/translations.zig");
+const runtime = @import("../services/runtime.zig");
 
 pub const UpdatePage = extern struct {
     parent_instance: Parent,
@@ -19,7 +24,7 @@ pub const UpdatePage = extern struct {
     pub const Parent = gtk.Box;
 
     pub const title: [:0]const u8 = "Update";
-    pub const icon_name: [:0]const u8 = "package-x-generic-symbolic";
+    pub const icon_name: [:0]const u8 = "software-update-available-symbolic";
     const resource_path = "/com/shellyorg/shelly/ui/update_page.ui";
 
     const Private = struct {
@@ -40,11 +45,14 @@ pub const UpdatePage = extern struct {
         filter: *gtk.CustomFilter,
         filter_model: *gtk.FilterListModel,
         selection: *gtk.NoSelection,
+        upgrade_button: *gtk.Button,
         arena: ?*std.heap.ArenaAllocator,
         generation: u64,
         loaded: bool,
         var offset: c_int = 0;
     };
+
+    const PageState = enum { Loading, Loaded, Fail, NoUpdates };
 
     const UpdateItem = struct {
         source: UpdateSource,
@@ -52,7 +60,7 @@ pub const UpdatePage = extern struct {
         description: []const u8,
         old_version: []const u8,
         new_version: []const u8,
-        size: []const u8,
+        size: i64,
     };
 
     const LoadResult = struct {
@@ -104,7 +112,35 @@ pub const UpdatePage = extern struct {
         _ = gtk.ToggleButton.signals.toggled.connect(p.native_toggle, *Self, &on_source_toggled, self, .{});
         _ = gtk.ToggleButton.signals.toggled.connect(p.aur_toggle, *Self, &on_source_toggled, self, .{});
         _ = gtk.ToggleButton.signals.toggled.connect(p.flatpak_toggle, *Self, &on_source_toggled, self, .{});
+        applyConfig(self);
         support.connectLifecycle(Self, self);
+    }
+
+    fn applyConfig(self: *Self) void {
+        const p = self.priv();
+        const aur_enabled = sourceConfigEnabled(.aur);
+        const flatpak_enabled = sourceConfigEnabled(.flatpak);
+
+        if (!aur_enabled) {
+            gtk.ToggleButton.setActive(p.aur_toggle, 0);
+            gtk.Widget.setVisible(p.aur_toggle.as(gtk.Widget), 0);
+            gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 0);
+        }
+        if (!flatpak_enabled) {
+            gtk.ToggleButton.setActive(p.flatpak_toggle, 0);
+            gtk.Widget.setVisible(p.flatpak_toggle.as(gtk.Widget), 0);
+            gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 0);
+        }
+    }
+
+    fn sourceConfigEnabled(source: UpdateSource) bool {
+        const svc = runtime.config orelse return true;
+        const cfg = svc.get() catch return true;
+        return switch (source) {
+            .package => true,
+            .aur => cfg.AurEnabled,
+            .flatpak => cfg.FlatPackEnabled,
+        };
     }
 
     fn source_is_active(source: UpdateSource, native: bool, aur: bool, flatpak: bool) bool {
@@ -116,6 +152,7 @@ pub const UpdatePage = extern struct {
     }
 
     fn is_source_active(self: *Self, source: UpdateSource) bool {
+        if (!sourceConfigEnabled(source)) return false;
         const p = self.priv();
         return source_is_active(
             source,
@@ -160,15 +197,10 @@ pub const UpdatePage = extern struct {
         const p = self.priv();
         p.generation += 1;
         clear_data(self);
-        gtk.Spinner.start(p.loading_spinner);
-        gtk.Label.setLabel(p.selected_label, "Checking for updates…");
-        gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 0);
-        gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 0);
-        gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 0);
-        gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 0);
+        self.set_load(PageState.Loading);
 
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch {
-            show_error(self);
+            self.set_load(PageState.Fail);
             return;
         };
         thread.detach();
@@ -194,20 +226,30 @@ pub const UpdatePage = extern struct {
     }
 
     fn flatten_updates(allocator: std.mem.Allocator, response: CheckUpdates) ![]UpdateItem {
-        const updates = try allocator.alloc(UpdateItem, response.count());
+        const aur_enabled = sourceConfigEnabled(.aur);
+        const flatpak_enabled = sourceConfigEnabled(.flatpak);
+
+        var total: usize = response.Packages.len;
+        if (aur_enabled) total += response.Aur.len;
+        if (flatpak_enabled) total += response.Flatpak.len;
+        const updates = try allocator.alloc(UpdateItem, total);
         var index: usize = 0;
-        var buf: [32]u8 = undefined;
+
         for (response.Packages) |package| {
-            updates[index] = .{ .source = .package, .name = package.Name, .description = "System package update", .old_version = package.CurrentVersion, .new_version = package.NewVersion, .size = size_helper.convert_null_term(&buf, package.DownloadSize) };
+            updates[index] = .{ .source = .package, .name = package.Name, .description = translations._("System package update"), .old_version = package.CurrentVersion, .new_version = package.NewVersion, .size = package.DownloadSize };
             index += 1;
         }
-        for (response.Aur) |package| {
-            updates[index] = .{ .source = .aur, .name = package.Name, .description = "AUR package update", .old_version = package.Version, .new_version = package.NewVersion, .size = size_helper.convert_null_term(&buf, package.DownloadSize) };
-            index += 1;
+        if (aur_enabled) {
+            for (response.Aur) |package| {
+                updates[index] = .{ .source = .aur, .name = package.Name, .description = translations._("AUR package update"), .old_version = package.Version, .new_version = package.NewVersion, .size = package.DownloadSize };
+                index += 1;
+            }
         }
-        for (response.Flatpak) |package| {
-            updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = package.Version, .new_version = "Installed", .size = "-" };
-            index += 1;
+        if (flatpak_enabled) {
+            for (response.Flatpak) |package| {
+                updates[index] = .{ .source = .flatpak, .name = package.Name, .description = package.Id, .old_version = package.Version, .new_version = translations._("Installed"), .size = 0 };
+                index += 1;
+            }
         }
         return updates;
     }
@@ -238,20 +280,20 @@ pub const UpdatePage = extern struct {
         }
         if (result.failed) {
             discard_result(result);
-            show_error(page);
+            set_load(page, PageState.Fail);
             return 0;
         }
         if (result.updates.len == 0) {
             discard_result(result);
-            update_source_labels(page);
-            finish_load(page, .empty);
+            set_load(page, .NoUpdates);
             return 0;
         }
 
         const end = @min(result.index + 100, result.updates.len);
         const allocator = result.arena.allocator();
+        var buf: [32]u8 = undefined;
         for (result.updates[result.index..end]) |update| {
-            const object = UpdateObject.new(allocator, update.source, update.name, update.description, update.old_version, update.new_version, update.size);
+            const object = UpdateObject.new(allocator, update.source, update.name, update.description, update.old_version, update.new_version, size_helper.convert_null_term(&buf, update.size));
             gio.ListStore.append(p.list_store, object.as(gobject.Object));
             object.as(gobject.Object).unref();
         }
@@ -260,35 +302,54 @@ pub const UpdatePage = extern struct {
 
         p.arena = result.arena;
         std.heap.c_allocator.destroy(result);
-        update_source_labels(page);
-        finish_load(page, .list);
+
+        set_load(page, .Loaded);
         update_summary(page);
         return 0;
     }
 
-    const LoadView = enum { list, empty };
-
-    fn finish_load(self: *Self, view: LoadView) void {
+    fn set_load(self: *Self, state: PageState) void {
         const p = self.priv();
-        gtk.Spinner.stop(p.loading_spinner);
-        gtk.Stack.setVisibleChild(p.updates_stack, switch (view) {
-            .list => p.list_page.as(gtk.Widget),
-            .empty => p.empty_page.as(gtk.Widget),
-        });
-        gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
-        gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 1);
-        gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 1);
-        gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 1);
-        if (view == .empty) gtk.Label.setLabel(p.selected_label, "No updates available");
-    }
 
-    fn show_error(self: *Self) void {
-        const p = self.priv();
-        gtk.Spinner.stop(p.loading_spinner);
-        gtk.Label.setLabel(p.error_label, "Could not run shelly check-updates. Check the CLI output and try again.");
-        gtk.Stack.setVisibleChild(p.updates_stack, p.error_page.as(gtk.Widget));
-        gtk.Label.setLabel(p.selected_label, "Update check failed");
-        gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
+        switch (state) {
+            .Loading => {
+                gtk.Label.setLabel(p.selected_label, translations._("Checking for updates…"));
+                gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 0);
+                gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 0);
+                gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 0);
+                gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 0);
+                gtk.Widget.setVisible(p.loading_spinner.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.upgrade_button.as(gtk.Widget), 0);
+                self.update_source_labels();
+                gtk.Spinner.start(p.loading_spinner);
+                gtk.Stack.setVisibleChild(p.updates_stack, p.loading_page.as(gtk.Widget));
+                return;
+            },
+            .Loaded => {
+                gtk.Stack.setVisibleChild(p.updates_stack, p.list_page.as(gtk.Widget));
+                gtk.Widget.setSensitive(p.native_toggle.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.aur_toggle.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.flatpak_toggle.as(gtk.Widget), 1);
+                gtk.Widget.setVisible(p.loading_spinner.as(gtk.Widget), 0);
+                gtk.Widget.setSensitive(p.upgrade_button.as(gtk.Widget), 1);
+                self.update_source_labels();
+                gtk.Spinner.stop(p.loading_spinner);
+            },
+            .Fail => {
+                gtk.Label.setLabel(p.error_label, translations._("Could not run shelly check-updates. Check the CLI output and try again."));
+                gtk.Stack.setVisibleChild(p.updates_stack, p.error_page.as(gtk.Widget));
+                gtk.Label.setLabel(p.selected_label, translations._("Update check failed"));
+                gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.upgrade_button.as(gtk.Widget), 0);
+                gtk.Spinner.stop(p.loading_spinner);
+            },
+            .NoUpdates => {
+                self.update_source_labels();
+                gtk.Stack.setVisibleChild(p.updates_stack, p.empty_page.as(gtk.Widget));
+                gtk.Widget.setSensitive(p.refresh_button.as(gtk.Widget), 1);
+                gtk.Widget.setSensitive(p.upgrade_button.as(gtk.Widget), 0);
+            },
+        }
     }
 
     fn update_source_labels(self: *Self) void {
@@ -314,9 +375,9 @@ pub const UpdatePage = extern struct {
         var system_buffer: [64]u8 = undefined;
         var aur_buffer: [64]u8 = undefined;
         var flatpak_buffer: [64]u8 = undefined;
-        gtk.Button.setLabel(p.native_toggle.as(gtk.Button), std.fmt.bufPrintZ(&system_buffer, "System · {d}", .{system_count}) catch "System");
-        gtk.Button.setLabel(p.aur_toggle.as(gtk.Button), std.fmt.bufPrintZ(&aur_buffer, "AUR · {d}", .{aur_count}) catch "AUR");
-        gtk.Button.setLabel(p.flatpak_toggle.as(gtk.Button), std.fmt.bufPrintZ(&flatpak_buffer, "Flatpak · {d}", .{flatpak_count}) catch "Flatpak");
+        gtk.Button.setLabel(p.native_toggle.as(gtk.Button), std.fmt.bufPrintZ(&system_buffer, "{s} · {d}", .{ translations._("System"), system_count }) catch translations._("System"));
+        gtk.Button.setLabel(p.aur_toggle.as(gtk.Button), std.fmt.bufPrintZ(&aur_buffer, "{s} · {d}", .{ translations._("AUR"), aur_count }) catch translations._("AUR"));
+        gtk.Button.setLabel(p.flatpak_toggle.as(gtk.Button), std.fmt.bufPrintZ(&flatpak_buffer, "{s} · {d}", .{ translations._("Flatpak"), flatpak_count }) catch translations._("Flatpak"));
     }
 
     fn on_row_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: *Self) callconv(.c) void {
@@ -402,43 +463,93 @@ pub const UpdatePage = extern struct {
         update_summary(self);
     }
 
-    fn update_summary(self: *Self) void {
-        const p = self.priv();
-        var included: usize = 0;
-        const model = p.list_store.as(gio.ListModel);
+    fn forEachActiveUpdate(self: *Self, ctx: anytype, comptime f: fn (@TypeOf(ctx), *UpdateObject) void) void {
+        const model = self.priv().list_store.as(gio.ListModel);
         const count = gio.ListModel.getNItems(model);
         for (0..count) |index| {
             const item: *gobject.Object = @ptrCast(@alignCast(gio.ListModel.getItem(model, @intCast(index)) orelse continue));
+            defer item.unref();
             if (gobject.ext.cast(UpdateObject, item)) |update| {
-                if (self.is_source_active(update.getSource())) included += 1;
+                if (self.is_source_active(update.getSource())) f(ctx, update);
             }
-            item.unref();
         }
+    }
+
+    fn update_summary(self: *Self) void {
+        const p = self.priv();
+        var included: usize = 0;
+        const total = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        self.forEachActiveUpdate(&included, struct {
+            fn cb(count: *usize, _: *UpdateObject) void {
+                count.* += 1;
+            }
+        }.cb);
 
         var buffer: [96]u8 = undefined;
-        const text = std.fmt.bufPrintZ(&buffer, "{d} of {d} updates included", .{ included, count }) catch "Updates included";
+        const text = std.fmt.bufPrintZ(
+            &buffer,
+            "{d} {s} {d} {s}",
+            .{ included, translations._("of"), total, translations._("updates included") },
+        ) catch translations._("Updates included");
         gtk.Label.setLabel(p.selected_label, text);
     }
 
     fn refresh_updates(self: *Self) callconv(.c) void {
-        if (self.priv().loaded) start_load(self);
+        self.reload();
     }
 
-    const template_children = .{
-        .{ "content_list", @offsetOf(Private, "content_list") },
-        .{ "selected_label", @offsetOf(Private, "selected_label") },
-        .{ "refresh_button", @offsetOf(Private, "refresh_button") },
-        .{ "native_toggle", @offsetOf(Private, "native_toggle") },
-        .{ "aur_toggle", @offsetOf(Private, "aur_toggle") },
-        .{ "flatpak_toggle", @offsetOf(Private, "flatpak_toggle") },
-        .{ "updates_stack", @offsetOf(Private, "updates_stack") },
-        .{ "loading_page", @offsetOf(Private, "loading_page") },
-        .{ "list_page", @offsetOf(Private, "list_page") },
-        .{ "empty_page", @offsetOf(Private, "empty_page") },
-        .{ "error_page", @offsetOf(Private, "error_page") },
-        .{ "loading_spinner", @offsetOf(Private, "loading_spinner") },
-        .{ "error_label", @offsetOf(Private, "error_label") },
-    };
+    fn upgrade(self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const flatpak = gtk.ToggleButton.getActive(p.flatpak_toggle) != 0;
+        const aur = gtk.ToggleButton.getActive(p.aur_toggle) != 0;
+        const standard = gtk.ToggleButton.getActive(p.native_toggle) != 0;
+
+        const argv = ShellyCommands.upgrade(std.heap.c_allocator, flatpak, aur, standard) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+
+        self.forEachActiveUpdate(&names, struct {
+            fn cb(list: *std.ArrayListUnmanaged([]const u8), pkg: *UpdateObject) void {
+                list.append(std.heap.c_allocator, pkg.getName()) catch {};
+            }
+        }.cb);
+        if (names.items.len == 0) return;
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = translations._("Upgrading packages"),
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *UpdatePage = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+        var tray = TrayDBus{};
+        defer tray.deinit();
+        tray.updatesMadeInUi();
+        self.reload();
+    }
+
+    fn reload(self: *Self) void {
+        const p = self.priv();
+        p.generation += 1;
+
+        self.set_load(PageState.Loading);
+        p.list_store.removeAll();
+
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        thread.detach();
+    }
+
+    const template_children = .{ .{ "content_list", @offsetOf(Private, "content_list") }, .{ "selected_label", @offsetOf(Private, "selected_label") }, .{ "refresh_button", @offsetOf(Private, "refresh_button") }, .{ "native_toggle", @offsetOf(Private, "native_toggle") }, .{ "aur_toggle", @offsetOf(Private, "aur_toggle") }, .{ "flatpak_toggle", @offsetOf(Private, "flatpak_toggle") }, .{ "updates_stack", @offsetOf(Private, "updates_stack") }, .{ "loading_page", @offsetOf(Private, "loading_page") }, .{ "list_page", @offsetOf(Private, "list_page") }, .{ "empty_page", @offsetOf(Private, "empty_page") }, .{ "error_page", @offsetOf(Private, "error_page") }, .{ "loading_spinner", @offsetOf(Private, "loading_spinner") }, .{ "error_label", @offsetOf(Private, "error_label") }, .{ "upgrade_button", @offsetOf(Private, "upgrade_button") } };
 
     pub const Class = extern struct {
         parent_class: Parent.Class,
@@ -452,6 +563,7 @@ pub const UpdatePage = extern struct {
                 support.bindChild(class, Private.offset, child[0], child[1]);
             }
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "refresh_updates", @ptrCast(&refresh_updates));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "upgrade_button", @ptrCast(&upgrade));
         }
     };
 };

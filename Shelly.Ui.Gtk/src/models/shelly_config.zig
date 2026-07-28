@@ -3,6 +3,11 @@ pub const ViewType = enum(u8) {
     list = 1,
 };
 
+pub const NavMode = enum(u8) {
+    sidebar = 0,
+    topbar = 1,
+};
+
 pub const ShellyTabs = enum(u8) {
     packages = 0,
     aur = 1,
@@ -24,69 +29,62 @@ pub const DayOfWeek = enum(u8) {
 
 pub const ShellyConfig = struct {
     // General
-    Culture: ?[]const u8 = null,
+    Culture: []const u8 = "",
     NewInstall: bool = true,
-    NewInstallInitSettings: bool = false,
     NoConfirm: bool = false,
-    UseOldMenu: bool = false,
 
     // Feature Toggles
     AurEnabled: bool = false,
     AurWarningConfirmed: bool = false,
     AppImageEnabled: bool = false,
+    AppImageInstallPath: []const u8 = "",
     FlatPackEnabled: bool = false,
     PackageDowngradeEnabled: bool = false,
     RecommendedEnabled: bool = true,
     ShellyIconsEnabled: bool = true,
     ShellySearchEnabled: bool = false,
-    StarFishEnabled: bool = false,
+    WebviewEnabled: bool = false,
 
     // Window & View
-    WindowWidth: f64 = 800,
-    WindowHeight: f64 = 600,
-    DefaultView: []const u8 = "HomeScreen",
     DefaultPageDropDown: ShellyTabs = .packages,
+    NavMode: NavMode = .sidebar,
+    // Internal: persisted window geometry, not exposed in settings UI
+    WindowLastWidth: i32 = 0,
+    WindowLastHeight: i32 = 0,
 
-    // Package Views
-    PackageInstallView: ViewType = .list,
-    PackageUpdateView: ViewType = .list,
-    PackageManageView: ViewType = .list,
+    // Package Page
+    PackageInstallView: ViewType = .grid,
 
-    // Package Management
     PackageManagementCascadeDelete: bool = true,
     PackageManagementRemoveConfigs: bool = false,
     PackageManagementRemoveOptionalDeps: bool = true,
-    PackageManagementShowHidden: bool = false,
 
-    // Package Install
     PackageInstallUpgrade: bool = false,
     PackageInstallShowHidden: bool = false,
+    PackageInstallShowExplicitOnly: bool = false,
+    PackageInstallShowDependsOnly: bool = false,
+    PackageInstallShowDetailPane: bool = false,
 
-    // Package Update
-    PackageUpdateShowHidden: bool = false,
-
-    // AUR Install
+    // AUR Page
     AurInstallUseChroot: bool = false,
     AurInstallRunChecks: bool = false,
+    AurInstallShowDetailPane: bool = false,
 
-    // AUR Remove
     AurRemoveCascadeDelete: bool = true,
-    AurRemoveShowHidden: bool = false,
 
-    // AUR Update
     AurUpdateRunChecks: bool = false,
     AurUpdateShowHidden: bool = false,
 
     // Tray
-    TrayEnabled: bool = true,
+    TrayEnabled: bool = false,
     TrayAutoStart: bool = false,
     TrayCheckIntervalHours: i32 = 72,
     UseSymbolicTray: bool = true,
-    TrayIconPath: ?[]const u8 = null,
-    TrayUpdatesIconPath: ?[]const u8 = null,
+    TrayIconPath: []const u8 = "",
+    TrayUpdatesIconPath: []const u8 = "",
 
     // Scheduled Operations
     UseWeeklySchedule: bool = false,
     DaysOfWeek: []const DayOfWeek = &.{},
-    Time: ?[]const u8 = null,
+    Time: []const u8 = "",
 };

@@ -5,6 +5,7 @@ const config_model = @import("../config/model.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const ui_operation = @import("../output/ui_operation.zig");
+const list_updates = @import("list_updates.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
@@ -213,6 +214,10 @@ pub fn dispatch(
 
     if (isFlatpakRepair(invocation) and !invocation.globals.ui_mode and !elevation.isRoot()) {
         const elevate = repairTargetRequiresElevation(context, invocation.positionals[0]) catch |err| {
+            if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                try context.stderr.print("{s}\n", .{message});
+                return 1;
+            }
             try context.stderr.print("Unable to inspect Flatpak before repair: {t}\n", .{err});
             return 1;
         };
@@ -239,12 +244,170 @@ fn executeWithRunner(
     invocation: *const parser.Invocation,
     runner: Runner,
 ) !u8 {
+    if (requestsStandardUpgrade(invocation) and !invocation.globals.no_confirm) {
+        const confirmed = if (invocation.globals.ui_mode)
+            try confirmStandardUpgradeUi(context)
+        else
+            try confirmStandardUpgrade(context);
+        if (!confirmed) return 0;
+    }
+
     const opening = try openingMessage(context.allocator, invocation);
     defer context.allocator.free(opening);
     return if (invocation.globals.ui_mode)
         executeUi(context, invocation, runner, opening)
     else
         executeStandard(context, invocation, runner, opening);
+}
+
+fn requestsStandardUpgrade(invocation: *const parser.Invocation) bool {
+    return std.mem.eql(u8, invocation.command.path, standard_command_path) and
+        optionEnabled(invocation, "--upgrade") and
+        dependencyTargetCount(invocation) > 0;
+}
+
+fn confirmStandardUpgrade(context: *runtime.RuntimeContext) !bool {
+    var result = list_updates.collectUpdates(context, .standard, false) catch |err| {
+        try context.stderr.print("Unable to prepare the standard upgrade plan: {t}\n", .{err});
+        try context.stderr.flush();
+        return err;
+    };
+    defer result.deinit(context.allocator);
+
+    const updates = switch (result) {
+        .standard => |standard| standard.items,
+        else => unreachable,
+    };
+    return confirmStandardUpgradeWithUpdates(context, updates);
+}
+
+fn confirmStandardUpgradeWithUpdates(
+    context: *runtime.RuntimeContext,
+    updates: []const list_updates.StandardUpdate,
+) !bool {
+    if (updates.len == 0) {
+        try context.stdout.writeAll(
+            "Standard packages are up to date. Continuing with the requested package installation.\n",
+        );
+        try context.stdout.flush();
+        return true;
+    }
+
+    try writeStandardUpgradePreview(context.stdout, updates);
+    const reader = context.stdin orelse {
+        try context.stdout.writeAll("Operation cancelled: confirmation input is unavailable.\n");
+        try context.stdout.flush();
+        return false;
+    };
+    while (true) {
+        try context.stdout.writeAll("Proceed with the standard system upgrade? (Y/n) ");
+        try context.stdout.flush();
+        const input = (try reader.takeDelimiter('\n')) orelse {
+            try context.stdout.writeAll("\nOperation cancelled.\n");
+            try context.stdout.flush();
+            return false;
+        };
+        const answer = std.mem.trim(u8, input, " \t\r\n");
+        if (answer.len == 0 or std.ascii.eqlIgnoreCase(answer, "y") or
+            std.ascii.eqlIgnoreCase(answer, "yes"))
+            return true;
+        if (std.ascii.eqlIgnoreCase(answer, "n") or
+            std.ascii.eqlIgnoreCase(answer, "no"))
+        {
+            try context.stdout.writeAll("Operation cancelled.\n");
+            try context.stdout.flush();
+            return false;
+        }
+        try context.stdout.writeAll("Please answer 'y' or 'n'.\n");
+    }
+}
+
+fn confirmStandardUpgradeUi(context: *runtime.RuntimeContext) !bool {
+    var result = list_updates.collectUpdates(context, .standard, false) catch |err| {
+        const message = try std.fmt.allocPrint(
+            context.allocator,
+            "Unable to prepare the standard upgrade plan: {t}",
+            .{err},
+        );
+        defer context.allocator.free(message);
+        output.writeErrorFrame(context, message) catch {};
+        ui_operation.flush(context) catch {};
+        return err;
+    };
+    defer result.deinit(context.allocator);
+
+    const updates = switch (result) {
+        .standard => |standard| standard.items,
+        else => unreachable,
+    };
+    return confirmStandardUpgradeUiWithUpdates(context, updates);
+}
+
+fn confirmStandardUpgradeUiWithUpdates(
+    context: *runtime.RuntimeContext,
+    updates: []const list_updates.StandardUpdate,
+) !bool {
+    if (updates.len == 0) {
+        try output.writeInfoFrame(
+            context,
+            "Standard packages are up to date. Continuing with the requested package installation.",
+        );
+        try ui_operation.flush(context);
+        return true;
+    }
+
+    var preview = std.Io.Writer.Allocating.init(context.allocator);
+    defer preview.deinit();
+    try writeStandardUpgradePreview(&preview.writer, updates);
+    try output.writeInfoFrame(context, preview.writer.buffered());
+
+    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    defer operation_context.deinit();
+    var question_responder: ui_operation.QuestionResponder = .{
+        .context = context,
+        .operation_context = &operation_context,
+        .no_confirm = false,
+    };
+    question_responder.attach();
+    defer question_responder.detach();
+
+    var operation = operation_context.begin(.{
+        .backend = .alpm,
+        .kind = .update,
+    });
+    var answer = try operation.ask(.{
+        .kind = .confirmation,
+        .prompt = "Proceed with the standard system upgrade?",
+        .default_response = .accepted,
+    });
+    defer answer.deinit(context.allocator);
+    const accepted = answer.response == .accepted;
+    operation.finish(if (accepted) .success else .cancelled);
+    if (!accepted) try output.writeInfoFrame(context, "Operation cancelled.");
+    try ui_operation.flush(context);
+    return accepted;
+}
+
+fn writeStandardUpgradePreview(
+    writer: *std.Io.Writer,
+    updates: []const list_updates.StandardUpdate,
+) !void {
+    try writer.print(
+        "WARNING: --upgrade will perform a full standard system upgrade before installing the " ++
+            "requested packages.\n\nThe following {d} standard package{s} will be upgraded:\n",
+        .{ updates.len, if (updates.len == 1) "" else "s" },
+    );
+    for (updates) |update| {
+        try writer.print(
+            "  {s}/{s}: {s} -> {s}\n",
+            .{
+                if (update.repository.len == 0) "unknown" else update.repository,
+                update.name,
+                update.current_version,
+                update.new_version,
+            },
+        );
+    }
 }
 
 fn executeStandard(
@@ -270,6 +433,7 @@ fn executeUi(
     opening: []const u8,
 ) !u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     var question_responder: ui_operation.QuestionResponder = .{
         .context = context,
@@ -289,6 +453,18 @@ fn executeUi(
     try ui_operation.flush(context);
 
     runner.call(runner.data, context, &operation_context, invocation) catch |err| {
+        if (err == error.Cancelled) {
+            try output.writeInfoFrame(context, "Operation cancelled.");
+            try output.writeAlpmInfoFrame(context, "TransactionCancelled", "Installation cancelled.");
+            try ui_operation.flush(context);
+            return 0;
+        }
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+            try output.writeErrorFrame(context, message);
+            try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
+            try ui_operation.flush(context);
+            return 1;
+        }
         const message = try std.fmt.allocPrint(context.allocator, "Installation failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
@@ -537,8 +713,8 @@ fn runFlatpak(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    const requested_scope: Zigalpm.flatpak.bindings.libflatpak.Scope =
-        if (optionEnabled(invocation, "--user")) .USER else .SYSTEM;
+    const requested_scope: Zigalpm.flatpak.Scope =
+        if (optionEnabled(invocation, "--user")) .user else .system;
     const requested_id = invocation.positionals[0];
     var selected_id: []const u8 = requested_id;
     var selected_remote: []const u8 = optionValue(invocation, "--remote") orelse "";
@@ -621,10 +797,10 @@ fn repairTargetRequiresElevation(context: *runtime.RuntimeContext, target: []con
 }
 
 fn repairScopeRequiresElevation(
-    scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    scope: Zigalpm.flatpak.Scope,
     running_as_root: bool,
 ) bool {
-    return !running_as_root and scope == .SYSTEM;
+    return !running_as_root and scope == .system;
 }
 
 const FlatpakFileKind = enum {
@@ -658,8 +834,8 @@ fn runFlatpakFile(
     if (!installed) return InstallError.BackendFailed;
 }
 
-fn flatpakFileScope(invocation: *const parser.Invocation) Zigalpm.flatpak.bindings.libflatpak.Scope {
-    return if (optionEnabled(invocation, "--user")) .USER else .SYSTEM;
+fn flatpakFileScope(invocation: *const parser.Invocation) Zigalpm.flatpak.Scope {
+    return if (optionEnabled(invocation, "--user")) .user else .system;
 }
 
 fn flatpakFileKind(invocation: *const parser.Invocation) ?FlatpakFileKind {
@@ -672,15 +848,18 @@ fn flatpakFileKind(invocation: *const parser.Invocation) ?FlatpakFileKind {
 fn firstFlatpakRemote(
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
-    requested_scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    requested_scope: Zigalpm.flatpak.Scope,
 ) !?[]const u8 {
     var manager = Zigalpm.flatpak.RemoteManager{ .allocator = context.allocator, .io = context.io };
     manager.setOperationContext(operation_context);
     const remotes = try manager.listRemotesWithDetails();
-    defer context.allocator.free(remotes);
+    defer Zigalpm.flatpak.Remote.deinitSlice(
+        context.allocator,
+        remotes,
+    );
     for (remotes) |remote| {
-        if (remote.get_scope() != requested_scope or remote.disabled()) continue;
-        const name = remote.name() orelse continue;
+        if (remote.scope != requested_scope or remote.disabled) continue;
+        const name = remote.name;
         if (name.len > 0) return try context.allocator.dupe(u8, name);
     }
     return null;
@@ -992,9 +1171,9 @@ test "Flatpak repair rejects install source modifiers" {
 }
 
 test "Flatpak repair lifecycle and elevation follow the installed scope" {
-    try std.testing.expect(repairScopeRequiresElevation(.SYSTEM, false));
-    try std.testing.expect(!repairScopeRequiresElevation(.USER, false));
-    try std.testing.expect(!repairScopeRequiresElevation(.SYSTEM, true));
+    try std.testing.expect(repairScopeRequiresElevation(.system, false));
+    try std.testing.expect(!repairScopeRequiresElevation(.user, false));
+    try std.testing.expect(!repairScopeRequiresElevation(.system, true));
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1051,7 +1230,7 @@ test "Flatpak file install modifiers use the shared command and scope" {
         &.{ "install", "flatpak", "--ref-file", "/tmp/demo.flatpakref" },
     );
     try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .ref_file);
-    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .SYSTEM);
+    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .system);
     try std.testing.expect(needsElevation(&outcome.dispatch));
     try std.testing.expectEqualStrings("/tmp/demo.flatpakref", outcome.dispatch.positionals[0]);
 
@@ -1061,7 +1240,7 @@ test "Flatpak file install modifiers use the shared command and scope" {
         &.{ "install", "flatpak", "--ref-file", "--user", "demo.flatpakref" },
     );
     try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .ref_file);
-    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .USER);
+    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .user);
     try std.testing.expect(!needsElevation(&outcome.dispatch));
 
     outcome = try parser.parse(
@@ -1070,7 +1249,7 @@ test "Flatpak file install modifiers use the shared command and scope" {
         &.{ "install", "flatpak", "--bundle", "demo.flatpak" },
     );
     try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .bundle);
-    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .SYSTEM);
+    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .system);
     try std.testing.expect(needsElevation(&outcome.dispatch));
 
     const old_ref = try parser.parse(
@@ -1078,13 +1257,15 @@ test "Flatpak file install modifiers use the shared command and scope" {
         &manifest,
         &.{ "install-ref-file", "flatpak", "demo.flatpakref" },
     );
-    try std.testing.expect(old_ref == .failure);
+    try std.testing.expect(old_ref == .dispatch);
+    try std.testing.expectEqualStrings("shelly", old_ref.dispatch.command.path);
     const old_bundle = try parser.parse(
         arena.allocator(),
         &manifest,
         &.{ "install-bundle", "flatpak", "demo.flatpak" },
     );
-    try std.testing.expect(old_bundle == .failure);
+    try std.testing.expect(old_bundle == .dispatch);
+    try std.testing.expectEqualStrings("shelly", old_bundle.dispatch.command.path);
 }
 
 test "Flatpak file install modifiers reject conflicting modes and repository options" {
@@ -1162,9 +1343,9 @@ test "install routes every action-first backend and forwards type-specific optio
             if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
                 if (flatpakFileKind(invocation)) |kind| {
                     if (kind == .ref_file)
-                        try std.testing.expect(flatpakFileScope(invocation) == .USER)
+                        try std.testing.expect(flatpakFileScope(invocation) == .user)
                     else
-                        try std.testing.expect(flatpakFileScope(invocation) == .SYSTEM);
+                        try std.testing.expect(flatpakFileScope(invocation) == .system);
                 } else {
                     try std.testing.expectEqualStrings("flathub-beta", optionValue(invocation, "--remote").?);
                     try std.testing.expectEqualStrings("beta", optionValue(invocation, "--branch").?);
@@ -1324,6 +1505,262 @@ test "install uses the shared non-UI and UI transaction lifecycles" {
     outcome = try parser.parse(arena.allocator(), &manifest, &.{ "install", "aur", "--ui-mode", "demo" });
     try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+}
+
+test "standard install upgrade requires confirmation unless disabled" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var declined_input = std.Io.Reader.fixed("n\n");
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdin = &declined_input,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const Capture = struct {
+        called: bool = false,
+
+        fn run(
+            data: ?*anyopaque,
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            _: *const parser.Invocation,
+        ) !void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.called = true;
+        }
+    };
+    var capture: Capture = .{};
+    const runner: Runner = .{ .data = &capture, .call = Capture.run };
+    const updates = [_]list_updates.StandardUpdate{.{
+        .name = "linux",
+        .current_version = "6.12.1-1",
+        .new_version = "6.12.2-1",
+        .download_size = 1024,
+        .size_difference = 256,
+        .description = "",
+        .url = "",
+        .repository = "core",
+        .installed_size = 4096,
+        .depends = &.{},
+        .optional_depends = &.{},
+        .licenses = &.{},
+        .provides = &.{},
+        .conflicts = &.{},
+        .groups = &.{},
+    }};
+
+    var outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "standard", "--upgrade", "demo" },
+    );
+    try std.testing.expect(requestsStandardUpgrade(&outcome.dispatch));
+    try std.testing.expect(!try confirmStandardUpgradeWithUpdates(&context, &updates));
+    try std.testing.expect(!capture.called);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "core/linux: 6.12.1-1 -> 6.12.2-1",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Proceed with the standard system upgrade? (Y/n)",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Operation cancelled.") != null);
+
+    stdout.writer.end = 0;
+    var accepted_input = std.Io.Reader.fixed("\n");
+    context.stdin = &accepted_input;
+    try std.testing.expect(try confirmStandardUpgradeWithUpdates(&context, &updates));
+
+    context.stdin = null;
+    outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "standard", "--upgrade", "--no-confirm", "demo" },
+    );
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expect(capture.called);
+
+    outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "install", "standard", "--upgrade", "demo.pkg.tar.zst" },
+    );
+    try std.testing.expect(!requestsStandardUpgrade(&outcome.dispatch));
+}
+
+test "standard install upgrade CLI skips confirmation when packages are current" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdin = null,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+
+    try std.testing.expect(try confirmStandardUpgradeWithUpdates(&context, &.{}));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Standard packages are up to date.",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Proceed with the standard system upgrade?",
+    ) == null);
+}
+
+test "standard install upgrade UI previews available updates before confirmation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const response_json = "{\"$kind\":\"a.yesno\",\"QuestionId\":\"1\",\"Accept\":true}";
+    const encoded_size = std.base64.standard.Encoder.calcSize(response_json.len);
+    const encoded = try arena.allocator().alloc(u8, encoded_size);
+    const encoded_response = std.base64.standard.Encoder.encode(encoded, response_json);
+    const response_frame = try std.fmt.allocPrint(
+        arena.allocator(),
+        "[JSON]{s}[/JSON]\n",
+        .{encoded_response},
+    );
+    var stdin = std.Io.Reader.fixed(response_frame);
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdin = &stdin,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+
+    const updates = [_]list_updates.StandardUpdate{
+        .{
+            .name = "linux",
+            .current_version = "6.12.1-1",
+            .new_version = "6.12.2-1",
+            .download_size = 1024,
+            .size_difference = 256,
+            .description = "",
+            .url = "",
+            .repository = "core",
+            .installed_size = 4096,
+            .depends = &.{},
+            .optional_depends = &.{},
+            .licenses = &.{},
+            .provides = &.{},
+            .conflicts = &.{},
+            .groups = &.{},
+        },
+        .{
+            .name = "firefox",
+            .current_version = "127.0-1",
+            .new_version = "128.0-1",
+            .download_size = 2048,
+            .size_difference = -128,
+            .description = "",
+            .url = "",
+            .repository = "extra",
+            .installed_size = 8192,
+            .depends = &.{},
+            .optional_depends = &.{},
+            .licenses = &.{},
+            .provides = &.{},
+            .conflicts = &.{},
+            .groups = &.{},
+        },
+    };
+
+    try std.testing.expect(try confirmStandardUpgradeUiWithUpdates(&context, &updates));
+    const rendered = stdout.writer.buffered();
+    var frame_iterator = std.mem.splitSequence(u8, rendered, "[JSON]");
+    _ = frame_iterator.next();
+    var found_preview = false;
+    var found_confirmation = false;
+    while (frame_iterator.next()) |framed| {
+        const encoded_end = std.mem.indexOf(u8, framed, "[/JSON]") orelse continue;
+        const payload = framed[0..encoded_end];
+        const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(payload);
+        const decoded = try arena.allocator().alloc(u8, decoded_size);
+        try std.base64.standard.Decoder.decode(decoded, payload);
+        if (std.mem.indexOf(u8, decoded, "core/linux: 6.12.1-1 -> 6.12.2-1") != null and
+            std.mem.indexOf(u8, decoded, "extra/firefox: 127.0-1 -> 128.0-1") != null)
+        {
+            found_preview = true;
+        }
+        if (std.mem.indexOf(u8, decoded, "\"$kind\":\"q.yesno\"") == null) continue;
+        found_confirmation = true;
+        try std.testing.expect(std.mem.indexOf(u8, decoded, "Proceed with the standard system upgrade?") != null);
+    }
+    try std.testing.expect(found_preview);
+    try std.testing.expect(found_confirmation);
+
+    stdout.writer.end = 0;
+    const decline_json = "{\"$kind\":\"a.yesno\",\"QuestionId\":\"1\",\"Accept\":false}";
+    const decline_encoded_size = std.base64.standard.Encoder.calcSize(decline_json.len);
+    const decline_encoded = try arena.allocator().alloc(u8, decline_encoded_size);
+    const decline_response = std.base64.standard.Encoder.encode(decline_encoded, decline_json);
+    const decline_frame = try std.fmt.allocPrint(
+        arena.allocator(),
+        "[JSON]{s}[/JSON]\n",
+        .{decline_response},
+    );
+    var decline_input = std.Io.Reader.fixed(decline_frame);
+    context.stdin = &decline_input;
+    try std.testing.expect(!try confirmStandardUpgradeUiWithUpdates(&context, &updates));
+}
+
+test "standard install upgrade UI skips confirmation when packages are current" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdin = null,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+
+    try std.testing.expect(try confirmStandardUpgradeUiWithUpdates(&context, &.{}));
+
+    var frame_iterator = std.mem.splitSequence(u8, stdout.writer.buffered(), "[JSON]");
+    _ = frame_iterator.next();
+    var found_up_to_date = false;
+    var found_confirmation = false;
+    while (frame_iterator.next()) |framed| {
+        const encoded_end = std.mem.indexOf(u8, framed, "[/JSON]") orelse continue;
+        const payload = framed[0..encoded_end];
+        const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(payload);
+        const decoded = try arena.allocator().alloc(u8, decoded_size);
+        try std.base64.standard.Decoder.decode(decoded, payload);
+        if (std.mem.indexOf(u8, decoded, "Standard packages are up to date.") != null)
+            found_up_to_date = true;
+        if (std.mem.indexOf(u8, decoded, "\"$kind\":\"q.yesno\"") != null)
+            found_confirmation = true;
+    }
+    try std.testing.expect(found_up_to_date);
+    try std.testing.expect(!found_confirmation);
 }
 
 test "install backend failures return a failing exit code and transaction result" {

@@ -5,6 +5,7 @@
         <property name="orientation">vertical</property>
         <property name="hexpand">true</property>
         <property name="vexpand">true</property>
+         <property name="margin-bottom">10</property>
         <child>
             <object class="GtkOverlay" id="PackageWindow">
                 <property name="hexpand">true</property>
@@ -58,6 +59,7 @@
                                 <child>
                                     <object class="GtkMenuButton" id="cart_button">
                                         <property name="tooltip-text" translatable="yes">Selected Packages</property>
+                                        <property name="sensitive" >true</property>
                                         <property name="popover">cart_popover</property>
                                         <child>
                                             <object class="GtkLabel" id="cart_label">
@@ -105,13 +107,23 @@
                                         <style>
                                             <class name="suggested-action"/>
                                         </style>
+                                        <child>
+                                          <object class="GtkShortcutController">
+                                            <property name="scope">managed</property>
+                                            <property name="propagation-phase">capture</property>
+                                            <child>
+                                              <object class="GtkShortcut">
+                                                <property name="trigger">Return</property>
+                                                <property name="action">activate</property>
+                                              </object>
+                                            </child>
+                                          </object>
+                                        </child>
                                     </object>
                                 </child>
                             </object>
                         </child>
-                        <child>
-                            <object class="GtkSeparator"/>
-                        </child>
+
                         <child>
                             <object class="GtkBox" id="views_and_detail_hbox">
                                 <property name="hexpand">true</property>
@@ -260,6 +272,30 @@
                     <object class="GtkCheckButton" id="show_hidden_check">
                         <property name="label" translatable="yes">Show Hidden</property>
                         <property name="tooltip-text" translatable="yes">Show packages in the IgnorePkg list from pacman.conf</property>
+                        <property name="active">false</property>
+                    </object>
+                </child>
+                <child>
+                    <object class="GtkCheckButton" id="show_explicit_only">
+                        <property name="label" translatable="yes">Show Explicit Only</property>
+                        <property name="tooltip-text" translatable="yes">Show only explicitly installed packages</property>
+                        <signal name="toggled" handler="on_explicit_only"/>
+                        <property name="active">false</property>
+                    </object>
+                </child>
+                <child>
+                    <object class="GtkCheckButton" id="show_depends_only">
+                        <property name="label" translatable="yes">Show Dependency Only</property>
+                        <property name="tooltip-text" translatable="yes">Show dependency packages on;y</property>
+                        <signal name="toggled" handler="on_depends_only"/>
+                        <property name="active">false</property>
+                    </object>
+                </child>
+                <child>
+                    <object class="GtkCheckButton" id="show_detail_pane">
+                        <property name="label" translatable="yes">Hide Detail Pane</property>
+                        <property name="tooltip-text" translatable="yes">Hide Detail Pane</property>
+                        <signal name="toggled" handler="on_detail_pane"/>
                         <property name="active">false</property>
                     </object>
                 </child>

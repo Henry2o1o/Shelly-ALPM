@@ -6,7 +6,8 @@ riderModule.iml
 .idea/
 Shelly-UI.sln.DotSettings.user
 .junie/
-Shelly.Ui.Gtk/.zig-cache/
-Shelly.Ui.Gtk/zig-pkg/
-Shelly.Cli.Zig/.zig-cache/
-Shelly.Cli.Zig/zig-pkg/
+.zig-cache/
+zig-out/
+zig-pkg/
+.codex-zig-cache/
+.codex-zig-global-cache/

@@ -165,11 +165,16 @@ pub fn runStreamingWithEnvironmentOperation(
 }
 
 fn drainLines(reader: *std.Io.Reader, stream: StreamKind, flush_tail: bool, line_handler: LineHandler) void {
-    while (std.mem.indexOfScalar(u8, reader.buffered(), '\n')) |line_end| {
-        const line = std.mem.trimEnd(u8, reader.buffered()[0..line_end], "\r");
-        if (line.len != 0) line_handler.call(stream, line);
+    while (std.mem.indexOfAny(u8, reader.buffered(), "\r\n")) |line_end| {
+        const line = reader.buffered()[0..line_end];
+
+        if (std.mem.trim(u8, line, " \t").len != 0) {
+            line_handler.call(stream, line);
+        }
+
         reader.toss(line_end + 1);
     }
+
     if (flush_tail and reader.bufferedLen() != 0) {
         const len = reader.bufferedLen();
         const line = std.mem.trimEnd(u8, reader.buffered(), "\r");
@@ -394,6 +399,22 @@ pub fn selectBuiltPackageFiles(
     directory_path: []const u8,
     package_name: []const u8,
 ) ![][]u8 {
+    return selectBuiltPackageFilesForNames(
+        allocator,
+        io,
+        directory_path,
+        &.{package_name},
+        &.{package_name},
+    );
+}
+
+pub fn selectBuiltPackageFilesForNames(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    directory_path: []const u8,
+    requested_names: []const []const u8,
+    package_names: []const []const u8,
+) ![][]u8 {
     var directory = std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return allocator.alloc([]u8, 0),
         else => return err,
@@ -405,18 +426,29 @@ pub fn selectBuiltPackageFiles(
         for (paths.items) |path| allocator.free(path);
         paths.deinit(allocator);
     }
-    const prefix = try std.fmt.allocPrint(allocator, "{s}-", .{package_name});
-    defer allocator.free(prefix);
-    var has_named_match = false;
     while (try iterator.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!isBuiltPackageFile(entry.name)) continue;
-        if (std.mem.startsWith(u8, entry.name, prefix)) has_named_match = true;
+
+        // Split-package names may prefix one another (for example `demo` and
+        // `demo-docs`). Classifying against the longest known package name
+        // prevents selecting an unrequested sibling as `demo`.
+        var matched_name: ?[]const u8 = null;
+        for (package_names) |name| {
+            if (entry.name.len <= name.len or entry.name[name.len] != '-' or
+                !std.mem.startsWith(u8, entry.name, name)) continue;
+            if (matched_name == null or name.len > matched_name.?.len) matched_name = name;
+        }
+        const package = matched_name orelse continue;
+        var requested = false;
+        for (requested_names) |name| {
+            if (std.mem.eql(u8, name, package)) {
+                requested = true;
+                break;
+            }
+        }
+        if (!requested) continue;
         try paths.append(allocator, try std.fs.path.join(allocator, &.{ directory_path, entry.name }));
-    }
-    if (paths.items.len > 1 and !has_named_match) {
-        for (paths.items) |path| allocator.free(path);
-        paths.clearRetainingCapacity();
     }
     return paths.toOwnedSlice(allocator);
 }
@@ -507,9 +539,26 @@ test "built package selection mirrors split-package and stale-output safeguards"
     try matching.dir.writeFile(std.testing.io, .{ .sub_path = "demo-1-1-x86_64.pkg.tar.zst.sig", .data = "" });
     const matching_path = try matching.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(matching_path);
-    const split_files = try selectBuiltPackageFiles(std.testing.allocator, std.testing.io, matching_path, "demo");
+    const split_files = try selectBuiltPackageFilesForNames(
+        std.testing.allocator,
+        std.testing.io,
+        matching_path,
+        &.{"demo"},
+        &.{ "demo", "demo-docs" },
+    );
     defer deinitPaths(std.testing.allocator, split_files);
-    try std.testing.expectEqual(@as(usize, 2), split_files.len);
+    try std.testing.expectEqual(@as(usize, 1), split_files.len);
+    try std.testing.expect(std.mem.endsWith(u8, split_files[0], "demo-1-1-x86_64.pkg.tar.zst"));
+
+    const all_split_files = try selectBuiltPackageFilesForNames(
+        std.testing.allocator,
+        std.testing.io,
+        matching_path,
+        &.{ "demo", "demo-docs" },
+        &.{ "demo", "demo-docs" },
+    );
+    defer deinitPaths(std.testing.allocator, all_split_files);
+    try std.testing.expectEqual(@as(usize, 2), all_split_files.len);
 
     var ambiguous = std.testing.tmpDir(.{});
     defer ambiguous.cleanup();

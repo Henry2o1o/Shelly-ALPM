@@ -243,18 +243,24 @@ fn collectState(_: ?*anyopaque, context: *runtime.RuntimeContext) !State {
         }
     }
 
-    {
+    flatpak_collection: {
         var manager = Zigalpm.FlatpakManager{
             .allocator = context.allocator,
             .io = context.io,
         };
         defer manager.deinit();
-        const installed = try manager.list_installed_applications();
-        defer Zigalpm.flatpak.manager.InstalledApplication.deinitSlice(context.allocator, installed);
+        const installed = manager.list_installed_applications() catch |err| {
+            if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                try output.writeWarning(context, message);
+                break :flatpak_collection;
+            }
+            return err;
+        };
+        defer Zigalpm.flatpak.InstalledApplication.deinitSlice(context.allocator, installed);
         for (installed) |application| {
             try flatpaks.append(context.allocator, .{
                 .id = try context.allocator.dupe(u8, application.id),
-                .kind = application.kind,
+                .kind = @intFromEnum(application.kind),
             });
         }
     }
@@ -910,11 +916,8 @@ test "backup is a standalone -B command with export and local modifiers" {
     try std.testing.expectEqualStrings(command_path, long_form.dispatch.command.path);
 
     const removed_export_command = try parser.parse(allocator, &manifest, &.{"export"});
-    try std.testing.expect(removed_export_command == .failure);
-    try std.testing.expectEqualStrings(
-        "Unrecognized command or argument 'export'.",
-        removed_export_command.failure.message,
-    );
+    try std.testing.expect(removed_export_command == .dispatch);
+    try std.testing.expectEqualStrings("shelly", removed_export_command.dispatch.command.path);
 
     const removed_export_shortcode = try @import("../cli/shortcodes.zig").translate(
         allocator,

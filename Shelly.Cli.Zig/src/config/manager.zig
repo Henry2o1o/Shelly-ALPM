@@ -99,6 +99,10 @@ test "creates, updates, and reloads the XDG config file" {
     const manager = Manager.init(&context);
     const config = try manager.read();
     try std.testing.expectEqualStrings("10", (try config.getDisplay(arena.allocator(), "ParallelDownloadCount")).?);
+    try std.testing.expectEqualStrings(
+        "PreferIPv4",
+        (try config.getDisplay(arena.allocator(), "DownloadAddressFamilyPolicy")).?,
+    );
 
     const saved = try temporary.dir.readFileAlloc(
         std.testing.io,
@@ -115,4 +119,10 @@ test "creates, updates, and reloads the XDG config file" {
     try std.testing.expect(try manager.update("ParallelDownloadCount", "22"));
     try std.testing.expectEqualStrings("22", (try manager.get("parallelDownloadCount")).?);
     try std.testing.expect(!try manager.update("ParallelDownloadCount", "many"));
+    try std.testing.expect(try manager.update("DownloadAddressFamilyPolicy", "ipv6only"));
+    try std.testing.expectEqualStrings(
+        "IPv6Only",
+        (try manager.get("downloadaddressfamilypolicy")).?,
+    );
+    try std.testing.expect(!try manager.update("DownloadAddressFamilyPolicy", "automatic"));
 }

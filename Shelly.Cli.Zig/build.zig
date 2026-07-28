@@ -1,14 +1,24 @@
 const std = @import("std");
+const package_manifest = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const flatpak_backend_path = b.option(
+        []const u8,
+        "flatpak-backend-path",
+        "Absolute path to the Shelly Flatpak backend shared library",
+    ) orelse "/usr/lib/shelly/libshelly-flatpak-backend.so.1";
 
     const zigalpm_dependency = b.dependency("zigalpm", .{
         .target = target,
         .optimize = optimize,
+        .@"flatpak-backend-path" = flatpak_backend_path,
     });
     const zigalpm = zigalpm_dependency.module("Zigalpm");
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", package_manifest.version);
 
     const cli = b.addModule("Shelly_Cli_Zig", .{
         .root_source_file = b.path("src/root.zig"),
@@ -16,6 +26,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     cli.addImport("Zigalpm", zigalpm);
+    cli.addOptions("build_options", build_options);
 
     const executable_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

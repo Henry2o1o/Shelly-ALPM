@@ -1,5 +1,7 @@
 const std = @import("std");
+const Zigalpm = @import("Zigalpm");
 const parser = @import("../cli/parser.zig");
+const log = @import("log.zig");
 
 pub const DispatchFn = *const fn (
     user_data: ?*anyopaque,
@@ -23,9 +25,18 @@ pub const RuntimeContext = struct {
     stdin_is_tty: bool = false,
     stdout_is_tty: bool = false,
     dispatcher: Dispatcher = .{},
+    transaction_log: ?*log.TransactionLog = null,
 
     pub fn dispatch(self: *RuntimeContext, invocation: *const parser.Invocation) !u8 {
         return self.dispatcher.call(self.dispatcher.user_data, self, invocation);
+    }
+
+    pub fn attachTransactionLog(
+        self: *RuntimeContext,
+        operation_context: *Zigalpm.OperationContext,
+    ) void {
+        if (self.transaction_log) |transaction_log|
+            _ = transaction_log.attach(operation_context) catch return;
     }
 };
 

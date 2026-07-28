@@ -12,8 +12,13 @@ pub const AppstreamAppObject = extern struct {
     const Private = struct {
         arena: ?*std.heap.ArenaAllocator,
         app: flatpak.AppstreamApp,
+        membership: Membership = .{},
+        permissions: []const [:0]const u8,
         var offset: c_int = 0;
     };
+
+    pub const Collection = enum { trending, popular, recently_updated, recently_added };
+    pub const Membership = std.EnumSet(Collection);
 
     pub const getGObjectType = gobject.ext.defineClass(Self, .{
         .name = "ShellyAppstreamAppObject",
@@ -30,6 +35,8 @@ pub const AppstreamAppObject = extern struct {
     fn init(self: *Self, _: *Class) callconv(.c) void {
         const p = self.priv();
         p.arena = null;
+        p.permissions = &.{};
+        p.membership = .{};
         p.app = .{};
     }
 
@@ -122,6 +129,33 @@ pub const AppstreamAppObject = extern struct {
 
     pub fn getAddons(self: *const Self) []const flatpak.AppstreamApp {
         return self.getApp().Addons;
+    }
+
+    pub fn getMembership(self: *const Self) Membership {
+        return @constCast(self).priv().membership;
+    }
+
+    pub fn setMembership(self: *Self, membership: Membership) void {
+        self.priv().membership = membership;
+    }
+
+    pub fn getPermissions(self: *Self) []const [:0]const u8 {
+        const p = self.priv();
+
+        return p.permissions;
+    }
+
+    pub fn setPermissions(self: *Self, permissions: []const []const u8) void {
+        const p = self.priv();
+        const arena = p.arena orelse return;
+        const alloc = arena.allocator();
+
+        const owned_perms = alloc.alloc([:0]const u8, permissions.len) catch return;
+        for (permissions, 0..) |perm, i| {
+            owned_perms[i] = alloc.dupeZ(u8, perm) catch "";
+        }
+
+        p.permissions = owned_perms;
     }
 
     pub fn as(self: *Self, comptime T: type) *T {

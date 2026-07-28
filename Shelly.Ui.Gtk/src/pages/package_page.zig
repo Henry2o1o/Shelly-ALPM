@@ -14,7 +14,13 @@ const IconResolver = @import("../services/icon_resolver.zig").IconResolver;
 const Package = @import("../models/packages.zig").Package;
 const runtime = @import("../services/runtime.zig");
 const c_string = @import("../helpers/c_string.zig");
-const ShellyOperation = @import("../services/shelly_operation.zig").ShellyOperation;
+const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
+const ViewType = @import("../models/shelly_config.zig").ViewType;
+const RecommendCategory = @import("../models/recommendation.zig").RecommendCategory;
+const sorters = @import("../helpers/sorters.zig");
+const recommendations = @import("../services/recommendations.zig");
+const translations = @import("../helpers/translations.zig");
+
 const Event = @import("../services/shelly_operation.zig").Event;
 const PackageDetail = @import("package_detail.zig").PackageDetail;
 
@@ -49,18 +55,35 @@ pub const PackagePage = extern struct {
         detail_grid_hbox: *gtk.Box,
         grid_view_button: *gtk.ToggleButton,
         list_view_button: *gtk.ToggleButton,
+        install_button: *gtk.Button,
+        cart_items_box: *gtk.Box,
+        cart_label: *gtk.Label,
+        upgrade_check: *gtk.CheckButton,
+        show_hidden_check: *gtk.CheckButton,
+        show_explicit_only_check: *gtk.CheckButton,
+        show_depends_only_check: *gtk.CheckButton,
+        show_detail_pane_check: *gtk.CheckButton,
         arena: ?*std.heap.ArenaAllocator,
         selected_group: [64]u8,
         selected_group_len: usize,
         generation: u64,
         show_installed_only: bool,
+        show_explicit_only: bool,
+        show_depends_only: bool,
+        show_hidden: bool,
+        show_detail_pane: bool,
+
+        check_map_grid: std.AutoHashMapUnmanaged(*PackageObject, *gtk.CheckButton),
+        check_map_column: std.AutoHashMapUnmanaged(*PackageObject, *gtk.CheckButton),
         loaded: bool,
+        applying_config: bool,
         resolver: IconResolver,
         search_text: [256]u8,
         search_len: usize,
-        operation: ?*ShellyOperation,
+
         detail_revealer: *gtk.Revealer,
         detail: *PackageDetail,
+
         var offset: c_int = 0;
     };
 
@@ -97,38 +120,48 @@ pub const PackagePage = extern struct {
         gtk.Widget.initTemplate(self.as(gtk.Widget));
         const p = self.priv();
         p.loaded = false;
+        p.applying_config = false;
         p.arena = null;
         p.generation = 0;
         p.show_installed_only = false;
-        p.operation = null;
+        p.show_explicit_only = false;
+        p.show_hidden = false;
+        p.show_detail_pane = false;
+        p.check_map_grid = .empty;
+        p.check_map_column = .empty;
 
         const detail = PackageDetail.new();
         p.detail = detail;
         gtk.Revealer.setChild(p.detail_revealer, detail.as(gtk.Widget));
-        // or gtk.Box.append(p.detail_hbox, detail.as(gtk.Widget)) — whatever your slot is
 
         p.list_store = gio.ListStore.new(PackageObject.getGObjectType());
-        p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
-        gtk.ColumnView.setModel(p.column_view, p.selection.as(gtk.SelectionModel));
 
         p.filter = gtk.CustomFilter.new(&filter_func, self, null);
         p.filter_model = gtk.FilterListModel.new(p.list_store.as(gio.ListModel), p.filter.as(gtk.Filter));
-        p.selection = gtk.SingleSelection.new(p.filter_model.as(gio.ListModel));
-        gtk.ColumnView.setModel(p.column_view, p.selection.as(gtk.SelectionModel));
 
+        const sort_model = gtk.SortListModel.new(p.filter_model.as(gio.ListModel), null);
+
+        p.selection = gtk.SingleSelection.new(sort_model.as(gio.ListModel));
+        gtk.SingleSelection.setAutoselect(p.selection, 0);
+        gtk.SingleSelection.setCanUnselect(p.selection, 1);
+
+        gtk.ColumnView.setModel(p.column_view, p.selection.as(gtk.SelectionModel));
         gtk.GridView.setModel(p.grid_view, p.selection.as(gtk.SelectionModel));
+
+        gtk.SortListModel.setSorter(sort_model, gtk.ColumnView.getSorter(p.column_view));
+
         gtk.GridView.setMaxColumns(p.grid_view, 4);
         gtk.GridView.setMinColumns(p.grid_view, 1);
 
         setup_grid_factory(self, p.grid_view);
-
         setup_name_column(self, p.name_column);
         setup_signal_text_label_column(p.version_column, &PackageObject.getVersion, gtk.Align.start);
         setup_signal_text_label_column(p.repository_column, &PackageObject.getRepository, gtk.Align.start);
 
         const check_factory = gtk.SignalListItemFactory.new();
-        _ = gtk.SignalListItemFactory.signals.setup.connect(check_factory, ?*anyopaque, &on_check_setup, null, .{});
-        _ = gtk.SignalListItemFactory.signals.bind.connect(check_factory, ?*anyopaque, &on_check_bind, null, .{});
+        _ = gtk.SignalListItemFactory.signals.setup.connect(check_factory, *Self, &on_check_setup, self, .{});
+        _ = gtk.SignalListItemFactory.signals.bind.connect(check_factory, *Self, &on_check_bind, self, .{});
+        _ = gtk.SignalListItemFactory.signals.unbind.connect(check_factory, *Self, &on_check_unbind, self, .{});
         gtk.ColumnViewColumn.setFactory(p.check_column, check_factory.as(gtk.ListItemFactory));
 
         const size_factory = gtk.SignalListItemFactory.new();
@@ -141,16 +174,26 @@ pub const PackagePage = extern struct {
         _ = gobject.Object.signals.notify.connect(p.grouping_selection.as(gobject.Object), *Self, &on_group_notify, self, .{ .detail = "selected" });
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
 
+        _ = gtk.GridView.signals.activate.connect(p.grid_view, *Self, &on_grid_activated, self, .{});
+        _ = gtk.ColumnView.signals.activate.connect(p.column_view, *Self, &on_column_activated, self, .{});
+
         p.resolver = IconResolver.init(std.heap.c_allocator);
 
-        const use_grid = true;
+        _ = gtk.CheckButton.signals.toggled.connect(p.upgrade_check, *Self, &on_upgrade_toggled, self, .{});
+        _ = gtk.CheckButton.signals.toggled.connect(p.show_hidden_check, *Self, &on_show_hidden_toggled, self, .{});
 
-        gtk.ToggleButton.setActive(p.grid_view_button, @intFromBool(use_grid));
-        gtk.ToggleButton.setActive(p.list_view_button, @intFromBool(!use_grid));
-        gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), @intFromBool(use_grid));
-        gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), @intFromBool(!use_grid));
+        attachSorter(p.name_column, sorters.stringSorter(PackageObject, &PackageObject.getName));
+        attachSorter(p.size_column, sorters.numericSorter(PackageObject, &PackageObject.getInstalledSize));
+        attachSorter(p.repository_column, sorters.stringSorter(PackageObject, &PackageObject.getRepository));
+        attachSorter(p.version_column, sorters.stringSorter(PackageObject, &PackageObject.getVersion));
 
+        applyOptionsFromConfig(self);
         support.connectLifecycle(Self, self);
+    }
+
+    fn attachSorter(column: *gtk.ColumnViewColumn, sorter: *gtk.Sorter) void {
+        gtk.ColumnViewColumn.setSorter(column, sorter);
+        sorter.as(gobject.Object).unref();
     }
 
     fn setup_signal_text_label_column(column: *gtk.ColumnViewColumn, comptime getter: *const fn (*PackageObject) [:0]const u8, comptime halign: gtk.Align) void {
@@ -184,7 +227,7 @@ pub const PackagePage = extern struct {
                 const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
 
                 const box = gtk.Box.new(.horizontal, 6);
-
+                gtk.ListItem.setActivatable(gobject.ext.as(gtk.ListItem, cell), 1);
                 const icon = gtk.Image.new();
                 gtk.Image.setPixelSize(icon, 24);
                 gtk.Box.append(box, icon.as(gtk.Widget));
@@ -195,7 +238,7 @@ pub const PackagePage = extern struct {
                 gtk.Box.append(box, label.as(gtk.Widget));
 
                 const installed_icon = gtk.Image.newFromIconName("object-select-symbolic");
-                gtk.Widget.setTooltipText(installed_icon.as(gtk.Widget), "Installed");
+                gtk.Widget.setTooltipText(installed_icon.as(gtk.Widget), translations._("Installed"));
                 gtk.Box.append(box, installed_icon.as(gtk.Widget));
 
                 gtk.ColumnViewCell.setChild(cell, box.as(gtk.Widget));
@@ -232,29 +275,37 @@ pub const PackagePage = extern struct {
         gtk.ColumnViewColumn.setFactory(column, factory.as(gtk.ListItemFactory));
     }
 
-    fn on_check_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+    fn on_check_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, self: *Self) callconv(.c) void {
         const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
-
         const check = gtk.CheckButton.new();
         gtk.Widget.setMarginStart(check.as(gtk.Widget), 10);
         gtk.Widget.setMarginEnd(check.as(gtk.Widget), 10);
-
         gobject.Object.setData(check.as(gobject.Object), "cell", cell);
+        gobject.Object.setData(check.as(gobject.Object), "page", self);
         _ = gtk.CheckButton.signals.toggled.connect(check, ?*anyopaque, &on_check_toggled, null, .{});
 
         gtk.ColumnViewCell.setChild(cell, check.as(gtk.Widget));
     }
 
-    fn on_check_bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+    fn on_check_bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, page: *Self) callconv(.c) void {
         const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
         const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
         const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
         const child = gtk.ColumnViewCell.getChild(cell) orelse return;
         const check = gobject.ext.cast(gtk.CheckButton, child) orelse return;
 
+        page.priv().check_map_column.put(std.heap.c_allocator, pkg, check) catch {};
+
         gobject.Object.setData(check.as(gobject.Object), "syncing", @ptrFromInt(1));
         gtk.CheckButton.setActive(check, @intFromBool(pkg.isSelected()));
         gobject.Object.setData(check.as(gobject.Object), "syncing", null);
+    }
+
+    fn on_check_unbind(_: *gtk.SignalListItemFactory, item: *gobject.Object, page: *Self) callconv(.c) void {
+        const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+        const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+        const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
+        _ = page.priv().check_map_column.remove(pkg);
     }
 
     fn size_bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
@@ -281,15 +332,24 @@ pub const PackagePage = extern struct {
         const cell: *gtk.ColumnViewCell = @ptrCast(@alignCast(cell_ptr));
         const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
         const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
-
         pkg.setSelected(gtk.CheckButton.getActive(check) != 0);
-        // TODO: update cart / install button sensitivity
+
+        const page_ptr = gobject.Object.getData(check.as(gobject.Object), "page") orelse return;
+
+        const self: *Self = @ptrCast(@alignCast(page_ptr));
+        const p = self.priv();
+        const path = p.resolver.resolve(pkg.getName());
+        p.detail.showPackage(pkg.getName(), pkg.isInstalled(), path);
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
+
+        self.update_selection_ui();
     }
 
     fn setup_grid_factory(self: *Self, view: *gtk.GridView) void {
         const c = struct {
-            fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: *Self) callconv(.c) void {
+            fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, self_setup: *Self) callconv(.c) void {
                 const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
+                gtk.ListItem.setActivatable(list_item, 1);
 
                 const content_grid = gtk.Grid.new();
                 gtk.Widget.setMarginStart(content_grid.as(gtk.Widget), 10);
@@ -327,7 +387,7 @@ pub const PackagePage = extern struct {
                 gtk.Widget.setValign(installed_check.as(gtk.Widget), .center);
                 gtk.Widget.setHalign(installed_check.as(gtk.Widget), .start);
                 gtk.Widget.setHexpand(installed_check.as(gtk.Widget), 0);
-                gtk.Widget.setTooltipText(installed_check.as(gtk.Widget), "Package is already installed");
+                gtk.Widget.setTooltipText(installed_check.as(gtk.Widget), translations._("Package is already installed"));
 
                 const title_grid = gtk.Grid.new();
                 gtk.Grid.setColumnSpacing(title_grid, 4);
@@ -354,6 +414,7 @@ pub const PackagePage = extern struct {
                 gtk.Widget.setHalign(selection_check.as(gtk.Widget), .end);
                 gtk.Widget.setHexpand(selection_check.as(gtk.Widget), 0);
                 gobject.Object.setData(selection_check.as(gobject.Object), "list-item", list_item);
+                gobject.Object.setData(selection_check.as(gobject.Object), "page", self_setup);
                 _ = gtk.CheckButton.signals.toggled.connect(selection_check, ?*anyopaque, &on_grid_check_toggled, null, .{});
                 gtk.Grid.attach(content_grid, selection_check.as(gtk.Widget), 2, 0, 1, 2);
 
@@ -370,7 +431,6 @@ pub const PackagePage = extern struct {
 
                 gtk.ListItem.setChild(list_item, frame.as(gtk.Widget));
             }
-
             fn bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, page: *Self) callconv(.c) void {
                 const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
                 const obj = gtk.ListItem.getItem(list_item) orelse return;
@@ -378,10 +438,11 @@ pub const PackagePage = extern struct {
                 const frame_w = gtk.ListItem.getChild(list_item) orelse return;
                 const frame = gobject.ext.cast(gtk.Frame, frame_w) orelse return;
                 const content_grid = gobject.ext.cast(gtk.Grid, gtk.Frame.getChild(frame) orelse return) orelse return;
-
                 const icon_image = gobject.ext.cast(gtk.Image, gtk.Grid.getChildAt(content_grid, 0, 0) orelse return) orelse return;
                 const right_box = gobject.ext.cast(gtk.Box, gtk.Grid.getChildAt(content_grid, 1, 0) orelse return) orelse return;
                 const selection_check = gobject.ext.cast(gtk.CheckButton, gtk.Grid.getChildAt(content_grid, 2, 0) orelse return) orelse return;
+
+                page.priv().check_map_grid.put(std.heap.c_allocator, pkg, selection_check) catch {};
 
                 const title_grid_w = gtk.Widget.getFirstChild(right_box.as(gtk.Widget)) orelse return;
                 const title_grid = gobject.ext.cast(gtk.Grid, title_grid_w) orelse return;
@@ -390,7 +451,6 @@ pub const PackagePage = extern struct {
                 const desc_w = gtk.Widget.getLastChild(right_box.as(gtk.Widget)) orelse return;
                 const desc_label = gobject.ext.cast(gtk.Label, desc_w) orelse return;
 
-                // checkbox state — guarded so the handler ignores this programmatic set
                 gobject.Object.setData(selection_check.as(gobject.Object), "syncing", @ptrFromInt(1));
                 gtk.CheckButton.setActive(selection_check, @intFromBool(pkg.isSelected()));
                 gobject.Object.setData(selection_check.as(gobject.Object), "syncing", null);
@@ -399,19 +459,24 @@ pub const PackagePage = extern struct {
                 if (p.resolver.resolve(pkg.getName())) |path| {
                     gtk.Image.setFromFile(icon_image, path);
                 } else {
-                    gtk.Image.setFromIconName(icon_image, "application-x-executable");
+                    gtk.Image.setFromIconName(icon_image, "package-x-generic");
                 }
-
                 var name_buf: [256]u8 = undefined;
                 const markup = std.fmt.bufPrintZ(&name_buf, "<b>{s}</b>", .{pkg.getName()}) catch pkg.getName();
                 gtk.Label.setMarkup(title_label, markup);
-
                 gtk.Widget.setVisible(installed_check, @intFromBool(pkg.isInstalled()));
                 gtk.Label.setLabel(desc_label, pkg.getDescription());
+            }
+            fn unbind(_: *gtk.SignalListItemFactory, item: *gobject.Object, page: *Self) callconv(.c) void {
+                const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
+                const obj = gtk.ListItem.getItem(list_item) orelse return;
+                const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
+                _ = page.priv().check_map_grid.remove(pkg);
             }
         };
 
         const factory = gtk.SignalListItemFactory.new();
+        _ = gtk.SignalListItemFactory.signals.unbind.connect(factory, *Self, &c.unbind, self, .{});
         _ = gtk.SignalListItemFactory.signals.setup.connect(factory, *Self, &c.setup, self, .{});
         _ = gtk.SignalListItemFactory.signals.bind.connect(factory, *Self, &c.bind, self, .{});
         gtk.GridView.setFactory(view, factory.as(gtk.ListItemFactory));
@@ -425,7 +490,47 @@ pub const PackagePage = extern struct {
         const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
         pkg.setSelected(gtk.CheckButton.getActive(check) != 0);
 
-        //TODO: Cart logic.
+        const page_ptr = gobject.Object.getData(check.as(gobject.Object), "page") orelse return;
+        const self: *Self = @ptrCast(@alignCast(page_ptr));
+        const p = self.priv();
+        const path = p.resolver.resolve(pkg.getName());
+        p.detail.showPackage(pkg.getName(), pkg.isInstalled(), path);
+        gtk.Revealer.setRevealChild(p.detail_revealer, 1);
+        self.update_selection_ui();
+    }
+
+    fn on_grid_activated(_: *gtk.GridView, position: c_uint, self: *Self) callconv(.c) void {
+        toggle_selection_at(self, position);
+    }
+
+    fn on_column_activated(_: *gtk.ColumnView, position: c_uint, self: *Self) callconv(.c) void {
+        toggle_selection_at(self, position);
+    }
+
+    fn toggle_selection_at(self: *Self, position: c_uint) void {
+        const p = self.priv();
+        const model = p.selection.as(gio.ListModel);
+        const obj = gio.ListModel.getObject(model, position) orelse return;
+        defer obj.unref();
+        const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
+
+        const new_state = !pkg.isSelected();
+        pkg.setSelected(new_state);
+
+        if (p.check_map_grid.get(pkg)) |check| {
+            set_sync_active(check, new_state);
+        }
+        if (p.check_map_column.get(pkg)) |check| {
+            set_sync_active(check, new_state);
+        }
+
+        self.update_selection_ui();
+    }
+
+    fn set_sync_active(check: *gtk.CheckButton, active: bool) void {
+        gobject.Object.setData(check.as(gobject.Object), "syncing", @ptrFromInt(1));
+        gtk.CheckButton.setActive(check, @intFromBool(active));
+        gobject.Object.setData(check.as(gobject.Object), "syncing", null);
     }
 
     fn filter_func(item: *gobject.Object, data: ?*anyopaque) callconv(.c) c_int {
@@ -447,6 +552,10 @@ pub const PackagePage = extern struct {
         }
 
         if (p.show_installed_only and !pkg.isInstalled()) return 0;
+
+        if (p.show_depends_only and pkg.isExplicit()) return 0;
+
+        if (p.show_explicit_only and !pkg.isExplicit()) return 0;
 
         if (p.search_len < 1) return 1;
 
@@ -488,7 +597,7 @@ pub const PackagePage = extern struct {
         const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
 
         const path = p.resolver.resolve(pkg.getName());
-        p.detail.showPackage(pkg.getName(), path);
+        p.detail.showPackage(pkg.getName(), pkg.isInstalled(), path);
         gtk.Revealer.setRevealChild(p.detail_revealer, 1);
     }
 
@@ -496,6 +605,7 @@ pub const PackagePage = extern struct {
         const p = self.priv();
 
         const idx = gtk.DropDown.getSelected(p.grouping_selection);
+
         if (idx == 0 or idx == std.math.maxInt(u32)) {
             p.selected_group_len = 0;
         } else {
@@ -514,17 +624,49 @@ pub const PackagePage = extern struct {
     pub fn onMap(self: *Self) void {
         const p = self.priv();
         if (p.loaded) return;
+        applyOptionsFromConfig(self);
         p.loaded = true;
         p.generation += 1;
-
         show_loading(self);
-
-        const arena_ptr = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
-        arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-        p.arena = arena_ptr;
-
-        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch return;
+        self.update_selection_ui();
+        _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, p.show_hidden }) catch return;
         thread.detach();
+    }
+
+    fn applyOptionsFromConfig(self: *Self) void {
+        const svc = runtime.config orelse return;
+        const cfg = svc.get() catch return;
+        const p = self.priv();
+        p.applying_config = true;
+        defer p.applying_config = false;
+
+        p.show_hidden = cfg.PackageInstallShowHidden;
+        gtk.CheckButton.setActive(p.upgrade_check, @intFromBool(cfg.PackageInstallUpgrade));
+        gtk.CheckButton.setActive(p.show_hidden_check, @intFromBool(cfg.PackageInstallShowHidden));
+
+        p.show_explicit_only = cfg.PackageInstallShowExplicitOnly;
+        gtk.CheckButton.setActive(p.show_explicit_only_check, @intFromBool(cfg.PackageInstallShowExplicitOnly));
+
+        p.show_detail_pane = cfg.PackageInstallShowDetailPane;
+        gtk.CheckButton.setActive(p.show_detail_pane_check, @intFromBool(cfg.PackageInstallShowDetailPane));
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (cfg.PackageInstallShowDetailPane) 0 else 1);
+
+        const use_grid = cfg.PackageInstallView == .grid;
+        gtk.ToggleButton.setActive(p.grid_view_button, @intFromBool(use_grid));
+        gtk.ToggleButton.setActive(p.list_view_button, @intFromBool(!use_grid));
+        gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), @intFromBool(use_grid));
+        gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), @intFromBool(!use_grid));
+    }
+
+    fn updateConfigField(
+        comptime field: std.meta.FieldEnum(ShellyConfig),
+        value: std.meta.fieldInfo(ShellyConfig, field).type,
+    ) void {
+        const svc = runtime.config orelse return;
+        svc.updateField(field, value) catch |err| {
+            std.log.err("package page: failed to update config: {t}", .{err});
+        };
     }
 
     extern fn malloc_trim(pad: usize) c_int;
@@ -543,10 +685,13 @@ pub const PackagePage = extern struct {
             p.arena = null;
         }
 
+        p.resolver.deinit();
+        p.resolver = IconResolver.init(std.heap.c_allocator);
+
         _ = malloc_trim(0);
     }
 
-    fn load_worker(page: *Self, generation: u64) void {
+    fn load_worker(page: *Self, generation: u64, show_hidden: bool) void {
         const arena_ptr = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
         arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
 
@@ -564,8 +709,10 @@ pub const PackagePage = extern struct {
         //and looking to paralize this please consider
         //done sequentially as load times arnt heavily effected by it and its easier then paralizing atm.
         const cli = ShellyCli{ .allocator = alloc, .io = threaded.io() };
-        const parsed = cli.get_packages() catch |err| {
+        const parsed = cli.get_packages(show_hidden) catch |err| {
             std.debug.print("get_packages failed: {t}\n", .{err});
+            arena_ptr.deinit();
+            std.heap.c_allocator.destroy(arena_ptr);
             return;
         };
 
@@ -579,9 +726,18 @@ pub const PackagePage = extern struct {
 
         const installed = icli.get_installed_packages() catch null;
         if (installed) |inst| {
-            var set: std.StringHashMapUnmanaged(void) = .empty;
-            for (inst.value) |pkg| set.put(ialloc, pkg.Name, {}) catch {};
-            for (parsed.value) |*pkg| pkg.Installed = set.contains(pkg.Name);
+            var map: std.StringHashMapUnmanaged(*const Package) = .empty;
+            for (inst.value) |*pkg| {
+                map.put(ialloc, pkg.Name, pkg) catch {};
+            }
+            for (parsed.value) |*pkg| {
+                if (map.get(pkg.Name)) |ipkg| {
+                    pkg.Installed = true;
+                    pkg.Explicit = std.mem.eql(u8, ipkg.InstallReason, "Explicit");
+                } else {
+                    pkg.Installed = false;
+                }
+            }
         }
 
         var set: std.StringHashMapUnmanaged(void) = .empty;
@@ -596,7 +752,13 @@ pub const PackagePage = extern struct {
         post_result(page, parsed.value, list.items, arena_ptr, generation);
     }
 
-    fn post_result(page: *Self, packages: []Package, groups: []const []const u8, arena: *std.heap.ArenaAllocator, generation: u64) void {
+    fn post_result(
+        page: *Self,
+        packages: []Package,
+        groups: []const []const u8,
+        arena: *std.heap.ArenaAllocator,
+        generation: u64,
+    ) void {
         const result = std.heap.c_allocator.create(LoadResult) catch return;
         result.* = .{
             .page = page,
@@ -611,7 +773,6 @@ pub const PackagePage = extern struct {
     fn onLoadComplete(data: ?*anyopaque) callconv(.c) c_int {
         const result: *LoadResult = @ptrCast(@alignCast(data.?));
         const p = result.page.priv();
-
         if (result.generation != p.generation) {
             result.arena.deinit();
             std.heap.c_allocator.destroy(result.arena);
@@ -619,14 +780,9 @@ pub const PackagePage = extern struct {
             return 0;
         }
 
-        const page_alloc = (p.arena orelse {
-            result.arena.deinit();
-            std.heap.c_allocator.destroy(result.arena);
-            std.heap.c_allocator.destroy(result);
-            return 0;
-        }).allocator();
-
         if (result.index == 0) {
+            gio.ListStore.removeAll(p.list_store);
+
             const strings = gtk.StringList.new(null);
             gtk.StringList.append(strings, "Any");
             for (result.groups) |g| {
@@ -634,34 +790,33 @@ pub const PackagePage = extern struct {
                 gtk.StringList.append(strings, c_string.cstr(&buf, g));
             }
             gtk.DropDown.setModel(p.grouping_selection, strings.as(gio.ListModel));
+            strings.as(gobject.Object).unref();
             gtk.DropDown.setSelected(p.grouping_selection, 0);
         }
 
         const batch_size = 500;
         const end = @min(result.index + batch_size, result.packages.len);
         const n = end - result.index;
-
         var batch: [500]*gobject.Object = undefined;
         var i: usize = 0;
         for (result.packages[result.index..end]) |d| {
-            const pkg = PackageObject.new(page_alloc, d);
+            const pkg = PackageObject.new(d);
             batch[i] = pkg.as(gobject.Object);
             i += 1;
         }
-
         const pos = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
         gio.ListStore.splice(p.list_store, pos, 0, &batch, @intCast(n));
-
         for (batch[0..n]) |o| o.unref();
-
         result.index = end;
-
         if (result.index < result.packages.len) return 1;
 
         const page = result.page;
         result.arena.deinit();
         std.heap.c_allocator.destroy(result.arena);
         std.heap.c_allocator.destroy(result);
+
+        _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), 0, 1);
+
         hide_loading(page);
         return 0;
     }
@@ -699,6 +854,13 @@ pub const PackagePage = extern struct {
         .{ "list_view_button", @offsetOf(Private, "list_view_button") },
         .{ "grouping_selection", @offsetOf(Private, "grouping_selection") },
         .{ "detail_revealer", @offsetOf(Private, "detail_revealer") },
+        .{ "install_button", @offsetOf(Private, "install_button") },
+        .{ "cart_label", @offsetOf(Private, "cart_label") },
+        .{ "cart_items_box", @offsetOf(Private, "cart_items_box") },
+        .{ "upgrade_check", @offsetOf(Private, "upgrade_check") },
+        .{ "show_hidden_check", @offsetOf(Private, "show_hidden_check") },
+        .{ "show_explicit_only", @offsetOf(Private, "show_explicit_only_check") },
+        .{ "show_detail_pane", @offsetOf(Private, "show_detail_pane_check") },
     };
 
     pub const Class = extern struct {
@@ -716,34 +878,173 @@ pub const PackagePage = extern struct {
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "install_selected", @ptrCast(&install_selected));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_grid_view_toggled", @ptrCast(&on_grid_view_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_list_view_toggled", @ptrCast(&on_list_view_toggled));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_explicit_only", @ptrCast(&on_explicit_only));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_depends_only", @ptrCast(&on_depends_only));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_installed_only_toggled", @ptrCast(&on_installed_only_toggled));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_detail_pane", @ptrCast(&on_detail_pane));
         }
     };
 
-    fn install_selected(self: *Self) callconv(.c) void {
-        const dialog = ConfirmDialog.new(
-            "Install Packages",
-            "Install the selected packages?",
-            &on_install_response,
-            self,
-        );
-        dialog.setButtons("Install", "Cancel");
+    fn update_selection_ui(self: *Self) void {
+        const p = self.priv();
+        const model = p.list_store.as(gio.ListModel);
+        const n = gio.ListModel.getNItems(model);
 
-        if (support.getWindow(ShellyWindow, self)) |win| {
-            win.showLockout(dialog.as(gtk.Widget));
+        while (gtk.Widget.getFirstChild(p.cart_items_box.as(gtk.Widget))) |child| {
+            gtk.Box.remove(p.cart_items_box, child);
         }
+
+        var install_count: u32 = 0;
+        var remove_count: u32 = 0;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(model, i) orelse continue;
+            const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
+            if (!pkg.isSelected()) continue;
+
+            const installed = pkg.isInstalled();
+            if (installed) remove_count += 1 else install_count += 1;
+
+            const row_btn = gtk.Button.new();
+            gtk.Widget.addCssClass(row_btn.as(gtk.Widget), "flat");
+            gtk.Widget.setHexpand(row_btn.as(gtk.Widget), 1);
+            gtk.Widget.setTooltipText(row_btn.as(gtk.Widget), translations._("Remove from selection"));
+
+            const row = gtk.Box.new(.horizontal, 8);
+            gtk.Widget.setHexpand(row.as(gtk.Widget), 1);
+
+            const name_label = gtk.Label.new(pkg.getName());
+            gtk.Widget.setHalign(name_label.as(gtk.Widget), .start);
+            gtk.Widget.setHexpand(name_label.as(gtk.Widget), 1);
+            gtk.Label.setXalign(name_label, 0);
+            gtk.Label.setEllipsize(name_label, .end);
+            gtk.Label.setMaxWidthChars(name_label, 24);
+            gtk.Box.append(row, name_label.as(gtk.Widget));
+
+            const tag = gtk.Label.new(if (installed) translations._("remove") else translations._("install"));
+            gtk.Widget.addCssClass(tag.as(gtk.Widget), "caption");
+            gtk.Widget.addCssClass(tag.as(gtk.Widget), if (installed) "error" else "success");
+            gtk.Widget.setHalign(tag.as(gtk.Widget), .end);
+            gtk.Box.append(row, tag.as(gtk.Widget));
+
+            const x_icon = gtk.Image.newFromIconName("window-close-symbolic");
+            gtk.Image.setPixelSize(x_icon, 12);
+            gtk.Widget.setHalign(x_icon.as(gtk.Widget), .end);
+            gtk.Box.append(row, x_icon.as(gtk.Widget));
+
+            gtk.Button.setChild(row_btn, row.as(gtk.Widget));
+
+            gobject.Object.setData(row_btn.as(gobject.Object), "pkg", pkg);
+            gobject.Object.setData(row_btn.as(gobject.Object), "page", self);
+            _ = gtk.Button.signals.clicked.connect(row_btn, ?*anyopaque, &on_cart_item_clicked, null, .{});
+
+            gtk.Box.append(p.cart_items_box, row_btn.as(gtk.Widget));
+        }
+
+        if (install_count == 0 and remove_count == 0) {
+            const empty = gtk.Label.new(translations._("No packages selected"));
+            gtk.Widget.addCssClass(empty.as(gtk.Widget), "dim-label");
+            gtk.Widget.setHalign(empty.as(gtk.Widget), .start);
+            gtk.Box.append(p.cart_items_box, empty.as(gtk.Widget));
+        }
+
+        const total = install_count + remove_count;
+        var cart_buf: [32]u8 = undefined;
+        gtk.Label.setLabel(p.cart_label, std.fmt.bufPrintZ(&cart_buf, "{d} {s}", .{ total, translations._("Selected") }) catch translations._("0 Selected"));
+
+        const btn = p.install_button.as(gtk.Widget);
+        gtk.Widget.removeCssClass(btn, "suggested-action");
+        gtk.Widget.removeCssClass(btn, "destructive-action");
+
+        if (total == 0) {
+            gtk.Button.setLabel(p.install_button, translations._("Install Selected"));
+            gtk.Widget.setSensitive(btn, 0);
+            gtk.Widget.setTooltipText(btn, null);
+        } else if (install_count > 0 and remove_count > 0) {
+            gtk.Button.setLabel(p.install_button, translations._("Mixed selection"));
+            gtk.Widget.setSensitive(btn, 0);
+            gtk.Widget.setTooltipText(btn, translations._("Select only installed packages to remove, or only available ones to install."));
+        } else if (remove_count > 0) {
+            gtk.Button.setLabel(p.install_button, translations._("Remove Selected"));
+            gtk.Widget.setSensitive(btn, 1);
+            gtk.Widget.addCssClass(btn, "destructive-action");
+            gtk.Widget.setTooltipText(btn, null);
+        } else {
+            gtk.Button.setLabel(p.install_button, translations._("Install Selected"));
+            gtk.Widget.setSensitive(btn, 1);
+            gtk.Widget.addCssClass(btn, "suggested-action");
+            gtk.Widget.setTooltipText(btn, null);
+        }
+    }
+
+    fn on_cart_item_clicked(button: *gtk.Button, _: ?*anyopaque) callconv(.c) void {
+        const pkg_ptr = gobject.Object.getData(button.as(gobject.Object), "pkg") orelse return;
+        const pkg: *PackageObject = @ptrCast(@alignCast(pkg_ptr));
+        const page_ptr = gobject.Object.getData(button.as(gobject.Object), "page") orelse return;
+        const self: *Self = @ptrCast(@alignCast(page_ptr));
+
+        pkg.setSelected(false);
+        const p = self.priv();
+
+        if (p.check_map_grid.get(pkg)) |check| {
+            set_sync_active(check, false);
+        }
+        if (p.check_map_column.get(pkg)) |check| {
+            set_sync_active(check, false);
+        }
+        self.update_selection_ui();
+    }
+
+    fn install_selected(self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const model = p.list_store.as(gio.ListModel);
+        const n = gio.ListModel.getNItems(model);
+        var install_count: u32 = 0;
+        var remove_count: u32 = 0;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(model, i) orelse continue;
+            const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
+            if (!pkg.isSelected()) continue;
+            if (pkg.isInstalled()) remove_count += 1 else install_count += 1;
+        }
+
+        if (install_count == 0 and remove_count == 0) return;
+        if (install_count > 0 and remove_count > 0) return;
+        if (remove_count > 0) self.confirm_remove() else self.start_install();
     }
 
     fn on_grid_view_toggled(self: *Self) callconv(.c) void {
         const p = self.priv();
+        if (p.applying_config) return;
+        if (gtk.ToggleButton.getActive(p.grid_view_button) == 0) return;
         gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), 1);
         gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), 0);
+        updateConfigField(.PackageInstallView, ViewType.grid);
     }
 
     fn on_list_view_toggled(self: *Self) callconv(.c) void {
         const p = self.priv();
+        if (p.applying_config) return;
+        if (gtk.ToggleButton.getActive(p.list_view_button) == 0) return;
         gtk.Widget.setVisible(p.detail_hbox.as(gtk.Widget), 1);
         gtk.Widget.setVisible(p.detail_grid_hbox.as(gtk.Widget), 0);
+        updateConfigField(.PackageInstallView, ViewType.list);
+    }
+
+    fn on_upgrade_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        updateConfigField(.PackageInstallUpgrade, gtk.CheckButton.getActive(check) != 0);
+    }
+
+    fn on_show_hidden_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_hidden = active;
+        updateConfigField(.PackageInstallShowHidden, active);
+        if (p.loaded) self.reload();
     }
 
     fn on_installed_only_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
@@ -752,67 +1053,160 @@ pub const PackagePage = extern struct {
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 
-    fn on_install_response(ctx: ?*anyopaque, confirmed: bool) void {
+    fn on_explicit_only(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_explicit_only = active;
+        updateConfigField(.PackageInstallShowExplicitOnly, active);
+        gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+    }
+
+    fn on_depends_only(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_depends_only = active;
+        updateConfigField(.PackageInstallShowDependsOnly, active);
+        gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+    }
+
+    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_detail_pane = active;
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active) 0 else 1);
+        updateConfigField(.PackageInstallShowDetailPane, active);
+    }
+
+    fn confirm_remove(self: *Self) void {
+        const dialog = ConfirmDialog.new(
+            translations._("Remove Packages"),
+            translations._("Remove the selected packages?"),
+            &on_remove_response,
+            self,
+        );
+        dialog.setButtons(translations._("Remove"), translations._("Cancel"));
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.showLockout(dialog.as(gtk.Widget));
+        }
+    }
+
+    fn on_remove_response(ctx: ?*anyopaque, confirmed: bool) void {
         const self: *PackagePage = @ptrCast(@alignCast(ctx.?));
         if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
         if (!confirmed) return;
 
-        //     const p = self.priv();
+        const p = self.priv();
 
-        //     var names: std.ArrayListUnmanaged([]const u8) = .empty;
-        //     defer names.deinit(std.heap.c_allocator);
-        //     const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
-        //     var i: u32 = 0;
-        //     while (i < n) : (i += 1) {
-        //         const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
-        //         const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
-        //         if (pkg.isSelected()) names.append(std.heap.c_allocator, pkg.getName()) catch continue;
-        //     }
-        //     if (names.items.len == 0) return;
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
 
-        //     const op = std.heap.c_allocator.create(ShellyOperation) catch return;
-        //     op.* = ShellyOperation.init(std.heap.c_allocator, &on_op_event, &on_op_done, self);
-        //     op.io = op.threaded.io();
-        //     p.operation = op;
+        const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
+            const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
+            if (pkg.isSelected()) {
+                names.append(std.heap.c_allocator, pkg.getName()) catch continue;
+            }
+        }
+        if (names.items.len == 0) return;
 
-        //     op.install(names.items) catch {
-        //         std.debug.print("failed to start install\n", .{});
-        //         std.heap.c_allocator.destroy(op);
-        //         p.operation = null;
-        //     };
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "remove") catch return;
+        argv.append(std.heap.c_allocator, "standard") catch return;
+        for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
+
+        if (runtime.config) |cfg_service| {
+            if (cfg_service.get()) |cfg| {
+                if (!cfg.PackageManagementCascadeDelete) {
+                    argv.append(std.heap.c_allocator, "--no-cascade") catch return;
+                }
+                if (cfg.PackageManagementRemoveOptionalDeps) {
+                    argv.append(std.heap.c_allocator, "--opt-deps") catch return;
+                }
+                if (cfg.PackageManagementRemoveConfigs) {
+                    argv.append(std.heap.c_allocator, "--remove-config") catch return;
+                }
+            } else |_| {}
+        }
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = translations._("Removing packages"),
+                .argv = argv.items,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
     }
 
-    // fn on_op_event(ctx: *anyopaque, events: Event) void {
-    //     const self: *PackagePage = @ptrCast(@alignCast(ctx));
-    //     self.handleOperationEvent(events);
-    // }
+    fn start_install(self: *Self) void {
+        const p = self.priv();
 
-    // fn on_op_done(ctx: *anyopaque, exit_code: u8) void {
-    //     const self: *PackagePage = @ptrCast(@alignCast(ctx));
-    //     self.handleOperationDone(exit_code);
-    // }
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
 
-    // fn handleOperationEvent(self: *Self, events: Event) void {
-    //     _ = self;
-    //     switch (events) {
-    //         .info => |i| {
-    //             std.debug.print("[info] {s}: {s}\n", .{ i.event_type, i.message });
-    //         },
-    //         .err => |e| {
-    //             std.debug.print("[error] {s}\n", .{e.message});
-    //         },
-    //         .unknown => {},
-    //     }
-    // }
+        const n = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(p.list_store.as(gio.ListModel), i) orelse continue;
+            const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
+            if (pkg.isSelected()) {
+                names.append(std.heap.c_allocator, pkg.getName()) catch continue;
+            }
+        }
+        if (names.items.len == 0) return;
 
-    // fn handleOperationDone(self: *Self, exit_code: u8) void {
-    //     const p = self.priv();
-    //     std.debug.print("[done] exit={d}\n", .{exit_code});
-    //     if (p.operation) |op| {
-    //         if (op.reader) |t| t.join(); // wait for reader to fully exit
-    //         op.threaded.deinit();
-    //         std.heap.c_allocator.destroy(op);
-    //         p.operation = null;
-    //     }
-    // }
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(std.heap.c_allocator);
+        argv.append(std.heap.c_allocator, "install") catch return;
+        argv.append(std.heap.c_allocator, "standard") catch return;
+        for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
+        if (gtk.CheckButton.getActive(p.upgrade_check) != 0) {
+            argv.append(std.heap.c_allocator, "--upgrade") catch return;
+        }
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = translations._("Installing packages"),
+                .argv = argv.items,
+                .packages = names.items,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
+    }
+
+    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+        const self: *PackagePage = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+
+        const p = self.priv();
+        const model = p.list_store.as(gio.ListModel);
+        const n = gio.ListModel.getNItems(model);
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const obj = gio.ListModel.getObject(model, i) orelse continue;
+            const pkg = gobject.ext.cast(PackageObject, obj) orelse continue;
+            pkg.setSelected(false);
+        }
+
+        self.update_selection_ui();
+        self.reload();
+    }
+
+    fn reload(self: *Self) void {
+        const p = self.priv();
+        p.generation += 1;
+        show_loading(self);
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, p.show_hidden }) catch return;
+        thread.detach();
+    }
 };

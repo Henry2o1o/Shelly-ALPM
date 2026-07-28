@@ -83,7 +83,7 @@ const FlatpakPackage = struct {
     download_size: u64 = 0,
     installed_size: u64 = 0,
     permissions: []const []const u8 = &.{},
-    scope: Zigalpm.flatpak.bindings.libflatpak.Scope = .UNKNOWN,
+    scope: Zigalpm.flatpak.Scope = .unknown,
 };
 
 const StandardMode = enum { packages, repositories, groups, detail };
@@ -182,6 +182,8 @@ fn executeWithRunner(
     }
 
     const result = runner.call(runner.data, context, invocation) catch |err| {
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message|
+            return writeFailure(context, invocation, message);
         const message = switch (err) {
             error.NoPackageSpecified => "No package specified",
             error.PackageNotFound => try std.fmt.allocPrint(
@@ -239,6 +241,8 @@ fn runStandard(
     const group = optionEnabled(invocation, "--group");
     const show_hidden = optionEnabled(invocation, "--show-hidden");
     const query: ?[]const u8 = if (invocation.positionals.len == 0) null else invocation.positionals[0];
+    const depends = optionEnabled(invocation, "--depends");
+    const explicit = optionEnabled(invocation, "--explicit");
 
     if (!repositories and !available and !installed and !local and !detail) {
         installed = true;
@@ -271,7 +275,15 @@ fn runStandard(
         for (values) |value| {
             const name = value.name() orelse continue;
             if (!show_hidden and ignoredPackage(manager, name)) continue;
-            try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
+            if (depends and value.reason_value == .Dependency) {
+                try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
+                continue;
+            }
+            if (explicit and value.reason_value == .Explicit) {
+                try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
+                continue;
+            }
+            if (!explicit and !depends) try packages.append(context.allocator, try copyStandardPackage(context.allocator, value));
         }
     }
     if (available) {
@@ -291,8 +303,11 @@ fn runStandard(
     if (detail and !group) {
         const wanted = query orelse return error.NoPackageSpecified;
         for (packages.items) |package| {
-            if (std.ascii.eqlIgnoreCase(package.name, wanted))
-                return .{ .mode = .detail, .detail = package };
+            var pkg = package;
+            if (std.ascii.eqlIgnoreCase(package.name, wanted)) {
+                pkg.required_by = try manager.get_required_packages(package.name, package.repository);
+                return .{ .mode = .detail, .detail = pkg };
+            }
         }
         return error.PackageNotFound;
     }
@@ -367,6 +382,7 @@ fn runStandard(
 
     const limit: usize = @intCast(optionInteger(invocation, "--limit", 100));
     const page: usize = @intCast(optionInteger(invocation, "--page", 1));
+
     return .{
         .mode = .packages,
         .packages = try pageSlice(StandardPackage, context.allocator, selected.items, page, limit),
@@ -487,20 +503,20 @@ fn enrichFlatpakRemoteInfo(
     var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
     defer manager.deinit();
     for (packages) |*package| {
-        if (package.scope == .UNKNOWN or package.remote.len == 0 or package.id.len == 0) continue;
+        if (package.scope == .unknown or package.remote.len == 0 or package.id.len == 0) continue;
         const remote = try context.allocator.dupeZ(u8, package.remote);
         defer context.allocator.free(remote);
         const id = try context.allocator.dupeZ(u8, package.id);
         defer context.allocator.free(id);
-        const info = manager.get_remote_ref_info_flatpak(
+        var info = manager.get_remote_ref_info_flatpak(
             remote,
             id,
             "stable",
             package.scope,
         ) catch continue;
         defer info.deinit(context.allocator);
-        package.download_size = info.download_size();
-        package.installed_size = info.installed_size();
+        package.download_size = info.download_size;
+        package.installed_size = info.installed_size;
         package.permissions = try copySentinelStrings(context.allocator, info.permissions);
     }
 }

@@ -243,6 +243,22 @@ pub const Store = struct {
         }
     }
 
+    pub fn setCommitSha(
+        self: *Store,
+        package_name: []const u8,
+        source_index: usize,
+        commit_sha: []const u8,
+    ) !bool {
+        const entries = self.entries.getPtr(package_name) orelse return false;
+        if (source_index >= entries.*.len) return false;
+        const entry = &entries.*[source_index];
+        if (std.mem.eql(u8, entry.commit_sha, commit_sha)) return false;
+        const owned_commit_sha = try self.allocator.dupe(u8, commit_sha);
+        self.allocator.free(entry.commit_sha);
+        entry.commit_sha = owned_commit_sha;
+        return true;
+    }
+
     pub fn clean(self: *Store, installed_names: []const []const u8) void {
         var remove_names: std.ArrayList([]const u8) = .empty;
         defer remove_names.deinit(self.allocator);
@@ -384,6 +400,9 @@ test "VCS store round trips the C# compatible JSON shape and cleans orphans" {
     defer loaded.deinit();
     try loaded.loadPayload(payload);
     try std.testing.expectEqualStrings("main", loaded.get("demo-git")[0].branch);
+    try std.testing.expect(try loaded.setCommitSha("demo-git", 0, "abc123"));
+    try std.testing.expectEqualStrings("abc123", loaded.get("demo-git")[0].commit_sha);
+    try std.testing.expect(!(try loaded.setCommitSha("demo-git", 0, "abc123")));
     loaded.clean(&.{"demo-git"});
     try std.testing.expectEqual(@as(usize, 0), loaded.get("orphan-git").len);
 }

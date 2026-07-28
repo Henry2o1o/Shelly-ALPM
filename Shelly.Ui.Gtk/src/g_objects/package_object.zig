@@ -10,15 +10,16 @@ pub const PackageObject = extern struct {
     pub const Parent = gobject.Object;
 
     const Private = struct {
+        arena: ?*std.heap.ArenaAllocator,
         name: [:0]const u8,
         version: [:0]const u8,
         repository: [:0]const u8,
         description: [:0]const u8,
         groups: []const [:0]const u8,
+        explicit: bool,
         installed_size: i64,
         installed: bool,
         selected: bool,
-
         var offset: c_int = 0;
     };
 
@@ -36,36 +37,57 @@ pub const PackageObject = extern struct {
 
     fn init(self: *Self, _: *Class) callconv(.c) void {
         const p = self.priv();
+        p.arena = null;
         p.name = "";
         p.version = "";
         p.repository = "";
         p.description = "";
+        p.explicit = false;
+        p.groups = &.{};
         p.installed_size = 0;
         p.installed = false;
         p.selected = false;
     }
 
-    pub fn new(arena: std.mem.Allocator, package: Package) *Self {
+    pub fn new(package: Package) *Self {
         const self = gobject.ext.newInstance(Self, .{});
         const p = self.priv();
-        p.name = arena.dupeZ(u8, package.Name) catch "";
-        p.version = arena.dupeZ(u8, package.Version) catch "";
-        p.repository = arena.dupeZ(u8, package.Repository) catch "";
-        p.description = arena.dupeZ(u8, package.Description) catch "";
+
+        const arena = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return self;
+        arena.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        p.arena = arena;
+        const a = arena.allocator();
+
+        p.name = a.dupeZ(u8, package.Name) catch "";
+        p.version = a.dupeZ(u8, package.Version) catch "";
+        p.repository = a.dupeZ(u8, package.Repository) catch "";
+        p.description = a.dupeZ(u8, package.Description) catch "";
         p.installed_size = package.InstalledSize;
         p.installed = package.Installed;
+        p.explicit = package.Explicit;
         p.selected = false;
 
-        if (arena.alloc([:0]const u8, package.Groups.len)) |g| {
-            for (package.Groups, 0..) |src, i| {
-                g[i] = arena.dupeZ(u8, src) catch "";
-            }
+        if (a.alloc([:0]const u8, package.Groups.len)) |g| {
+            for (package.Groups, 0..) |src, i| g[i] = a.dupeZ(u8, src) catch "";
             p.groups = g;
         } else |_| {
             p.groups = &.{};
         }
-
         return self;
+    }
+
+    fn finalize(object: *gobject.Object) callconv(.c) void {
+        const self = gobject.ext.cast(Self, object) orelse {
+            Class.parent.f_finalize.?(object);
+            return;
+        };
+        const p = self.priv();
+        if (p.arena) |arena| {
+            arena.deinit();
+            std.heap.c_allocator.destroy(arena);
+            p.arena = null;
+        }
+        Class.parent.f_finalize.?(object);
     }
 
     pub fn getName(self: *Self) [:0]const u8 {
@@ -85,6 +107,9 @@ pub const PackageObject = extern struct {
     }
     pub fn isInstalled(self: *Self) bool {
         return self.priv().installed;
+    }
+    pub fn isExplicit(self: *Self) bool {
+        return self.priv().explicit;
     }
     pub fn isSelected(self: *Self) bool {
         return self.priv().selected;
@@ -106,7 +131,10 @@ pub const PackageObject = extern struct {
         var parent: *Parent.Class = undefined;
         pub const Instance = Self;
 
-        fn init(_: *Class) callconv(.c) void {}
+        fn init(class: *Class) callconv(.c) void {
+            const object_class = gobject.ext.as(gobject.Object.Class, class);
+            object_class.f_finalize = &finalize;
+        }
 
         pub fn as(class: *Class, comptime T: type) *T {
             return gobject.ext.as(T, class);

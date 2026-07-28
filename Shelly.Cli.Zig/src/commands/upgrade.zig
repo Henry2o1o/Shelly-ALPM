@@ -12,6 +12,7 @@ const runtime = @import("../runtime/context.zig");
 const elevation = @import("../runtime/elevation.zig");
 const xdg = @import("../runtime/xdg.zig");
 const spec = @import("../cli/spec.zig");
+const news = @import("news.zig");
 
 const standard_command_path = "shelly upgrade standard";
 const all_command_path = "shelly upgrade all";
@@ -206,6 +207,12 @@ fn buildAllUpgradePlan(
         try context.stdout.flush();
 
         var result = collector.call(collector.data, context, backend) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    try output.writeWarning(context, message);
+                    continue;
+                }
+            }
             try context.stdout.print("Error collecting {s} upgrades: {t}\n", .{
                 backend.displayName(),
                 err,
@@ -437,14 +444,14 @@ fn renderStandardUpgradePreview(
 fn confirmPreparedUpgrade(context: *runtime.RuntimeContext, prompt: []const u8) !bool {
     const reader = context.stdin orelse return false;
     while (true) {
-        try context.stdout.print("{s} (y/N) ", .{prompt});
+        try context.stdout.print("{s} (Y/n) ", .{prompt});
         try context.stdout.flush();
         const input = (try reader.takeDelimiter('\n')) orelse return false;
         const answer = std.mem.trim(u8, input, " \t\r\n");
-        if (answer.len == 0 or std.ascii.eqlIgnoreCase(answer, "n") or
-            std.ascii.eqlIgnoreCase(answer, "no")) return false;
-        if (std.ascii.eqlIgnoreCase(answer, "y") or
+        if (answer.len == 0 or std.ascii.eqlIgnoreCase(answer, "y") or
             std.ascii.eqlIgnoreCase(answer, "yes")) return true;
+        if (std.ascii.eqlIgnoreCase(answer, "n") or
+            std.ascii.eqlIgnoreCase(answer, "no")) return false;
         try context.stdout.writeAll("Please answer 'y' or 'n'.\n");
     }
 }
@@ -511,6 +518,7 @@ fn executeUi(
     runner: Runner,
 ) !u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
     var question_responder: ui_operation.QuestionResponder = .{
         .context = context,
@@ -530,6 +538,12 @@ fn executeUi(
     try ui_operation.flush(context);
 
     runSelected(runner, context, &operation_context, invocation) catch |err| {
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |unavailable| {
+            try output.writeErrorFrame(context, unavailable);
+            try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
+            try ui_operation.flush(context);
+            return 1;
+        }
         const message = try std.fmt.allocPrint(context.allocator, "Upgrade failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
@@ -564,6 +578,12 @@ fn runSelected(
     for (all_backends) |backend| {
         if (!backendEnabled(invocation, backend)) continue;
         runner.call(runner.data, context, operation_context, backend, invocation) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    reportBackendSkipped(operation_context, message);
+                    continue;
+                }
+            }
             failed = true;
             try reportBackendFailure(context, operation_context, backend, err);
         };
@@ -593,6 +613,16 @@ fn runStandard(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
+    if (!invocation.globals.ui_mode) {
+        const result = elevation.runAsInvokingUser(
+            context,
+            &.{ "news", "standard" },
+        ) catch null;
+
+        if (result == null) {
+            _ = news.showUnread(context) catch {};
+        }
+    }
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
@@ -604,7 +634,7 @@ fn runStandard(
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
 
-    try manager.sync(false);
+    try manager.sync(true);
     const updates = try manager.get_updates_available();
     defer Zigalpm.alpm.OwnedPackageWithUpdate.deinitSlice(context.allocator, updates);
     if (updates.len == 0) {
@@ -799,6 +829,19 @@ fn reportBackendFailure(
     });
     operation.reportError(err, message, "upgrade", null, true);
     operation.finish(.failed);
+}
+
+fn reportBackendSkipped(
+    operation_context: *Zigalpm.OperationContext,
+    reason: []const u8,
+) void {
+    var operation = operation_context.begin(.{
+        .backend = .flatpak,
+        .kind = .update,
+        .subject = "Flatpak",
+    });
+    operation.status(.warning, reason, "flatpak.backend_unavailable", null);
+    operation.finish(.success);
 }
 
 fn emitStatus(
@@ -1040,12 +1083,12 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "demo-git: 1.0 -> 1.1") != null);
     try std.testing.expectEqual(
         @as(usize, 2),
-        std.mem.count(u8, rendered, "Proceed with all upgrades? (y/N)"),
+        std.mem.count(u8, rendered, "Proceed with all upgrades? (Y/n)"),
     );
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Please answer 'y' or 'n'.") != null);
 }
 
-test "combined upgrade plan defaults to cancellation and no-confirm bypasses the prompt" {
+test "combined upgrade plan defaults to approval, supports decline, and no-confirm bypasses the prompt" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
@@ -1067,17 +1110,17 @@ test "combined upgrade plan defaults to cancellation and no-confirm bypasses the
     };
     const collector: PlanCollector = .{ .call = Capture.collect };
 
-    const declined = try parser.parse(arena.allocator(), &manifest, &.{
+    const defaulted = try parser.parse(arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
         "--no-aur",
         "--no-flatpak",
     });
-    try std.testing.expect(declined == .dispatch);
-    try std.testing.expect(!requiresElevation(&declined.dispatch));
-    try std.testing.expect(shouldPrepareAllPreview(&declined.dispatch, false));
-    var decline_stdin = std.Io.Reader.fixed("\n");
+    try std.testing.expect(defaulted == .dispatch);
+    try std.testing.expect(!requiresElevation(&defaulted.dispatch));
+    try std.testing.expect(shouldPrepareAllPreview(&defaulted.dispatch, false));
+    var default_stdin = std.Io.Reader.fixed("\n");
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
     var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -1085,13 +1128,26 @@ test "combined upgrade plan defaults to cancellation and no-confirm bypasses the
     var context: runtime.RuntimeContext = .{
         .allocator = arena.allocator(),
         .io = std.testing.io,
-        .stdin = &decline_stdin,
+        .stdin = &default_stdin,
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
+    const defaulted_preview = try prepareAllUpgradePreviewWithCollector(
+        &context,
+        &defaulted.dispatch,
+        collector,
+    );
+    try std.testing.expect(defaulted_preview.has_updates);
+    try std.testing.expect(defaulted_preview.proceed);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Proceed with all upgrades? (Y/n)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Upgrade cancelled.") == null);
+
+    stdout.writer.end = 0;
+    var decline_stdin = std.Io.Reader.fixed("n\n");
+    context.stdin = &decline_stdin;
     const declined_preview = try prepareAllUpgradePreviewWithCollector(
         &context,
-        &declined.dispatch,
+        &defaulted.dispatch,
         collector,
     );
     try std.testing.expect(declined_preview.has_updates);
@@ -1310,6 +1366,65 @@ test "upgrade all continues after a failed backend and returns failure" {
     try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AUR upgrade step failed") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
+}
+
+test "upgrade all treats an unavailable Flatpak backend as a warning" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    var calls: std.ArrayList(Backend) = .empty;
+    defer calls.deinit(std.testing.allocator);
+    const runner: Runner = .{
+        .data = &calls,
+        .call = struct {
+            fn run(
+                data: ?*anyopaque,
+                _: *runtime.RuntimeContext,
+                _: *Zigalpm.OperationContext,
+                backend: Backend,
+                _: *const parser.Invocation,
+            ) !void {
+                const captured: *std.ArrayList(Backend) =
+                    @ptrCast(@alignCast(data.?));
+                try captured.append(std.testing.allocator, backend);
+                if (backend == .flatpak)
+                    return error.FlatpakBackendUnavailable;
+            }
+        }.run,
+    };
+
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        try executeWithRunner(&context, &outcome.dispatch, runner),
+    );
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Install shelly-flatpak-backend and Flatpak",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        ":: Transaction complete.",
+    ) != null);
 }
 
 test "upgrade UI mode emits backend percentage frames" {

@@ -16,6 +16,11 @@ const appimage_command_path = "shelly list-updates appimage";
 const aur_command_path = "shelly list-updates aur";
 const flatpak_command_path = "shelly list-updates flatpak";
 
+// Update listings must not trust a cache file's local mtime as an HTTP
+// validator. Some repositories publish databases with an older Last-Modified
+// value, which can otherwise leave the user-owned planning database stale.
+const force_standard_database_refresh = true;
+
 pub const Backend = enum {
     standard,
     appimage,
@@ -212,6 +217,12 @@ fn executeAllWithRunner(
             backend,
             optionEnabled(invocation, "--show-hidden"),
         ) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    try writeBackendSkipped(context, invocation, message);
+                    continue;
+                }
+            }
             failed = true;
             try writeQueryFailure(context, invocation, backend, err);
             continue;
@@ -247,6 +258,15 @@ fn writeQueryFailure(
     backend: Backend,
     err: anyerror,
 ) !void {
+    if (backend == .flatpak) {
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+            if (invocation.globals.ui_mode)
+                try output.writeErrorFrame(context, message)
+            else
+                try output.writeFailure(context, message);
+            return;
+        }
+    }
     const message = try std.fmt.allocPrint(
         context.allocator,
         "Unable to query {s} updates: {t}",
@@ -260,6 +280,23 @@ fn writeQueryFailure(
     } else {
         try output.writeFailure(context, message);
     }
+}
+
+fn writeBackendSkipped(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    reason: []const u8,
+) !void {
+    const message = try std.fmt.allocPrint(
+        context.allocator,
+        "Skipping Flatpak updates. {s}",
+        .{reason},
+    );
+    defer context.allocator.free(message);
+    if (invocation.globals.ui_mode)
+        try output.writeWarningFrame(context, message)
+    else
+        try output.writeWarning(context, message);
 }
 
 fn writeStandardInfoFrame(context: *runtime.RuntimeContext, count: usize) !void {
@@ -667,7 +704,7 @@ fn runStandard(context: *runtime.RuntimeContext) !Result {
         database_path,
     );
     defer manager.deinit();
-    try manager.sync_for_update_check(false);
+    try manager.sync_for_update_check(force_standard_database_refresh);
     const native_updates = try manager.get_updates_available();
     defer Zigalpm.alpm.bindings.libalpm.OwnedPackageWithUpdate.deinitSlice(
         context.allocator,
@@ -717,7 +754,7 @@ fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
         .show_hidden_packages = show_hidden,
     });
     defer manager.deinit();
-    const native_updates = try manager.getPackagesNeedingUpdate(false);
+    const native_updates = try manager.getPackagesNeedingUpdate(true);
     defer Zigalpm.aur.models.Update.deinitSlice(context.allocator, native_updates);
 
     const arena = try context.allocator.create(std.heap.ArenaAllocator);
@@ -791,13 +828,10 @@ fn runFlatpak(context: *runtime.RuntimeContext) !Result {
     };
     defer manager.deinit();
     const native_updates = try manager.get_updates_flatpak();
-    defer {
-        for (native_updates) |native| {
-            native.deinitPermissions(context.allocator);
-            Zigalpm.flatpak.bindings.libflatpak.flatpak.g_object_unref(native.ptr);
-        }
-        context.allocator.free(native_updates);
-    }
+    defer Zigalpm.flatpak.InstalledRef.deinitSlice(
+        context.allocator,
+        native_updates,
+    );
 
     const arena = try context.allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(context.allocator);
@@ -808,25 +842,25 @@ fn runFlatpak(context: *runtime.RuntimeContext) !Result {
     const allocator = arena.allocator();
     const updates = try allocator.alloc(FlatpakUpdate, native_updates.len);
     for (native_updates, updates) |native, *update| {
-        const ref = try Zigalpm.flatpak.bindings.libflatpak.refToString(allocator, native.ptr);
+        const ref = try allocator.dupe(u8, native.reference);
         update.* = .{
-            .id = try allocator.dupe(u8, native.id()),
-            .name = try allocator.dupe(u8, native.name()),
-            .version = try allocator.dupe(u8, native.version()),
-            .arch = try allocator.dupe(u8, native.arch()),
-            .branch = try allocator.dupe(u8, native.branch()),
-            .latest_commit = try allocator.dupe(u8, native.last_commit()),
-            .summary = try allocator.dupe(u8, native.summary()),
-            .kind = native.kind(),
-            .remote = try allocator.dupe(u8, native.origin()),
-            .install_level = @intFromEnum(native.get_scope()),
+            .id = try allocator.dupe(u8, native.id),
+            .name = try allocator.dupe(u8, native.name),
+            .version = try allocator.dupe(u8, native.version),
+            .arch = try allocator.dupe(u8, native.arch),
+            .branch = try allocator.dupe(u8, native.branch),
+            .latest_commit = try allocator.dupe(u8, native.latest_commit),
+            .summary = try allocator.dupe(u8, native.summary),
+            .kind = @intFromEnum(native.kind),
+            .remote = try allocator.dupe(u8, native.origin),
+            .install_level = @intFromEnum(native.scope),
             .permissions = try dupeStrings(allocator, native.permissions),
-            .installed_size = native.installed_size(),
+            .installed_size = native.installed_size,
             .ref = ref,
             .full_ref = try std.fmt.allocPrint(
                 allocator,
                 "{s}:{s}",
-                .{ native.origin(), ref },
+                .{ native.origin, ref },
             ),
         };
     }
@@ -880,6 +914,10 @@ fn emptyTestResult(backend: Backend) Result {
         .aur => .{ .aur = .{ .items = &.{} } },
         .flatpak => .{ .flatpak = .{ .items = &.{} } },
     };
+}
+
+test "standard list-updates forces an unconditional database refresh" {
+    try std.testing.expect(force_standard_database_refresh);
 }
 
 test "list-updates routes long and short forms to each backend" {
@@ -1135,6 +1173,61 @@ test "bare list-updates shortcode continues after a backend failure" {
         stdout.writer.buffered(),
     );
     try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "Unable to query appimage updates") != null);
+}
+
+test "aggregate list-updates skips an unavailable Flatpak backend without failing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "-P", "--json" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const runner: Runner = .{
+        .call = struct {
+            fn run(
+                _: ?*anyopaque,
+                _: *runtime.RuntimeContext,
+                backend: Backend,
+                _: bool,
+            ) !Result {
+                if (backend == .flatpak)
+                    return error.FlatpakBackendUnavailable;
+                return emptyTestResult(backend);
+            }
+        }.run,
+    };
+
+    try std.testing.expectEqual(
+        @as(?u8, 0),
+        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+    );
+    try std.testing.expectEqualStrings(
+        "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}\n",
+        stdout.writer.buffered(),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stderr.writer.buffered(),
+        "Skipping Flatpak updates",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stderr.writer.buffered(),
+        "Install shelly-flatpak-backend and Flatpak",
+    ) != null);
 }
 
 test "list-updates forwards AUR show-hidden and ignores unsupported paths" {

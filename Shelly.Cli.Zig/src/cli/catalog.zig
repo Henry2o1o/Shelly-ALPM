@@ -1,9 +1,10 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 pub const binary = "shelly";
-pub const version = "2.4.1+4";
+pub const version = build_options.version;
 pub const informational_version = version;
-pub const root_description = "Shelly — a native, unified package manager for Arch Linux repository packages, the AUR, Flatpaks, and AppImages.";
+pub const root_description = "Shelly — a native, unified package manager for Arch Linux repository packages, the AUR, Flatpaks, and AppImages. A bare value searches standard repositories and the AUR, then prompts for a package to install.";
 
 pub const Argument = struct {
     name: []const u8,
@@ -45,6 +46,13 @@ pub const root_options = [_]Option{
     globalFlag("--ui-mode", &.{"-U"}, "Emit framed output for the Shelly UI"),
     globalFlag("--json", &.{"-j"}, "Output structured JSON where the command supports it"),
 };
+
+pub const root_arguments = [_]Argument{.{
+    .name = "query",
+    .minimumArity = 1,
+    .maximumArity = null,
+    .description = "Package search words used by the interactive standard/AUR install fallback",
+}};
 
 pub const Type = struct {
     name: []const u8,
@@ -106,6 +114,8 @@ pub const variants = [_]Variant{
                 .{ .name = "--show-hidden", .description = "Include packages hidden by pacman IgnorePkg configuration" },
                 .{ .name = "--detail", .description = "Show complete metadata for one exact ALPM package name" },
                 .{ .name = "--group", .description = "List package groups or restrict available packages to the requested group" },
+                .{ .name = "--explicit", .description = "Shows only explicitly installed pacakges" },
+                .{ .name = "--depends", .description = "Shows only dependency packages" },
             },
         },
     },
@@ -123,7 +133,7 @@ pub const variants = [_]Variant{
             }},
             .options = &.{
                 .{ .name = "--no-deps", .description = "Pass the ALPM nodeps transaction flag when installing repository packages" },
-                .{ .name = "--upgrade", .description = "Synchronize and upgrade the standard system before installing the requested repository packages" },
+                .{ .name = "--upgrade", .description = "After confirmation, synchronize and upgrade the standard system before installing the requested repository packages" },
             },
         },
     },
@@ -270,6 +280,7 @@ pub const variants = [_]Variant{
             .implementation = "Native Zig ownership repair; Zigalpm.PacfileManager pacdiff workflow; Markdown documentation and Bash/Fish/Zsh completion generators",
             .options = &.{
                 .{ .name = "--fix-permissions", .description = "Restore the invoking user's ownership of Shelly's configuration, cache, and data directories" },
+                .{ .name = "--repair-db", .description = "Remove a stale database lock" },
                 .{ .name = "--docs", .description = "Write Markdown CLI reference documentation to standard output" },
                 .{ .name = "--completions", .description = "Write a Bash, Fish, or Zsh completion script to standard output" },
                 .{ .name = "--pacfiles", .description = "Run the pacdiff-compatible pacnew, pacorig, and pacsave maintenance workflow" },
@@ -968,6 +979,7 @@ pub fn findActionByCode(action_code: u8) ?[]const u8 {
 fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8) []const Option {
     if (pathIs(action, type_name, "utility", "utility")) return &.{
         flag("--fix-permissions", &.{"-f"}, "Restore ownership of Shelly's user directories"),
+        flag("--repair-db", &.{"-r"}, "Remove a stale database lock"),
         flag("--docs", &.{"-d"}, "Generate Markdown CLI documentation"),
         .{
             .name = "--completions",
@@ -1008,6 +1020,8 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--show-hidden", &.{"-w"}, "Include packages hidden through IgnorePkg"),
         flag("--detail", &.{ "--info", "-d" }, "Show complete metadata for an exact package"),
         flag("--group", &.{"-g"}, "List groups or search within a group"),
+        flag("--explicit", &.{"-e"}, "Returns only explicitly installed packages"),
+        flag("--depends", &.{"-D"}, "Returns only dependency packages"),
     };
     if (pathIs(action, type_name, "search", "aur")) return &.{
         flag(
