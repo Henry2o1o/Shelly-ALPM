@@ -4,7 +4,7 @@ const std = @import("std");
 // --
 // Repo
 // --
-// ostree_repo_fsck_object()
+// ostree_repo_fsck_object() x
 // ostree_repo_delete_object()
 // ostree_repo_load_variant()
 // ostree_repo_load_commit()
@@ -35,6 +35,29 @@ pub const libostree = struct {
         return std.mem.span(ptr);
     }
 
+    pub const OstreeError = error{
+        NotFound,
+        InvalidObject,
+        IoError,
+        Unknown,
+    };
+
+    fn mapError(err: ?*ostree.GError) OstreeError!void {
+        if (err == null)
+            return error.Unknown;
+    
+        if (ostree.g_error_matches(err, ostree.G_IO_ERROR, ostree.G_IO_ERROR_NOT_FOUND) != 0)
+            return error.NotFound;
+    
+        if (ostree.g_error_matches(err, ostree.G_IO_ERROR, ostree.G_IO_ERROR_INVALID_DATA) != 0)
+            return error.InvalidObject;
+    
+        if (ostree.g_error_matches(err, ostree.G_IO_ERROR, ostree.G_IO_ERROR_FAILED) != 0)
+            return error.IoError;
+    
+        return error.Unknown;
+    }
+    
     pub const Repo = struct {
         ptr: *ostree.OstreeRepo,
 
@@ -47,6 +70,26 @@ pub const libostree = struct {
         pub fn path(self: Repo) ?*ostree.GFile {
             return ostree.ostree_repo_get_path(self.ptr);
         }
-        
+
+        pub fn fsckObject(
+            self: Repo, 
+            object_type: ostree.OstreeObjectType, 
+            checksum: [:0]const u8) OstreeError!void {
+
+                var err: ?*ostree.GError = null;
+
+                defer if (err) |e| ostree.g_error_free(e);
+
+                const ok = ostree.ostree_repo_fsck_object(
+                    self.ptr,
+                    object_type,
+                    checksum.ptr,
+                    null,
+                    &err,
+                );
+
+                if(ok == 0) try mapError(err);
+
+            }
     };
 };
