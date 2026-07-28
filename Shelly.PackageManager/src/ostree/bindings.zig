@@ -10,7 +10,7 @@ const std = @import("std");
 // ostree_repo_load_commit() x
 // ostree_repo_list_refs() x
 // ostree_repo_set_ref_immediate() x
-// ostree_repo_mark_commit_partial_reason()
+// ostree_repo_mark_commit_partial_reason() x
 // --
 // Commit traversal
 // ostree_repo_commit_traverse_iter_init_dirtree()
@@ -194,6 +194,24 @@ pub const libostree = struct {
                     &err,
                 );
                 if (ok == 0) try mapError(err);
-            }    
+            }
+        
+        pub fn markCommitPartialReason(
+            self: Repo,
+            checksum: [:0]const u8,
+            is_partial: bool,
+            in_state: ostree.OstreeRepoCommitState) OstreeError!void {
+                var err: ?*ostree.GError = null;
+                defer if (err) |e| ostree.g_error_free(e);
+        
+                const ok = ostree.ostree_repo_mark_commit_partial_reason(
+                    self.ptr,
+                    checksum.ptr,
+                    if (is_partial) 1 else 0,
+                    in_state,
+                    &err,
+                );
+                if (ok == 0) try mapError(err);
+            }        
         };
     };
