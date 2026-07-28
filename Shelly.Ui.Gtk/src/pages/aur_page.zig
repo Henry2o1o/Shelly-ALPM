@@ -395,17 +395,19 @@ pub const AurPage = extern struct {
 
     fn on_row_activated(_: *gtk.ColumnView, position: c_uint, self: *Self) callconv(.c) void {
         const p = self.priv();
+        const obj = gio.ListModel.getObject(p.selection.as(gio.ListModel), position) orelse return;
+        defer obj.unref();
+        const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
 
-        _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), position, @intCast(position + 1));
+        const new_state = !pkg.isSelected();
+        pkg.setSelected(new_state);
+        if (p.check_map.get(pkg)) |check| set_sync_active(check, new_state);
 
-        const obj = gtk.SingleSelection.getSelectedItem(p.selection) orelse return;
-        const pkg_obj = gobject.ext.cast(AurPackageObject, obj) orelse return;
-        pkg_obj.setSelected(true);
-
-        p.aur_detail.showPackage(pkg_obj.getPackage());
+        p.aur_detail.showPackage(pkg.getPackage());
         gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-    }
 
+        self.update_selection_ui();
+    }
     fn selection_count(self: *Self) u32 {
         const p = self.priv();
         const model = p.list_store.as(gio.ListModel);
