@@ -67,18 +67,33 @@ pub const flatpak = struct {
     pub const appstream_manager = @import("flatpak/appstream_manager.zig");
     pub const appstream_parser = @import("flatpak/appstream_parser.zig");
     pub const events = @import("flatpak/events.zig");
-    pub const bindings = @import("flatpak/bindings.zig");
+    pub const types = @import("flatpak/types.zig");
+    pub const backend_loader = @import("flatpak/backend_loader.zig");
+    pub const errors = @import("flatpak/errors.zig");
 
     pub const Manager = manager.Manager;
-    pub const InstalledApplication = manager.InstalledApplication;
-    pub const RunningInstance = manager.RunningInstance;
-    pub const UnusedDependency = manager.UnusedDependency;
+    pub const Scope = types.Scope;
+    pub const RefKind = types.RefKind;
+    pub const InstalledApplication = types.InstalledApplication;
+    pub const InstalledRef = types.InstalledRef;
+    pub const Ref = types.Ref;
+    pub const Remote = types.Remote;
+    pub const RemoteRef = types.RemoteRef;
+    pub const RunningInstance = types.RunningInstance;
+    pub const UnusedDependency = types.UnusedDependency;
     pub const RemoteManager = remote_manager.RemoteManager;
     pub const AppstreamManager = appstream_manager.AppstreamManager;
-    pub const AppstreamCatalog = appstream_manager.AppstreamCatalog;
+    pub const AppstreamCatalog = types.AppstreamCatalog;
     pub const AppstreamError = appstream_manager.Error;
     pub const AppstreamParser = appstream_parser.AppstreamParser;
-    pub const AppstreamApp = appstream_parser.AppstreamApp;
+    pub const AppstreamIcon = types.AppstreamIcon;
+    pub const AppstreamImage = types.AppstreamImage;
+    pub const AppstreamScreenshot = types.AppstreamScreenshot;
+    pub const AppstreamRelease = types.AppstreamRelease;
+    pub const AppstreamApp = types.AppstreamApp;
+    pub const BackendInfo = backend_loader.BackendInfo;
+    pub const BackendStatus = backend_loader.BackendStatus;
+    pub const backendStatus = backend_loader.backendStatus;
     pub const FlatpakEventDispatcher = events.Dispatcher;
     pub const FlatpakEventType = events.EventType;
     pub const FlatpakStatusArgs = events.StatusArgs;
@@ -448,7 +463,10 @@ test {
     _ = @import("alpm/pacfile_manager.zig");
     _ = @import("alpm/distribution-hooks/CachyOS/update_notice.zig");
     _ = @import("alpm/distribution-hooks/os_utilities.zig");
-    _ = @import("flatpak/bindings.zig");
+    _ = @import("flatpak/types.zig");
+    _ = @import("flatpak/backend_loader.zig");
+    _ = @import("flatpak/client.zig");
+    _ = @import("flatpak/errors.zig");
     _ = @import("flatpak/remote_manager.zig");
     _ = @import("flatpak/manager.zig");
     _ = @import("flatpak/appstream_manager.zig");
@@ -466,4 +484,14 @@ test {
     _ = @import("local/xdg_integration.zig");
     _ = @import("local/events.zig");
     _ = @import("operation_context");
+}
+
+test "Flatpak public facade does not expose generated native bindings" {
+    try std.testing.expect(!@hasDecl(flatpak, "bindings"));
+    try std.testing.expect(!@hasDecl(flatpak.manager, "bindings"));
+    _ = flatpak.Scope;
+    _ = flatpak.RefKind;
+    _ = flatpak.InstalledApplication;
+    _ = flatpak.InstalledRef;
+    _ = flatpak.Remote;
 }
