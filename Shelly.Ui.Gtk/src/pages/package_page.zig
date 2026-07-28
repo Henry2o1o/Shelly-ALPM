@@ -60,6 +60,7 @@ pub const PackagePage = extern struct {
         upgrade_check: *gtk.CheckButton,
         show_hidden_check: *gtk.CheckButton,
         show_explicit_only_check: *gtk.CheckButton,
+        show_depends_only_check: *gtk.CheckButton,
         show_detail_pane_check: *gtk.CheckButton,
         arena: ?*std.heap.ArenaAllocator,
         selected_group: [64]u8,
@@ -67,6 +68,7 @@ pub const PackagePage = extern struct {
         generation: u64,
         show_installed_only: bool,
         show_explicit_only: bool,
+        show_depends_only: bool,
         show_hidden: bool,
         show_detail_pane: bool,
 
@@ -535,6 +537,8 @@ pub const PackagePage = extern struct {
 
         if (p.show_installed_only and !pkg.isInstalled()) return 0;
 
+        if (p.show_depends_only and pkg.isExplicit()) return 0;
+
         if (p.show_explicit_only and !pkg.isExplicit()) return 0;
 
         if (p.search_len < 1) return 1;
@@ -856,6 +860,7 @@ pub const PackagePage = extern struct {
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_grid_view_toggled", @ptrCast(&on_grid_view_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_list_view_toggled", @ptrCast(&on_list_view_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_explicit_only", @ptrCast(&on_explicit_only));
+            gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_depends_only", @ptrCast(&on_depends_only));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_installed_only_toggled", @ptrCast(&on_installed_only_toggled));
             gtk.Widget.Class.bindTemplateCallbackFull(wc, "on_detail_pane", @ptrCast(&on_detail_pane));
         }
@@ -1035,6 +1040,15 @@ pub const PackagePage = extern struct {
         const active = gtk.CheckButton.getActive(check) != 0;
         p.show_explicit_only = active;
         updateConfigField(.PackageInstallShowExplicitOnly, active);
+        gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+    }
+
+    fn on_depends_only(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_depends_only = active;
+        updateConfigField(.PackageInstallShowDependsOnly, active);
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 
