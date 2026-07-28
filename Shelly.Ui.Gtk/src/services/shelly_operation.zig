@@ -294,7 +294,8 @@ pub const ShellyCommands = struct {
         if (name.len > 0) try argv.append(alloc, name);
         try argv.append(alloc, "--remote-url");
         try argv.append(alloc, url);
-        if (std.mem.eql(u8, scope, "system")) try argv.append(alloc, "--system");
+        if (!std.mem.eql(u8, scope, "system")) try argv.append(alloc, "--system");
+        if (!std.mem.eql(u8, scope, "system")) try argv.append(alloc, "false");
         return argv.toOwnedSlice(alloc);
     }
 
