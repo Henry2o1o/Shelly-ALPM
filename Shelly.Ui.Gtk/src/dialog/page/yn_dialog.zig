@@ -56,6 +56,11 @@ pub const ConfirmDialog = extern struct {
         return self;
     }
 
+    pub fn focusConfirm(self: *Self) void {
+        const p = self.priv();
+        _ = gtk.Widget.grabFocus(p.confirm_button.as(gtk.Widget));
+    }
+
     pub fn setButtons(self: *Self, confirm: [:0]const u8, cancel: [:0]const u8) void {
         const p = self.priv();
         gtk.Button.setLabel(p.confirm_button, confirm);
