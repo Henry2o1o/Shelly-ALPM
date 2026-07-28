@@ -8,7 +8,7 @@ const std = @import("std");
 // ostree_repo_delete_object() x
 // ostree_repo_load_variant() x
 // ostree_repo_load_commit() x
-// ostree_repo_list_refs()
+// ostree_repo_list_refs() x
 // ostree_repo_set_ref_immediate()
 // ostree_repo_mark_commit_partial_reason()
 // --
@@ -157,7 +157,25 @@ pub const libostree = struct {
                     .state = state,
                 };
             }
-        
     };
 
-};
+        pub fn listRefs(
+            self: Repo,
+            refspec_prefix: ?[:0]const u8) OstreeError!*ostree.GHashTable {
+                var refs: ?*ostree.GHashTable = null;
+                var err: ?*ostree.GError = null;
+        
+                defer if (err) |e| ostree.g_error_free(e);
+        
+                const ok = ostree.ostree_repo_list_refs(
+                    self.ptr,
+                    if (refspec_prefix) |p| p.ptr else null,
+                    &refs,
+                    null,
+                    &err,
+                );
+                if (ok == 0) try mapError(err);
+                return refs orelse error.Unknown;
+            }    
+    
+    };
