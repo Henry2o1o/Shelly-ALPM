@@ -107,6 +107,9 @@ pub const AurPage = extern struct {
 
         p.list_store = gio.ListStore.new(AurPackageObject.getGObjectType());
         p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
+        p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
+        gtk.SingleSelection.setAutoselect(p.selection, 0);
+        gtk.SingleSelection.setCanUnselect(p.selection, 1);
 
         gtk.ColumnView.setModel(p.package_grid, p.selection.as(gtk.SelectionModel));
 
