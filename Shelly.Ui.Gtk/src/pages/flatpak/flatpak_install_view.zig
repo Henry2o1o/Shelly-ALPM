@@ -850,7 +850,7 @@ pub const FlatpakInstallView = extern struct {
             gtk.Box.append(content, spacer.as(gtk.Widget));
 
             const open_link = gtk.LinkButton.newWithLabel(@ptrCast(entry.value_ptr.*.ptr), "");
-            gtk.Button.setIconName(open_link.as(gtk.Button), "web-browser");
+            gtk.Button.setIconName(open_link.as(gtk.Button), "insert-link-symbolic");
             gtk.Widget.setHalign(open_link.as(gtk.Widget), .end);
             gtk.Widget.setValign(open_link.as(gtk.Widget), .center);
             gtk.Widget.setTooltipText(open_link.as(gtk.Widget), translations._("Open link in browser"));
