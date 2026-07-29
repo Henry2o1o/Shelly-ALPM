@@ -202,6 +202,7 @@ pub const PackagePage = extern struct {
                 const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
                 const label = gtk.Label.new("");
                 gtk.Widget.setHalign(label.as(gtk.Widget), halign);
+                gtk.Label.setEllipsize(label, .end);
                 gtk.ColumnViewCell.setChild(cell, label.as(gtk.Widget));
             }
 
@@ -234,7 +235,7 @@ pub const PackagePage = extern struct {
 
                 const label = gtk.Label.new("");
                 gtk.Widget.setHalign(label.as(gtk.Widget), .start);
-                gtk.Label.setEllipsize(label, .end);
+
                 gtk.Box.append(box, label.as(gtk.Widget));
 
                 const installed_icon = gtk.Image.newFromIconName("object-select-symbolic");
@@ -420,7 +421,7 @@ pub const PackagePage = extern struct {
 
                 const frame = gtk.Frame.new(null);
                 gtk.Frame.setChild(frame, content_grid.as(gtk.Widget));
-                gtk.Widget.setSizeRequest(frame.as(gtk.Widget), 300, -1);
+                gtk.Widget.setSizeRequest(frame.as(gtk.Widget), 275, -1);
                 gtk.Widget.setHexpand(frame.as(gtk.Widget), 0);
                 gtk.Widget.setHalign(frame.as(gtk.Widget), .fill);
                 gtk.Widget.setMarginStart(frame.as(gtk.Widget), 3);

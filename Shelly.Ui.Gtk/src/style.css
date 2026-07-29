@@ -190,3 +190,7 @@
 .dep-row-static {
     padding: 6px 8px;
 }
+
+.list {
+  background: none;
+}
