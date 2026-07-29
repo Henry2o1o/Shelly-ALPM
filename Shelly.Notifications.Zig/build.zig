@@ -10,6 +10,9 @@ pub fn build(b: *std.Build) void {
     });
     const zsn_mod = zsn_dep.module("zsn");
 
+    const zeit_dep = b.dependency("zeit", .{ .target = target, .optimize = optimize });
+    const zeit_mod = zeit_dep.module("zeit");
+
     const exe = b.addExecutable(.{
         .name = "shelly-notifications",
         .root_module = b.createModule(.{
@@ -18,6 +21,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zsn", .module = zsn_mod },
+                .{ .name = "zeit", .module = zeit_mod },
             },
         }),
     });
