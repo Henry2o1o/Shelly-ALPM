@@ -267,7 +267,7 @@ SCRIPT
 
 package_shelly-flatpak-backend() {
   pkgdesc="Optional native Flatpak backend for Shelly"
-  depends=("shelly=${pkgver}-${pkgrel}" 'flatpak')
+  depends=("shelly=${pkgver}" 'flatpak')
   provides=("shelly-flatpak-backend=${pkgver}")
   conflicts=('shelly-flatpak-backend-git' 'shelly-flatpak-backend-bin')
 
