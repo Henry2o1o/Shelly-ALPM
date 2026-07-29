@@ -174,12 +174,6 @@
         <property name="margin-start">12</property>
         <property name="margin-end">12</property>
         <child>
-          <object class="GtkCheckButton" id="chroot_check">
-            <property name="label" translatable="yes">Use chroot</property>
-            <property name="tooltip-text" translatable="yes">Build packages in a clean chroot environment</property>
-          </object>
-        </child>
-        <child>
           <object class="GtkCheckButton" id="run_checks_check">
             <property name="label" translatable="yes">Run checks</property>
             <property name="tooltip-text" translatable="yes">Run the --check function during package build</property>
