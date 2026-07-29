@@ -17,6 +17,7 @@ const c_string = @import("../helpers/c_string.zig");
 const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const ViewType = @import("../models/shelly_config.zig").ViewType;
 const RecommendCategory = @import("../models/recommendation.zig").RecommendCategory;
+const sorters = @import("../helpers/sorters.zig");
 const recommendations = @import("../services/recommendations.zig");
 const translations = @import("../helpers/translations.zig");
 
@@ -126,7 +127,6 @@ pub const PackagePage = extern struct {
         p.show_explicit_only = false;
         p.show_hidden = false;
         p.show_detail_pane = false;
-
         p.check_map_grid = .empty;
         p.check_map_column = .empty;
 
@@ -138,16 +138,22 @@ pub const PackagePage = extern struct {
 
         p.filter = gtk.CustomFilter.new(&filter_func, self, null);
         p.filter_model = gtk.FilterListModel.new(p.list_store.as(gio.ListModel), p.filter.as(gtk.Filter));
-        p.selection = gtk.SingleSelection.new(p.filter_model.as(gio.ListModel));
+
+        const sort_model = gtk.SortListModel.new(p.filter_model.as(gio.ListModel), null);
+
+        p.selection = gtk.SingleSelection.new(sort_model.as(gio.ListModel));
+        gtk.SingleSelection.setAutoselect(p.selection, 0);
+        gtk.SingleSelection.setCanUnselect(p.selection, 1);
 
         gtk.ColumnView.setModel(p.column_view, p.selection.as(gtk.SelectionModel));
-
         gtk.GridView.setModel(p.grid_view, p.selection.as(gtk.SelectionModel));
+
+        gtk.SortListModel.setSorter(sort_model, gtk.ColumnView.getSorter(p.column_view));
+
         gtk.GridView.setMaxColumns(p.grid_view, 4);
         gtk.GridView.setMinColumns(p.grid_view, 1);
 
         setup_grid_factory(self, p.grid_view);
-
         setup_name_column(self, p.name_column);
         setup_signal_text_label_column(p.version_column, &PackageObject.getVersion, gtk.Align.start);
         setup_signal_text_label_column(p.repository_column, &PackageObject.getRepository, gtk.Align.start);
@@ -176,9 +182,18 @@ pub const PackagePage = extern struct {
         _ = gtk.CheckButton.signals.toggled.connect(p.upgrade_check, *Self, &on_upgrade_toggled, self, .{});
         _ = gtk.CheckButton.signals.toggled.connect(p.show_hidden_check, *Self, &on_show_hidden_toggled, self, .{});
 
-        applyOptionsFromConfig(self);
+        attachSorter(p.name_column, sorters.stringSorter(PackageObject, &PackageObject.getName));
+        attachSorter(p.size_column, sorters.numericSorter(PackageObject, &PackageObject.getInstalledSize));
+        attachSorter(p.repository_column, sorters.stringSorter(PackageObject, &PackageObject.getRepository));
+        attachSorter(p.version_column, sorters.stringSorter(PackageObject, &PackageObject.getVersion));
 
+        applyOptionsFromConfig(self);
         support.connectLifecycle(Self, self);
+    }
+
+    fn attachSorter(column: *gtk.ColumnViewColumn, sorter: *gtk.Sorter) void {
+        gtk.ColumnViewColumn.setSorter(column, sorter);
+        sorter.as(gobject.Object).unref();
     }
 
     fn setup_signal_text_label_column(column: *gtk.ColumnViewColumn, comptime getter: *const fn (*PackageObject) [:0]const u8, comptime halign: gtk.Align) void {
@@ -334,6 +349,7 @@ pub const PackagePage = extern struct {
         const c = struct {
             fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, self_setup: *Self) callconv(.c) void {
                 const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
+                gtk.ListItem.setActivatable(list_item, 1);
 
                 const content_grid = gtk.Grid.new();
                 gtk.Widget.setMarginStart(content_grid.as(gtk.Widget), 10);
@@ -798,6 +814,9 @@ pub const PackagePage = extern struct {
         result.arena.deinit();
         std.heap.c_allocator.destroy(result.arena);
         std.heap.c_allocator.destroy(result);
+
+        _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), 0, 1);
+
         hide_loading(page);
         return 0;
     }
@@ -1100,6 +1119,20 @@ pub const PackagePage = extern struct {
         argv.append(std.heap.c_allocator, "remove") catch return;
         argv.append(std.heap.c_allocator, "standard") catch return;
         for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
+
+        if (runtime.config) |cfg_service| {
+            if (cfg_service.get()) |cfg| {
+                if (!cfg.PackageManagementCascadeDelete) {
+                    argv.append(std.heap.c_allocator, "--no-cascade") catch return;
+                }
+                if (cfg.PackageManagementRemoveOptionalDeps) {
+                    argv.append(std.heap.c_allocator, "--opt-deps") catch return;
+                }
+                if (cfg.PackageManagementRemoveConfigs) {
+                    argv.append(std.heap.c_allocator, "--remove-config") catch return;
+                }
+            } else |_| {}
+        }
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{

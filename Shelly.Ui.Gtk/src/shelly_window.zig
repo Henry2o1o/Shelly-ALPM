@@ -13,12 +13,14 @@ const RecommendPage = @import("pages/recommend_page.zig").RecommendPage;
 const WelcomePage = @import("pages/welcome.zig").WelcomePage;
 const SupportPage = @import("pages/support.zig");
 const SettingsPage = @import("pages/settings_page.zig").SettingsPage;
+const UtilitiesPage = @import("pages/utilities_page.zig").UtilitiesPage;
 const TransactionPage = @import("pages/transaction_page.zig").TransactionPage;
 const TransactionRequest = @import("pages/transaction_page.zig").TransactionRequest;
 const runtime = @import("services/runtime.zig");
 const NavMode = @import("models/shelly_config.zig").NavMode;
 const ShellyTabs = @import("models/shelly_config.zig").ShellyTabs;
 const translations = @import("helpers/translations.zig");
+const ConfirmDialog = @import("dialog/page/yn_dialog.zig").ConfirmDialog;
 
 const NavButton = struct {
     button: *gtk.Button,
@@ -262,6 +264,7 @@ pub const ShellyWindow = extern struct {
         const menu_box = gtk.Box.new(.vertical, 4);
         const utils_btn = gtk.Button.newWithLabel(translations._("Utilities"));
         gtk.Widget.addCssClass(utils_btn.as(gtk.Widget), "flat");
+        _ = gtk.Button.signals.clicked.connect(utils_btn, *ShellyWindow, &on_utilities, self, .{});
         gtk.Box.append(menu_box, utils_btn.as(gtk.Widget));
         const sp_btn = gtk.Button.newWithLabel(translations._("Settings"));
         gtk.Widget.addCssClass(sp_btn.as(gtk.Widget), "flat");
@@ -310,6 +313,7 @@ pub const ShellyWindow = extern struct {
         const menu_box = gtk.Box.new(.vertical, 4);
         const utils_btn = gtk.Button.newWithLabel(translations._("Utilities"));
         gtk.Widget.addCssClass(utils_btn.as(gtk.Widget), "flat");
+        _ = gtk.Button.signals.clicked.connect(utils_btn, *ShellyWindow, &on_utilities, self, .{});
         gtk.Box.append(menu_box, utils_btn.as(gtk.Widget));
         const sp_btn = gtk.Button.newWithLabel(translations._("Settings"));
         gtk.Widget.addCssClass(sp_btn.as(gtk.Widget), "flat");
@@ -454,6 +458,14 @@ pub const ShellyWindow = extern struct {
         }
     }
 
+    fn on_utilities(btn: *gtk.Button, self: *ShellyWindow) callconv(.c) void {
+        const p = self.private();
+        gtk.Stack.setVisibleChildName(p.content_stack, "utilities");
+        if (gtk.Widget.getAncestor(btn.as(gtk.Widget), gtk.Popover.getGObjectType())) |pop| {
+            gtk.Popover.popdown(@ptrCast(@alignCast(pop)));
+        }
+    }
+
     fn populate_stack(self: *ShellyWindow) void {
         const stack = self.private().content_stack;
 
@@ -484,6 +496,10 @@ pub const ShellyWindow = extern struct {
         const sp = SettingsPage.new();
         const sp_page = gtk.Stack.addTitled(stack, sp.as(gtk.Widget), "settings", translations._("Settings"));
         gtk.StackPage.setIconName(sp_page, SettingsPage.icon_name);
+
+        const up_utils = UtilitiesPage.new();
+        const up_utils_page = gtk.Stack.addTitled(stack, up_utils.as(gtk.Widget), "utilities", translations._("Utilities"));
+        gtk.StackPage.setIconName(up_utils_page, UtilitiesPage.icon_name);
     }
 
     pub fn showLockout(self: *ShellyWindow, content: *gtk.Widget) void {
@@ -492,15 +508,31 @@ pub const ShellyWindow = extern struct {
             gtk.Box.remove(p.lockout_content, c);
         }
         gtk.Box.append(p.lockout_content, content);
+
+        gtk.Widget.setSensitive(p.content_stack.as(gtk.Widget), 0);
+        if (p.rail) |r| gtk.Widget.setSensitive(r.as(gtk.Widget), 0);
+        if (p.topnav) |t| gtk.Widget.setSensitive(t.as(gtk.Widget), 0);
+
         gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 1);
+
+        if (gobject.ext.cast(ConfirmDialog, content)) |dlg| {
+            dlg.focusConfirm();
+        } else {
+            _ = gtk.Widget.grabFocus(content);
+        }
     }
 
     pub fn hideLockout(self: *ShellyWindow) void {
         const p = self.private();
+        gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 0);
+
+        gtk.Widget.setSensitive(p.content_stack.as(gtk.Widget), 1);
+        if (p.rail) |r| gtk.Widget.setSensitive(r.as(gtk.Widget), 1);
+        if (p.topnav) |t| gtk.Widget.setSensitive(t.as(gtk.Widget), 1);
+
         while (gtk.Widget.getFirstChild(p.lockout_content.as(gtk.Widget))) |c| {
             gtk.Box.remove(p.lockout_content, c);
         }
-        gtk.Widget.setVisible(p.lockout_overlay.as(gtk.Widget), 0);
     }
 
     pub fn startTransaction(self: *ShellyWindow, request: TransactionRequest) void {

@@ -4,7 +4,6 @@ const glib = bindings.glib;
 const JsonPackFrame = @import("../helpers/ui_decode.zig").JsonPackFrame;
 const Scope = @import("../models/flatpak.zig").InstallLevel;
 const UpdateType = @import("../models/appimage.zig").UpdateType;
-const TrayDBus = @import("dbus.zig").TrayDBus;
 const builtin = @import("builtin");
 const runtime = @import("runtime.zig");
 
@@ -334,6 +333,15 @@ pub const ShellyCommands = struct {
         return argv.toOwnedSlice(alloc);
     }
 
+    pub fn clean_cache(alloc: std.mem.Allocator, keep_str: []const u8) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "purify");
+        try argv.append(alloc, "standard");
+        try argv.append(alloc, "--cache");
+        try argv.append(alloc, keep_str);
+        return argv.toOwnedSlice(alloc);
+    }
+
     pub fn install_aur(alloc: std.mem.Allocator, names: []const []const u8) ![]const []const u8 {
         var argv: std.ArrayListUnmanaged([]const u8) = .empty;
         try argv.append(alloc, "install");
@@ -500,9 +508,7 @@ pub const ShellyOperation = struct {
             .exited => |c| @intCast(c),
             else => 255,
         };
-        var tray = TrayDBus{};
-        defer tray.deinit();
-        tray.updatesMadeInUi();
+
         post_done(self, code);
     }
 
