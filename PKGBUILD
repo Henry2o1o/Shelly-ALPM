@@ -13,7 +13,8 @@ makedepends=('git' 'zig>=0.16' 'clang' 'gettext' 'vala' 'meson' 'ninja' 'flatpak
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Seafoam-Labs/Shelly-ALPM/archive/v${pkgver}.tar.gz")
 
 sha256sums=('5ee0f766be084f50d8967cb2f1e0fee0d1d8d652bae98a0bf38bcdc38305b8b5')
-_source_dir="Shelly-ALPM-${pkgver}"
+# GitHub replaces "+" with "-" in archive top-level directory names.
+_source_dir="Shelly-ALPM-${pkgver//+/-}"
 
 build() {
   cd "$srcdir/${_source_dir}"
