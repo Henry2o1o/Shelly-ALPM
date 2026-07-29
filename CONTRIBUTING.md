@@ -9,21 +9,14 @@ Shelly is organized into several interconnected projects:
 
 ### Core Components
 
-| Project                  | Description                                                                                                    |
-|--------------------------|----------------------------------------------------------------------------------------------------------------|
-| **Shelly-UI**            | The main Avalonia-based desktop application providing a graphical interface for package management             |
-| **Shelly-CLI**           | Command-line interface for terminal-based package management, also used by Shelly-UI for privileged operations |
-| **Shelly-Notifications** | Application to handle tray services and notifications. Communicates with Shelly-UI.                            |
-| **Shelly.PackageManager** | Core libalpm/AUR/AppImage library and backend-neutral Flatpak facade                                          |
-| **Shelly.Flatpak.Backend** | Optional ABI-versioned shared library containing generated libflatpak bindings and native operations          |
-| **Shelly.Utilities**     | Shared utility classes and extensions used across projects                                                     |
-
-### Test Projects
-
-| Project                  | Description                                               |
-|--------------------------|-----------------------------------------------------------|
-| **PackageManager.Tests** | Tests for ALPM bindings, AUR functionality, and utilities |
-| **Shelly-UI.Tests**      | Tests for UI services, ViewModels, and Views              |
+| Project                             | Description                                                                                           |
+|-------------------------------------|-------------------------------------------------------------------------------------------------------|
+| **Shelly.UI.GTK**                   | GTK UI Frontend                                                                                       |
+| **Shelly.CLI.Zig**                  | Command-line interface for terminal-based package management                                          |
+| **Shelly-Notifications**            | Application to handle tray services and notifications.                                                |
+| **Shelly.PackageManager**           | Core libalpm/AUR/AppImage library and backend-neutral Flatpak facade                                  |
+| **Shelly.Flatpak.Backend**          | Optional ABI-versioned shared library containing generated libflatpak bindings and native operations  |
+| **Shelly.Utilities**                | Shared utility classes and extensions used across projects                                            |
 
 ## How Components Interact
 
