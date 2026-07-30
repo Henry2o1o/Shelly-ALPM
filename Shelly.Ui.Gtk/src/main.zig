@@ -18,20 +18,19 @@ pub fn main(init: std.process.Init) void {
     if (!translations.init()) {
         std.log.warn("translations: failed to initialize gettext", .{});
     }
-
     IconDownloadService(std.heap.c_allocator, runtime.io);
 
     const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();
-
     const gapp = gobject.ext.as(gio.Application, app);
 
-    const registered = gio.Application.register(gapp, null, null);
-    std.debug.print("registered = {}\n", .{registered});
-    std.debug.print("is_remote = {}\n", .{
-        gio.Application.getIsRemote(gapp),
-    });
-
+    _ = gio.Application.signals.startup.connect(
+        app,
+        ?*anyopaque,
+        &startup,
+        null,
+        .{},
+    );
     _ = gio.Application.signals.activate.connect(
         app,
         ?*anyopaque,
@@ -41,9 +40,7 @@ pub fn main(init: std.process.Init) void {
     );
 
     const status = gio.Application.run(gapp, 0, null);
-
     tryStopTray(runtime.io, std.heap.c_allocator);
-
     runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
 }
@@ -54,6 +51,25 @@ fn tryStopTray(io: std.Io, alloc: std.mem.Allocator) void {
         if (svc.get() catch null) |cfg| should_stop = !cfg.TrayEnabled;
     }
     if (should_stop) _ = tray_service.end(io, alloc);
+}
+
+fn quitActivated(_: *gio.SimpleAction, _: ?*glib.Variant, app: *gtk.Application) callconv(.c) void {
+    app.as(gio.Application).quit();
+}
+
+fn startup(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
+    const quit_action = gio.SimpleAction.new("quit", null);
+    defer quit_action.unref();
+    _ = gio.SimpleAction.signals.activate.connect(
+        quit_action,
+        *gtk.Application,
+        &quitActivated,
+        app,
+        .{},
+    );
+    app.as(gio.ActionMap).addAction(quit_action.as(gio.Action));
+    const accels = [_:null]?[*:0]const u8{ "<Control>q", "<Control>w", null };
+    gtk.Application.setAccelsForAction(app, "app.quit", &accels);
 }
 
 fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
@@ -81,6 +97,8 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
 
     tryStartTray(runtime.io, std.heap.c_allocator);
 
+     setupGnomeThemePreference();
+
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }
@@ -91,6 +109,44 @@ fn tryStartTray(io: std.Io, alloc: std.mem.Allocator) void {
         if (!cfg.TrayEnabled) return;
     }
     tray_service.start(io, alloc);
+}
+
+fn setupGnomeThemePreference() void {
+    const desktop = runtime.environ_map.get("XDG_CURRENT_DESKTOP") orelse return;
+
+    std.debug.print("desktop = {s}\n", .{desktop});
+
+    if (!std.mem.containsAtLeast(u8, desktop, 1, "GNOME")) {
+        return;
+    }
+
+    const settings = gio.Settings.new("org.gnome.desktop.interface");
+
+    const scheme = settings.getString("color-scheme");
+
+    const prefer_dark = std.mem.eql(u8, std.mem.span(scheme), "prefer-dark");
+
+    std.debug.print("prefer_dark = {}\n", .{prefer_dark});
+
+    if (prefer_dark) {
+        const gtk_settings = gtk.Settings.getDefault() orelse {
+            std.debug.print("Failed to fetch GtkSettings layout.\n", .{});
+            return;
+        };
+        const base_object = @as(*gobject.Object, @ptrCast(@alignCast(gtk_settings)));
+        var value = std.mem.zeroes(gobject.Value);
+        const bool_type = gobject.typeFromName("gboolean");
+        _ = value.init(bool_type);
+        value.setBoolean(1);
+        base_object.setProperty("gtk-application-prefer-dark-theme", &value);
+    }
+
+
+    _ = glib.setenv(
+        "GTK_APPLICATION_PREFER_DARK_THEME",
+        if (prefer_dark) "1" else "0",
+        1,
+    );
 }
 
 test {
