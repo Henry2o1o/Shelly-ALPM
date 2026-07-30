@@ -48,6 +48,8 @@ pub const ShellyWindow = extern struct {
         topnav: ?*gtk.Box,
         chevron_img: ?*gtk.Image,
         nav_buttons: std.ArrayListUnmanaged(*NavButton),
+        prev_page: ?[*:0]const u8 = null,
+        transaction_page: ?*TransactionPage = null,
         collapsed: bool,
         nav_mode: NavMode,
         pending_nav: NavMode,
@@ -535,9 +537,31 @@ pub const ShellyWindow = extern struct {
     }
 
     pub fn startTransaction(self: *ShellyWindow, request: TransactionRequest) void {
+        const p = self.private();
+        if (gtk.Stack.getVisibleChildName(p.content_stack)) |name| {
+            p.prev_page = name;
+        }
         const tp = TransactionPage.new();
-        self.showLockout(tp.as(gtk.Widget));
+        _ = gtk.Stack.addNamed(p.content_stack, tp.as(gtk.Widget), "transaction");
+        p.transaction_page = tp;
+        gtk.Stack.setVisibleChildName(p.content_stack, "transaction");
+        if (p.rail) |r| gtk.Widget.setSensitive(r.as(gtk.Widget), 0);
+        if (p.topnav) |t| gtk.Widget.setSensitive(t.as(gtk.Widget), 0);
         tp.run(request);
+    }
+
+    pub fn hideTransaction(self: *ShellyWindow) void {
+        const p = self.private();
+        if (p.rail) |r| gtk.Widget.setSensitive(r.as(gtk.Widget), 1);
+        if (p.topnav) |t| gtk.Widget.setSensitive(t.as(gtk.Widget), 1);
+        if (p.prev_page) |prev| {
+            gtk.Stack.setVisibleChildName(p.content_stack, prev);
+        }
+        p.prev_page = null;
+        if (p.transaction_page) |tp| {
+            gtk.Stack.remove(p.content_stack, tp.as(gtk.Widget));
+            p.transaction_page = null;
+        }
     }
 
     const template_children = .{

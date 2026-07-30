@@ -474,6 +474,7 @@ pub const TransactionPage = extern struct {
         append_terminal(self, msg);
 
         setLabel(p.title_label, "Done");
+        gtk.Widget.setVisible(p.status_label.as(gtk.Widget), 0);
 
         gtk.Widget.setVisible(p.close_button.as(gtk.Widget), 1);
         p.finished = true;
@@ -622,7 +623,7 @@ pub const TransactionPage = extern struct {
 
     fn on_close(self: *Self) callconv(.c) void {
         if (support.getWindow(ShellyWindow, self)) |win| {
-            win.hideLockout();
+            win.hideTransaction();
         }
     }
 
@@ -630,7 +631,7 @@ pub const TransactionPage = extern struct {
         const p = self.priv();
         if (!p.finished) return 0;
         if (keyval == gdk.KEY_Escape) {
-            if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
+            if (support.getWindow(ShellyWindow, self)) |win| win.hideTransaction();
             return 1;
         }
         _ = keycode;
