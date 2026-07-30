@@ -40,6 +40,10 @@
             .url = "git+https://github.com/rockorager/zeit?ref=v0.9.0#b1c1c2fcbc71fd7799a316bbcf0ff88d06d80ccc",
             .hash = "zeit-0.9.0-5I6bk2m9AgBSMH8-L6rYJkwuQAyhXplnfxnvTSGzVHUR",
         },
+        .conch = .{
+            .url = "git+https://github.com/Seafoam-Labs/conch#6f7bc0d3cb90c1c59ca2619ae3d52f2a608890ee",
+            .hash = "conch-0.0.1-k9bFouvFAAC_IojnpzBXmWSeZfFp92uJ7G1VB5_mkry-",
+        },
     },
     .paths = .{
         "build.zig",
