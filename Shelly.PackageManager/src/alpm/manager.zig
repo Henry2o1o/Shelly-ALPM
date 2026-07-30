@@ -226,6 +226,19 @@ pub const Manager = struct {
         // for update checking. Symlink the real local database into the temp
         // path so ALPM can see installed packages when checking for updates.
         if (self.temp_root_path.len != 0) {
+            const configured_db_path = std.fs.path.resolve(
+                self.allocator,
+                &.{self.config.database_path},
+            ) catch return InitError.InitFailed;
+            defer self.allocator.free(configured_db_path);
+            const resolved_temp_root = std.fs.path.resolve(
+                self.allocator,
+                &.{self.temp_root_path},
+            ) catch return InitError.InitFailed;
+            defer self.allocator.free(resolved_temp_root);
+            if (std.mem.eql(u8, configured_db_path, resolved_temp_root))
+                return InitError.InitFailed;
+
             // "{DBPath}/local" for the *real* database, captured before we repoint DBPath.
             const real_local_db = blk: {
                 const s = std.fmt.allocPrint(self.allocator, "{s}/local", .{self.config.database_path}) catch {
@@ -326,6 +339,7 @@ pub const Manager = struct {
         while (databases != null) : (databases = databases.?.next) {
             const db = databases.?.data orelse continue;
             var db_struct: libalpm.Database = .{ .ptr = @ptrCast(@alignCast(db)) };
+            if (!db_struct.allowUsage(.sync)) continue;
             const db_name: []const u8 = db_struct.name() orelse continue;
             required_signatures.put(db_name, databaseSignatureRequired(db_struct.sigLevel())) catch {
                 return TransactionError.SyncDbFailed;
@@ -403,6 +417,7 @@ pub const Manager = struct {
             var failed_dbs: std.ArrayList([]const u8) = .empty;
             defer failed_dbs.deinit(self.allocator);
             for (self.sync_dbs.items) |db| {
+                if (!db.allowUsage(.sync)) continue;
                 if (db.verify()) continue;
                 const name = db.name() orelse continue;
                 failed_dbs.append(self.allocator, name) catch return TransactionError.OutOfMemory;
@@ -542,6 +557,7 @@ pub const Manager = struct {
         while (sync_database != null) : (sync_database = sync_database.?.*.next) {
             const db_data = sync_database.?.*.data orelse continue;
             const database = libalpm.Database.from(db_data) orelse continue;
+            if (!database.allowUsage(.search)) continue;
             var tempPackages = database.packages();
             while (tempPackages.next()) |pkg| {
                 var owned_package = libalpm.OwnedPackage.init(self.allocator, pkg) catch return TransactionError.OutOfMemory;
@@ -571,6 +587,7 @@ pub const Manager = struct {
         while (sync_database != null) : (sync_database = sync_database.?.*.next) {
             const db = sync_database.?.*.data orelse continue;
             const database = libalpm.Database.from(db) orelse continue;
+            if (!database.allowUsage(.search)) continue;
             const group = database.getGroup(groupName) orelse continue;
             var package_list = group.packages();
             while (package_list.next()) |pkg| {
@@ -594,13 +611,31 @@ pub const Manager = struct {
             for (package_updates.items) |*update| update.deinit(self.allocator);
             package_updates.deinit(self.allocator);
         }
-        const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var usable_sync_databases: [*c]rawLibalpm.alpm_list_t = null;
+        defer rawLibalpm.alpm_list_free(usable_sync_databases);
+
+        while (sync_databases != null) : (sync_databases = sync_databases.*.next) {
+            const db_data = sync_databases.*.data orelse continue;
+            const database = libalpm.Database.from(db_data) orelse continue;
+
+            if (!database.allowUsage(.upgrade)) continue;
+
+            const updated = rawLibalpm.alpm_list_add(
+                usable_sync_databases,
+                @ptrCast(database.ptr),
+            );
+            if (updated == null) return TransactionError.OutOfMemory;
+
+            usable_sync_databases = updated;
+        }
+
         const local_database = rawLibalpm.alpm_get_localdb(self.handle);
         var local_packages = rawLibalpm.alpm_db_get_pkgcache(local_database);
         while (local_packages != null) : (local_packages = local_packages.*.next) {
             const package_data = local_packages.*.data orelse continue;
             const local_pkg = libalpm.Package.from(package_data) orelse continue;
-            const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg.ptr, sync_databases) orelse continue;
+            const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg.ptr, usable_sync_databases) orelse continue;
             var owned_update = libalpm.OwnedPackageWithUpdate.init(
                 self.allocator,
                 local_pkg,
@@ -672,33 +707,37 @@ pub const Manager = struct {
                 }
                 try packages.append(self.allocator, found orelse return TransactionError.PackageFetchFailed);
             } else {
+                var current_packages: std.ArrayList(*rawLibalpm.alpm_pkg_t) = .empty;
+                defer current_packages.deinit(self.allocator);
                 var node = sync_databases;
-                var found_any = false;
                 while (node != null) : (node = node.*.next) {
                     const db_data: ?*anyopaque = node.*.data;
                     const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
+                    const database = libalpm.Database.from(db_ptr) orelse continue;
+                    if (!database.allowUsage(.install)) continue;
                     if (rawLibalpm.alpm_db_get_pkg(db_ptr, target.ptr)) |pkg| {
-                        try packages.append(self.allocator, pkg);
-                        found_any = true;
+                        if (current_packages.items.len > 0) current_packages.clearRetainingCapacity();
+                        current_packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
                         break;
                     }
+                    if (current_packages.items.len != 0) continue;
                     if (rawLibalpm.alpm_db_get_group(db_ptr, target.ptr)) |group| {
                         var pkg_node = group.*.packages;
                         while (pkg_node != null) : (pkg_node = pkg_node.*.next) {
                             const pkg_data: ?*anyopaque = pkg_node.*.data;
                             const pkg: *rawLibalpm.alpm_pkg_t = @ptrCast(@alignCast(pkg_data orelse continue));
-                            try packages.append(self.allocator, pkg);
+                            current_packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
                         }
-                        found_any = true;
-                        break;
                     }
+
+                    if (current_packages.items.len != 0) continue;
                     if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db_ptr), target.ptr)) |pkg| {
-                        try packages.append(self.allocator, pkg);
-                        found_any = true;
-                        break;
+                        current_packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
                     }
                 }
-                if (!found_any) return TransactionError.PackageFetchFailed;
+                for (current_packages.items) |pkg| {
+                    packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
+                }
             }
         }
         if (packages.items.len == 0) return TransactionError.PackageFetchFailed;
@@ -742,6 +781,8 @@ pub const Manager = struct {
             while (node != null) : (node = node.*.next) {
                 const db_data: ?*anyopaque = node.*.data;
                 const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
+                const database = libalpm.Database.from(db_ptr) orelse continue;
+                if (!database.allowUsage(.install)) continue;
                 const selected_pkg = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db_ptr), selected_z.ptr) orelse continue;
                 try packages.append(self.allocator, selected_pkg);
                 if (libalpm.str(rawLibalpm.alpm_pkg_get_name(selected_pkg))) |resolved_name|
@@ -1424,6 +1465,7 @@ pub const Manager = struct {
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_ptr = sync_dbs.*.data orelse continue;
             const db: libalpm.Database = libalpm.Database.from(db_ptr) orelse continue;
+            if (!db.allowUsage(.install)) continue;
             const pkg_cache = db.package_cache();
             const satisfier = rawLibalpm.alpm_find_satisfier(pkg_cache, provides.ptr) orelse continue;
             const pkg = libalpm.Package.from(satisfier) orelse continue;
@@ -1472,6 +1514,7 @@ pub const Manager = struct {
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_ptr = sync_dbs.*.data orelse continue;
             const db = libalpm.Database.from(db_ptr) orelse continue;
+            if (!db.allowUsage(.install)) continue;
             const pkg_cache = db.package_cache();
             const satisfier = rawLibalpm.alpm_find_satisfier(pkg_cache, dependency) orelse continue;
             const pkg = libalpm.Package.from(satisfier) orelse continue;
@@ -1498,6 +1541,7 @@ pub const Manager = struct {
             var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
             while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
                 const db = libalpm.Database.from(sync_dbs.*.data.?) orelse continue;
+                if (!db.allowUsage(.install)) continue;
                 const sync_pkg = rawLibalpm.alpm_db_get_pkg(db.ptr, package_name) orelse continue;
                 break :find_pkg sync_pkg;
             }
@@ -1541,7 +1585,24 @@ pub const Manager = struct {
         errdefer operation_scope.fail();
         try self.checkOperationCancelled();
         self.sync(false) catch |err| return err;
-        const sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var usable_sync_databases: [*c]rawLibalpm.alpm_list_t = null;
+        defer rawLibalpm.alpm_list_free(usable_sync_databases);
+
+        while (sync_databases != null) : (sync_databases = sync_databases.*.next) {
+            const db_data = sync_databases.*.data orelse continue;
+            const database = libalpm.Database.from(db_data) orelse continue;
+
+            if (!database.allowUsage(.upgrade)) continue;
+
+            const updated = rawLibalpm.alpm_list_add(
+                usable_sync_databases,
+                @ptrCast(database.ptr),
+            );
+            if (updated == null) return TransactionError.OutOfMemory;
+
+            usable_sync_databases = updated;
+        }
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
 
         var trans_flags = flags;
@@ -1552,7 +1613,7 @@ pub const Manager = struct {
 
         for (package_list) |pkg_name| {
             const pkg_ptr = rawLibalpm.alpm_db_get_pkg(local_db, pkg_name) orelse continue;
-            const new_pkg_ptr = rawLibalpm.alpm_sync_get_new_version(pkg_ptr, sync_dbs) orelse continue;
+            const new_pkg_ptr = rawLibalpm.alpm_sync_get_new_version(pkg_ptr, usable_sync_databases) orelse continue;
             if (rawLibalpm.alpm_add_pkg(self.handle, new_pkg_ptr) != 0) {
                 return TransactionError.PackageAddFailed;
             }
@@ -1927,6 +1988,8 @@ pub const Manager = struct {
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_data: ?*anyopaque = sync_dbs.*.data;
             const db: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
+            const database = libalpm.Database.from(db) orelse continue;
+            if (!database.allowUsage(.install)) continue;
             if (rawLibalpm.alpm_db_get_pkg(db, pkg_name.ptr) != null) return true;
             if (rawLibalpm.alpm_db_get_group(db, pkg_name.ptr) != null) return true;
             if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db), pkg_name.ptr) != null) return true;

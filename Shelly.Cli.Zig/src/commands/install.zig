@@ -3,6 +3,7 @@ const Zigalpm = @import("Zigalpm");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output = @import("../output/config.zig");
+const format = @import("../output/format.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const ui_operation = @import("../output/ui_operation.zig");
 const list_updates = @import("list_updates.zig");
@@ -214,6 +215,10 @@ pub fn dispatch(
 
     if (isFlatpakRepair(invocation) and !invocation.globals.ui_mode and !elevation.isRoot()) {
         const elevate = repairTargetRequiresElevation(context, invocation.positionals[0]) catch |err| {
+            if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                try context.stderr.print("{s}\n", .{message});
+                return 1;
+            }
             try context.stderr.print("Unable to inspect Flatpak before repair: {t}\n", .{err});
             return 1;
         };
@@ -455,6 +460,12 @@ fn executeUi(
             try ui_operation.flush(context);
             return 0;
         }
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+            try output.writeErrorFrame(context, message);
+            try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
+            try ui_operation.flush(context);
+            return 1;
+        }
         const message = try std.fmt.allocPrint(context.allocator, "Installation failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
@@ -673,7 +684,8 @@ fn runAppImage(
 
     const configuration = config_manager.Manager.init(context).read() catch
         try config_model.Config.defaults(context.allocator);
-    const install_directory = stringValue(&configuration, "AppImageInstallPath") orelse
+    const install_directory = optionValue(invocation, "--install-path") orelse
+        stringValue(&configuration, "AppImageInstallPath") orelse
         try xdg.binHome(context);
     const local_db_path = try std.fs.path.join(
         context.allocator,
@@ -703,8 +715,8 @@ fn runFlatpak(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    const requested_scope: Zigalpm.flatpak.bindings.libflatpak.Scope =
-        if (optionEnabled(invocation, "--user")) .USER else .SYSTEM;
+    const requested_scope: Zigalpm.flatpak.Scope =
+        if (optionEnabled(invocation, "--user")) .user else .system;
     const requested_id = invocation.positionals[0];
     var selected_id: []const u8 = requested_id;
     var selected_remote: []const u8 = optionValue(invocation, "--remote") orelse "";
@@ -787,10 +799,10 @@ fn repairTargetRequiresElevation(context: *runtime.RuntimeContext, target: []con
 }
 
 fn repairScopeRequiresElevation(
-    scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    scope: Zigalpm.flatpak.Scope,
     running_as_root: bool,
 ) bool {
-    return !running_as_root and scope == .SYSTEM;
+    return !running_as_root and scope == .system;
 }
 
 const FlatpakFileKind = enum {
@@ -824,8 +836,8 @@ fn runFlatpakFile(
     if (!installed) return InstallError.BackendFailed;
 }
 
-fn flatpakFileScope(invocation: *const parser.Invocation) Zigalpm.flatpak.bindings.libflatpak.Scope {
-    return if (optionEnabled(invocation, "--user")) .USER else .SYSTEM;
+fn flatpakFileScope(invocation: *const parser.Invocation) Zigalpm.flatpak.Scope {
+    return if (optionEnabled(invocation, "--user")) .user else .system;
 }
 
 fn flatpakFileKind(invocation: *const parser.Invocation) ?FlatpakFileKind {
@@ -838,15 +850,18 @@ fn flatpakFileKind(invocation: *const parser.Invocation) ?FlatpakFileKind {
 fn firstFlatpakRemote(
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
-    requested_scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    requested_scope: Zigalpm.flatpak.Scope,
 ) !?[]const u8 {
     var manager = Zigalpm.flatpak.RemoteManager{ .allocator = context.allocator, .io = context.io };
     manager.setOperationContext(operation_context);
     const remotes = try manager.listRemotesWithDetails();
-    defer context.allocator.free(remotes);
+    defer Zigalpm.flatpak.Remote.deinitSlice(
+        context.allocator,
+        remotes,
+    );
     for (remotes) |remote| {
-        if (remote.get_scope() != requested_scope or remote.disabled()) continue;
-        const name = remote.name() orelse continue;
+        if (remote.scope != requested_scope or remote.disabled) continue;
+        const name = remote.name;
         if (name.len > 0) return try context.allocator.dupe(u8, name);
     }
     return null;
@@ -919,7 +934,7 @@ fn openingMessage(allocator: std.mem.Allocator, invocation: *const parser.Invoca
                 "Installing AUR package {s} at commit {s}",
                 .{ invocation.positionals[0], invocation.positionals[1] },
             );
-        const names = try joined(allocator, invocation.positionals);
+        const names = try format.joined(allocator, invocation.positionals);
         defer allocator.free(names);
         if (std.mem.eql(u8, invocation.command.path, standard_command_path))
             return std.fmt.allocPrint(allocator, "Installing packages: {s}", .{names});
@@ -1064,10 +1079,6 @@ fn stringValue(configuration: *const config_model.Config, key: []const u8) ?[]co
     return value.string;
 }
 
-fn joined(allocator: std.mem.Allocator, values: []const []const u8) ![]const u8 {
-    return std.mem.join(allocator, ", ", values);
-}
-
 fn isInstallPath(path: []const u8) bool {
     return std.mem.eql(u8, path, standard_command_path) or
         std.mem.eql(u8, path, appimage_command_path) or
@@ -1158,9 +1169,9 @@ test "Flatpak repair rejects install source modifiers" {
 }
 
 test "Flatpak repair lifecycle and elevation follow the installed scope" {
-    try std.testing.expect(repairScopeRequiresElevation(.SYSTEM, false));
-    try std.testing.expect(!repairScopeRequiresElevation(.USER, false));
-    try std.testing.expect(!repairScopeRequiresElevation(.SYSTEM, true));
+    try std.testing.expect(repairScopeRequiresElevation(.system, false));
+    try std.testing.expect(!repairScopeRequiresElevation(.user, false));
+    try std.testing.expect(!repairScopeRequiresElevation(.system, true));
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1217,7 +1228,7 @@ test "Flatpak file install modifiers use the shared command and scope" {
         &.{ "install", "flatpak", "--ref-file", "/tmp/demo.flatpakref" },
     );
     try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .ref_file);
-    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .SYSTEM);
+    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .system);
     try std.testing.expect(needsElevation(&outcome.dispatch));
     try std.testing.expectEqualStrings("/tmp/demo.flatpakref", outcome.dispatch.positionals[0]);
 
@@ -1227,7 +1238,7 @@ test "Flatpak file install modifiers use the shared command and scope" {
         &.{ "install", "flatpak", "--ref-file", "--user", "demo.flatpakref" },
     );
     try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .ref_file);
-    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .USER);
+    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .user);
     try std.testing.expect(!needsElevation(&outcome.dispatch));
 
     outcome = try parser.parse(
@@ -1236,7 +1247,7 @@ test "Flatpak file install modifiers use the shared command and scope" {
         &.{ "install", "flatpak", "--bundle", "demo.flatpak" },
     );
     try std.testing.expect(flatpakFileKind(&outcome.dispatch) == .bundle);
-    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .SYSTEM);
+    try std.testing.expect(flatpakFileScope(&outcome.dispatch) == .system);
     try std.testing.expect(needsElevation(&outcome.dispatch));
 
     const old_ref = try parser.parse(
@@ -1330,9 +1341,9 @@ test "install routes every action-first backend and forwards type-specific optio
             if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
                 if (flatpakFileKind(invocation)) |kind| {
                     if (kind == .ref_file)
-                        try std.testing.expect(flatpakFileScope(invocation) == .USER)
+                        try std.testing.expect(flatpakFileScope(invocation) == .user)
                     else
-                        try std.testing.expect(flatpakFileScope(invocation) == .SYSTEM);
+                        try std.testing.expect(flatpakFileScope(invocation) == .system);
                 } else {
                     try std.testing.expectEqualStrings("flathub-beta", optionValue(invocation, "--remote").?);
                     try std.testing.expectEqualStrings("beta", optionValue(invocation, "--branch").?);

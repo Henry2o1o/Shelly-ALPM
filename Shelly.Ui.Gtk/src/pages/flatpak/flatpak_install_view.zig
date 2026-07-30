@@ -21,6 +21,7 @@ const ShellyCommands = @import("../../services/shelly_operation.zig").ShellyComm
 const Category = @import("../../models/flatpak.zig").Category;
 const FlatHubApiService = @import("../../services/flathub_api.zig").FlatHubApiService;
 const PermissionsDialog = @import("../../dialog/page/permissions.zig").PermissionsDialog;
+const AddonsDialog = @import("../../dialog/page/addons.zig").AddonsDialog;
 const VersionHistoryDialog = @import("../../dialog/page/version_history.zig").VersionHistoryDialog;
 const Entry = @import("../../dialog/page/version_history.zig").Entry;
 const translations = @import("../../helpers/translations.zig");
@@ -63,6 +64,7 @@ pub const FlatpakInstallView = extern struct {
         description_reveal_button: *gtk.Button,
         overlay_remote_selection: *gtk.DropDown,
         overlay_install_button: *gtk.Button,
+        overlay_show_plugin_button: *gtk.Button,
         overlay_permissions_button: *gtk.Button,
         version_history_button: *gtk.Button,
         overlay_links_box: *gtk.ListBox,
@@ -76,6 +78,7 @@ pub const FlatpakInstallView = extern struct {
         load_generation: u64,
         details_generation: u64,
         remote_info_generation: u64,
+        addon_generation: u64,
         suppress_remote_notify: bool,
         search_text: [256]u8,
         category: Category,
@@ -117,6 +120,12 @@ pub const FlatpakInstallView = extern struct {
         failed: bool = false,
     };
 
+    const AddonInstallCtx = struct {
+        page: *Self,
+        generation: u64,
+        button: *gtk.Button,
+    };
+
     pub const getGObjectType = gobject.ext.defineClass(Self, .{
         .name = "ShellyFlatpakInstallView",
         .instanceInit = &init,
@@ -150,12 +159,14 @@ pub const FlatpakInstallView = extern struct {
         p.load_generation = 0;
         p.details_generation = 0;
         p.remote_info_generation = 0;
+        p.addon_generation = 0;
         p.suppress_remote_notify = false;
         p.search_len = 0;
         self.setup_grid();
         _ = gtk.Button.signals.clicked.connect(p.overlay_back_button, *Self, &on_back_clicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.description_reveal_button, *Self, &on_description_reveal_clicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.overlay_install_button, *Self, &on_install_clicked, self, .{});
+        _ = gtk.Button.signals.clicked.connect(p.overlay_show_plugin_button, *Self, &on_addons_clicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.overlay_permissions_button, *Self, &on_permissions_clicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.version_history_button, *Self, &on_version_history_clicked, self, .{});
         _ = gobject.Object.signals.notify.connect(p.overlay_remote_selection.as(gobject.Object), *Self, &on_remote_selected, self, .{ .detail = "selected" });
@@ -332,7 +343,7 @@ pub const FlatpakInstallView = extern struct {
             if (remote.Scope == .user) "user" else "system",
         });
 
-        const argv = ShellyCommands.install_flatpak(std.heap.c_allocator, app.getId(), remote.Scope) catch return;
+        const argv = ShellyCommands.install_flatpak(std.heap.c_allocator, app.getId(), remote.Scope, remote.Name) catch return;
         defer std.mem.Allocator.free(std.heap.c_allocator, argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -369,6 +380,74 @@ pub const FlatpakInstallView = extern struct {
 
         const dlg = PermissionsDialog.new(translations._("Permissions"), app.getName(), app.getPermissions(), &on_close, self);
         if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dlg.as(gtk.Widget));
+    }
+
+    fn on_addons_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const app = p.selected_app orelse return;
+        const addons = app.getAddons();
+        if (addons.len == 0) return;
+
+        const dlg = AddonsDialog.new(translations._("Available Addons"), app.getName(), addons, &on_addon_install, &on_close, self);
+        if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dlg.as(gtk.Widget));
+    }
+
+    fn on_addon_install(opaque_ctx: ?*anyopaque, addon: *const flatpak.AppstreamApp, button: *gtk.Button) void {
+        const self: *FlatpakInstallView = @ptrCast(@alignCast(opaque_ctx orelse return));
+        const p = self.priv();
+        if (p.disposed) return;
+        const app = p.selected_app orelse return;
+
+        const addon_remote = resolveAddonRemote(addon, app.getRemotes());
+        std.log.info("Flatpak addon install: addon={s} remote={s} scope={s}", .{
+            addon.Id,
+            if (addon_remote.name.len > 0) addon_remote.name else "(default)",
+            if (addon_remote.scope == .user) "user" else "system",
+        });
+
+        const argv = ShellyCommands.install_flatpak_ex(std.heap.c_allocator, addon.Id, addon_remote.scope, addon_remote.name, true) catch return;
+        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+        names.append(std.heap.c_allocator, if (addon.Name.len > 0) addon.Name else addon.Id) catch {};
+
+        const ctx = std.heap.c_allocator.create(AddonInstallCtx) catch return;
+        ctx.* = .{
+            .page = self,
+            .generation = p.addon_generation,
+            .button = button,
+        };
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = translations._("Installing flatpak addon"),
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &on_addon_transaction_complete,
+                .privileged = false,
+                .ctx = ctx,
+            });
+        } else {
+            std.heap.c_allocator.destroy(ctx);
+            gtk.Widget.setSensitive(button.as(gtk.Widget), 1);
+        }
+    }
+
+    fn on_addon_transaction_complete(opaque_ctx: *anyopaque, success: bool) void {
+        const ctx: *AddonInstallCtx = @ptrCast(@alignCast(opaque_ctx));
+        defer std.heap.c_allocator.destroy(ctx);
+
+        const self = ctx.page;
+        const p = self.priv();
+        if (p.disposed or ctx.generation != p.addon_generation) return;
+
+        // The lockout is reused for the transaction page; if the user closed
+        // the addons dialog the button may no longer be attached to a window.
+        if (gtk.Widget.getRoot(ctx.button.as(gtk.Widget)) != null) {
+            gtk.Widget.setSensitive(ctx.button.as(gtk.Widget), @intFromBool(!success));
+            if (success) gtk.Button.setLabel(ctx.button, translations._("Installed"));
+        }
     }
 
     fn on_version_history_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
@@ -442,6 +521,13 @@ pub const FlatpakInstallView = extern struct {
         const license = if (app.getProjectLicense().len > 0) app.getProjectLicense() else translations._("Unknown");
         gtk.Label.setLabel(p.overlay_license_label, std.fmt.bufPrintZ(&license_buffer, "{s}: {s}", .{ translations._("License"), license }) catch translations._("License: Unknown"));
         gtk.Label.setLabel(p.overlay_summary_label, if (app.getSummary().len > 0) app.getSummary() else translations._("No summary available"));
+        const addon_count = app.getAddons().len;
+        gtk.Widget.setVisible(p.overlay_show_plugin_button.as(gtk.Widget), @intFromBool(addon_count > 0));
+        gtk.Widget.setSensitive(p.overlay_show_plugin_button.as(gtk.Widget), 1);
+        if (addon_count > 0) {
+            var addons_buffer: [128]u8 = undefined;
+            gtk.Button.setLabel(p.overlay_show_plugin_button, std.fmt.bufPrintZ(&addons_buffer, "{s} ({d})", .{ translations._("Addons"), addon_count }) catch translations._("Addons"));
+        }
         self.populate_remotes(app);
         self.set_description(app.getDescription());
         self.populate_screenshots(app);
@@ -454,6 +540,7 @@ pub const FlatpakInstallView = extern struct {
         const strings = gtk.StringList.new(null);
         defer strings.as(gobject.Object).unref();
         const remotes = app.getRemotes();
+        std.log.debug("remotes {d}", .{remotes.len});
         for (remotes) |remote| {
             var buffer: [512]u8 = undefined;
             const label = std.fmt.bufPrintZ(
@@ -581,7 +668,7 @@ pub const FlatpakInstallView = extern struct {
 
     fn set_description(self: *Self, description: [:0]const u8) void {
         const p = self.priv();
-        if (description_split_index(description)) |index| {
+        if (descriptionSplitIndex(description)) |index| {
             const preview = g_strndup(description.ptr, index);
             defer glib.free(preview);
             gtk.Label.setLabel(p.overlay_description_label, preview);
@@ -601,7 +688,7 @@ pub const FlatpakInstallView = extern struct {
         const carousel = Carousel.new();
         var count: usize = 0;
         for (app.getScreenshots()) |screenshot| {
-            const screenshot_url = first_screenshot_url(screenshot) orelse continue;
+            const screenshot_url = firstScreenshotUrl(screenshot) orelse continue;
             const picture = gtk.Picture.new();
             gtk.Picture.setCanShrink(picture, 1);
             gtk.Picture.setContentFit(picture, .contain);
@@ -764,7 +851,7 @@ pub const FlatpakInstallView = extern struct {
             gtk.Box.append(content, spacer.as(gtk.Widget));
 
             const open_link = gtk.LinkButton.newWithLabel(@ptrCast(entry.value_ptr.*.ptr), "");
-            gtk.Button.setIconName(open_link.as(gtk.Button), "web-browser");
+            gtk.Button.setIconName(open_link.as(gtk.Button), "insert-link-symbolic");
             gtk.Widget.setHalign(open_link.as(gtk.Widget), .end);
             gtk.Widget.setValign(open_link.as(gtk.Widget), .center);
             gtk.Widget.setTooltipText(open_link.as(gtk.Widget), translations._("Open link in browser"));
@@ -815,6 +902,8 @@ pub const FlatpakInstallView = extern struct {
         gtk.Widget.setSensitive(p.overlay_remote_selection.as(gtk.Widget), 0);
         gtk.Widget.setSensitive(p.overlay_install_button.as(gtk.Widget), 0);
         gtk.Widget.setSensitive(p.overlay_permissions_button.as(gtk.Widget), 0);
+        gtk.Widget.setVisible(p.overlay_show_plugin_button.as(gtk.Widget), 0);
+        p.addon_generation +%= 1;
         gtk.ListBox.removeAll(p.overlay_links_box);
         if (p.selected_app) |app| {
             app.as(gobject.Object).unref();
@@ -929,6 +1018,8 @@ pub const FlatpakInstallView = extern struct {
         const io = threaded.io();
 
         const cli: ShellyCli = .{ .allocator = alloc, .io = io };
+        cli.sync_remote_appstream_flatpak() catch {};
+        std.log.debug("sync_remote_appstream_flatpak completed", .{});
         result.parsed = cli.get_remote_appstream_apps() catch {
             result.failed = true;
             _ = glib.idleAdd(&load_complete, result);
@@ -1081,6 +1172,7 @@ pub const FlatpakInstallView = extern struct {
         .{ "description_reveal_button", @offsetOf(Private, "description_reveal_button") },
         .{ "overlay_remote_selection", @offsetOf(Private, "overlay_remote_selection") },
         .{ "overlay_install_button", @offsetOf(Private, "overlay_install_button") },
+        .{ "overlay_show_plugin_button", @offsetOf(Private, "overlay_show_plugin_button") },
         .{ "overlay_permissions_button", @offsetOf(Private, "overlay_permissions_button") },
         .{ "version_history_button", @offsetOf(Private, "version_history_button") },
         .{ "overlay_links_box", @offsetOf(Private, "overlay_links_box") },
@@ -1103,7 +1195,7 @@ pub const FlatpakInstallView = extern struct {
     };
 };
 
-fn description_split_index(description: []const u8) ?usize {
+fn descriptionSplitIndex(description: []const u8) ?usize {
     var newline_count: usize = 0;
     for (description, 0..) |character, index| {
         if (character != '\n') continue;
@@ -1113,7 +1205,7 @@ fn description_split_index(description: []const u8) ?usize {
     return null;
 }
 
-fn first_screenshot_url(screenshot: flatpak.AppstreamScreenshot) ?[:0]const u8 {
+fn firstScreenshotUrl(screenshot: flatpak.AppstreamScreenshot) ?[:0]const u8 {
     for (screenshot.Images) |image| {
         if (image.Url.len > 0) return image.Url.ptr[0..image.Url.len :0];
     }
@@ -1121,21 +1213,21 @@ fn first_screenshot_url(screenshot: flatpak.AppstreamScreenshot) ?[:0]const u8 {
 }
 
 test "Flatpak details split descriptions only when additional lines exist" {
-    try std.testing.expectEqual(@as(?usize, 13), description_split_index("one\ntwo\nthree\nfour"));
-    try std.testing.expectEqual(@as(?usize, null), description_split_index("one\ntwo\nthree"));
-    try std.testing.expectEqual(@as(?usize, null), description_split_index("one\ntwo\nthree\n"));
+    try std.testing.expectEqual(@as(?usize, 13), descriptionSplitIndex("one\ntwo\nthree\nfour"));
+    try std.testing.expectEqual(@as(?usize, null), descriptionSplitIndex("one\ntwo\nthree"));
+    try std.testing.expectEqual(@as(?usize, null), descriptionSplitIndex("one\ntwo\nthree\n"));
 }
 
 test "Flatpak details find the first usable screenshot URL" {
     const no_images: flatpak.AppstreamScreenshot = .{};
-    try std.testing.expect(first_screenshot_url(no_images) == null);
+    try std.testing.expect(firstScreenshotUrl(no_images) == null);
 
     const images = [_]flatpak.AppstreamImage{
         .{},
         .{ .Url = "https://example.test/screenshot.png" },
     };
     const screenshot: flatpak.AppstreamScreenshot = .{ .Images = &images };
-    try std.testing.expectEqualStrings("https://example.test/screenshot.png", first_screenshot_url(screenshot).?);
+    try std.testing.expectEqualStrings("https://example.test/screenshot.png", firstScreenshotUrl(screenshot).?);
 }
 
 test "Flatpak details map AppStream URL types to C# icons" {
@@ -1150,4 +1242,55 @@ test "Flatpak details capitalize AppStream URL type labels" {
     try std.testing.expectEqualStrings("Homepage", FlatpakInstallView.format_url_type(&buffer, "homepage"));
     try std.testing.expectEqualStrings("Vcs-browser", FlatpakInstallView.format_url_type(&buffer, "vcs-browser"));
     try std.testing.expectEqualStrings("", FlatpakInstallView.format_url_type(&buffer, ""));
+}
+
+const AddonRemote = struct {
+    name: []const u8 = "",
+    scope: flatpak.InstallLevel = .system,
+};
+
+fn resolveAddonRemote(addon: *const flatpak.AppstreamApp, parent_remotes: []const flatpak.Remote) AddonRemote {
+    for (addon.Remotes) |remote| {
+        for (parent_remotes) |parent_remote| {
+            if (std.mem.eql(u8, remote.Name, parent_remote.Name)) {
+                return .{ .name = remote.Name, .scope = remote.Scope };
+            }
+        }
+    }
+    if (addon.Remotes.len > 0) return .{ .name = addon.Remotes[0].Name, .scope = addon.Remotes[0].Scope };
+    if (parent_remotes.len > 0) return .{ .name = parent_remotes[0].Name, .scope = parent_remotes[0].Scope };
+    return .{};
+}
+
+test "Flatpak addon scope resolution prefers matching parent remote" {
+    const parent_remotes = [_]flatpak.Remote{
+        .{ .Name = "flathub", .Scope = .system },
+        .{ .Name = "flathub-beta", .Scope = .user },
+    };
+
+    const matching = flatpak.AppstreamApp{
+        .Id = "org.example.App.Locale",
+        .Remotes = &.{.{ .Name = "flathub-beta", .Scope = .user }},
+    };
+    const matching_resolved = resolveAddonRemote(&matching, &parent_remotes);
+    try std.testing.expectEqualStrings("flathub-beta", matching_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.user, matching_resolved.scope);
+
+    const addon_only = flatpak.AppstreamApp{
+        .Id = "org.example.App.Locale",
+        .Remotes = &.{.{ .Name = "custom", .Scope = .user }},
+    };
+    const addon_only_resolved = resolveAddonRemote(&addon_only, &parent_remotes);
+    try std.testing.expectEqualStrings("custom", addon_only_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.user, addon_only_resolved.scope);
+
+    const no_addon_remotes = flatpak.AppstreamApp{ .Id = "org.example.App.Locale" };
+    const no_addon_resolved = resolveAddonRemote(&no_addon_remotes, &parent_remotes);
+    try std.testing.expectEqualStrings("flathub", no_addon_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.system, no_addon_resolved.scope);
+
+    const empty = flatpak.AppstreamApp{ .Id = "org.example.App.Locale" };
+    const empty_resolved = resolveAddonRemote(&empty, &.{});
+    try std.testing.expectEqualStrings("", empty_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.system, empty_resolved.scope);
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
+const fmt = @import("../output/format.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const table = @import("../output/table.zig");
@@ -207,6 +208,12 @@ fn buildAllUpgradePlan(
         try context.stdout.flush();
 
         var result = collector.call(collector.data, context, backend) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    try output.writeWarning(context, message);
+                    continue;
+                }
+            }
             try context.stdout.print("Error collecting {s} upgrades: {t}\n", .{
                 backend.displayName(),
                 err,
@@ -295,8 +302,8 @@ fn renderPlannedStandardUpdates(
         cells[1] = update.name;
         cells[2] = update.current_version;
         cells[3] = update.new_version;
-        cells[4] = try formatUpgradeSize(allocator, size_display, update.size_difference);
-        cells[5] = try formatUpgradeSize(allocator, size_display, update.download_size);
+        cells[4] = try fmt.formatSignedSize(allocator, size_display, update.size_difference);
+        cells[5] = try fmt.formatSignedSize(allocator, size_display, update.download_size);
         row.* = cells;
     }
 
@@ -308,8 +315,8 @@ fn renderPlannedStandardUpdates(
         rows,
         output.supportsAnsi(context),
     );
-    const formatted_download = try formatUpgradeSize(allocator, size_display, total_download);
-    const formatted_change = try formatUpgradeSize(allocator, size_display, net_change);
+    const formatted_download = try fmt.formatSignedSize(allocator, size_display, total_download);
+    const formatted_change = try fmt.formatSignedSize(allocator, size_display, net_change);
     try context.stdout.print(
         "\nTotal Download Size: {s}\nNet Upgrade Size: {s}\n\n",
         .{ formatted_download, formatted_change },
@@ -343,11 +350,8 @@ fn noUpdatesMessage(backend: Backend) []const u8 {
     };
 }
 
-const SizeDisplay = enum {
-    bytes,
-    megabytes,
-    gigabytes,
-};
+const SizeDisplay = fmt.SizeDisplay;
+const loadSizeDisplay = fmt.loadSizeDisplay;
 
 fn prepareStandardUpgradePreview(
     context: *runtime.RuntimeContext,
@@ -413,8 +417,8 @@ fn renderStandardUpgradePreview(
         cells[1] = update.new_package.name() orelse "unknown";
         cells[2] = update.old_package.version() orelse "unknown";
         cells[3] = update.new_package.version() orelse "unknown";
-        cells[4] = try formatUpgradeSize(allocator, size_display, size_change);
-        cells[5] = try formatUpgradeSize(allocator, size_display, download_size);
+        cells[4] = try fmt.formatSignedSize(allocator, size_display, size_change);
+        cells[5] = try fmt.formatSignedSize(allocator, size_display, download_size);
         row.* = cells;
     }
 
@@ -426,8 +430,8 @@ fn renderStandardUpgradePreview(
         rows,
         output.supportsAnsi(context),
     );
-    const formatted_download = try formatUpgradeSize(allocator, size_display, total_download);
-    const formatted_change = try formatUpgradeSize(allocator, size_display, net_change);
+    const formatted_download = try fmt.formatSignedSize(allocator, size_display, total_download);
+    const formatted_change = try fmt.formatSignedSize(allocator, size_display, net_change);
     try context.stdout.print(
         "\nTotal Download Size: {s}\nNet Upgrade Size: {s}\n\n",
         .{ formatted_download, formatted_change },
@@ -448,36 +452,6 @@ fn confirmPreparedUpgrade(context: *runtime.RuntimeContext, prompt: []const u8) 
             std.ascii.eqlIgnoreCase(answer, "no")) return false;
         try context.stdout.writeAll("Please answer 'y' or 'n'.\n");
     }
-}
-
-fn loadSizeDisplay(context: *runtime.RuntimeContext) !SizeDisplay {
-    const manager = config_manager.Manager.init(context);
-    const configuration = manager.read() catch return .megabytes;
-    const value = configuration.values.get("FileSizeDisplay") orelse return .megabytes;
-    if (value != .string) return .megabytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Bytes")) return .bytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Gigabytes")) return .gigabytes;
-    return .megabytes;
-}
-
-fn formatUpgradeSize(
-    allocator: std.mem.Allocator,
-    display: SizeDisplay,
-    bytes: i128,
-) ![]const u8 {
-    return switch (display) {
-        .bytes => std.fmt.allocPrint(allocator, "{d} B", .{bytes}),
-        .megabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} MiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1048576.0},
-        ),
-        .gigabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} GiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1073741824.0},
-        ),
-    };
 }
 
 fn executeWithRunner(
@@ -501,7 +475,12 @@ fn executeStandard(
         context,
         openingMessage(invocation),
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        .{
+            .data = &adapter,
+            .call = RunnerAdapter.call,
+            .success_message = successMessage(invocation),
+            .failure_message = failureMessage(invocation),
+        },
     );
     return if (succeeded) 0 else 1;
 }
@@ -532,6 +511,12 @@ fn executeUi(
     try ui_operation.flush(context);
 
     runSelected(runner, context, &operation_context, invocation) catch |err| {
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |unavailable| {
+            try output.writeErrorFrame(context, unavailable);
+            try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
+            try ui_operation.flush(context);
+            return 1;
+        }
         const message = try std.fmt.allocPrint(context.allocator, "Upgrade failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
@@ -566,6 +551,12 @@ fn runSelected(
     for (all_backends) |backend| {
         if (!backendEnabled(invocation, backend)) continue;
         runner.call(runner.data, context, operation_context, backend, invocation) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    reportBackendSkipped(operation_context, message);
+                    continue;
+                }
+            }
             failed = true;
             try reportBackendFailure(context, operation_context, backend, err);
         };
@@ -732,6 +723,12 @@ fn runFlatpakStep(
     if (upgradesAll(invocation) and
         !invocation.globals.ui_mode)
     {
+        switch (Zigalpm.flatpak.backendStatus()) {
+            .available => {},
+            .unavailable => return Zigalpm.flatpak.errors.Error.FlatpakBackendUnavailable,
+            .incompatible => return Zigalpm.flatpak.errors.Error.FlatpakBackendIncompatible,
+        }
+
         var arguments: std.ArrayList([]const u8) = .empty;
         defer arguments.deinit(context.allocator);
         try arguments.appendSlice(context.allocator, &.{ "upgrade", "flatpak" });
@@ -811,6 +808,19 @@ fn reportBackendFailure(
     });
     operation.reportError(err, message, "upgrade", null, true);
     operation.finish(.failed);
+}
+
+fn reportBackendSkipped(
+    operation_context: *Zigalpm.OperationContext,
+    reason: []const u8,
+) void {
+    var operation = operation_context.begin(.{
+        .backend = .flatpak,
+        .kind = .update,
+        .subject = "Flatpak",
+    });
+    operation.status(.warning, reason, "flatpak.backend_unavailable", null);
+    operation.finish(.success);
 }
 
 fn emitStatus(
@@ -1145,7 +1155,7 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
 }
 
 test "upgrade preview size formatting preserves negative net changes" {
-    const formatted = try formatUpgradeSize(std.testing.allocator, .megabytes, -1048576);
+    const formatted = try fmt.formatSignedSize(std.testing.allocator, .megabytes, -1048576);
     defer std.testing.allocator.free(formatted);
     try std.testing.expectEqualStrings("-1.00 MiB", formatted);
 }
@@ -1201,7 +1211,11 @@ test "upgrade routes every action-first type through the combined handler" {
 
         try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
         try std.testing.expectEqual(expected.backend, observed.?);
-        try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            stdout.writer.buffered(),
+            successMessage(&outcome.dispatch),
+        ) != null);
     }
 }
 
@@ -1334,7 +1348,70 @@ test "upgrade all continues after a failed backend and returns failure" {
     try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
     try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AUR upgrade step failed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        ":: One or more upgrade steps failed.",
+    ) != null);
+}
+
+test "upgrade all treats an unavailable Flatpak backend as a warning" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    var calls: std.ArrayList(Backend) = .empty;
+    defer calls.deinit(std.testing.allocator);
+    const runner: Runner = .{
+        .data = &calls,
+        .call = struct {
+            fn run(
+                data: ?*anyopaque,
+                _: *runtime.RuntimeContext,
+                _: *Zigalpm.OperationContext,
+                backend: Backend,
+                _: *const parser.Invocation,
+            ) !void {
+                const captured: *std.ArrayList(Backend) =
+                    @ptrCast(@alignCast(data.?));
+                try captured.append(std.testing.allocator, backend);
+                if (backend == .flatpak)
+                    return error.FlatpakBackendUnavailable;
+            }
+        }.run,
+    };
+
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        try executeWithRunner(&context, &outcome.dispatch, runner),
+    );
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        "Install shelly-flatpak-backend and Flatpak",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        ":: All upgrades complete.",
+    ) != null);
 }
 
 test "upgrade UI mode emits backend percentage frames" {

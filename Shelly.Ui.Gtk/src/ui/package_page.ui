@@ -107,6 +107,18 @@
                                         <style>
                                             <class name="suggested-action"/>
                                         </style>
+                                        <child>
+                                          <object class="GtkShortcutController">
+                                            <property name="scope">managed</property>
+                                            <property name="propagation-phase">capture</property>
+                                            <child>
+                                              <object class="GtkShortcut">
+                                                <property name="trigger">Return</property>
+                                                <property name="action">activate</property>
+                                              </object>
+                                            </child>
+                                          </object>
+                                        </child>
                                     </object>
                                 </child>
                             </object>
@@ -268,6 +280,14 @@
                         <property name="label" translatable="yes">Show Explicit Only</property>
                         <property name="tooltip-text" translatable="yes">Show only explicitly installed packages</property>
                         <signal name="toggled" handler="on_explicit_only"/>
+                        <property name="active">false</property>
+                    </object>
+                </child>
+                <child>
+                    <object class="GtkCheckButton" id="show_depends_only">
+                        <property name="label" translatable="yes">Show Dependency Only</property>
+                        <property name="tooltip-text" translatable="yes">Show dependency packages on;y</property>
+                        <signal name="toggled" handler="on_depends_only"/>
                         <property name="active">false</property>
                     </object>
                 </child>

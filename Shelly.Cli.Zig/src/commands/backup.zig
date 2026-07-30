@@ -1,6 +1,8 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const output = @import("../output/config.zig");
+const colors = @import("../output/colors.zig");
+const format = @import("../output/format.zig");
 const parser = @import("../cli/parser.zig");
 const runtime = @import("../runtime/context.zig");
 const spec = @import("../cli/spec.zig");
@@ -243,18 +245,24 @@ fn collectState(_: ?*anyopaque, context: *runtime.RuntimeContext) !State {
         }
     }
 
-    {
+    flatpak_collection: {
         var manager = Zigalpm.FlatpakManager{
             .allocator = context.allocator,
             .io = context.io,
         };
         defer manager.deinit();
-        const installed = try manager.list_installed_applications();
-        defer Zigalpm.flatpak.manager.InstalledApplication.deinitSlice(context.allocator, installed);
+        const installed = manager.list_installed_applications() catch |err| {
+            if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                try output.writeWarning(context, message);
+                break :flatpak_collection;
+            }
+            return err;
+        };
+        defer Zigalpm.flatpak.InstalledApplication.deinitSlice(context.allocator, installed);
         for (installed) |application| {
             try flatpaks.append(context.allocator, .{
                 .id = try context.allocator.dupe(u8, application.id),
-                .kind = application.kind,
+                .kind = @intFromEnum(application.kind),
             });
         }
     }
@@ -388,22 +396,9 @@ fn exportFileName(
 
     const seconds = std.Io.Clock.real.now(context.io).toSeconds();
     if (seconds < 0) return error.InvalidTimestamp;
-    const epoch: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
-    const year_day = epoch.getEpochDay().calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_seconds = epoch.getDaySeconds();
-    return std.fmt.allocPrint(
-        context.allocator,
-        "{d:0>4}{d:0>2}{d:0>2}{d:0>2}{d:0>2}{d:0>2}_shelly.toml",
-        .{
-            year_day.year,
-            month_day.month.numeric(),
-            month_day.day_index + 1,
-            day_seconds.getHoursIntoDay(),
-            day_seconds.getMinutesIntoHour(),
-            day_seconds.getSecondsIntoMinute(),
-        },
-    );
+    const stamp = try format.formatCompactDateTime(context.allocator, seconds);
+    defer context.allocator.free(stamp);
+    return std.fmt.allocPrint(context.allocator, "{s}_shelly.toml", .{stamp});
 }
 
 fn exportPath(
@@ -431,17 +426,11 @@ fn writeExportFile(
 }
 
 fn writeSuccess(context: *runtime.RuntimeContext, path: []const u8) !void {
-    if (output.supportsAnsi(context))
-        try context.stdout.print("\x1b[34mBackup exported to: {s}\x1b[0m\n", .{path})
-    else
-        try context.stdout.print("Backup exported to: {s}\n", .{path});
+    try colors.printLine(context, .heading, "Backup exported to: {s}", .{path});
 }
 
 fn writeImportSuccess(context: *runtime.RuntimeContext, path: []const u8) !void {
-    if (output.supportsAnsi(context))
-        try context.stdout.print("\x1b[34mBackup imported from: {s}\x1b[0m\n", .{path})
-    else
-        try context.stdout.print("Backup imported from: {s}\n", .{path});
+    try colors.printLine(context, .heading, "Backup imported from: {s}", .{path});
 }
 
 fn writeFailure(

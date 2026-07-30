@@ -2,7 +2,9 @@ const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
+const format = @import("../output/format.zig");
 const output = @import("../output/config.zig");
+const colors = @import("../output/colors.zig");
 const table = @import("../output/table.zig");
 const parser = @import("../cli/parser.zig");
 const shortcodes = @import("../cli/shortcodes.zig");
@@ -139,11 +141,9 @@ pub fn resultCount(result: *const Result) usize {
     };
 }
 
-const SizeDisplay = enum {
-    bytes,
-    megabytes,
-    gigabytes,
-};
+const SizeDisplay = format.SizeDisplay;
+const loadSizeDisplay = format.loadSizeDisplay;
+const formatSize = format.formatSignedSize;
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -217,6 +217,12 @@ fn executeAllWithRunner(
             backend,
             optionEnabled(invocation, "--show-hidden"),
         ) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    try writeBackendSkipped(context, invocation, message);
+                    continue;
+                }
+            }
             failed = true;
             try writeQueryFailure(context, invocation, backend, err);
             continue;
@@ -252,6 +258,15 @@ fn writeQueryFailure(
     backend: Backend,
     err: anyerror,
 ) !void {
+    if (backend == .flatpak) {
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+            if (invocation.globals.ui_mode)
+                try output.writeErrorFrame(context, message)
+            else
+                try output.writeFailure(context, message);
+            return;
+        }
+    }
     const message = try std.fmt.allocPrint(
         context.allocator,
         "Unable to query {s} updates: {t}",
@@ -265,6 +280,23 @@ fn writeQueryFailure(
     } else {
         try output.writeFailure(context, message);
     }
+}
+
+fn writeBackendSkipped(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    reason: []const u8,
+) !void {
+    const message = try std.fmt.allocPrint(
+        context.allocator,
+        "Skipping Flatpak updates. {s}",
+        .{reason},
+    );
+    defer context.allocator.free(message);
+    if (invocation.globals.ui_mode)
+        try output.writeWarningFrame(context, message)
+    else
+        try output.writeWarning(context, message);
 }
 
 fn writeStandardInfoFrame(context: *runtime.RuntimeContext, count: usize) !void {
@@ -471,7 +503,7 @@ fn writePlain(context: *runtime.RuntimeContext, result: *const Result) !void {
 }
 
 fn writeStandardPlain(context: *runtime.RuntimeContext, updates: []const StandardUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "0;255;0", "All packages are up to date!");
+    if (updates.len == 0) return writeColoredLine(context, .success, "All packages are up to date!");
 
     var storage = std.heap.ArenaAllocator.init(context.allocator);
     defer storage.deinit();
@@ -497,11 +529,11 @@ fn writeStandardPlain(context: *runtime.RuntimeContext, updates: []const Standar
     );
     try context.stdout.writeByte('\n');
     const message = try std.fmt.allocPrint(allocator, "{d} standard packages can be updated", .{updates.len});
-    try writeColoredLine(context, "255;255;0", message);
+    try writeColoredLine(context, .warning, message);
 }
 
 fn writeAurPlain(context: *runtime.RuntimeContext, updates: []const AurUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "255;255;0", "All AUR packages are up to date.");
+    if (updates.len == 0) return writeColoredLine(context, .warning, "All AUR packages are up to date.");
 
     var storage = std.heap.ArenaAllocator.init(context.allocator);
     defer storage.deinit();
@@ -528,11 +560,11 @@ fn writeAurPlain(context: *runtime.RuntimeContext, updates: []const AurUpdate) !
         output.supportsAnsi(context),
     );
     const message = try std.fmt.allocPrint(allocator, "AUR Total: {d} packages need updates", .{updates.len});
-    try writeColoredLine(context, "255;255;0", message);
+    try writeColoredLine(context, .warning, message);
 }
 
 fn writeAppImagePlain(context: *runtime.RuntimeContext, updates: []const AppImageUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "255;255;0", "No appimage updates available");
+    if (updates.len == 0) return writeColoredLine(context, .warning, "No appimage updates available");
     for (updates) |update| {
         const message = try std.fmt.allocPrint(
             context.allocator,
@@ -540,7 +572,7 @@ fn writeAppImagePlain(context: *runtime.RuntimeContext, updates: []const AppImag
             .{ update.name, update.version },
         );
         defer context.allocator.free(message);
-        try writeColoredLine(context, "255;255;0", message);
+        try writeColoredLine(context, .warning, message);
     }
 }
 
@@ -570,19 +602,15 @@ fn writeFlatpakPlain(context: *runtime.RuntimeContext, updates: []const FlatpakU
     );
     try context.stdout.writeByte('\n');
     const message = try std.fmt.allocPrint(allocator, "Flatpak Total: {d} packages", .{updates.len});
-    try writeColoredLine(context, "255;255;0", message);
+    try writeColoredLine(context, .warning, message);
 }
 
 fn writeColoredLine(
     context: *runtime.RuntimeContext,
-    color: []const u8,
+    color: colors.Color,
     message: []const u8,
 ) !void {
-    if (output.supportsAnsi(context)) {
-        try context.stdout.print("\x1b[38;2;{s}m{s}\x1b[0m\n", .{ color, message });
-    } else {
-        try context.stdout.print("{s}\n", .{message});
-    }
+    try colors.printLine(context, color, "{s}", .{message});
 }
 
 fn sortedStandard(allocator: std.mem.Allocator, updates: []const StandardUpdate) ![]StandardUpdate {
@@ -613,32 +641,6 @@ fn sortedFlatpak(allocator: std.mem.Allocator, updates: []const FlatpakUpdate) !
         }
     }.lessThan);
     return sorted;
-}
-
-fn loadSizeDisplay(context: *runtime.RuntimeContext) !SizeDisplay {
-    const manager = config_manager.Manager.init(context);
-    const configuration = manager.read() catch return .megabytes;
-    const value = configuration.values.get("FileSizeDisplay") orelse return .megabytes;
-    if (value != .string) return .megabytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Bytes")) return .bytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Gigabytes")) return .gigabytes;
-    return .megabytes;
-}
-
-fn formatSize(allocator: std.mem.Allocator, display: SizeDisplay, bytes: i64) ![]const u8 {
-    return switch (display) {
-        .bytes => std.fmt.allocPrint(allocator, "{d} B", .{bytes}),
-        .megabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} MiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1048576.0},
-        ),
-        .gigabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} GiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1073741824.0},
-        ),
-    };
 }
 
 fn truncate(value: []const u8, maximum: usize) []const u8 {
@@ -796,13 +798,10 @@ fn runFlatpak(context: *runtime.RuntimeContext) !Result {
     };
     defer manager.deinit();
     const native_updates = try manager.get_updates_flatpak();
-    defer {
-        for (native_updates) |native| {
-            native.deinitPermissions(context.allocator);
-            Zigalpm.flatpak.bindings.libflatpak.flatpak.g_object_unref(native.ptr);
-        }
-        context.allocator.free(native_updates);
-    }
+    defer Zigalpm.flatpak.InstalledRef.deinitSlice(
+        context.allocator,
+        native_updates,
+    );
 
     const arena = try context.allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(context.allocator);
@@ -813,25 +812,25 @@ fn runFlatpak(context: *runtime.RuntimeContext) !Result {
     const allocator = arena.allocator();
     const updates = try allocator.alloc(FlatpakUpdate, native_updates.len);
     for (native_updates, updates) |native, *update| {
-        const ref = try Zigalpm.flatpak.bindings.libflatpak.refToString(allocator, native.ptr);
+        const ref = try allocator.dupe(u8, native.reference);
         update.* = .{
-            .id = try allocator.dupe(u8, native.id()),
-            .name = try allocator.dupe(u8, native.name()),
-            .version = try allocator.dupe(u8, native.version()),
-            .arch = try allocator.dupe(u8, native.arch()),
-            .branch = try allocator.dupe(u8, native.branch()),
-            .latest_commit = try allocator.dupe(u8, native.last_commit()),
-            .summary = try allocator.dupe(u8, native.summary()),
-            .kind = native.kind(),
-            .remote = try allocator.dupe(u8, native.origin()),
-            .install_level = @intFromEnum(native.get_scope()),
+            .id = try allocator.dupe(u8, native.id),
+            .name = try allocator.dupe(u8, native.name),
+            .version = try allocator.dupe(u8, native.version),
+            .arch = try allocator.dupe(u8, native.arch),
+            .branch = try allocator.dupe(u8, native.branch),
+            .latest_commit = try allocator.dupe(u8, native.latest_commit),
+            .summary = try allocator.dupe(u8, native.summary),
+            .kind = @intFromEnum(native.kind),
+            .remote = try allocator.dupe(u8, native.origin),
+            .install_level = @intFromEnum(native.scope),
             .permissions = try dupeStrings(allocator, native.permissions),
-            .installed_size = native.installed_size(),
+            .installed_size = native.installed_size,
             .ref = ref,
             .full_ref = try std.fmt.allocPrint(
                 allocator,
                 "{s}:{s}",
-                .{ native.origin(), ref },
+                .{ native.origin, ref },
             ),
         };
     }
@@ -1144,6 +1143,61 @@ test "bare list-updates shortcode continues after a backend failure" {
         stdout.writer.buffered(),
     );
     try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "Unable to query appimage updates") != null);
+}
+
+test "aggregate list-updates skips an unavailable Flatpak backend without failing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const outcome = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "-P", "--json" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const runner: Runner = .{
+        .call = struct {
+            fn run(
+                _: ?*anyopaque,
+                _: *runtime.RuntimeContext,
+                backend: Backend,
+                _: bool,
+            ) !Result {
+                if (backend == .flatpak)
+                    return error.FlatpakBackendUnavailable;
+                return emptyTestResult(backend);
+            }
+        }.run,
+    };
+
+    try std.testing.expectEqual(
+        @as(?u8, 0),
+        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+    );
+    try std.testing.expectEqualStrings(
+        "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}\n",
+        stdout.writer.buffered(),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stderr.writer.buffered(),
+        "Skipping Flatpak updates",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stderr.writer.buffered(),
+        "Install shelly-flatpak-backend and Flatpak",
+    ) != null);
 }
 
 test "list-updates forwards AUR show-hidden and ignores unsupported paths" {

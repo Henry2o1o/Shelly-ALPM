@@ -2,7 +2,9 @@ const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
+const format = @import("../output/format.zig");
 const output = @import("../output/config.zig");
+const colors = @import("../output/colors.zig");
 const table = @import("../output/table.zig");
 const parser = @import("../cli/parser.zig");
 const shortcodes = @import("../cli/shortcodes.zig");
@@ -220,7 +222,7 @@ fn dispatchFlatpakRemote(
 
 const ConfiguredRemote = struct {
     name: []const u8,
-    scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    scope: Zigalpm.flatpak.Scope,
     url: []const u8,
 };
 
@@ -236,13 +238,16 @@ fn dispatchConfiguredFlatpakRemotes(
         try writeConfiguredRemoteFailure(context, invocation, err);
         return 1;
     };
-    defer context.allocator.free(native_remotes);
+    defer Zigalpm.flatpak.Remote.deinitSlice(
+        context.allocator,
+        native_remotes,
+    );
     const remotes = try context.allocator.alloc(ConfiguredRemote, native_remotes.len);
     defer context.allocator.free(remotes);
     for (native_remotes, remotes) |remote, *item| item.* = .{
-        .name = remote.name() orelse "",
-        .scope = remote.get_scope(),
-        .url = remote.url() orelse "",
+        .name = remote.name,
+        .scope = remote.scope,
+        .url = remote.url,
     };
 
     if (invocation.globals.ui_mode) {
@@ -264,6 +269,13 @@ fn writeConfiguredRemoteFailure(
     invocation: *const parser.Invocation,
     err: anyerror,
 ) !void {
+    if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+        if (invocation.globals.ui_mode)
+            try output.writeErrorFrame(context, message)
+        else
+            try output.writeFailure(context, message);
+        return;
+    }
     const message = try std.fmt.allocPrint(
         context.allocator,
         "Unable to list configured Flatpak remotes: {t}",
@@ -298,18 +310,18 @@ fn writeConfiguredRemotesPlain(
 ) !void {
     const ansi = output.supportsAnsi(context);
     if (ansi)
-        try context.stdout.writeAll("\x1b[38;2;0;0;255mRemotes:\x1b[0m\n")
+        try context.stdout.print("{s}Remotes:{s}\n", .{ colors.colorCode(.heading), colors.reset })
     else
         try context.stdout.writeAll("Remotes:\n");
     for (remotes) |remote| {
         const scope = switch (remote.scope) {
-            .SYSTEM => "System",
-            .USER => "User",
-            .UNKNOWN => "Unknown",
+            .system => "System",
+            .user => "User",
+            .unknown => "Unknown",
         };
         if (ansi) {
-            const color = if (remote.scope == .SYSTEM) "\x1b[32m" else "\x1b[33m";
-            try context.stdout.print("{s} {s}({s})\x1b[0m\n", .{ remote.name, color, scope });
+            const color: colors.Color = if (remote.scope == .system) .success else .warning;
+            try context.stdout.print("{s} {s}({s}){s}\n", .{ remote.name, colors.colorCode(color), scope, colors.reset });
         } else {
             try context.stdout.print("{s} ({s})\n", .{ remote.name, scope });
         }
@@ -322,6 +334,13 @@ fn writeRemoteQueryFailure(
     query: []const u8,
     err: anyerror,
 ) !void {
+    if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+        if (invocation.globals.ui_mode)
+            try output.writeErrorFrame(context, message)
+        else
+            try output.writeFailure(context, message);
+        return;
+    }
     const message = try std.fmt.allocPrint(
         context.allocator,
         "Unable to read Flatpak AppStream catalog '{s}': {t}",
@@ -354,7 +373,7 @@ fn writeRemoteResult(
 
 const AppstreamRemote = struct {
     name: []const u8,
-    scope: Zigalpm.flatpak.bindings.libflatpak.Scope,
+    scope: Zigalpm.flatpak.Scope,
 };
 
 const MergedAppstreamApp = struct {
@@ -519,6 +538,17 @@ fn writeQueryFailure(
     backend: Backend,
     err: anyerror,
 ) !void {
+    if (backend == .flatpak) {
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+            if (invocation.globals.ui_mode)
+                try output.writeErrorFrame(context, message)
+            else if (invocation.globals.json)
+                try context.stderr.print("{s}\n", .{message})
+            else
+                try output.writeFailure(context, message);
+            return;
+        }
+    }
     const message = try std.fmt.allocPrint(
         context.allocator,
         "Unable to list installed {s} objects: {t}",
@@ -799,10 +829,7 @@ fn writeFlatpakPlain(context: *runtime.RuntimeContext, items: []const FlatpakIte
 }
 
 fn coloredTotal(context: *runtime.RuntimeContext, message: []const u8) !void {
-    if (output.supportsAnsi(context))
-        try context.stdout.print("\x1b[38;2;0;0;255m{s}\x1b[0m\n", .{message})
-    else
-        try context.stdout.print("{s}\n", .{message});
+    try colors.printLine(context, .heading, "{s}", .{message});
 }
 
 fn row(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
@@ -865,24 +892,10 @@ fn sortedFlatpaks(allocator: std.mem.Allocator, items: []const FlatpakItem) ![]F
     return sorted;
 }
 
-const SizeDisplay = enum { bytes, megabytes, gigabytes };
-
-fn loadSizeDisplay(context: *runtime.RuntimeContext) !SizeDisplay {
-    const configuration = config_manager.Manager.init(context).read() catch return .megabytes;
-    const value = configuration.values.get("FileSizeDisplay") orelse return .megabytes;
-    if (value != .string) return .megabytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Bytes")) return .bytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Gigabytes")) return .gigabytes;
-    return .megabytes;
-}
-
-fn formatSize(allocator: std.mem.Allocator, display: SizeDisplay, bytes: u64) ![]const u8 {
-    return switch (display) {
-        .bytes => std.fmt.allocPrint(allocator, "{d} B", .{bytes}),
-        .megabytes => std.fmt.allocPrint(allocator, "{d:.2} MiB", .{@as(f64, @floatFromInt(bytes)) / 1048576.0}),
-        .gigabytes => std.fmt.allocPrint(allocator, "{d:.2} GiB", .{@as(f64, @floatFromInt(bytes)) / 1073741824.0}),
-    };
-}
+const SizeDisplay = format.SizeDisplay;
+const loadSizeDisplay = format.loadSizeDisplay;
+const formatSize = format.formatSize;
+const formatIsoDateTime = format.formatIsoDateTime;
 
 fn formatSignedSize(allocator: std.mem.Allocator, display: SizeDisplay, bytes: i64) ![]const u8 {
     return formatSize(allocator, display, if (bytes <= 0) 0 else @intCast(bytes));
@@ -1054,7 +1067,7 @@ fn runFlatpak(context: *runtime.RuntimeContext) !Result {
     const allocator = arena.allocator();
     const items = try allocator.alloc(FlatpakItem, native_items.len);
     for (native_items, items) |native, *item| {
-        const kind = if (native.kind == 0) "app" else "runtime";
+        const kind = if (native.kind == .app) "app" else "runtime";
         const ref = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{s}/{s}",
@@ -1068,7 +1081,7 @@ fn runFlatpak(context: *runtime.RuntimeContext) !Result {
             .branch = try allocator.dupe(u8, native.branch),
             .latest_commit = try allocator.dupe(u8, native.latest_commit),
             .summary = try allocator.dupe(u8, native.summary),
-            .kind = native.kind,
+            .kind = @intFromEnum(native.kind),
             .remote = try allocator.dupe(u8, native.origin),
             .install_level = @intFromEnum(native.scope),
             .installed_size = native.installed_size,
@@ -1121,26 +1134,6 @@ fn ignoredStandardPackage(manager: *Zigalpm.AlpmManager, name: []const u8) bool 
         if (std.mem.eql(u8, ignored, name)) return true;
     }
     return false;
-}
-
-fn formatIsoDateTime(buffer: []u8, seconds: i64) ![]const u8 {
-    if (seconds < 0) return std.fmt.bufPrint(buffer, "1970-01-01T00:00:00", .{});
-    const epoch: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
-    const year_day = epoch.getEpochDay().calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_seconds = epoch.getDaySeconds();
-    return std.fmt.bufPrint(
-        buffer,
-        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}",
-        .{
-            year_day.year,
-            month_day.month.numeric(),
-            month_day.day_index + 1,
-            day_seconds.getHoursIntoDay(),
-            day_seconds.getMinutesIntoHour(),
-            day_seconds.getSecondsIntoMinute(),
-        },
-    );
 }
 
 fn parseTestArguments(
@@ -1372,8 +1365,8 @@ test "Flatpak remote mode parses configured remotes and AppStream queries" {
 
 test "configured Flatpak remotes use compatibility JSON fields and scopes" {
     const remotes = [_]ConfiguredRemote{
-        .{ .name = "flathub", .scope = .SYSTEM, .url = "https://dl.flathub.org/repo/" },
-        .{ .name = "flathub-beta", .scope = .USER, .url = "https://flathub.org/beta-repo/" },
+        .{ .name = "flathub", .scope = .system, .url = "https://dl.flathub.org/repo/" },
+        .{ .name = "flathub-beta", .scope = .user, .url = "https://flathub.org/beta-repo/" },
     };
     var rendered = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer rendered.deinit();
@@ -1418,7 +1411,7 @@ test "Flatpak all-remote AppStream JSON merges IDs and records scopes" {
             .owner_allocator = std.testing.allocator,
             .arena_state = undefined,
             .remote_name = "flathub",
-            .scope = .SYSTEM,
+            .scope = .system,
             .arch = "x86_64",
             .path = "",
             .apps = &first_apps,
@@ -1427,7 +1420,7 @@ test "Flatpak all-remote AppStream JSON merges IDs and records scopes" {
             .owner_allocator = std.testing.allocator,
             .arena_state = undefined,
             .remote_name = "flathub-user",
-            .scope = .USER,
+            .scope = .user,
             .arch = "x86_64",
             .path = "",
             .apps = &second_apps,
@@ -1469,7 +1462,7 @@ test "Flatpak named-remote AppStream JSON uses UI framing" {
         .owner_allocator = std.testing.allocator,
         .arena_state = undefined,
         .remote_name = "flathub",
-        .scope = .SYSTEM,
+        .scope = .system,
         .arch = "x86_64",
         .path = "",
         .apps = &apps,

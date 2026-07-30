@@ -3,6 +3,8 @@ const Zigalpm = @import("Zigalpm");
 const model = @import("../config/model.zig");
 const runtime = @import("../runtime/context.zig");
 const xdg = @import("../runtime/xdg.zig");
+const colors = @import("colors.zig");
+const format = @import("format.zig");
 const review_output = @import("review.zig");
 
 pub fn writeListPlain(
@@ -13,10 +15,10 @@ pub fn writeListPlain(
     for (config.values.keys()) |key| width = @max(width, key.len);
     const use_color = supportsAnsi(context);
     for (config.values.keys()) |key| {
-        if (use_color) try context.stdout.writeAll("\x1b[38;2;0;255;255m");
+        if (use_color) try context.stdout.writeAll(colors.colorCode(.info));
         try context.stdout.print("{s}", .{key});
         try context.stdout.splatByteAll(' ', width - key.len);
-        if (use_color) try context.stdout.writeAll("\x1b[0m");
+        if (use_color) try context.stdout.writeAll(colors.reset);
         const value = try config.getDisplay(context.allocator, key);
         try context.stdout.print("  {s}\n", .{value orelse "(null)"});
     }
@@ -61,6 +63,35 @@ pub fn writeConfigFrame(context: *runtime.RuntimeContext, config: *const model.C
 
 pub fn writeInfoFrame(context: *runtime.RuntimeContext, message: []const u8) !void {
     try writeAlpmInfoFrame(context, "InformationalOutput", message);
+}
+
+pub fn writeWarningFrame(context: *runtime.RuntimeContext, message: []const u8) !void {
+    var payload = std.Io.Writer.Allocating.init(context.allocator);
+    defer payload.deinit();
+    var json: std.json.Stringify = .{ .writer = &payload.writer };
+    try json.beginObject();
+    try json.objectField("$kind");
+    try json.write("alpm.info");
+    try json.objectField("EventType");
+    try json.write("WarningOutput");
+    try json.objectField("Message");
+    try json.write(message);
+    try json.objectField("PackageName");
+    try json.write(null);
+    try json.objectField("CurrentIndex");
+    try json.write(null);
+    try json.objectField("TotalCount");
+    try json.write(null);
+    try json.objectField("Source");
+    try json.write("Flatpak");
+    try json.objectField("Level");
+    try json.write("Warning");
+    try json.objectField("TimeStamp");
+    const time = try timestamp(context);
+    defer context.allocator.free(time);
+    try json.write(time);
+    try json.endObject();
+    try writeFrame(context, payload.writer.buffered());
 }
 
 pub fn writeAlpmInfoFrame(
@@ -424,6 +455,11 @@ fn writeSimpleProgressFrame(
 }
 
 fn progressPercentage(update: Zigalpm.operation.ProgressUpdate) u8 {
+    if (update.native_code) |native_code| switch (native_code) {
+        512, 514, 516, 518 => return 0,
+        513, 515, 517, 519, 520, 521 => return 100,
+        else => {},
+    };
     if (update.percentage) |percentage| {
         if (std.math.isNan(percentage) or percentage <= 0) return 0;
         if (percentage >= 100) return 100;
@@ -460,6 +496,10 @@ fn progressType(progress: Zigalpm.operation.ProgressEvent) []const u8 {
         200 => "MakepkgBuild",
         201 => "MakepkgPackage",
         202 => "AurDownload",
+        512, 513 => "AurDownload",
+        514, 515 => "MakepkgBuild",
+        516, 517 => "AddStart",
+        518, 519 => "RemoveStart",
         else => fallbackProgressType(progress.envelope.kind),
     };
     return fallbackProgressType(progress.envelope.kind);
@@ -480,8 +520,41 @@ fn fallbackProgressType(kind: Zigalpm.operation.OperationKind) []const u8 {
 fn progressMessage(stage: ?[]const u8) ?[]const u8 {
     const value = stage orelse return null;
     if (std.ascii.eqlIgnoreCase(value, "transaction") or
-        std.ascii.eqlIgnoreCase(value, "download")) return null;
+        std.ascii.eqlIgnoreCase(value, "download") or
+        std.mem.startsWith(u8, value, "aur_")) return null;
     return value;
+}
+
+test "AUR lifecycle progress uses stage semantics instead of package position" {
+    const build_start: Zigalpm.operation.ProgressEvent = .{
+        .envelope = .{
+            .operation_id = 1,
+            .parent_id = null,
+            .backend = .aur,
+            .kind = .install,
+            .subject = "demo",
+        },
+        .update = .{
+            .stage = "aur_build_start",
+            .completed = 1,
+            .total = 1,
+            .native_code = 514,
+        },
+    };
+    try std.testing.expectEqualStrings("MakepkgBuild", progressType(build_start));
+    try std.testing.expectEqual(@as(u8, 0), progressPercentage(build_start.update));
+    try std.testing.expect(progressMessage(build_start.update.stage) == null);
+
+    var build_done = build_start;
+    build_done.update.stage = "aur_build_done";
+    build_done.update.native_code = 515;
+    try std.testing.expectEqual(@as(u8, 100), progressPercentage(build_done.update));
+
+    var install_start = build_start;
+    install_start.update.stage = "aur_install_start";
+    install_start.update.native_code = 516;
+    try std.testing.expectEqualStrings("AddStart", progressType(install_start));
+    try std.testing.expectEqual(@as(u8, 0), progressPercentage(install_start.update));
 }
 
 pub fn writeErrorFrame(context: *runtime.RuntimeContext, message: []const u8) !void {
@@ -506,19 +579,15 @@ pub fn writeErrorFrame(context: *runtime.RuntimeContext, message: []const u8) !v
 }
 
 pub fn writeSuccess(context: *runtime.RuntimeContext, message: []const u8) !void {
-    if (supportsAnsi(context)) {
-        try context.stdout.print("\x1b[38;2;0;128;0m{s}\x1b[0m\n", .{message});
-    } else {
-        try context.stdout.print("{s}\n", .{message});
-    }
+    try colors.printLine(context, .success, "{s}", .{message});
 }
 
 pub fn writeFailure(context: *runtime.RuntimeContext, message: []const u8) !void {
-    if (supportsAnsi(context)) {
-        try context.stdout.print("\x1b[38;2;255;0;0m{s}\x1b[0m\n", .{message});
-    } else {
-        try context.stdout.print("{s}\n", .{message});
-    }
+    try colors.printLine(context, .err, "{s}", .{message});
+}
+
+pub fn writeWarning(context: *runtime.RuntimeContext, message: []const u8) !void {
+    try context.stderr.print("warning: {s}\n", .{message});
 }
 
 pub fn writeFrame(context: *runtime.RuntimeContext, payload: []const u8) !void {
@@ -541,20 +610,5 @@ pub fn supportsAnsi(context: *const runtime.RuntimeContext) bool {
 fn timestamp(context: *runtime.RuntimeContext) ![]const u8 {
     const seconds = std.Io.Clock.real.now(context.io).toSeconds();
     if (seconds < 0) return error.InvalidTimestamp;
-    const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
-    const year_day = epoch_seconds.getEpochDay().calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_seconds = epoch_seconds.getDaySeconds();
-    return std.fmt.allocPrint(
-        context.allocator,
-        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}+00:00",
-        .{
-            year_day.year,
-            month_day.month.numeric(),
-            month_day.day_index + 1,
-            day_seconds.getHoursIntoDay(),
-            day_seconds.getMinutesIntoHour(),
-            day_seconds.getSecondsIntoMinute(),
-        },
-    );
+    return format.formatIsoDateTimeUtc(context.allocator, seconds);
 }

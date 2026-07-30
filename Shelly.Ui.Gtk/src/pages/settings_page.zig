@@ -9,9 +9,9 @@ const ShellyTabs = @import("../models/shelly_config.zig").ShellyTabs;
 const DayOfWeek = @import("../models/shelly_config.zig").DayOfWeek;
 const NavMode = @import("../models/shelly_config.zig").NavMode;
 const ConfigResolver = @import("../services/config_resolver.zig").ConfigResolver;
-const runtime = @import("../services/runtime.zig");
 const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
-const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
+const support_packages = @import("../services/support_packages.zig");
+const runtime = @import("../services/runtime.zig");
 const systemd_tray = @import("../services/systemd_tray.zig");
 const tray_service = @import("../services/tray_service.zig");
 const support = @import("support.zig");
@@ -31,6 +31,12 @@ pub const ShellySettingsPage = extern struct {
 
     const Self = @This();
     pub const Parent = gtk.Box;
+    const SupportFeature = support_packages.Feature;
+    const SupportInstallStage = enum {
+        dependencies,
+        backend_standard,
+        backend_aur,
+    };
 
     pub const title: [:0]const u8 = "Settings";
     pub const icon_name: [:0]const u8 = "settings-symbolic";
@@ -84,10 +90,6 @@ pub const ShellySettingsPage = extern struct {
         webview_switch: *gtk.Switch,
         appimage_install_path_box: *gtk.Box,
         appimage_install_path_button: *gtk.Button,
-        sync_button: *gtk.Button,
-        rm_db_lock_button: *gtk.Button,
-        fix_permissions_button: *gtk.Button,
-        purify_button: *gtk.Button,
 
         // Bottom action bar
         save_button: *gtk.Button,
@@ -99,6 +101,10 @@ pub const ShellySettingsPage = extern struct {
 
         toast: *Toast,
         loaded: bool,
+        save_guard: bool,
+        save_source: c_uint,
+        support_install_pending: ?SupportFeature,
+        support_install_stage: SupportInstallStage,
 
         var offset: c_int = 0;
     };
@@ -127,6 +133,10 @@ pub const ShellySettingsPage = extern struct {
         gtk.Widget.initTemplate(self.as(gtk.Widget));
         const p = self.priv();
         p.loaded = false;
+        p.save_guard = false;
+        p.save_source = 0;
+        p.support_install_pending = null;
+        p.support_install_stage = .dependencies;
 
         populateDropdowns(p);
 
@@ -139,11 +149,6 @@ pub const ShellySettingsPage = extern struct {
         _ = gtk.Button.signals.clicked.connect(p.tray_updates_icon_clear_button, *Self, &on_clear_tray_updates_icon, self, .{});
 
         _ = gtk.Button.signals.clicked.connect(p.appimage_install_path_button, *Self, &on_pick_appimage_install_path, self, .{});
-
-        _ = gtk.Button.signals.clicked.connect(p.sync_button, *Self, &on_sync_db, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.rm_db_lock_button, *Self, &on_remove_db_lock, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.fix_permissions_button, *Self, &on_fix_permissions, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.purify_button, *Self, &on_purify, self, .{});
 
         _ = gobject.Object.signals.notify.connect(
             p.daily_schedule.as(gobject.Object),
@@ -173,6 +178,94 @@ pub const ShellySettingsPage = extern struct {
             self,
             .{ .detail = "active" },
         );
+        _ = gobject.Object.signals.notify.connect(
+            p.nav_mode_drop.as(gobject.Object),
+            *Self,
+            &on_nav_mode_changed,
+            self,
+            .{ .detail = "selected" },
+        );
+        _ = gobject.Object.signals.notify.connect(
+            p.flatpak_switch.as(gobject.Object),
+            *Self,
+            &on_flatpak_notify,
+            self,
+            .{ .detail = "active" },
+        );
+        _ = gobject.Object.signals.notify.connect(
+            p.appimage_switch.as(gobject.Object),
+            *Self,
+            &on_appimage_notify,
+            self,
+            .{ .detail = "active" },
+        );
+
+        const autosave_switches = .{
+            p.recommended_switch,
+            p.shelly_icons_switch,
+            p.symbolic_tray_switch,
+            p.no_confirm_switch,
+            p.shelly_search_switch,
+            p.package_downgrade_switch,
+            p.remove_cache_switch,
+            p.webview_switch,
+        };
+        inline for (autosave_switches) |s| {
+            _ = gobject.Object.signals.notify.connect(
+                s.as(gobject.Object),
+                *Self,
+                &on_autosave_notify,
+                self,
+                .{ .detail = "active" },
+            );
+        }
+        _ = gobject.Object.signals.notify.connect(
+            p.aur_switch.as(gobject.Object),
+            *Self,
+            &on_autosave_notify,
+            self,
+            .{ .detail = "active", .after = true },
+        );
+
+        _ = gobject.Object.signals.notify.connect(
+            p.default_page_drop.as(gobject.Object),
+            *Self,
+            &on_autosave_notify,
+            self,
+            .{ .detail = "selected" },
+        );
+        _ = gobject.Object.signals.notify.connect(
+            p.language_drop.as(gobject.Object),
+            *Self,
+            &on_autosave_notify,
+            self,
+            .{ .detail = "selected" },
+        );
+        _ = gobject.Object.signals.notify.connect(
+            p.nav_mode_drop.as(gobject.Object),
+            *Self,
+            &on_autosave_notify,
+            self,
+            .{ .detail = "selected", .after = true },
+        );
+
+        const day_checks = .{
+            p.day_sun_check,
+            p.day_mon_check,
+            p.day_tue_check,
+            p.day_wed_check,
+            p.day_thu_check,
+            p.day_fri_check,
+            p.day_sat_check,
+        };
+        inline for (day_checks) |c| {
+            _ = gtk.CheckButton.signals.toggled.connect(c, *Self, &on_autosave_toggled, self, .{});
+        }
+
+        const spins = .{ p.tray_interval_spin, p.update_hour_spin, p.update_minute_spin };
+        inline for (spins) |s| {
+            _ = gtk.SpinButton.signals.value_changed.connect(s, *Self, &on_autosave_value_changed, self, .{});
+        }
 
         support.connectLifecycle(Self, self);
 
@@ -202,15 +295,19 @@ pub const ShellySettingsPage = extern struct {
             return;
         };
 
-        populateFromConfig(p, cfg);
+        p.save_guard = true;
+        applyConfig(p, cfg);
+        p.save_guard = false;
         applyScheduleVisibility(p);
         applyTrayVisibility(p);
     }
 
     pub fn onUnmap(self: *Self) void {
-        self.save() catch |err| {
-            std.log.err("settings: save failed: {t}", .{err});
-        };
+        const p = self.priv();
+        if (p.save_source != 0) {
+            _ = glib.Source.remove(p.save_source);
+            p.save_source = 0;
+        }
     }
 
     fn on_save_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
@@ -240,7 +337,260 @@ pub const ShellySettingsPage = extern struct {
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.applyConfig();
+            win.applyDefaultPage();
         }
+    }
+
+    fn autosave(self: *Self) void {
+        const p = self.priv();
+        if (p.save_guard or !p.loaded) return;
+
+        if (p.save_source != 0) {
+            _ = glib.Source.remove(p.save_source);
+            p.save_source = 0;
+        }
+
+        const svc = obtainConfigService() catch return;
+        const cfg = svc.get() catch return;
+
+        var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        defer arena.deinit();
+
+        var updated = cfg.*;
+        collectIntoConfig(p, arena.allocator(), &updated);
+        svc.set(updated) catch {
+            p.toast.show(.@"error", translations._("Failed to save settings"));
+            return;
+        };
+        svc.save() catch {
+            p.toast.show(.@"error", translations._("Failed to save settings"));
+            return;
+        };
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.applyConfig();
+        }
+    }
+
+    fn scheduleAutosave(self: *Self) void {
+        const p = self.priv();
+        if (p.save_guard or !p.loaded) return;
+        if (p.save_source != 0) return;
+        p.save_source = glib.timeoutAdd(300, &on_autosave_timeout, self);
+    }
+
+    fn on_autosave_timeout(data: ?*anyopaque) callconv(.c) c_int {
+        const self: *Self = @ptrCast(@alignCast(data.?));
+        self.priv().save_source = 0;
+        self.autosave();
+        return 0;
+    }
+
+    fn on_autosave_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        self.autosave();
+    }
+
+    fn on_flatpak_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        self.onSupportNotify(.flatpak);
+    }
+
+    fn on_appimage_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        self.onSupportNotify(.appimage);
+    }
+
+    fn onSupportNotify(self: *Self, feature: SupportFeature) void {
+        const p = self.priv();
+        if (p.save_guard or !p.loaded or p.support_install_pending != null) return;
+
+        if (!getSwitch(supportSwitch(p, feature))) {
+            self.autosave();
+            return;
+        }
+
+        const svc = obtainConfigService() catch {
+            self.restoreSupportSwitch(feature, false);
+            return;
+        };
+        const cfg = svc.get() catch {
+            self.restoreSupportSwitch(feature, false);
+            return;
+        };
+        if (supportEnabled(cfg, feature)) return;
+
+        const win = support.getWindow(ShellyWindow, self) orelse {
+            self.restoreSupportSwitch(feature, false);
+            return;
+        };
+
+        const packages = supportDependencies(feature);
+        const argv = ShellyCommands.install(std.heap.c_allocator, packages) catch {
+            self.restoreSupportSwitch(feature, false);
+            p.toast.show(.@"error", supportStartFailureMessage(feature));
+            return;
+        };
+        defer std.heap.c_allocator.free(argv);
+
+        p.support_install_pending = feature;
+        p.support_install_stage = .dependencies;
+        win.startTransaction(.{
+            .title = supportInstallTitle(feature),
+            .argv = argv,
+            .packages = packages,
+            .privileged = true,
+            .on_complete = &on_support_install_complete,
+            .ctx = self,
+        });
+    }
+
+    fn on_support_install_complete(ctx: *anyopaque, success: bool) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        const p = self.priv();
+        const feature = p.support_install_pending orelse return;
+
+        switch (p.support_install_stage) {
+            .dependencies => {
+                if (!success) return self.finishSupportInstall(feature, false);
+                if (feature == .flatpak) {
+                    p.support_install_stage = .backend_standard;
+                    _ = glib.idleAdd(&start_support_backend_idle, self);
+                    return;
+                }
+            },
+            .backend_standard => {
+                if (!success) {
+                    p.support_install_stage = .backend_aur;
+                    _ = glib.idleAdd(&start_support_backend_idle, self);
+                    return;
+                }
+            },
+            .backend_aur => if (!success) return self.finishSupportInstall(feature, false),
+        }
+
+        self.finishSupportInstall(feature, true);
+    }
+
+    fn start_support_backend_idle(data: ?*anyopaque) callconv(.c) c_int {
+        const self: *Self = @ptrCast(@alignCast(data.?));
+        self.startSupportBackend();
+        return 0;
+    }
+
+    fn startSupportBackend(self: *Self) void {
+        const p = self.priv();
+        const feature = p.support_install_pending orelse return;
+        const package = support_packages.flatpakBackendPackage();
+        const packages = &.{package};
+        const argv = switch (p.support_install_stage) {
+            .backend_standard => ShellyCommands.install(std.heap.c_allocator, packages),
+            .backend_aur => ShellyCommands.install_aur(std.heap.c_allocator, packages),
+            .dependencies => unreachable,
+        } catch {
+            p.support_install_pending = null;
+            self.restoreSupportSwitch(feature, false);
+            p.toast.show(.@"error", supportStartFailureMessage(feature));
+            return;
+        };
+        defer std.heap.c_allocator.free(argv);
+
+        const win = support.getWindow(ShellyWindow, self) orelse {
+            self.finishSupportInstall(feature, false);
+            return;
+        };
+        win.startTransaction(.{
+            .title = supportInstallTitle(feature),
+            .argv = argv,
+            .packages = packages,
+            .privileged = true,
+            .on_complete = &on_support_install_complete,
+            .ctx = self,
+        });
+    }
+
+    fn finishSupportInstall(self: *Self, feature: SupportFeature, success: bool) void {
+        const p = self.priv();
+        p.support_install_pending = null;
+
+        if (!success) {
+            self.restoreSupportSwitch(feature, false);
+            p.toast.show(.@"error", supportFailureMessage(feature));
+            return;
+        }
+
+        const save_result = switch (feature) {
+            .flatpak => persistFeatureEnabled(.FlatPackEnabled, true),
+            .appimage => persistFeatureEnabled(.AppImageEnabled, true),
+        };
+        save_result catch {
+            self.restoreSupportSwitch(feature, false);
+            p.toast.show(.@"error", translations._("Failed to save settings"));
+            return;
+        };
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.applyConfig();
+        }
+        p.toast.show(.success, supportSuccessMessage(feature));
+    }
+
+    fn restoreSupportSwitch(self: *Self, feature: SupportFeature, enabled: bool) void {
+        const p = self.priv();
+        p.save_guard = true;
+        setSwitch(supportSwitch(p, feature), enabled);
+        p.save_guard = false;
+    }
+
+    fn supportSwitch(p: *Private, feature: SupportFeature) *gtk.Switch {
+        return switch (feature) {
+            .flatpak => p.flatpak_switch,
+            .appimage => p.appimage_switch,
+        };
+    }
+
+    fn supportEnabled(cfg: *const ShellyConfig, feature: SupportFeature) bool {
+        return switch (feature) {
+            .flatpak => cfg.FlatPackEnabled,
+            .appimage => cfg.AppImageEnabled,
+        };
+    }
+
+    fn supportDependencies(feature: SupportFeature) []const []const u8 {
+        return support_packages.dependenciesForFeature(feature);
+    }
+
+    fn supportInstallTitle(feature: SupportFeature) [:0]const u8 {
+        return switch (feature) {
+            .flatpak => translations._("Installing Flatpak support"),
+            .appimage => translations._("Installing AppImage support"),
+        };
+    }
+
+    fn supportStartFailureMessage(feature: SupportFeature) [:0]const u8 {
+        return switch (feature) {
+            .flatpak => translations._("Failed to start Flatpak support installation"),
+            .appimage => translations._("Failed to start AppImage support installation"),
+        };
+    }
+
+    fn supportFailureMessage(feature: SupportFeature) [:0]const u8 {
+        return switch (feature) {
+            .flatpak => translations._("Flatpak support installation failed"),
+            .appimage => translations._("AppImage support installation failed"),
+        };
+    }
+
+    fn supportSuccessMessage(feature: SupportFeature) [:0]const u8 {
+        return switch (feature) {
+            .flatpak => translations._("Flatpak support enabled"),
+            .appimage => translations._("AppImage support enabled"),
+        };
+    }
+
+    fn on_autosave_toggled(_: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        self.autosave();
+    }
+
+    fn on_autosave_value_changed(_: *gtk.SpinButton, self: *Self) callconv(.c) void {
+        self.scheduleAutosave();
     }
 
     fn showChangelog(self: *Self) !void {
@@ -505,83 +855,9 @@ pub const ShellySettingsPage = extern struct {
         updateConfigField(.AppImageInstallPath, path_slice);
     }
 
-    fn on_sync_db(_: *gtk.Button, self: *Self) callconv(.c) void {
-        const argv = ShellyCommands.sync_db(std.heap.c_allocator) catch return;
-        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
-
-        const win = support.getWindow(ShellyWindow, self) orelse return;
-        win.startTransaction(.{
-            .title = translations._("Refreshing package databases"),
-            .argv = argv,
-            .packages = &.{},
-            .on_complete = &on_transaction_complete,
-            .privileged = true,
-            .ctx = self,
-        });
-    }
-
-    fn on_remove_db_lock(_: *gtk.Button, self: *Self) callconv(.c) void {
-        var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-        defer arena.deinit();
-        var threaded: std.Io.Threaded = .init(arena.allocator(), .{});
-        defer threaded.deinit();
-
-        const cli = ShellyCli{ .allocator = arena.allocator(), .io = threaded.io() };
-        const parsed = cli.repair_db() catch |err| {
-            std.log.err("settings: repair-db failed: {any}", .{err});
-            return;
-        };
-        defer parsed.deinit();
-
-        const response = parsed.value;
-        if (response.isSuccess()) {
-            self.priv().toast.show(.success, translations._("Database lock removed successfully"));
-        } else {
-            self.priv().toast.show(.@"error", translations._("Failed to remove database lock"));
-        }
-    }
-
-    fn on_fix_permissions(_: *gtk.Button, self: *Self) callconv(.c) void {
-        const argv = ShellyCommands.fix_permissions(std.heap.c_allocator) catch return;
-        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
-
-        const win = support.getWindow(ShellyWindow, self) orelse return;
-        win.startTransaction(.{
-            .title = translations._("Fixing permissions"),
-            .argv = argv,
-            .packages = &.{},
-            .on_complete = &on_transaction_complete,
-            .privileged = true,
-            .ctx = self,
-        });
-    }
-
-    fn on_purify(_: *gtk.Button, self: *Self) callconv(.c) void {
-        const argv = ShellyCommands.purify(std.heap.c_allocator) catch return;
-        defer std.mem.Allocator.free(std.heap.c_allocator, argv);
-
-        const win = support.getWindow(ShellyWindow, self) orelse return;
-        win.startTransaction(.{
-            .title = translations._("Purifying packages"),
-            .argv = argv,
-            .packages = &.{},
-            .on_complete = &on_transaction_complete,
-            .privileged = true,
-            .ctx = self,
-        });
-    }
-
-    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
-        const self: *Self = @ptrCast(@alignCast(ctx));
-        if (success) {
-            self.priv().toast.show(.success, translations._("Operation completed successfully"));
-        } else {
-            self.priv().toast.show(.@"error", translations._("Operation failed"));
-        }
-    }
-
     fn on_schedule_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         applyScheduleVisibility(self.priv());
+        self.autosave();
     }
 
     fn on_tray_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
@@ -598,18 +874,24 @@ pub const ShellySettingsPage = extern struct {
         if (cfg.TrayEnabled == active) return;
 
         if (active) {
-            tray_service.start();
+            tray_service.start(runtime.io, std.heap.c_allocator);
+            updateConfigField(.TrayEnabled, active);
             p.toast.show(.success, translations._("Tray enabled"));
         } else {
-            const stopped = tray_service.end(runtime.io);
-            if (stopped) {
-                p.toast.show(.success, translations._("Tray disabled"));
-            } else {
-                p.toast.show(.info, translations._("Tray disabled"));
-            }
-        }
+            const stopped = tray_service.end(runtime.io, std.heap.c_allocator);
+            updateConfigField(.TrayEnabled, active);
 
-        updateConfigField(.TrayEnabled, active);
+            systemd_tray.removeService(std.heap.c_allocator, runtime.io) catch |err| {
+                std.log.err("failed to remove systemd tray service: {s}", .{@errorName(err)});
+                p.toast.show(.@"error", translations._("Tray disabled, but autostart service remains"));
+                return;
+            };
+
+            p.toast.show(if (stopped) .success else .info, translations._("Tray disabled"));
+
+            gtk.Switch.setActive(p.tray_auto_switch, 0);
+            updateConfigField(.TrayAutoStart, active);
+        }
     }
 
     fn on_tray_auto_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
@@ -669,6 +951,15 @@ pub const ShellySettingsPage = extern struct {
         dialog.setButtons(translations._("Enable"), translations._("Cancel"));
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.showLockout(dialog.as(gtk.Widget));
+        }
+    }
+
+    fn on_nav_mode_changed(obj: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        const dd: *gtk.DropDown = @ptrCast(@alignCast(obj));
+        const idx = gtk.DropDown.getSelected(dd);
+        if (idx >= nav_mode_entries.len) return;
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.requestNav(nav_mode_entries[idx].value);
         }
     }
 
@@ -732,10 +1023,6 @@ pub const ShellySettingsPage = extern struct {
         .{ "webview_switch", @offsetOf(Private, "webview_switch") },
         .{ "appimage_install_path_box", @offsetOf(Private, "appimage_install_path_box") },
         .{ "appimage_install_path_button", @offsetOf(Private, "appimage_install_path_button") },
-        .{ "sync_button", @offsetOf(Private, "sync_button") },
-        .{ "rm_db_lock_button", @offsetOf(Private, "rm_db_lock_button") },
-        .{ "fix_permissions_button", @offsetOf(Private, "fix_permissions_button") },
-        .{ "purify_button", @offsetOf(Private, "purify_button") },
 
         // Bottom action bar
         .{ "save_button", @offsetOf(Private, "save_button") },
@@ -877,7 +1164,19 @@ fn updateConfigField(
     };
 }
 
-fn populateFromConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
+fn persistFeatureEnabled(
+    comptime field: std.meta.FieldEnum(ShellyConfig),
+    enabled: bool,
+) !void {
+    const svc = try obtainConfigService();
+    const cfg = try svc.get();
+    var updated = cfg.*;
+    @field(updated, @tagName(field)) = enabled;
+    try svc.set(updated);
+    try svc.save();
+}
+
+fn applyConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
     setSwitch(p.aur_switch, cfg.AurEnabled);
     setSwitch(p.flatpak_switch, cfg.FlatPackEnabled);
     setSwitch(p.recommended_switch, cfg.RecommendedEnabled);
@@ -957,7 +1256,6 @@ fn collectIntoConfig(p: *ShellySettingsPage.Private, allocator: std.mem.Allocato
         gtk.SpinButton.getValueAsInt(p.update_minute_spin),
     ) catch cfg.Time;
 
-    // Look & Feel
     cfg.ShellyIconsEnabled = getSwitch(p.shelly_icons_switch);
     cfg.UseSymbolicTray = getSwitch(p.symbolic_tray_switch);
 
@@ -977,6 +1275,49 @@ fn collectIntoConfig(p: *ShellySettingsPage.Private, allocator: std.mem.Allocato
     cfg.PackageDowngradeEnabled = getSwitch(p.package_downgrade_switch);
     cfg.PackageManagementRemoveConfigs = getSwitch(p.remove_cache_switch);
     cfg.WebviewEnabled = getSwitch(p.webview_switch);
+}
+
+test "Flatpak support uses libflatpak and the configured companion backend" {
+    const packages = support_packages.dependenciesForFeature(.flatpak);
+    try std.testing.expectEqualStrings("flatpak", packages[0]);
+
+    const argv = try ShellyCommands.install(std.testing.allocator, &packages);
+    defer std.testing.allocator.free(argv);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &.{ "install", "standard", "flatpak" },
+        argv,
+    );
+
+    const backend = &.{support_packages.flatpakBackendPackage()};
+    const standard_argv = try ShellyCommands.install(std.testing.allocator, backend);
+    defer std.testing.allocator.free(standard_argv);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &.{ "install", "standard", options.flatpak_backend_package },
+        standard_argv,
+    );
+
+    const aur_argv = try ShellyCommands.install_aur(std.testing.allocator, backend);
+    defer std.testing.allocator.free(aur_argv);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &.{ "install", "aur", options.flatpak_backend_package },
+        aur_argv,
+    );
+}
+
+test "AppImage support installs fuse2" {
+    const packages = support_packages.dependenciesForFeature(.appimage);
+    try std.testing.expectEqualStrings("fuse2", packages[0]);
+
+    const argv = try ShellyCommands.install(std.testing.allocator, &packages);
+    defer std.testing.allocator.free(argv);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &.{ "install", "standard", "fuse2" },
+        argv,
+    );
 }
 
 fn applyScheduleVisibility(p: *ShellySettingsPage.Private) void {
