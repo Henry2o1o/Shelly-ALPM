@@ -105,7 +105,7 @@ calls must remain under `Shelly.Flatpak.Backend`. Consumers use owned records
 from `Shelly.PackageManager/src/flatpak/types.zig`; never expose a generated
 binding type in a public PackageManager declaration.
 
-Protocol schema 1 rejects unknown and duplicate fields. Add a new operation by
+Protocol schema 2 rejects unknown and duplicate fields. Add a new operation by
 updating the wire inventory, backend dispatch, PackageManager facade, fake
 backend coverage, and parity tests together. Run
 `scripts/check-flatpak-separation.sh` before submitting a change.

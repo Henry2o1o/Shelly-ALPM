@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const schema_version: u32 = 1;
+pub const schema_version: u32 = 2;
 pub const max_message_size: usize = 16 * 1024 * 1024;
 
 pub const Method = struct {
@@ -86,6 +86,8 @@ pub const EventEnvelope = struct {
     kind: EventKind,
     code: []const u8,
     message: []const u8,
+    stage: ?[]const u8 = null,
+    subject: ?[]const u8 = null,
     level: EventLevel = .information,
     percentage: ?f64 = null,
     completed: ?u64 = null,

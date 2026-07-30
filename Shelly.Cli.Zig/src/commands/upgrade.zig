@@ -507,7 +507,12 @@ fn executeStandard(
         context,
         openingMessage(invocation),
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        .{
+            .data = &adapter,
+            .call = RunnerAdapter.call,
+            .success_message = successMessage(invocation),
+            .failure_message = failureMessage(invocation),
+        },
     );
     return if (succeeded) 0 else 1;
 }
@@ -1238,7 +1243,11 @@ test "upgrade routes every action-first type through the combined handler" {
 
         try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
         try std.testing.expectEqual(expected.backend, observed.?);
-        try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            stdout.writer.buffered(),
+            successMessage(&outcome.dispatch),
+        ) != null);
     }
 }
 
@@ -1371,7 +1380,11 @@ test "upgrade all continues after a failed backend and returns failure" {
     try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
     try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AUR upgrade step failed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        stdout.writer.buffered(),
+        ":: One or more upgrade steps failed.",
+    ) != null);
 }
 
 test "upgrade all treats an unavailable Flatpak backend as a warning" {
@@ -1429,7 +1442,7 @@ test "upgrade all treats an unavailable Flatpak backend as a warning" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         stdout.writer.buffered(),
-        ":: Transaction complete.",
+        ":: All upgrades complete.",
     ) != null);
 }
 

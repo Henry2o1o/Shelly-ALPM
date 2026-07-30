@@ -955,6 +955,8 @@ fn forwardOperationEvent(
             .code = "flatpak.progress",
             .message = value.update.message orelse
                 value.update.stage orelse "Flatpak operation in progress",
+            .stage = value.update.stage,
+            .subject = value.update.message orelse value.envelope.subject,
             .percentage = value.update.percentage,
             .completed = value.update.completed orelse
                 value.update.bytes_completed,
