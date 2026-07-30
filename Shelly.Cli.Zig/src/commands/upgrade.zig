@@ -750,6 +750,12 @@ fn runFlatpakStep(
     if (upgradesAll(invocation) and
         !invocation.globals.ui_mode)
     {
+        switch (Zigalpm.flatpak.backendStatus()) {
+            .available => {},
+            .unavailable => return Zigalpm.flatpak.errors.Error.FlatpakBackendUnavailable,
+            .incompatible => return Zigalpm.flatpak.errors.Error.FlatpakBackendIncompatible,
+        }
+
         var arguments: std.ArrayList([]const u8) = .empty;
         defer arguments.deinit(context.allocator);
         try arguments.appendSlice(context.allocator, &.{ "upgrade", "flatpak" });
