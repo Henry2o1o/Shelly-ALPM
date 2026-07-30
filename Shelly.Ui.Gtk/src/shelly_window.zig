@@ -21,6 +21,8 @@ const NavMode = @import("models/shelly_config.zig").NavMode;
 const ShellyTabs = @import("models/shelly_config.zig").ShellyTabs;
 const translations = @import("helpers/translations.zig");
 const ConfirmDialog = @import("dialog/page/yn_dialog.zig").ConfirmDialog;
+const PolkitDialog = @import("dialog/page/polkit_warning.zig").PolkitDialog;
+const DBus = @import("services/dbus.zig").DBus;
 
 const NavButton = struct {
     button: *gtk.Button,
@@ -89,6 +91,7 @@ pub const ShellyWindow = extern struct {
         applyConfig(self);
         applyDefaultPage(self);
         showWelcomeIfFirstStart(self);
+        checkPolkitLockout(self);
         _ = gtk.Window.signals.close_request.connect(self.as(gtk.Window), *ShellyWindow, &on_close_request, self, .{});
     }
 
@@ -133,6 +136,22 @@ pub const ShellyWindow = extern struct {
         if (!cfg.NewInstall) return;
         const wp = WelcomePage.new();
         self.showLockout(wp.as(gtk.Widget));
+    }
+
+    fn checkPolkitLockout(self: *ShellyWindow) void {
+        var dbus = DBus{};
+        defer dbus.deinit();
+
+        if (!dbus.polkitAvailable()) {
+            const dialog = PolkitDialog.new(&on_polkit_close, self);
+            self.showLockout(dialog.as(gtk.Widget));
+            dialog.focusClose();
+        }
+    }
+
+    fn on_polkit_close(ctx: ?*anyopaque) void {
+        const self: *ShellyWindow = @ptrCast(@alignCast(ctx.?));
+        self.hideLockout();
     }
 
     fn setNavEnabled(self: *ShellyWindow, name: [:0]const u8, enabled: bool) void {
