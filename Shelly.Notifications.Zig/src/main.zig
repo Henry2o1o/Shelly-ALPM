@@ -1,71 +1,312 @@
 const std = @import("std");
-const Io = std.Io;
+const zsn = @import("zsn");
+const runtime = @import("runtime.zig");
+const ShellyCli = @import("services/shelly-cli.zig").ShellyCli;
+const ShellyConfig = @import("services/config.zig").ConfigResolver;
+const next_notification = @import("services/next_notification.zig");
 
-const Shelly_Notifications_Zig = @import("Shelly_Notifications_Zig");
+const CheckUpdatesPackage = @import("models/update.zig").CheckUpdatesPackage;
+const CheckUpdatesAur = @import("models/update.zig").CheckUpdatesAur;
+const CheckUpdatesFlatpak = @import("models/update.zig").CheckUpdatesFlatpak;
 
-pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+const Service = zsn.Service;
+const MenuController = zsn.MenuController;
+const Notifier = zsn.Notifier;
+const MenuState = zsn.MenuState;
+const Tree = zsn.Tree;
+const Tray = zsn.Tray;
+const MenuItem = zsn.MenuItem;
+const ItemType = zsn.ItemType;
 
-    // This is appropriate for anything that lives as long as the process.
-    const arena: std.mem.Allocator = init.arena.allocator();
+const Repo = @import("models/update.zig").CheckUpdatesPackage;
+const Aur = @import("models/update.zig").CheckUpdatesAur;
+const Flatpak = @import("models/update.zig").CheckUpdatesFlatpak;
 
-    // Accessing command line arguments:
-    const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
+var quit_index: usize = 0;
+var open_index: usize = 0;
+
+const Updates = struct {
+    mutex: std.Io.Mutex = .init,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo: std.ArrayListUnmanaged(Repo) = .empty,
+    aur: std.ArrayListUnmanaged(Aur) = .empty,
+    flatpak: std.ArrayListUnmanaged(Flatpak) = .empty,
+
+    fn init(allocator: std.mem.Allocator, io: std.Io) Updates {
+        return .{ .allocator = allocator, .io = io };
     }
 
-    // In order to do I/O operations need an `Io` instance.
-    const io = init.io;
+    fn deinit(self: *Updates) void {
+        self.mutex.lockUncancelable(self.io);
+        self.clear();
+        self.mutex.unlock(self.io);
+        self.repo.deinit(self.allocator);
+        self.aur.deinit(self.allocator);
+        self.flatpak.deinit(self.allocator);
+    }
 
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-    const stdout_writer = &stdout_file_writer.interface;
+    fn clear(self: *Updates) void {
+        for (self.repo.items) |*e| {
+            self.allocator.free(e.Name);
+            self.allocator.free(e.CurrentVersion);
+            self.allocator.free(e.NewVersion);
+        }
+        for (self.aur.items) |*e| {
+            self.allocator.free(e.Name);
+            self.allocator.free(e.Version);
+            self.allocator.free(e.NewVersion);
+        }
+        for (self.flatpak.items) |*e| {
+            self.allocator.free(e.Name);
+            self.allocator.free(e.Version);
+        }
+        self.repo.clearRetainingCapacity();
+        self.aur.clearRetainingCapacity();
+        self.flatpak.clearRetainingCapacity();
+    }
 
-    try Shelly_Notifications_Zig.printAnotherMessage(stdout_writer);
+    fn total(self: *Updates) usize {
+        return self.repo.items.len + self.aur.items.len + self.flatpak.items.len;
+    }
+};
 
-    try stdout_writer.flush(); // Don't forget to flush!
-}
+const Worker = struct {
+    updates: *Updates,
+    ctrl: *MenuController,
+    cli: ShellyCli,
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    config: *const ShellyConfig,
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+    fn run(self: *Worker) void {
+        while (true) {
+            self.pollOnce() catch |e| {
+                std.debug.print("[worker] check failed: {any}\n", .{e});
+            };
 
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
-}
+            const secs = //next_notification.getNextSeconds(self.gpa, self.io, self.config.) catch |e| {
+                //std.debug.print("[worker] schedule calc failed: {any}, using 10h\n", .{e});
+                36000;
+            // };
 
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
+            std.debug.print("[worker] sleeping {d}s until next check\n", .{secs});
+            self.io.sleep(.fromSeconds(secs), .awake) catch break;
+        }
+    }
 
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
+    fn pollOnce(self: *Worker) !void {
+        const parsed = try self.cli.check_updates();
+        defer parsed.deinit();
+
+        self.updates.mutex.lockUncancelable(self.io);
+        defer self.updates.mutex.unlock(self.io);
+
+        self.updates.clear();
+
+        const a = self.updates.allocator;
+
+        for (parsed.value.Packages) |pkg| {
+            try self.updates.repo.append(a, .{
+                .Name = try a.dupe(u8, pkg.Name),
+                .CurrentVersion = try a.dupe(u8, pkg.CurrentVersion),
+                .NewVersion = try a.dupe(u8, pkg.NewVersion),
+            });
+        }
+        for (parsed.value.Aur) |pkg| {
+            try self.updates.aur.append(a, .{
+                .Name = try a.dupe(u8, pkg.Name),
+                .Version = try a.dupe(u8, pkg.Version),
+                .NewVersion = try a.dupe(u8, pkg.NewVersion),
+            });
+        }
+        for (parsed.value.Flatpak) |pkg| {
+            try self.updates.flatpak.append(a, .{
+                .Name = try a.dupe(u8, pkg.Name),
+                .Version = try a.dupe(u8, pkg.Version),
+            });
+        }
+
+        std.debug.print("[worker] {d} updates found\n", .{self.updates.total()});
+
+        self.ctrl.invalidate() catch {};
+    }
+};
+
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    runtime.allocator = allocator;
+    runtime.io = init.io;
+    runtime.environ_map = init.environ_map;
+
+    var svc = try Service.init(allocator, init.io, init.environ_map);
+    defer svc.deinit();
+
+    var t = try Tray.init(&svc, .{
+        .id = "shelly.shellyorg.Notifications",
+        .title = "Shelly Notifications",
+        .icon_name = "shelly",
+        .attention_icon_name = "dialog-warning",
+    });
+    defer t.deinit();
+    const item_handle = try t.register();
+
+    const conn = svc.connection();
+
+    var updates = Updates.init(allocator, init.io);
+    defer updates.deinit();
+
+    var mstate = MenuState.init(allocator, buildMenu);
+    defer mstate.deinit();
+    mstate.ctx = &updates;
+    mstate.on_event = onEvent;
+
+    var menu_ctrl = MenuController.init(&svc, &mstate, t.name, "/MenuBar");
+    _ = try menu_ctrl.register();
+
+    const config = try ShellyConfig.init(allocator, runtime.io, runtime.environ_map);
+
+    var worker = Worker{
+        .updates = &updates,
+        .ctrl = &menu_ctrl,
+        .cli = ShellyCli{
+            .allocator = allocator,
+            .io = init.io,
+            .environ_map = init.environ_map,
         },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
-        },
+        .io = init.io,
+        .gpa = allocator,
+        .config = &config,
     };
+    const worker_thread = try std.Thread.spawn(.{}, Worker.run, .{&worker});
+    defer worker_thread.join();
+
+    try conn.waitOnHandle(item_handle);
+}
+
+fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
+    const updates: *Updates = @ptrCast(@alignCast(ctx.?));
+
+    updates.mutex.lockUncancelable(updates.io);
+    defer updates.mutex.unlock(updates.io);
+    var items = std.ArrayList(MenuItem).empty;
+    var tray_index: usize = 0;
+
+    try addItem(arena, &items, &tray_index, "Open Shelly", true, true, .normal);
+    try addItem(arena, &items, &tray_index, "Update Packages", true, true, .normal);
+    try addItem(arena, &items, &tray_index, "Check for updates", true, true, .normal);
+    try addItem(arena, &items, &tray_index, "", false, true, .separator);
+
+    const count = updates.total();
+    if (count == 0) {
+        tray_index += 1;
+        try addItem(arena, &items, &tray_index, "No updates", false, true, .normal);
+    } else {
+        if (updates.repo.items.len > 0) {
+            tray_index += 1;
+            try addItemWithSubmenu(
+                @TypeOf(updates.repo.items[0]),
+                arena,
+                &items,
+                &tray_index,
+                updates.repo.items,
+                repoLabel,
+                "Standard",
+                .normal,
+            );
+        }
+
+        if (updates.aur.items.len > 0) {
+            tray_index += 1;
+            try addItemWithSubmenu(
+                @TypeOf(updates.aur.items[0]),
+                arena,
+                &items,
+                &tray_index,
+                updates.aur.items,
+                aurLabel,
+                "AUR",
+                .normal,
+            );
+        }
+
+        try addItemWithSubmenu(
+            @TypeOf(updates.flatpak.items[0]),
+            arena,
+            &items,
+            &tray_index,
+            updates.flatpak.items,
+            flatpakLabel,
+            "Standard",
+            .normal,
+        );
+    }
+
+    try addItem(arena, &items, &tray_index, "", true, true, .separator);
+    try addItem(arena, &items, &tray_index, "Exit", true, true, .normal);
+
+    return .{ .root = .{ .id = 0, .children = try items.toOwnedSlice(arena) } };
+}
+
+fn addItem(arena: std.mem.Allocator, items: *std.ArrayList(MenuItem), id: *usize, label: []const u8, enabled: bool, visible: bool, itype: ItemType) !void {
+    id.* += 1;
+    const item: MenuItem = .{ .id = @as(i32, @intCast(id.*)), .label = label, .enabled = enabled, .visible = visible, .type = itype };
+    try items.append(arena, item);
+}
+
+fn repoLabel(arena: std.mem.Allocator, pkg: CheckUpdatesPackage) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}  {s} -> {s}", .{
+        pkg.Name, pkg.CurrentVersion, pkg.NewVersion,
+    });
+}
+
+fn aurLabel(arena: std.mem.Allocator, pkg: CheckUpdatesAur) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}  {s} -> {s}", .{
+        pkg.Name, pkg.Version, pkg.NewVersion,
+    });
+}
+
+fn flatpakLabel(arena: std.mem.Allocator, pkg: CheckUpdatesFlatpak) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}  {s}", .{
+        pkg.Name, pkg.Version,
+    });
+}
+
+fn addItemWithSubmenu(
+    comptime T: type,
+    arena: std.mem.Allocator,
+    items: *std.ArrayList(MenuItem),
+    id: *usize,
+    source: []const T,
+    labelFn: fn (std.mem.Allocator, T) anyerror![]const u8,
+    label: []const u8,
+    itype: ItemType,
+) !void {
+    var children = std.ArrayList(MenuItem).empty;
+    defer children.deinit(arena);
+
+    for (source) |pkg| {
+        const child_label = try labelFn(arena, pkg);
+        try children.append(arena, .{ .id = @as(i32, @intCast(id.*)), .label = child_label });
+        id.* += 1;
+    }
+
+    try items.append(arena, .{
+        .id = @as(i32, @intCast(id.*)),
+        .type = itype,
+        .children = try children.toOwnedSlice(arena),
+        .label = label,
+    });
+    id.* += 1;
+}
+
+fn onEvent(ctx: ?*anyopaque, id: i32) void {
+    _ = ctx;
+    std.debug.print("id: {}\n", .{id});
+    if (id == quit_index) std.debug.print("[menu] quit requested\n", .{});
+}
+
+test {
+    std.testing.refAllDecls(@This());
+    _ = @import("services/next_notification.zig");
 }
