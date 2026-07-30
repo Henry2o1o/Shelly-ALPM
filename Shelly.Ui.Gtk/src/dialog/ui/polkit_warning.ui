@@ -49,37 +49,19 @@ Install and enable it, then retry.
               <object class="GtkBox">
                 <property name="spacing">12</property>
                 <property name="halign">center</property>
-                <property name="homogeneous">true</property>
                 <property name="margin-top">12</property>
                 <child>
-                <object class="GtkButton" id="confirm_button">
-                  <property name="label" translatable="yes">Retry</property>
-                  <property name="receives-default">true</property>
-                  <signal name="clicked" handler="on_confirm" swapped="true"/>
-                  <style><class name="suggested-action"/></style>
-                  <child>
-                    <object class="GtkShortcutController">
-                      <property name="scope">managed</property>
-                      <child>
-                        <object class="GtkShortcut">
-                          <property name="trigger">Return|KP_Enter</property>
-                          <property name="action">activate</property>
-                        </object>
-                      </child>
-                    </object>
-                  </child>
-                </object>
-                </child>
-                <child>
-                  <object class="GtkButton" id="cancel_button">
-                    <property name="label" translatable="yes">Quit</property>
-                    <signal name="clicked" handler="on_cancel" swapped="true"/>
+                  <object class="GtkButton" id="close_button">
+                    <property name="label" translatable="yes">Close</property>
+                    <property name="receives-default">true</property>
+                    <signal name="clicked" handler="on_close" swapped="true"/>
+                    <style><class name="suggested-action"/></style>
                     <child>
                       <object class="GtkShortcutController">
                         <property name="scope">managed</property>
                         <child>
                           <object class="GtkShortcut">
-                            <property name="trigger">Escape</property>
+                            <property name="trigger">Return|KP_Enter|Escape</property>
                             <property name="action">activate</property>
                           </object>
                         </child>
