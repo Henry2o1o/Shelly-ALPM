@@ -56,6 +56,10 @@ pub fn dispatch(
         if (flatpakRemoteValidationFailure(invocation)) |message|
             return try reportValidationFailure(context, invocation, message);
     }
+    if (is_appimage) {
+        if (appImageValidationFailure(invocation)) |message|
+            return try reportValidationFailure(context, invocation, message);
+    }
 
     const system_remote_mutation = is_flatpak and isFlatpakRemoteMutation(invocation) and
         booleanOption(invocation, "--system", true);
@@ -411,6 +415,24 @@ fn flatpakRemoteValidationFailure(invocation: *const parser.Invocation) ?[]const
     }
     if (hasOption(invocation, "--remote-url") or hasOption(invocation, "--gpg-verify"))
         return "Flatpak remote remove cannot use --remote-url or --gpg-verify.";
+    return null;
+}
+
+fn appImageValidationFailure(invocation: *const parser.Invocation) ?[]const u8 {
+    const configure_updates = optionEnabled(invocation, "--configure-updates") or
+        invocation.positionals.len == 3;
+    if (!configure_updates or invocation.positionals.len != 3) return null;
+
+    const update_type = parseAppImageUpdateType(invocation.positionals[2]) orelse return null;
+    Zigalpm.appimage.UpdateManager.validate_update_configuration(
+        invocation.positionals[1],
+        update_type,
+    ) catch return switch (update_type) {
+        .forgejo => "Invalid Forgejo URL. Use http(s)://host/owner/repo or http(s)://host/owner/repo/releases.",
+        .github, .gitlab, .codeberg => "Invalid repository. Use owner/repo.",
+        .static_url => "Invalid static update URL. Use an http:// or https:// URL.",
+        .none => "Invalid AppImage update configuration.",
+    };
     return null;
 }
 
@@ -801,7 +823,36 @@ test "AppImage sync accepts the update URL overload and compatibility shortcode"
     try std.testing.expect(optionEnabled(&outcome.dispatch, "--prerelease"));
 }
 
-test "real AppImage runner persists update URL type and prerelease policy" {
+test "AppImage configuration validation accepts Forgejo release pages and rejects unrelated paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    var outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync",
+        "appimage",
+        "Editor",
+        "https://git.eden-emu.dev/eden-ci/nightly/releases",
+        "Forgejo",
+    });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expect(appImageValidationFailure(&outcome.dispatch) == null);
+
+    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "sync",
+        "appimage",
+        "Editor",
+        "https://git.eden-emu.dev/eden-ci/nightly/actions",
+        "Forgejo",
+    });
+    try std.testing.expect(outcome == .dispatch);
+    try std.testing.expectEqualStrings(
+        "Invalid Forgejo URL. Use http(s)://host/owner/repo or http(s)://host/owner/repo/releases.",
+        appImageValidationFailure(&outcome.dispatch).?,
+    );
+}
+
+test "real AppImage runner persists and normalizes Forgejo release-page URLs" {
     var temporary = std.testing.tmpDir(.{});
     defer temporary.cleanup();
     var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -842,7 +893,12 @@ test "real AppImage runner persists update URL type and prerelease policy" {
 
     const manifest = try spec.Manifest.load(allocator);
     const outcome = try parser.parse(allocator, &manifest, &.{
-        "sync", "appimage", "Editor", "owner/repository", "GitHub", "--prerelease",
+        "sync",
+        "appimage",
+        "Editor",
+        "https://git.eden-emu.dev/eden-ci/nightly/releases",
+        "Forgejo",
+        "--prerelease",
     });
     try std.testing.expectEqual(
         @as(u8, 0),
@@ -852,11 +908,87 @@ test "real AppImage runner persists update URL type and prerelease policy" {
     const app_images = try appimage_manager.getAppImagesFromLocalDb();
     defer appimage_manager.freeAppImages(app_images);
     try std.testing.expectEqual(@as(usize, 1), app_images.len);
-    try std.testing.expectEqual(Zigalpm.appimage.UpdateType.github, app_images[0].update_type);
-    try std.testing.expectEqualStrings("owner", app_images[0].repo_owner.?);
-    try std.testing.expectEqualStrings("repository", app_images[0].repo_name.?);
+    try std.testing.expectEqual(Zigalpm.appimage.UpdateType.forgejo, app_images[0].update_type);
+    try std.testing.expectEqualStrings(
+        "https://git.eden-emu.dev/eden-ci/nightly",
+        app_images[0].update_url,
+    );
+    try std.testing.expect(app_images[0].repo_owner == null);
+    try std.testing.expect(app_images[0].repo_name == null);
     try std.testing.expect(app_images[0].allow_prerelease);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Successfully configured updates for Editor") != null);
+}
+
+test "real AppImage runner rejects invalid Forgejo paths without reporting success" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path_length = try temporary.dir.realPath(std.testing.io, &path_buffer);
+    const root = path_buffer[0..path_length];
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const home = try std.fs.path.join(allocator, &.{ root, "home" });
+    const install_directory = try std.fs.path.join(allocator, &.{ home, ".local", "bin" });
+    const local_db_path = try std.fs.path.join(allocator, &.{ root, "shelly", "appimage-metadata-v2.db" });
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, install_directory);
+
+    var environment = std.process.Environ.Map.init(allocator);
+    try environment.put("HOME", home);
+    try environment.put("XDG_CONFIG_HOME", root);
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .environment = &environment,
+    };
+    var appimage_manager = Zigalpm.AppImageManager{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .environ = context.environ,
+        .install_directory = install_directory,
+        .local_db_path = local_db_path,
+    };
+    defer appimage_manager.deinit();
+    try appimage_manager.addAppImageToLocalDb(.{
+        .name = "Editor",
+        .update_url = "https://old.example/owner/repository",
+        .update_type = .forgejo,
+    });
+
+    const manifest = try spec.Manifest.load(allocator);
+    const outcome = try parser.parse(allocator, &manifest, &.{
+        "sync",
+        "appimage",
+        "Editor",
+        "https://git.eden-emu.dev/eden-ci/nightly/actions",
+        "Forgejo",
+    });
+    try std.testing.expectEqual(
+        @as(u8, 1),
+        try executeWithRunner(&context, &outcome.dispatch, real_appimage_runner),
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, stdout.writer.buffered(), "InvalidAppImageUpdateConfiguration") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, stdout.writer.buffered(), "Successfully configured updates") == null,
+    );
+
+    const app_images = try appimage_manager.getAppImagesFromLocalDb();
+    defer appimage_manager.freeAppImages(app_images);
+    try std.testing.expectEqual(@as(usize, 1), app_images.len);
+    try std.testing.expectEqual(Zigalpm.appimage.UpdateType.forgejo, app_images[0].update_type);
+    try std.testing.expectEqualStrings(
+        "https://old.example/owner/repository",
+        app_images[0].update_url,
+    );
 }
 
 test "real AppImage runner reports a missing install directory without failing" {

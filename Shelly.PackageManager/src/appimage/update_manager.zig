@@ -80,8 +80,13 @@ pub const UpdateManager = struct {
         return true;
     }
 
+    pub fn validate_update_configuration(update_info: []const u8, update_type: appimage.UpdateType) !void {
+        var app = appimage.AppImage{ .name = "" };
+        try configure_update(update_info, update_type, &app, false);
+    }
+
     fn configure_update(update_info: []const u8, update_type: appimage.UpdateType, app: *appimage.AppImage, allow_prerelease: bool) !void {
-        app.allow_prerelease = allow_prerelease;
+        const trimmed = std.mem.trim(u8, update_info, &std.ascii.whitespace);
 
         switch (update_type) {
             .none => {
@@ -91,33 +96,103 @@ pub const UpdateManager = struct {
                 app.repo_name = null;
             },
             .static_url => {
-                app.update_url = update_info;
+                if (!isHttpUrl(trimmed)) return error.InvalidAppImageUpdateConfiguration;
+                app.update_url = trimmed;
                 app.update_type = update_type;
+                app.repo_owner = null;
+                app.repo_name = null;
             },
             .forgejo => {
-                if (std.mem.indexOf(u8, update_info, "//")) |idx| {
-                    const after_scheme = update_info[idx + 2 ..];
-                    if (countChar(after_scheme, '/') == 2) {
-                        app.update_url = update_info;
-                        app.update_type = update_type;
-                    } else {
-                        // std.log.warn("Could not parse update info. Please use the format: https://<domain>/<user>/<repo>");
-                    }
-                } else {
-                    // std.log.warn("Could not parse update info. Please use the format: https://<domain>/<user>/<repo>");
-                }
+                const repository = try parseForgejoRepository(trimmed);
+                app.update_url = repository.canonical_url;
+                app.update_type = update_type;
+                app.repo_owner = null;
+                app.repo_name = null;
             },
             .github, .gitlab, .codeberg => {
-                if (countChar(update_info, '/') == 1) {
-                    const idx = std.mem.indexOf(u8, update_info, "/").?;
-                    app.repo_owner = update_info[0..idx];
-                    app.repo_name = update_info[idx + 1 ..];
-                    app.update_type = update_type;
-                } else {
-                    // std.log.warn("Could not parse update info. Please use the format: <user>/<repo> (e.g., github.com/user/repo or gitlab.com/user/repo");
-                }
+                if (countChar(trimmed, '/') != 1) return error.InvalidAppImageUpdateConfiguration;
+                const idx = std.mem.indexOf(u8, trimmed, "/").?;
+                if (idx == 0 or idx + 1 == trimmed.len) return error.InvalidAppImageUpdateConfiguration;
+                app.update_url = "";
+                app.repo_owner = trimmed[0..idx];
+                app.repo_name = trimmed[idx + 1 ..];
+                app.update_type = update_type;
             },
         }
+        app.allow_prerelease = allow_prerelease;
+    }
+
+    const ForgejoRepository = struct {
+        canonical_url: []const u8,
+        origin: []const u8,
+        owner: []const u8,
+        repo: []const u8,
+    };
+
+    fn parseForgejoRepository(update_info: []const u8) !ForgejoRepository {
+        const trimmed = std.mem.trim(u8, update_info, &std.ascii.whitespace);
+        const uri = std.Uri.parse(trimmed) catch return error.InvalidAppImageUpdateConfiguration;
+        if (!std.ascii.eqlIgnoreCase(uri.scheme, "http") and
+            !std.ascii.eqlIgnoreCase(uri.scheme, "https"))
+        {
+            return error.InvalidAppImageUpdateConfiguration;
+        }
+        if (uri.host == null or uri.user != null or uri.password != null or
+            uri.query != null or uri.fragment != null)
+        {
+            return error.InvalidAppImageUpdateConfiguration;
+        }
+
+        const host = componentText(uri.host.?);
+        const path = componentText(uri.path);
+        if (host.len == 0 or path.len == 0 or path[0] != '/')
+            return error.InvalidAppImageUpdateConfiguration;
+
+        var repository_path = path;
+        if (repository_path.len > 1 and repository_path[repository_path.len - 1] == '/')
+            repository_path = repository_path[0 .. repository_path.len - 1];
+        if (countChar(repository_path, '/') == 3 and
+            std.mem.endsWith(u8, repository_path, "/releases"))
+        {
+            repository_path = repository_path[0 .. repository_path.len - "/releases".len];
+        }
+        if (countChar(repository_path, '/') != 2)
+            return error.InvalidAppImageUpdateConfiguration;
+
+        const owner_and_repo = repository_path[1..];
+        const separator = std.mem.indexOfScalar(u8, owner_and_repo, '/') orelse
+            return error.InvalidAppImageUpdateConfiguration;
+        const owner = owner_and_repo[0..separator];
+        const repo = owner_and_repo[separator + 1 ..];
+        if (owner.len == 0 or repo.len == 0 or
+            std.mem.eql(u8, owner, ".") or std.mem.eql(u8, owner, "..") or
+            std.mem.eql(u8, repo, ".") or std.mem.eql(u8, repo, ".."))
+        {
+            return error.InvalidAppImageUpdateConfiguration;
+        }
+
+        const removed_path_bytes = path.len - repository_path.len;
+        const canonical_url = trimmed[0 .. trimmed.len - removed_path_bytes];
+        const origin = trimmed[0 .. trimmed.len - path.len];
+        return .{
+            .canonical_url = canonical_url,
+            .origin = origin,
+            .owner = owner,
+            .repo = repo,
+        };
+    }
+
+    fn isHttpUrl(value: []const u8) bool {
+        const uri = std.Uri.parse(value) catch return false;
+        return (std.ascii.eqlIgnoreCase(uri.scheme, "http") or
+            std.ascii.eqlIgnoreCase(uri.scheme, "https")) and uri.host != null;
+    }
+
+    fn componentText(component: std.Uri.Component) []const u8 {
+        return switch (component) {
+            .raw => |value| value,
+            .percent_encoded => |value| value,
+        };
     }
 
     fn countChar(haystack: []const u8, needle: u8) usize {
@@ -519,6 +594,10 @@ pub const UpdateManager = struct {
         return std.fmt.allocPrint(allocator, "https://{s}/api/v1/repos/{s}/{s}/releases", .{ domain, owner, repo });
     }
 
+    fn forgejo_to_releases_api(allocator: std.mem.Allocator, origin: []const u8, owner: []const u8, repo: []const u8) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{s}/api/v1/repos/{s}/{s}/releases", .{ origin, owner, repo });
+    }
+
     pub fn check_gitea_update(self: UpdateManager, domain: []const u8, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
         var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .search, app_name);
         operation_scope.attach();
@@ -548,22 +627,18 @@ pub const UpdateManager = struct {
         defer operation_scope.finish(.success);
         errdefer operation_scope.fail();
         try self.checkCancelled();
-        const uri = std.Uri.parse(update_url) catch return null;
-        const host = switch (uri.host orelse return null) {
-            .raw => |h| h,
-            .percent_encoded => |h| h,
-        };
-        const path = switch (uri.path) {
-            .raw => |p| p,
-            .percent_encoded => |p| p,
-        };
-        if (countChar(path, '/') != 2) return null;
-        const after_slash = path[1..]; // skip leading '/'
-        const sep = std.mem.indexOf(u8, after_slash, "/") orelse return null;
-        const owner = after_slash[0..sep];
-        const repo = after_slash[sep + 1 ..];
-        if (owner.len == 0 or repo.len == 0) return null;
-        return self.check_gitea_update(host, owner, repo, app_name, current_version, allow_prerelease);
+        const repository = parseForgejoRepository(update_url) catch return null;
+        const url = try forgejo_to_releases_api(
+            self.allocator,
+            repository.origin,
+            repository.owner,
+            repository.repo,
+        );
+        defer self.allocator.free(url);
+
+        const body = (try self.fetchJson(url, "application/json")) orelse return null;
+        defer self.allocator.free(body);
+        return parse_github_response(self.allocator, body, app_name, current_version, allow_prerelease);
     }
 
     pub fn check_github_update(self: UpdateManager, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
@@ -988,46 +1063,84 @@ test "configureUpdates: None resets url and repo fields" {
 }
 
 test "configureUpdates: StaticUrl stores the url verbatim" {
-    var app = appimage.AppImage{ .name = "Test" };
+    var app = appimage.AppImage{
+        .name = "Test",
+        .repo_owner = "stale-owner",
+        .repo_name = "stale-repo",
+    };
 
     try UpdateManager.configure_update("https://example.com/update.json", .static_url, &app, false);
 
     try std.testing.expectEqual(appimage.UpdateType.static_url, app.update_type);
     try std.testing.expectEqualStrings("https://example.com/update.json", app.update_url);
+    try std.testing.expect(app.repo_owner == null);
+    try std.testing.expect(app.repo_name == null);
 }
 
 test "configureUpdates: Forgejo accepts a well-formed url" {
-    var app = appimage.AppImage{ .name = "Test" };
+    var app = appimage.AppImage{
+        .name = "Test",
+        .repo_owner = "stale-owner",
+        .repo_name = "stale-repo",
+    };
 
     try UpdateManager.configure_update("https://codeberg.org/user/repo", .forgejo, &app, false);
 
     try std.testing.expectEqual(appimage.UpdateType.forgejo, app.update_type);
     try std.testing.expectEqualStrings("https://codeberg.org/user/repo", app.update_url);
+    try std.testing.expect(app.repo_owner == null);
+    try std.testing.expect(app.repo_name == null);
+}
+
+test "configureUpdates: Forgejo normalizes repository release pages" {
+    var app = appimage.AppImage{ .name = "Test" };
+
+    try UpdateManager.configure_update(
+        " https://git.eden-emu.dev/eden-ci/nightly/releases/ ",
+        .forgejo,
+        &app,
+        true,
+    );
+
+    try std.testing.expectEqual(appimage.UpdateType.forgejo, app.update_type);
+    try std.testing.expectEqualStrings("https://git.eden-emu.dev/eden-ci/nightly", app.update_url);
+    try std.testing.expect(app.allow_prerelease);
 }
 
 test "configureUpdates: Forgejo rejects a url missing the scheme separator" {
     var app = appimage.AppImage{ .name = "Test", .update_type = .none };
 
-    try UpdateManager.configure_update("codeberg.org/user/repo", .forgejo, &app, false);
+    try std.testing.expectError(
+        error.InvalidAppImageUpdateConfiguration,
+        UpdateManager.configure_update("codeberg.org/user/repo", .forgejo, &app, false),
+    );
 
-    // Parsing failed, so the type should never have been set to .forgejo.
     try std.testing.expectEqual(appimage.UpdateType.none, app.update_type);
 }
 
 test "configureUpdates: Forgejo rejects a url with the wrong path depth" {
-    var app = appimage.AppImage{ .name = "Test", .update_type = .none };
+    var app = appimage.AppImage{
+        .name = "Test",
+        .update_url = "https://old.example/owner/repo",
+        .update_type = .forgejo,
+    };
 
-    try UpdateManager.configure_update("https://codeberg.org/user/repo/extra", .forgejo, &app, false);
+    try std.testing.expectError(
+        error.InvalidAppImageUpdateConfiguration,
+        UpdateManager.configure_update("https://codeberg.org/user/repo/extra", .forgejo, &app, false),
+    );
 
-    try std.testing.expectEqual(appimage.UpdateType.none, app.update_type);
+    try std.testing.expectEqual(appimage.UpdateType.forgejo, app.update_type);
+    try std.testing.expectEqualStrings("https://old.example/owner/repo", app.update_url);
 }
 
 test "configureUpdates: GitHub/GitLab/Codeberg split owner and repo" {
-    var app = appimage.AppImage{ .name = "Test" };
+    var app = appimage.AppImage{ .name = "Test", .update_url = "https://stale.example/update" };
 
     try UpdateManager.configure_update("torvalds/linux", .github, &app, false);
 
     try std.testing.expectEqual(appimage.UpdateType.github, app.update_type);
+    try std.testing.expectEqualStrings("", app.update_url);
     try std.testing.expectEqualStrings("torvalds", app.repo_owner.?);
     try std.testing.expectEqualStrings("linux", app.repo_name.?);
 }
@@ -1045,7 +1158,10 @@ test "configureUpdates: GitLab works identically to GitHub" {
 test "configureUpdates: Codeberg rejects malformed owner/repo (no slash)" {
     var app = appimage.AppImage{ .name = "Test", .repo_owner = null, .repo_name = null, .update_type = .none };
 
-    try UpdateManager.configure_update("just-a-name", .codeberg, &app, false);
+    try std.testing.expectError(
+        error.InvalidAppImageUpdateConfiguration,
+        UpdateManager.configure_update("just-a-name", .codeberg, &app, false),
+    );
 
     try std.testing.expectEqual(appimage.UpdateType.none, app.update_type);
     try std.testing.expectEqual(@as(?[]const u8, null), app.repo_owner);
@@ -1055,17 +1171,40 @@ test "configureUpdates: Codeberg rejects malformed owner/repo (no slash)" {
 test "configureUpdates: GitHub rejects malformed owner/repo (too many slashes)" {
     var app = appimage.AppImage{ .name = "Test", .update_type = .none };
 
-    try UpdateManager.configure_update("owner/repo/extra", .github, &app, false);
+    try std.testing.expectError(
+        error.InvalidAppImageUpdateConfiguration,
+        UpdateManager.configure_update("owner/repo/extra", .github, &app, false),
+    );
 
     try std.testing.expectEqual(appimage.UpdateType.none, app.update_type);
 }
 
-test "configureUpdates: allow_prerelease is always applied, even on failure paths" {
+test "configureUpdates: failed validation does not partially apply prerelease" {
     var app = appimage.AppImage{ .name = "Test" };
 
-    try UpdateManager.configure_update("malformed", .github, &app, true);
+    try std.testing.expectError(
+        error.InvalidAppImageUpdateConfiguration,
+        UpdateManager.configure_update("malformed", .github, &app, true),
+    );
 
-    try std.testing.expectEqual(true, app.allow_prerelease);
+    try std.testing.expect(!app.allow_prerelease);
+}
+
+test "configureUpdates: StaticUrl rejects a non-http url without mutation" {
+    var app = appimage.AppImage{
+        .name = "Test",
+        .update_url = "https://old.example/update",
+        .update_type = .static_url,
+    };
+
+    try std.testing.expectError(
+        error.InvalidAppImageUpdateConfiguration,
+        UpdateManager.configure_update("file:///tmp/Test.AppImage", .static_url, &app, true),
+    );
+
+    try std.testing.expectEqual(appimage.UpdateType.static_url, app.update_type);
+    try std.testing.expectEqualStrings("https://old.example/update", app.update_url);
+    try std.testing.expect(!app.allow_prerelease);
 }
 
 test "github_to_releases_api builds correct url" {
@@ -1439,6 +1578,96 @@ fn seedDb(allocator: std.mem.Allocator, io: std.Io, db_path: []const u8, apps: [
     var writer = file.writer(io, &write_buf);
     try writer.interface.writeAll(json_bytes);
     try writer.interface.flush();
+}
+
+test "configure_updates persists a normalized Forgejo release-page URL" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path_length = try temporary.dir.realPath(std.testing.io, &path_buffer);
+    const root = path_buffer[0..path_length];
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ root, "appimage-metadata-v2.db" });
+    defer std.testing.allocator.free(db_path);
+
+    try seedDb(std.testing.allocator, std.testing.io, db_path, &.{
+        .{
+            .name = "Eden",
+            .update_type = .github,
+            .repo_owner = "stale-owner",
+            .repo_name = "stale-repo",
+        },
+    });
+
+    var manager = makeUpdateManager(std.testing.allocator, root, db_path);
+    defer manager.deinit();
+    try std.testing.expect(try manager.configure_updates(
+        "https://git.eden-emu.dev/eden-ci/nightly/releases",
+        "Eden",
+        .forgejo,
+        true,
+    ));
+
+    const database = appimage_manager.AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = std.testing.environ,
+        .install_directory = root,
+        .local_db_path = db_path,
+    };
+    const apps = try database.getAppImagesFromLocalDb();
+    defer database.freeAppImages(apps);
+    try std.testing.expectEqual(@as(usize, 1), apps.len);
+    try std.testing.expectEqual(appimage.UpdateType.forgejo, apps[0].update_type);
+    try std.testing.expectEqualStrings("https://git.eden-emu.dev/eden-ci/nightly", apps[0].update_url);
+    try std.testing.expect(apps[0].repo_owner == null);
+    try std.testing.expect(apps[0].repo_name == null);
+    try std.testing.expect(apps[0].allow_prerelease);
+}
+
+test "configure_updates leaves the database unchanged when Forgejo validation fails" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path_length = try temporary.dir.realPath(std.testing.io, &path_buffer);
+    const root = path_buffer[0..path_length];
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ root, "appimage-metadata-v2.db" });
+    defer std.testing.allocator.free(db_path);
+
+    try seedDb(std.testing.allocator, std.testing.io, db_path, &.{
+        .{
+            .name = "Eden",
+            .update_url = "https://old.example/owner/repo",
+            .update_type = .forgejo,
+        },
+    });
+    const before = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        db_path,
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(before);
+
+    var manager = makeUpdateManager(std.testing.allocator, root, db_path);
+    defer manager.deinit();
+    try std.testing.expectError(
+        error.InvalidAppImageUpdateConfiguration,
+        manager.configure_updates(
+            "https://git.eden-emu.dev/eden-ci/nightly/actions",
+            "Eden",
+            .forgejo,
+            false,
+        ),
+    );
+
+    const after = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        db_path,
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualStrings(before, after);
 }
 
 test "get_update returns optional owned results for configured providers" {
