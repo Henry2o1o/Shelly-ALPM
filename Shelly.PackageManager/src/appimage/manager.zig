@@ -318,12 +318,30 @@ pub const AppImageManager = struct {
             }
         }
 
-        const icon_name: []const u8 = if (icon_line_value) |icon_val| blk: {
-            defer self.allocator.free(icon_val);
-            break :blk try self.installIcon(squashfs_root, clean_name, icon_val);
-        } else try self.allocator.dupe(u8, "");
+        const discovered_icon_name = blk: {
+            if (icon_line_value) |icon_val| {
+                defer self.allocator.free(icon_val);
+                break :blk try self.installIcon(squashfs_root, clean_name, icon_val);
+            }
+            break :blk try self.installIcon(squashfs_root, clean_name, "");
+        };
+        const icon_name: []const u8 = if (discovered_icon_name.len > 0)
+            discovered_icon_name
+        else blk: {
+            self.allocator.free(discovered_icon_name);
+            break :blk try self.allocator.dupe(u8, "application-x-executable");
+        };
+        const effective_desktop_name = if (desktop_name.len > 0) desktop_name else app_name;
 
-        try self.writeDesktopEntry(clean_name, exec_path, desktop_file_path, squashfs_root, icon_name, desktop_name, description);
+        try self.writeDesktopEntry(
+            clean_name,
+            exec_path,
+            desktop_file_path,
+            squashfs_root,
+            icon_name,
+            effective_desktop_name,
+            description,
+        );
 
         const update_info = try self.getAppImageUpdateInfo(path);
 
@@ -356,12 +374,58 @@ pub const AppImageManager = struct {
 
         var it = d.iterate();
         while (try it.next(self.io)) |entry| {
-            if (entry.kind != .file) continue;
-            if (std.mem.endsWith(u8, entry.name, ".desktop")) {
-                return try std.fs.path.join(self.allocator, &.{ dir, entry.name });
-            }
+            if (!std.ascii.eqlIgnoreCase(std.fs.path.extension(entry.name), ".desktop")) continue;
+            const path = try std.fs.path.join(self.allocator, &.{ dir, entry.name });
+            if (entry.kind == .file) return path;
+            if (entry.kind == .sym_link) {
+                const resolved = try self.resolveConfinedFile(dir, path);
+                self.allocator.free(path);
+                if (resolved) |resolved_path| return resolved_path;
+            } else self.allocator.free(path);
+        }
+
+        var walker = try d.walk(self.allocator);
+        defer walker.deinit();
+        while (try walker.next(self.io)) |entry| {
+            if (entry.kind != .file or
+                !std.ascii.eqlIgnoreCase(std.fs.path.extension(entry.basename), ".desktop")) continue;
+            return try std.fs.path.join(self.allocator, &.{ dir, entry.path });
         }
         return null;
+    }
+
+    fn resolveConfinedFile(
+        self: AppImageManager,
+        root: []const u8,
+        candidate: []const u8,
+    ) !?[]u8 {
+        const canonical_root = try std.Io.Dir.cwd().realPathFileAlloc(self.io, root, self.allocator);
+        defer self.allocator.free(canonical_root);
+        const canonical_candidate = std.Io.Dir.cwd().realPathFileAlloc(
+            self.io,
+            candidate,
+            self.allocator,
+        ) catch return null;
+        errdefer self.allocator.free(canonical_candidate);
+        if (!pathIsInside(canonical_root, canonical_candidate)) {
+            self.allocator.free(canonical_candidate);
+            return null;
+        }
+        const status = std.Io.Dir.cwd().statFile(
+            self.io,
+            canonical_candidate,
+            .{ .follow_symlinks = false },
+        ) catch {
+            self.allocator.free(canonical_candidate);
+            return null;
+        };
+        if (status.kind != .file) {
+            self.allocator.free(canonical_candidate);
+            return null;
+        }
+        const result = try self.allocator.dupe(u8, canonical_candidate);
+        self.allocator.free(canonical_candidate);
+        return result;
     }
 
     fn readFileAllocOwned(self: AppImageManager, path: []const u8) ![]u8 {
@@ -378,27 +442,40 @@ pub const AppImageManager = struct {
         var d = std.Io.Dir.cwd().openDir(self.io, squashfs_root, .{ .iterate = true }) catch return null;
         defer d.close(self.io);
 
-        var it = d.iterate();
-        while (try it.next(self.io)) |entry| {
-            if (entry.kind != .file) continue;
+        const requested_stem = std.fs.path.stem(std.fs.path.basename(icon_value));
+        var best_path: ?[]u8 = null;
+        errdefer if (best_path) |path| self.allocator.free(path);
+        var best_score: u8 = 0;
 
-            const stem = std.fs.path.stem(entry.name);
-            if (!std.mem.eql(u8, stem, icon_value)) continue;
-
-            const ext = std.fs.path.extension(entry.name);
-            if (!std.mem.eql(u8, ext, ".png") and !std.mem.eql(u8, ext, ".svg")) continue;
-
-            const path = try std.fs.path.join(self.allocator, &.{ squashfs_root, entry.name });
+        if (requested_stem.len > 0) {
+            var walker = try d.walk(self.allocator);
+            defer walker.deinit();
+            while (try walker.next(self.io)) |entry| {
+                if (entry.kind != .file) continue;
+                const ext = std.fs.path.extension(entry.basename);
+                if (!isSupportedIconExtension(ext) or
+                    !std.ascii.eqlIgnoreCase(std.fs.path.stem(entry.basename), requested_stem)) continue;
+                const score = iconSourceScore(entry.path, ext);
+                if (best_path != null and score <= best_score) continue;
+                const candidate = try std.fs.path.join(self.allocator, &.{ squashfs_root, entry.path });
+                if (best_path) |path| self.allocator.free(path);
+                best_path = candidate;
+                best_score = score;
+            }
+        }
+        if (best_path) |path| {
+            const ext = std.fs.path.extension(path);
             return IconSource{ .path = path, .ext = ext };
         }
 
         const diricon = try std.fs.path.join(self.allocator, &.{ squashfs_root, ".DirIcon" });
-        if (std.Io.Dir.cwd().statFile(self.io, diricon, .{})) |_| {
-            return IconSource{ .path = diricon, .ext = ".png" };
-        } else |_| {
-            self.allocator.free(diricon);
-            return null;
+        defer self.allocator.free(diricon);
+        const resolved = (try self.resolveConfinedFile(squashfs_root, diricon)) orelse return null;
+        const resolved_ext = std.fs.path.extension(resolved);
+        if (isSupportedIconExtension(resolved_ext)) {
+            return IconSource{ .path = resolved, .ext = resolved[resolved.len - resolved_ext.len ..] };
         }
+        return IconSource{ .path = resolved, .ext = ".png" };
     }
 
     fn iconSubDir(ext: []const u8) []const u8 {
@@ -1180,6 +1257,25 @@ pub const AppImageManager = struct {
     }
 };
 
+fn pathIsInside(root: []const u8, candidate: []const u8) bool {
+    return candidate.len > root.len and
+        std.mem.startsWith(u8, candidate, root) and
+        std.fs.path.isSep(candidate[root.len]);
+}
+
+fn isSupportedIconExtension(extension: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(extension, ".png") or
+        std.ascii.eqlIgnoreCase(extension, ".svg");
+}
+
+fn iconSourceScore(path: []const u8, extension: []const u8) u8 {
+    if (std.mem.indexOf(u8, path, "icons/hicolor/scalable/apps/") != null) return 7;
+    if (std.mem.indexOf(u8, path, "icons/hicolor/256x256/apps/") != null) return 6;
+    if (std.mem.indexOf(u8, path, "icons/hicolor/512x512/apps/") != null) return 5;
+    if (std.ascii.eqlIgnoreCase(extension, ".svg")) return 4;
+    return 1;
+}
+
 fn writeTestAppImageDb(path: []const u8, contents: []const u8) !void {
     var file = try std.Io.Dir.cwd().createFile(std.testing.io, path, .{});
     defer file.close(std.testing.io);
@@ -1240,6 +1336,21 @@ const validTestAppImage =
     \\if [ "$1" = "--appimage-extract" ]; then
     \\  mkdir -p squashfs-root
     \\  printf '%s\n' '[Desktop Entry]' 'Name=Editor' 'X-AppImage-Version=2.0.0' 'Exec=editor' > squashfs-root/editor.desktop
+    \\  exit 0
+    \\fi
+    \\exit 0
+;
+
+const symlinkLayoutTestAppImage =
+    \\#!/bin/sh
+    \\if [ "$1" = "--appimage-extract" ]; then
+    \\  mkdir -p squashfs-root/usr/share/applications
+    \\  mkdir -p squashfs-root/usr/share/icons/hicolor/256x256/apps
+    \\  printf '%s\n' '[Desktop Entry]' 'Name=Symlink Editor' 'X-AppImage-Version=3.1.0' 'Exec=editor %u' 'Icon=editor' 'Categories=Game;Emulator;' > squashfs-root/usr/share/applications/editor.desktop
+    \\  printf '%s\n' 'icon-data' > squashfs-root/usr/share/icons/hicolor/256x256/apps/editor.png
+    \\  ln -s usr/share/applications/editor.desktop squashfs-root/editor.desktop
+    \\  ln -s usr/share/icons/hicolor/256x256/apps/editor.png squashfs-root/editor.png
+    \\  ln -s usr/share/icons/hicolor/256x256/apps/editor.png squashfs-root/.DirIcon
     \\  exit 0
     \\fi
     \\exit 0
@@ -1357,6 +1468,76 @@ test "installAppImage atomically replaces a validated AppImage" {
     try std.testing.expect(std.mem.indexOf(u8, desktop, ".shelly-install-") == null);
 }
 
+test "installAppImage reads desktop metadata and icons through standard AppImage symlinks" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    const source_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "source" });
+    defer std.testing.allocator.free(source_dir);
+    const install_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "install" });
+    defer std.testing.allocator.free(install_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, source_dir);
+
+    const source_path = try std.fs.path.join(std.testing.allocator, &.{ source_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(source_path);
+    const installed_path = try std.fs.path.join(std.testing.allocator, &.{ install_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(installed_path);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ root, "config", "appimages.db" });
+    defer std.testing.allocator.free(db_path);
+    try writeTestAppImageDb(source_path, symlinkLayoutTestAppImage);
+
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+    const manager = AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = environ,
+        .install_directory = install_dir,
+        .local_db_path = db_path,
+    };
+
+    try std.testing.expect(try manager.installAppImage(source_path));
+
+    const app_images = try manager.getAppImagesFromLocalDb();
+    defer manager.freeAppImages(app_images);
+    try std.testing.expectEqual(@as(usize, 1), app_images.len);
+    try std.testing.expectEqualStrings("Symlink Editor", app_images[0].desktop_name);
+    try std.testing.expectEqualStrings("editor", app_images[0].icon_name);
+    try std.testing.expectEqualStrings("3.1.0", app_images[0].version);
+    try std.testing.expectEqualStrings(installed_path, app_images[0].path);
+
+    const desktop_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "data", "applications", "editor.desktop" },
+    );
+    defer std.testing.allocator.free(desktop_path);
+    const desktop = try readTestAppImageDb(std.testing.allocator, desktop_path);
+    defer std.testing.allocator.free(desktop);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "Name=Symlink Editor\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "Icon=editor\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "Categories=Game;Emulator;\n") != null);
+    const expected_exec = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "Exec=\"{s}\" %u\n",
+        .{installed_path},
+    );
+    defer std.testing.allocator.free(expected_exec);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, expected_exec) != null);
+
+    const icon_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "data", "icons", "hicolor", "256x256", "apps", "editor.png" },
+    );
+    defer std.testing.allocator.free(icon_path);
+    const icon = try readTestAppImageDb(std.testing.allocator, icon_path);
+    defer std.testing.allocator.free(icon);
+    try std.testing.expectEqualStrings("icon-data\n", icon);
+}
+
 test "installAppImage restores the previous binary when database commit fails" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1418,6 +1599,46 @@ test "AppImage classification is case insensitive and extension based" {
     try std.testing.expect(AppImageManager.is_app_image("/tmp/Example.appimage"));
     try std.testing.expect(!AppImageManager.isAppImage("Example.AppImage.zsync"));
     try std.testing.expect(!AppImageManager.isAppImage("AppImage"));
+}
+
+test "AppImage metadata discovery rejects symlinks outside the extraction root" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    const extraction_root = try std.fs.path.join(std.testing.allocator, &.{ root, "squashfs-root" });
+    defer std.testing.allocator.free(extraction_root);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, extraction_root);
+
+    const outside_desktop = try std.fs.path.join(std.testing.allocator, &.{ root, "outside.desktop" });
+    defer std.testing.allocator.free(outside_desktop);
+    const outside_icon = try std.fs.path.join(std.testing.allocator, &.{ root, "outside.png" });
+    defer std.testing.allocator.free(outside_icon);
+    try writeTestAppImageDb(outside_desktop, "[Desktop Entry]\nName=Outside\n");
+    try writeTestAppImageDb(outside_icon, "outside-icon\n");
+
+    const desktop_link = try std.fs.path.join(std.testing.allocator, &.{ extraction_root, "outside.desktop" });
+    defer std.testing.allocator.free(desktop_link);
+    const icon_link = try std.fs.path.join(std.testing.allocator, &.{ extraction_root, ".DirIcon" });
+    defer std.testing.allocator.free(icon_link);
+    try std.Io.Dir.cwd().symLink(std.testing.io, outside_desktop, desktop_link, .{});
+    try std.Io.Dir.cwd().symLink(std.testing.io, outside_icon, icon_link, .{});
+
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+    const manager = AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = environ,
+        .install_directory = root,
+        .local_db_path = root,
+    };
+
+    try std.testing.expect((try manager.findDesktopFile(extraction_root)) == null);
+    try std.testing.expect((try manager.findIconSource(extraction_root, "")) == null);
 }
 
 test "cleanInvalidNames lowercases and replaces separators" {

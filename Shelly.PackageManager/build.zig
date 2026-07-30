@@ -520,6 +520,7 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "AppImage dispatcher forwards typed status and download progress",
             "AppImage classification is case insensitive and extension based",
+            "AppImage metadata discovery rejects symlinks outside the extraction root",
             "test isAppImage",
             "get_update returns optional owned results for configured providers",
             "get_updates returns an owned update list",
@@ -539,6 +540,7 @@ pub fn build(b: *std.Build) void {
             "removeAppImageFromLocalDb removes an orphaned entry by name",
             "installAppImage preserves an existing install when staged validation fails",
             "installAppImage atomically replaces a validated AppImage",
+            "installAppImage reads desktop metadata and icons through standard AppImage symlinks",
             "installAppImage restores the previous binary when database commit fails",
         },
     });
