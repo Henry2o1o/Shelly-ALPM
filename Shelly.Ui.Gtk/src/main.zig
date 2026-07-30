@@ -15,8 +15,6 @@ pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
     runtime.environ_map = init.environ_map;
 
-    setupGnomeThemePreference();
-
     if (!translations.init()) {
         std.log.warn("translations: failed to initialize gettext", .{});
     }
@@ -98,6 +96,8 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
     };
 
     tryStartTray(runtime.io, std.heap.c_allocator);
+
+    setupGnomeThemePreference();
 
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
