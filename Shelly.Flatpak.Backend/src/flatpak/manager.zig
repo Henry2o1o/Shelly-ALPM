@@ -1493,6 +1493,9 @@ pub const Manager = struct {
         cancellation: ?events.Cancellation,
         cancellable: *rawflatpak.GCancellable,
         current_name: []const u8 = "",
+        end_of_life_detected: bool = false,
+        replacement_operation_queued: bool = false,
+        callback_error_encounters: bool = false,
     };
 
     fn transactionCallbackContext(self: Manager, cancellable: *rawflatpak.GCancellable) TransactionCallbackContext {
