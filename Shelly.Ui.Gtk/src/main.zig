@@ -128,6 +128,20 @@ fn setupGnomeThemePreference() void {
 
     std.debug.print("prefer_dark = {}\n", .{prefer_dark});
 
+    if (prefer_dark) {
+        const gtk_settings = gtk.Settings.getDefault() orelse {
+            std.debug.print("Failed to fetch GtkSettings layout.\n", .{});
+            return;
+        };
+        const base_object = @as(*gobject.Object, @ptrCast(@alignCast(gtk_settings)));
+        var value = std.mem.zeroes(gobject.Value);
+        const bool_type = gobject.typeFromName("gboolean");
+        _ = value.init(bool_type);
+        value.setBoolean(1);
+        base_object.setProperty("gtk-application-prefer-dark-theme", &value);
+    }
+
+
     _ = glib.setenv(
         "GTK_APPLICATION_PREFER_DARK_THEME",
         if (prefer_dark) "1" else "0",
