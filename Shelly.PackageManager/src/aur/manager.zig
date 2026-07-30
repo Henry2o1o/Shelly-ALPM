@@ -542,17 +542,21 @@ pub const Manager = struct {
         var vcs_store_changed = false;
         for (candidates.items) |*candidate| {
             if (candidate.first_seen) {
-                const entries = candidate.owned_entries.?;
-                for (entries, candidate.remote_shas) |*entry, *remote_sha| {
-                    const sha = remote_sha.slice();
-                    if (sha.len == 0) continue;
-                    const owned_sha = try self.allocator.dupe(u8, sha);
-                    self.allocator.free(entry.commit_sha);
-                    entry.commit_sha = owned_sha;
+                const local = installed.items[candidate.installed_index];
+                candidate.needs_update = firstSeenVcsNeedsUpdate(local.version, candidate.remote_shas);
+                if (!candidate.needs_update) {
+                    const entries = candidate.owned_entries.?;
+                    for (entries, candidate.remote_shas) |*entry, *remote_sha| {
+                        const sha = remote_sha.slice();
+                        if (sha.len == 0) continue;
+                        const owned_sha = try self.allocator.dupe(u8, sha);
+                        self.allocator.free(entry.commit_sha);
+                        entry.commit_sha = owned_sha;
+                    }
+                    try self.vcs_store.set(candidate.package_name, entries);
+                    vcs_store_changed = true;
+                    continue;
                 }
-                try self.vcs_store.set(candidate.package_name, entries);
-                vcs_store_changed = true;
-                continue;
             }
             if (try backfillMissingVcsBaselines(&self.vcs_store, candidate))
                 vcs_store_changed = true;
@@ -1934,6 +1938,31 @@ const RemoteSha = struct {
     }
 };
 
+fn installedVcsCommit(installed_version: []const u8) ?[]const u8 {
+    const marker = std.mem.lastIndexOf(u8, installed_version, ".g") orelse return null;
+    const start = marker + 2;
+    var end = start;
+    while (end < installed_version.len and std.ascii.isHex(installed_version[end])) : (end += 1) {}
+    if (end - start < 7) return null;
+    return installed_version[start..end];
+}
+
+fn firstSeenVcsNeedsUpdate(installed_version: []const u8, remote_shas: []const RemoteSha) bool {
+    const installed_commit = installedVcsCommit(installed_version) orelse return false;
+    var fetched_any = false;
+    for (remote_shas) |*remote_sha| {
+        const sha = remote_sha.slice();
+        if (sha.len == 0) continue;
+        fetched_any = true;
+        if (sha.len >= installed_commit.len and
+            std.ascii.eqlIgnoreCase(sha[0..installed_commit.len], installed_commit))
+        {
+            return false;
+        }
+    }
+    return fetched_any;
+}
+
 const VcsCheckCandidate = struct {
     package_name: []const u8,
     installed_index: usize,
@@ -3036,6 +3065,14 @@ test "VCS package checks execute concurrently and retain per-package results" {
     try std.testing.expect(candidates[1].needs_update);
     try std.testing.expectEqualStrings("new", candidates[0].remote_shas[0].slice());
     try std.testing.expectEqualStrings("new", candidates[1].remote_shas[0].slice());
+
+    var changed = [_]RemoteSha{RemoteSha.fromSlice("dcaed638f1a486650c67063543708cf1313dfb14").?};
+    try std.testing.expect(firstSeenVcsNeedsUpdate("0.46.r29.g34c6095-1", &changed));
+    try std.testing.expect(!firstSeenVcsNeedsUpdate("26.36.0602723.r6.gdcaed63-1", &changed));
+    try std.testing.expect(!firstSeenVcsNeedsUpdate("0.46-1", &changed));
+
+    var unavailable = [_]RemoteSha{.{}};
+    try std.testing.expect(!firstSeenVcsNeedsUpdate("0.46.r29.g34c6095-1", &unavailable));
 }
 
 test "VCS checks retry and baseline transiently failed sources" {
