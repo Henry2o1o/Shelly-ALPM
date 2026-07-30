@@ -60,18 +60,26 @@ fn dayInSchedule(day: i32, scheduled: []const DayOfWeek) bool {
 }
 
 pub fn getNextSeconds(gpa: std.mem.Allocator, io: std.Io, config: *const ShellyConfig) !u32 {
-    const now = try zeit.instant(.{});
+    const now = zeit.instant(.{ .now = io }, &zeit.utc);
     const local = try zeit.local(gpa, io, .{});
     defer local.deinit();
     const dt = now.in(&local).time();
 
+    const local_secs = dt.instant().unixTimestamp();
+    const days = zeit.daysSinceEpoch(local_secs);
+    const wd = zeit.weekdayFromDays(days);
+
     const info = NowInfo{
-        .weekday = @intCast(@mod(@as(i32, @intCast(@intFromEnum(dt.weekday))), 7)),
+        .weekday = @intCast(@intFromEnum(wd)),
         .seconds_of_day = @as(i32, @intCast(dt.hour)) * 3600 +
             @as(i32, @intCast(dt.minute)) * 60 +
             @as(i32, @intCast(dt.second)),
     };
     return computeNextSeconds(info, config);
+}
+
+fn mapWeekday(wd: zeit.Weekday) i32 {
+    return @intCast(@intFromEnum(wd));
 }
 
 const testing = std.testing;

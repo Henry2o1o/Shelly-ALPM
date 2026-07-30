@@ -6,10 +6,8 @@ const ShellyTabs = shelly_config.ShellyTabs;
 const ViewType = shelly_config.ViewType;
 const xdg_paths = @import("xdg_paths.zig").xdg_paths;
 
-// TODO: Change me to config.json
 const settings_path = "shelly/settings.json";
 
-/// Maximum size accepted when reading the settings file (1 MiB).
 const max_settings_size: Io.Limit = .limited(1 << 20);
 
 pub const ConfigError = error{
@@ -21,6 +19,9 @@ pub const ConfigResolver = struct {
     io: Io,
     config_dir: Io.Dir,
     parsed: ?std.json.Parsed(ShellyConfig),
+    mutex: std.Io.Mutex = .init,
+    dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    settings_dir_abs: ?[]const u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -36,11 +37,15 @@ pub const ConfigResolver = struct {
             else => return err,
         };
 
+        const rel_dir = std.fs.path.dirname(settings_path).?;
+        const abs_dir = try std.fs.path.join(allocator, &.{ home_path, rel_dir });
+
         return .{
             .allocator = allocator,
             .io = io,
             .config_dir = config_dir,
             .parsed = null,
+            .settings_dir_abs = abs_dir,
         };
     }
 
@@ -57,6 +62,10 @@ pub const ConfigResolver = struct {
         if (self.parsed) |*p| {
             p.deinit();
             self.parsed = null;
+        }
+        if (self.settings_dir_abs) |d| {
+            self.allocator.free(d);
+            self.settings_dir_abs = null;
         }
     }
 
@@ -82,6 +91,24 @@ pub const ConfigResolver = struct {
         defer self.allocator.free(data);
 
         self.parsed = try self.parseJsonIntoConfig(data);
+    }
+
+    pub fn reload(self: *ConfigResolver) !void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        try self.load();
+        self.dirty.store(true, .seq_cst);
+    }
+
+    pub fn fileHash(self: *const ConfigResolver) ?u64 {
+        const data = self.config_dir.readFileAlloc(
+            self.io,
+            settings_path,
+            self.allocator,
+            max_settings_size,
+        ) catch return null;
+        defer self.allocator.free(data);
+        return std.hash.Wyhash.hash(0, data);
     }
 
     fn parseJsonIntoConfig(self: *ConfigResolver, json: []const u8) !std.json.Parsed(ShellyConfig) {
@@ -127,7 +154,7 @@ pub const ConfigResolver = struct {
         try fw.flush();
     }
 
-    pub fn get(self: *ConfigResolver) !*ShellyConfig {
+    pub fn get(self: *const ConfigResolver) !*const ShellyConfig {
         if (self.parsed) |*p| {
             return &p.value;
         }

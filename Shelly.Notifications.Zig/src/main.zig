@@ -4,6 +4,7 @@ const runtime = @import("runtime.zig");
 const ShellyCli = @import("services/shelly-cli.zig").ShellyCli;
 const ShellyConfig = @import("services/config.zig").ConfigResolver;
 const next_notification = @import("services/next_notification.zig");
+const ConfigWatcher = @import("services/config-watcher.zig").ConfigWatcher;
 
 const CheckUpdatesPackage = @import("models/update.zig").CheckUpdatesPackage;
 const CheckUpdatesAur = @import("models/update.zig").CheckUpdatesAur;
@@ -77,7 +78,7 @@ const Worker = struct {
     cli: ShellyCli,
     io: std.Io,
     gpa: std.mem.Allocator,
-    config: *const ShellyConfig,
+    config: *ShellyConfig,
 
     fn run(self: *Worker) void {
         while (true) {
@@ -85,13 +86,33 @@ const Worker = struct {
                 std.debug.print("[worker] check failed: {any}\n", .{e});
             };
 
-            const secs = //next_notification.getNextSeconds(self.gpa, self.io, self.config.) catch |e| {
-                //std.debug.print("[worker] schedule calc failed: {any}, using 10h\n", .{e});
-                36000;
-            // };
+            const secs: u32 = blk: {
+                self.config.mutex.lockUncancelable(self.io);
+                defer self.config.mutex.unlock(self.io);
+                const cfg = self.config.get() catch |e| {
+                    std.log.warn("[worker] config get failed: {any}, using 1h", .{e});
+                    break :blk 3600;
+                };
+                break :blk next_notification.getNextSeconds(self.gpa, self.io, cfg) catch |e| {
+                    std.log.warn("[worker] schedule calc failed: {any}, using 10h", .{e});
+                    break :blk 36000;
+                };
+            };
 
+            std.log.info("[worker] next check in: {d}", .{secs});
             std.debug.print("[worker] sleeping {d}s until next check\n", .{secs});
-            self.io.sleep(.fromSeconds(secs), .awake) catch break;
+
+            _ = self.config.dirty.swap(false, .seq_cst);
+            var remaining = secs;
+            while (remaining > 0) {
+                const chunk = @min(remaining, 30);
+                self.io.sleep(.fromSeconds(chunk), .awake) catch return;
+                if (self.config.dirty.swap(false, .seq_cst)) {
+                    std.debug.print("[worker] config changed, recomputing schedule\n", .{});
+                    break;
+                }
+                remaining -= chunk;
+            }
         }
     }
 
@@ -164,7 +185,15 @@ pub fn main(init: std.process.Init) !void {
     var menu_ctrl = MenuController.init(&svc, &mstate, t.name, "/MenuBar");
     _ = try menu_ctrl.register();
 
-    const config = try ShellyConfig.init(allocator, runtime.io, runtime.environ_map);
+    var config = try ShellyConfig.init(allocator, runtime.io, runtime.environ_map);
+    defer config.deinit();
+    try config.load();
+
+    var watcher = try ConfigWatcher.init(allocator, &config, "settings.json");
+    defer watcher.deinit();
+    try watcher.start();
+    defer watcher.stop();
+    _ = watcher.changedSinceLast();
 
     var worker = Worker{
         .updates = &updates,
