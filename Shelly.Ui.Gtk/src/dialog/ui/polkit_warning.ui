@@ -38,7 +38,7 @@
                 <property name="justify">center</property>
                 <property name="max-width-chars">40</property>
                 <property name="use-markup">true</property>
-                <property name="label" translatable="yes">Shelly needs &lt;b&gt;polkit&lt;/b&gt; installed and running to authorize privileged actions, but it wasn't found on the system bus.
+                <property name="label" translatable="yes">Shelly's GUI needs &lt;b&gt;polkit&lt;/b&gt; installed and running to authorize privileged actions, but it wasn't found on the system bus.
 
 Install and enable it, then retry.
 
