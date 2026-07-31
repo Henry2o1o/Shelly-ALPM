@@ -93,7 +93,7 @@ pub fn validatePkgbuild(
     var info = try parser.parser_content(content, base_directory);
     defer info.deinit(allocator);
 
-    return validatePkgbuildInfo(allocator, io, &info, base_directory);
+    return validatePkgbuildInfo(allocator, io, &info, base_directory, content);
 }
 
 pub fn validatePkgbuildInfo(
@@ -101,8 +101,9 @@ pub fn validatePkgbuildInfo(
     io: std.Io,
     info: *const PkgbuildInfo,
     base_directory: ?[]const u8,
+    content: ?[]const u8,
 ) !PkgbuildValidation {
-    var post_install = try (post_install_validator.PostInstallValidator{ .allocator = allocator }).validate(info.*);
+    var post_install = try (post_install_validator.PostInstallValidator{ .allocator = allocator }).validateWithContent(info.*, content);
     errdefer post_install.deinit(allocator);
     var homograph = try (homograph_validator.HomographValidator{ .allocator = allocator }).validate(info.*);
     errdefer homograph.deinit(allocator);
@@ -1230,7 +1231,7 @@ pub const Manager = struct {
         errdefer info.deinit(self.allocator);
         try requireReviewInputs(self.allocator, self.io(), cache_path, &info);
 
-        var validation_results = try validatePkgbuildInfo(self.allocator, self.io(), &info, cache_path);
+        var validation_results = try validatePkgbuildInfo(self.allocator, self.io(), &info, cache_path, new_pkgbuild);
         errdefer validation_results.deinit(self.allocator);
         const digest = try reviewDigest(self.allocator, self.io(), cache_path, new_pkgbuild, &info);
 

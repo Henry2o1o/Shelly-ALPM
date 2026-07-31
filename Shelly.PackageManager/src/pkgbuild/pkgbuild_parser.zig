@@ -1154,7 +1154,7 @@ pub const PkgbuildParser = struct {
         return value[start_u..end_u];
     }
 
-    fn extract_function_body(content: []const u8, function_name: []const u8) !?[]const u8 {
+    pub fn extract_function_body(content: []const u8, function_name: []const u8) !?[]const u8 {
         const header_match = try match_at_line_start(content, 0, function_name);
         const start = header_match orelse return null;
 
