@@ -19,6 +19,12 @@ const flatpak_command_path = "shelly list flatpak";
 
 pub const Backend = enum { standard, appimage, aur, flatpak };
 
+const ListOptions = struct {
+    show_hidden: bool = false,
+    required_by: bool = false,
+    optional_for: bool = false,
+};
+
 pub const StandardItem = struct {
     name: []const u8,
     version: []const u8 = "",
@@ -141,7 +147,7 @@ const Runner = struct {
         data: ?*anyopaque,
         context: *runtime.RuntimeContext,
         backend: Backend,
-        show_hidden: bool,
+        options: ListOptions,
     ) anyerror!Result,
 };
 
@@ -166,7 +172,11 @@ fn dispatchWithRunner(
         runner.data,
         context,
         backend,
-        optionEnabled(invocation, "--show-hidden"),
+        .{
+            .show_hidden = optionEnabled(invocation, "--show-hidden"),
+            .required_by = optionEnabled(invocation, "--required-by"),
+            .optional_for = optionEnabled(invocation, "--optional-for"),
+        },
     ) catch |err| {
         try writeQueryFailure(context, invocation, backend, err);
         return 1;
@@ -732,17 +742,31 @@ fn writeStandardPlain(
     const selected = try selectedStandard(allocator, invocation, items);
     const rows = try allocator.alloc([]const []const u8, selected.len);
     const size_display = try loadSizeDisplay(context);
-    for (selected, rows) |item, *cells| cells.* = try row(allocator, &.{
-        item.name,
-        item.repository,
-        item.version,
-        try formatSignedSize(allocator, size_display, item.installed_size),
-        truncate(item.description, 50),
-    });
+    const include_required_by = optionEnabled(invocation, "--required-by");
+    const include_optional_for = optionEnabled(invocation, "--optional-for");
+    var headings: std.ArrayList([]const u8) = .empty;
+    try headings.appendSlice(allocator, &.{ "Name", "Repository", "Version", "Size", "Description" });
+    if (include_required_by) try headings.append(allocator, "Required By");
+    if (include_optional_for) try headings.append(allocator, "Optional For");
+    for (selected, rows) |item, *cells| {
+        var values: std.ArrayList([]const u8) = .empty;
+        try values.appendSlice(allocator, &.{
+            item.name,
+            item.repository,
+            item.version,
+            try formatSignedSize(allocator, size_display, item.installed_size),
+            truncate(item.description, 50),
+        });
+        if (include_required_by)
+            try values.append(allocator, try joinedNames(allocator, item.required_by));
+        if (include_optional_for)
+            try values.append(allocator, try joinedNames(allocator, item.optional_for));
+        cells.* = try values.toOwnedSlice(allocator);
+    }
     try table.write(
         context.allocator,
         context.stdout,
-        &.{ "Name", "Repository", "Version", "Size", "Description" },
+        headings.items,
         rows,
         output.supportsAnsi(context),
     );
@@ -788,15 +812,29 @@ fn writeAurPlain(
     const allocator = storage.allocator();
     const selected = try selectedAur(allocator, invocation, items);
     const rows = try allocator.alloc([]const []const u8, selected.len);
-    for (selected, rows) |item, *cells| cells.* = try row(allocator, &.{
-        item.name,
-        item.version,
-        truncate(item.description orelse "", 60),
-    });
+    const include_required_by = optionEnabled(invocation, "--required-by");
+    const include_optional_for = optionEnabled(invocation, "--optional-for");
+    var headings: std.ArrayList([]const u8) = .empty;
+    try headings.appendSlice(allocator, &.{ "Name", "Version", "Description" });
+    if (include_required_by) try headings.append(allocator, "Required By");
+    if (include_optional_for) try headings.append(allocator, "Optional For");
+    for (selected, rows) |item, *cells| {
+        var values: std.ArrayList([]const u8) = .empty;
+        try values.appendSlice(allocator, &.{
+            item.name,
+            item.version,
+            truncate(item.description orelse "", 60),
+        });
+        if (include_required_by)
+            try values.append(allocator, try joinedNames(allocator, item.required_by orelse &.{}));
+        if (include_optional_for)
+            try values.append(allocator, try joinedNames(allocator, item.optional_for orelse &.{}));
+        cells.* = try values.toOwnedSlice(allocator);
+    }
     try table.write(
         context.allocator,
         context.stdout,
-        &.{ "Name", "Version", "Description" },
+        headings.items,
         rows,
         output.supportsAnsi(context),
     );
@@ -840,6 +878,10 @@ fn row(allocator: std.mem.Allocator, values: []const []const u8) ![]const []cons
     const result = try allocator.alloc([]const u8, values.len);
     @memcpy(result, values);
     return result;
+}
+
+fn joinedNames(allocator: std.mem.Allocator, values: []const []const u8) ![]const u8 {
+    return std.mem.join(allocator, ", ", values);
 }
 
 fn selectedAur(
@@ -913,17 +955,17 @@ fn runReal(
     _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     backend: Backend,
-    show_hidden: bool,
+    options: ListOptions,
 ) !Result {
     return switch (backend) {
-        .standard => runStandard(context, show_hidden),
+        .standard => runStandard(context, options),
         .appimage => runAppImage(context),
-        .aur => runAur(context, show_hidden),
+        .aur => runAur(context, options),
         .flatpak => runFlatpak(context),
     };
 }
 
-fn runStandard(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
+fn runStandard(context: *runtime.RuntimeContext, options: ListOptions) !Result {
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
@@ -932,8 +974,11 @@ fn runStandard(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
         null,
     );
     defer manager.deinit();
-    if (show_hidden and !manager.show_hidden_packages) _ = manager.toggle_hidden_packages();
-    const native_items = try manager.get_installed_packages();
+    if (options.show_hidden and !manager.show_hidden_packages) _ = manager.toggle_hidden_packages();
+    const native_items = try manager.get_installed_packages_with_reverse_dependencies(.{
+        .required_by = options.required_by,
+        .optional_for = options.optional_for,
+    });
     defer Zigalpm.alpm.OwnedPackage.deinitSlice(context.allocator, native_items);
 
     const arena = try createArena(context.allocator);
@@ -942,7 +987,7 @@ fn runStandard(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
     var items: std.ArrayList(StandardItem) = .empty;
     for (native_items) |native| {
         const name = native.name() orelse continue;
-        if (!show_hidden and ignoredStandardPackage(manager, name)) continue;
+        if (!options.show_hidden and ignoredStandardPackage(manager, name)) continue;
         try items.append(allocator, .{
             .name = try allocator.dupe(u8, name),
             .version = try allocator.dupe(u8, native.version() orelse ""),
@@ -1013,17 +1058,20 @@ fn runAppImage(context: *runtime.RuntimeContext) !Result {
     return .{ .appimage = .{ .items = items, .arena = arena } };
 }
 
-fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
+fn runAur(context: *runtime.RuntimeContext, options: ListOptions) !Result {
     const database_path = try xdg.shellyCache(context, &.{"db"});
     defer context.allocator.free(database_path);
     try std.Io.Dir.cwd().createDirPath(context.io, database_path);
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
         .use_temp_path = true,
         .temp_path = database_path,
-        .show_hidden_packages = show_hidden,
+        .show_hidden_packages = options.show_hidden,
     });
     defer manager.deinit();
-    const native_items = try manager.getInstalledPackages();
+    const native_items = try manager.getInstalledPackagesWithReverseDependencies(.{
+        .required_by = options.required_by,
+        .optional_for = options.optional_for,
+    });
     defer Zigalpm.aur.models.Package.deinitSlice(context.allocator, native_items);
 
     const arena = try createArena(context.allocator);
@@ -1199,7 +1247,7 @@ test "list routes long and requested uppercase short forms to package backends o
         const runner: Runner = .{
             .data = &observed,
             .call = struct {
-                fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, backend: Backend, _: bool) !Result {
+                fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, backend: Backend, _: ListOptions) !Result {
                     const capture: *?Backend = @ptrCast(@alignCast(data.?));
                     capture.* = backend;
                     return switch (backend) {
@@ -1223,17 +1271,103 @@ test "list routes long and requested uppercase short forms to package backends o
     try std.testing.expect(keyring == .failure);
 }
 
+test "list reverse dependency modifiers are selective and backend scoped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const Case = struct {
+        arguments: []const []const u8,
+        backend: Backend,
+        required_by: bool = false,
+        optional_for: bool = false,
+    };
+    const cases = [_]Case{
+        .{ .arguments = &.{ "list", "standard", "--json" }, .backend = .standard },
+        .{
+            .arguments = &.{ "list", "standard", "--required-by", "--json" },
+            .backend = .standard,
+            .required_by = true,
+        },
+        .{
+            .arguments = &.{ "list", "aur", "--optional-for", "--json" },
+            .backend = .aur,
+            .optional_for = true,
+        },
+        .{
+            .arguments = &.{ "list", "aur", "--required-by", "--optional-for", "--json" },
+            .backend = .aur,
+            .required_by = true,
+            .optional_for = true,
+        },
+    };
+    for (cases) |case| {
+        const Capture = struct {
+            expected: Case,
+            called: bool = false,
+        };
+        var capture = Capture{ .expected = case };
+        const runner: Runner = .{ .data = &capture, .call = struct {
+            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, backend: Backend, options: ListOptions) !Result {
+                const observed: *Capture = @ptrCast(@alignCast(data.?));
+                try std.testing.expectEqual(observed.expected.backend, backend);
+                try std.testing.expectEqual(observed.expected.required_by, options.required_by);
+                try std.testing.expectEqual(observed.expected.optional_for, options.optional_for);
+                observed.called = true;
+                return switch (backend) {
+                    .standard => .{ .standard = .{ .items = &.{} } },
+                    .appimage => .{ .appimage = .{ .items = &.{} } },
+                    .aur => .{ .aur = .{ .items = &.{} } },
+                    .flatpak => .{ .flatpak = .{ .items = &.{} } },
+                };
+            }
+        }.run };
+        const outcome = try parseTestArguments(arena.allocator(), &manifest, case.arguments);
+        try std.testing.expect(outcome == .dispatch);
+        var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer stdout.deinit();
+        var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer stderr.deinit();
+        var context: runtime.RuntimeContext = .{
+            .allocator = arena.allocator(),
+            .io = std.testing.io,
+            .stdout = &stdout.writer,
+            .stderr = &stderr.writer,
+        };
+        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, runner));
+        try std.testing.expect(capture.called);
+    }
+
+    const appimage = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "appimage", "--required-by" },
+    );
+    try std.testing.expect(appimage == .failure);
+    const flatpak = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "flatpak", "--optional-for" },
+    );
+    try std.testing.expect(flatpak == .failure);
+}
+
 test "standard install-reason filters apply to structured output" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
     const items = [_]StandardItem{
         .{ .name = "dependency-package", .version = "1", .install_reason = "Dependency" },
-        .{ .name = "explicit-package", .version = "2", .install_reason = "Explicit" },
+        .{
+            .name = "explicit-package",
+            .version = "2",
+            .install_reason = "Explicit",
+            .required_by = &.{"desktop-meta"},
+            .optional_for = &.{"shell-extras"},
+        },
     };
     const runner: Runner = .{ .data = @constCast(&items), .call = struct {
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, show_hidden: bool) !Result {
-            try std.testing.expect(show_hidden);
+        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, options: ListOptions) !Result {
+            try std.testing.expect(options.show_hidden);
             const values: *const [2]StandardItem = @ptrCast(@alignCast(data.?));
             return .{ .standard = .{ .items = values } };
         }
@@ -1259,6 +1393,19 @@ test "standard install-reason filters apply to structured output" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "dependency-package") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PackageFile\":null") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"InstallReason\":\"Explicit\"") != null);
+
+    stdout.writer.end = 0;
+    const plain_outcome = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "standard", "--show-hidden", "--required-by", "--optional-for" },
+    );
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, runner));
+    const plain = stdout.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, plain, "Required By") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "Optional For") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "desktop-meta") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "shell-extras") != null);
 }
 
 test "AUR filters apply to JSON and UI structured output" {
@@ -1276,7 +1423,7 @@ test "AUR filters apply to JSON and UI structured output" {
         },
     };
     const runner: Runner = .{ .data = @constCast(&items), .call = struct {
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, _: bool) !Result {
+        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, _: ListOptions) !Result {
             const values: *const [2]AurItem = @ptrCast(@alignCast(data.?));
             return .{ .aur = .{ .items = values } };
         }
@@ -1285,7 +1432,7 @@ test "AUR filters apply to JSON and UI structured output" {
     const json_outcome = try parseTestArguments(
         arena.allocator(),
         &manifest,
-        &.{ "list", "aur", "--explicitOnly", "--json" },
+        &.{ "list", "aur", "--explicitOnly", "--required-by", "--optional-for", "--json" },
     );
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
@@ -1313,6 +1460,19 @@ test "AUR filters apply to JSON and UI structured output" {
     const payload = try decodeFirstTestFrame(arena.allocator(), stdout.writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, payload, "dependency-package") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "explicit-package") == null);
+
+    stdout.writer.end = 0;
+    const plain_outcome = try parseTestArguments(
+        arena.allocator(),
+        &manifest,
+        &.{ "list", "aur", "--required-by", "--optional-for" },
+    );
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, runner));
+    const plain = stdout.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, plain, "Required By") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "Optional For") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "desktop-meta") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "shell-extras") != null);
 }
 
 test "AppImage and Flatpak lists emit compatibility JSON and stable ordering" {

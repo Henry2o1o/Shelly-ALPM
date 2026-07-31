@@ -17,6 +17,7 @@ pub const alpm = struct {
     pub const SigLevel = bindings.libalpm.SigLevel;
     pub const OwnedPackage = bindings.libalpm.OwnedPackage;
     pub const OwnedPackageWithUpdate = bindings.libalpm.OwnedPackageWithUpdate;
+    pub const ReverseDependencyOptions = manager.ReverseDependencyOptions;
     pub const DependencySatisfier = manager.DependencySatisfier;
     pub const RestartReport = manager.RestartReport;
     pub const AffectedProcess = manager.AffectedProcess;

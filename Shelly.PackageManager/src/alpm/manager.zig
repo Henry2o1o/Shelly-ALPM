@@ -53,6 +53,7 @@ pub const TransactionError = error{
 };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound, NoHandle, OutOfMemory, Cancelled };
+pub const ReverseDependencyOptions = libalpm.ReverseDependencyOptions;
 
 pub const IgnorePackageError = configuration.IgnorePackageError;
 pub const HoldPackageError = configuration.HoldPackageError;
@@ -442,6 +443,13 @@ pub const Manager = struct {
     }
 
     pub fn get_installed_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
+        return self.get_installed_packages_with_reverse_dependencies(.{});
+    }
+
+    pub fn get_installed_packages_with_reverse_dependencies(
+        self: *Manager,
+        reverse_dependencies: ReverseDependencyOptions,
+    ) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
         var operation_scope = OperationScope.init(self, .search, null);
         operation_scope.attach();
@@ -459,7 +467,11 @@ pub const Manager = struct {
         while (pkg_ptr != null) : (pkg_ptr = pkg_ptr.?.*.next) {
             const package_ptr = pkg_ptr.?.data orelse continue;
             const package = libalpm.Package.from(package_ptr) orelse continue;
-            var owned_package = libalpm.OwnedPackage.init(self.allocator, package) catch return TransactionError.OutOfMemory;
+            var owned_package = libalpm.OwnedPackage.initWithReverseDependencies(
+                self.allocator,
+                package,
+                reverse_dependencies,
+            ) catch return TransactionError.OutOfMemory;
             package_list.append(self.allocator, owned_package) catch {
                 owned_package.deinit(self.allocator);
                 return TransactionError.OutOfMemory;

@@ -615,6 +615,82 @@ test "Package owned reverse dependency queries return local required and optiona
     try testing.expect(!containsRequiredPackage(optional_for, "shelly-optional-unrelated"));
 }
 
+test "installed package snapshots selectively include direct reverse dependencies" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-snapshot-target", "1.0-1");
+    try workspace.addLocalPackageWithDependencies(
+        allocator,
+        "shelly-snapshot-direct",
+        "1.0-1",
+        &.{"shelly-snapshot-target"},
+    );
+    try workspace.addLocalPackageWithDependencies(
+        allocator,
+        "shelly-snapshot-indirect",
+        "1.0-1",
+        &.{"shelly-snapshot-direct"},
+    );
+    try workspace.addLocalPackageWithOptionalDependencies(
+        allocator,
+        "shelly-snapshot-optional",
+        "1.0-1",
+        &.{"shelly-snapshot-target: Optional integration"},
+    );
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const default_packages = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, default_packages);
+    const default_target = findOwnedPackage(default_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expectEqual(@as(usize, 0), default_target.required_by().len);
+    try testing.expectEqual(@as(usize, 0), default_target.optional_for().len);
+
+    const required_packages = try mgr.get_installed_packages_with_reverse_dependencies(.{
+        .required_by = true,
+    });
+    defer libalpm.OwnedPackage.deinitSlice(allocator, required_packages);
+    const required_target = findOwnedPackage(required_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expect(containsReversePackage(required_target.required_by(), "shelly-snapshot-direct"));
+    try testing.expect(!containsReversePackage(required_target.required_by(), "shelly-snapshot-indirect"));
+    try testing.expectEqual(@as(usize, 0), required_target.optional_for().len);
+
+    const optional_packages = try mgr.get_installed_packages_with_reverse_dependencies(.{
+        .optional_for = true,
+    });
+    defer libalpm.OwnedPackage.deinitSlice(allocator, optional_packages);
+    const optional_target = findOwnedPackage(optional_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expectEqual(@as(usize, 0), optional_target.required_by().len);
+    try testing.expect(containsReversePackage(optional_target.optional_for(), "shelly-snapshot-optional"));
+
+    const both_packages = try mgr.get_installed_packages_with_reverse_dependencies(.{
+        .required_by = true,
+        .optional_for = true,
+    });
+    defer libalpm.OwnedPackage.deinitSlice(allocator, both_packages);
+    const both_target = findOwnedPackage(both_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expect(containsReversePackage(both_target.required_by(), "shelly-snapshot-direct"));
+    try testing.expect(containsReversePackage(both_target.optional_for(), "shelly-snapshot-optional"));
+}
+
+fn containsReversePackage(names: anytype, expected: []const u8) bool {
+    for (names) |name| {
+        if (std.mem.eql(u8, name, expected)) return true;
+    }
+    return false;
+}
+
 test "get_required_packages returns an empty result for an unknown package" {
     const allocator = testing.allocator;
 

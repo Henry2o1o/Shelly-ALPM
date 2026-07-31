@@ -22,6 +22,7 @@ pub const version = @import("version.zig");
 pub const native_events = alpm_events;
 
 const AlpmManager = alpm_module.Manager;
+pub const ReverseDependencyOptions = alpm_module.ReverseDependencyOptions;
 const TransFlag = alpm_bindings.libalpm.TransFlag;
 const PkgbuildInfo = pkgbuild_parser.pkgbuild_info;
 const ParsedDependency = pkgbuild_parser.parsed_dep;
@@ -421,6 +422,16 @@ pub const Manager = struct {
     }
 
     pub fn getInstalledPackages(self: *Self) ![]models.Package {
+        return self.getInstalledPackagesWithReverseDependencies(.{
+            .required_by = true,
+            .optional_for = true,
+        });
+    }
+
+    pub fn getInstalledPackagesWithReverseDependencies(
+        self: *Self,
+        reverse_dependencies: ReverseDependencyOptions,
+    ) ![]models.Package {
         var operation_scope = OperationScope.init(self, .search, null);
         operation_scope.attach();
         defer operation_scope.finish(.success);
@@ -444,7 +455,7 @@ pub const Manager = struct {
         var response = try self.aur_client.getInfo(names.items);
         errdefer response.deinit(self.allocator);
         try applyInstalledState(self.allocator, response.results, installed.items);
-        try self.applyLocalReverseDependencies(response.results);
+        try self.applyLocalReverseDependencies(response.results, reverse_dependencies);
         self.allocator.free(response.response_type);
         if (response.error_message) |message| self.allocator.free(message);
         return response.results;
@@ -470,20 +481,30 @@ pub const Manager = struct {
         for (search_response.results[0..count], names) |package, *name| name.* = package.name;
         var info_response = try self.aur_client.getInfo(names);
         errdefer info_response.deinit(self.allocator);
-        try self.applyLocalReverseDependencies(info_response.results);
+        try self.applyLocalReverseDependencies(info_response.results, .{
+            .required_by = true,
+            .optional_for = true,
+        });
         self.allocator.free(info_response.response_type);
         if (info_response.error_message) |message| self.allocator.free(message);
         return info_response.results;
     }
 
-    fn applyLocalReverseDependencies(self: *Self, packages: []models.Package) !void {
+    fn applyLocalReverseDependencies(
+        self: *Self,
+        packages: []models.Package,
+        reverse_dependencies: ReverseDependencyOptions,
+    ) !void {
+        if (!reverse_dependencies.required_by and !reverse_dependencies.optional_for) return;
         for (packages) |*package| {
             const name_z = try self.allocator.dupeZ(u8, package.name);
             defer self.allocator.free(name_z);
             if (!self.alpm.is_package_installed(name_z)) continue;
             const local_package = try self.alpm.get_single_installed_package(name_z) orelse continue;
-            package.required_by = try local_package.owned_required_by(self.allocator);
-            package.optional_for = try local_package.owned_optional_for(self.allocator);
+            if (reverse_dependencies.required_by)
+                package.required_by = try local_package.owned_required_by(self.allocator);
+            if (reverse_dependencies.optional_for)
+                package.optional_for = try local_package.owned_optional_for(self.allocator);
         }
     }
 
