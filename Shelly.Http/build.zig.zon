@@ -6,7 +6,6 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "http_client.zig",
-        "tls_client.zig",
+        "src",
     },
 }

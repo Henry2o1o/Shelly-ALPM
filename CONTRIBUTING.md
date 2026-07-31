@@ -14,6 +14,7 @@ Shelly is organized into several interconnected projects:
 | **Shelly.UI.GTK**                   | GTK UI Frontend                                                                                       |
 | **Shelly.CLI.Zig**                  | Command-line interface for terminal-based package management                                          |
 | **Shelly-Notifications**            | Application to handle tray services and notifications.                                                |
+| **Shelly.Http**                     | Standalone HTTP client and compatibility TLS implementation                                           |
 | **Shelly.PackageManager**           | Core libalpm/AUR/AppImage library and backend-neutral Flatpak facade                                  |
 | **Shelly.Flatpak.Backend**          | Optional ABI-versioned shared library containing generated libflatpak bindings and native operations  |
 | **Shelly.Utilities**                | Shared utility classes and extensions used across projects                                            |
@@ -81,6 +82,7 @@ scripts/test-flatpak-separation.sh
 
 # Build individual native projects
 (cd Shelly.Flatpak.Backend && zig build)
+(cd Shelly.Http && zig build)
 (cd Shelly.PackageManager && zig build)
 (cd Shelly.Cli.Zig && zig build)
 (cd Shelly.Ui.Gtk && zig build)
@@ -93,6 +95,7 @@ scripts/test-flatpak-separation.sh
 (cd Shelly.Flatpak.Backend && zig build abi-test)
 (cd Shelly.Flatpak.Backend && zig build parity-test)
 (cd Shelly.Flatpak.Backend && zig build integration-test)
+(cd Shelly.Http && zig build test)
 (cd Shelly.PackageManager && zig build test)
 (cd Shelly.PackageManager && zig build flatpak-test)
 (cd Shelly.Cli.Zig && zig build test)
