@@ -21,6 +21,7 @@ const NavMode = @import("models/shelly_config.zig").NavMode;
 const ShellyTabs = @import("models/shelly_config.zig").ShellyTabs;
 const translations = @import("helpers/translations.zig");
 const ConfirmDialog = @import("dialog/page/yn_dialog.zig").ConfirmDialog;
+const UnifiedPage = @import("pages/unified_page.zig").UnifiedPage;
 
 const NavButton = struct {
     button: *gtk.Button,
@@ -252,6 +253,7 @@ pub const ShellyWindow = extern struct {
         add_nav_button(self, items, stack, true, "flatpak", FlatpakPage.icon_name, translations._(FlatpakPage.title));
         add_nav_button(self, items, stack, true, "appimage", AppImagePage.icon_name, translations._(AppImagePage.title));
         add_nav_button(self, items, stack, true, "update", UpdatePage.icon_name, translations._(UpdatePage.title));
+        add_nav_button(self, items, stack, true, "unified", UnifiedPage.icon_name, translations._(UnifiedPage.title));
 
         const sep = gtk.Box.new(.horizontal, 0);
         gtk.Widget.setVexpand(sep.as(gtk.Widget), 1);
@@ -423,7 +425,7 @@ pub const ShellyWindow = extern struct {
             .flatpak => "flatpak",
             .app_image => "appimage",
             .recommend => "recommend",
-            .shelly_search => null,
+            .shelly_search => "unified",
         };
     }
 
@@ -491,6 +493,10 @@ pub const ShellyWindow = extern struct {
         const up = UpdatePage.new();
         const up_page = gtk.Stack.addTitled(stack, up.as(gtk.Widget), "update", translations._("Update"));
         gtk.StackPage.setIconName(up_page, UpdatePage.icon_name);
+
+        const upp = UnifiedPage.new();
+        const upp_page = gtk.Stack.addTitled(stack, upp.as(gtk.Widget), "unified", translations._("Unified"));
+        gtk.StackPage.setIconName(upp_page, UnifiedPage.icon_name);
 
         const sp = SettingsPage.new();
         const sp_page = gtk.Stack.addTitled(stack, sp.as(gtk.Widget), "settings", translations._("Settings"));

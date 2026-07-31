@@ -2,6 +2,7 @@ const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const gobject = bindings.gobject;
 const UnifiedPackage = @import("../models/unified_package.zig").UnifiedPackage;
+const Source = @import("../models/unified_package.zig").Source;
 
 pub const UnifiedPackageObject = extern struct {
     parent_instance: Parent,
@@ -38,6 +39,7 @@ pub const UnifiedPackageObject = extern struct {
             .Id = "",
             .Name = "",
             .Version = "",
+            .Source = Source.repo,
             .Description = null,
             .Url = null,
             .Depends = null,
@@ -120,6 +122,10 @@ pub const UnifiedPackageObject = extern struct {
 
     pub fn getLicense(self: *const Self) []const []const u8 {
         return self.getPackage().License orelse &.{};
+    }
+
+    pub fn getSource(self: *const Self) Source {
+        return self.getPackage().Source orelse Source.repo;
     }
 
     pub fn isSelected(self: *const Self) bool {

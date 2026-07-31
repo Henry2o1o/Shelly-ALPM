@@ -2,6 +2,7 @@
 pub const UnifiedPackage = struct {
     Id: [:0]const u8,
     Name: [:0]const u8,
+    Source: Source,
     Version: [:0]const u8,
     Description: ?[:0]const u8 = null,
     Url: ?[:0]const u8 = null,
@@ -15,4 +16,10 @@ pub const UnifiedPackage = struct {
     Replaces: ?[]const [:0]const u8 = null,
     Groups: ?[]const [:0]const u8 = null,
     License: ?[]const [:0]const u8 = null,
+};
+
+pub const Source = enum {
+    aur,
+    repo,
+    flatpak,
 };
