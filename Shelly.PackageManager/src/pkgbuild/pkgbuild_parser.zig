@@ -1,4 +1,5 @@
 const std = @import("std");
+const file_inspector = @import("../local/file_inspector.zig");
 const listDictionary = @import("../shared/list_dictionary.zig").ListDictionary;
 
 pub const pkgbuild_info = struct {
@@ -444,29 +445,12 @@ pub const PkgbuildParser = struct {
         var files: std.ArrayList([]const u8) = .empty;
         errdefer files.deinit(self.allocator);
 
-        const local_source_exts = [_][]const u8{
-            ".sh",   ".bash", ".install", ".patch",   ".diff", ".desktop",
-            ".py",   ".pl",   ".rb",      ".service", ".conf", ".cfg",
-            ".hook",
-        };
-
         for (source) |line| {
             const entry = split_source_entry(line);
             if (try is_remote_source(entry.location)) continue;
 
             const name = if (entry.file_name.len == 0) entry.location else entry.file_name;
             if (name.len == 0) continue;
-
-            const ext = std.fs.path.extension(name);
-
-            var matched = false;
-            for (local_source_exts) |known_ext| {
-                if (std.ascii.eqlIgnoreCase(known_ext, ext)) {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) continue;
 
             var already_have = false;
             for (files.items) |existing| {
@@ -979,17 +963,31 @@ pub const PkgbuildParser = struct {
         if (std.ascii.indexOfIgnoreCase(location, "://") != null) return true else return false;
     }
 
+    const max_local_source_size = 32 * 1024 * 1024;
+
     fn resolve_local_source_contents(self: PkgbuildParser, local_source_files: [][]const u8, base_dir: ?[]const u8) !std.StringHashMap([]const u8) {
         var contents: std.StringHashMap([]const u8) = .init(self.allocator);
 
         for (local_source_files) |file| {
             const resolved = try resolve_local_file(self, file, base_dir);
             if (resolved) |content| {
+                defer self.allocator.free(content);
                 const key_owned = try self.allocator.dupe(u8, file);
-                try contents.put(key_owned, content);
+                const display = try self.allocator.dupe(u8, reviewable_local_source_content(content));
+                try contents.put(key_owned, display);
             }
         }
         return contents;
+    }
+
+    fn reviewable_local_source_content(content: []const u8) []const u8 {
+        if (file_inspector.isElfBytes(content)) {
+            return "ELF executable binary (content is not displayed). Review the file's source and checksum before proceeding.";
+        }
+        if (!std.unicode.utf8ValidateSlice(content)) {
+            return "Binary file (content is not displayed). Review the file's source and checksum before proceeding.";
+        }
+        return content;
     }
 
     fn eval_expression(tokens: [][]const u8, pos: usize, new_pos: *usize) std.fmt.ParseIntError!i64 {
@@ -1264,10 +1262,7 @@ pub const PkgbuildParser = struct {
         };
         if (!exists) return null;
 
-        const install_content = try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .unlimited);
-        defer self.allocator.free(install_content);
-
-        return try self.allocator.dupe(u8, install_content);
+        return try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .limited(max_local_source_size));
     }
 
     fn skip_ws(content: []const u8, start: usize) usize {
@@ -2673,12 +2668,13 @@ test "split_source_entry: case insensitive separator" {
     try std.testing.expectEqualStrings("pkg", result.file_name);
     try std.testing.expectEqualStrings("url", result.location);
 }
-test "extract_local_source_files: keeps local files with known extensions" {
+test "extract_local_source_files: keeps every local source, including extensionless binaries" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var source = [_][]const u8{
         "install.sh",
         "fix.patch",
-        "readme.md", // unknown extension, should be excluded
+        "readme.md",
+        "updater",
     };
     const result = try parser.extract_local_source_files(source[0..]);
     defer {
@@ -2686,9 +2682,11 @@ test "extract_local_source_files: keeps local files with known extensions" {
         std.testing.allocator.free(result);
     }
 
-    try std.testing.expectEqual(@as(usize, 2), result.len);
+    try std.testing.expectEqual(@as(usize, 4), result.len);
     try std.testing.expectEqualStrings("install.sh", result[0]);
     try std.testing.expectEqualStrings("fix.patch", result[1]);
+    try std.testing.expectEqualStrings("readme.md", result[2]);
+    try std.testing.expectEqualStrings("updater", result[3]);
 }
 
 test "extract_local_source_files: excludes remote sources" {
@@ -2740,7 +2738,7 @@ test "extract_local_source_files: empty source returns empty slice" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "extract_local_source_files: uppercase extension matches case-insensitively" {
+test "extract_local_source_files: keeps source names regardless of filename casing" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var source = [_][]const u8{
         "SETUP.SH",
@@ -2753,6 +2751,18 @@ test "extract_local_source_files: uppercase extension matches case-insensitively
 
     try std.testing.expectEqual(@as(usize, 1), result.len);
     try std.testing.expectEqualStrings("SETUP.SH", result[0]);
+}
+
+test "reviewable local source content marks ELF and non-text binaries without changing text" {
+    try std.testing.expectEqualStrings(
+        "ELF executable binary (content is not displayed). Review the file's source and checksum before proceeding.",
+        PkgbuildParser.reviewable_local_source_content("\x7fELFpayload"),
+    );
+    try std.testing.expectEqualStrings(
+        "Binary file (content is not displayed). Review the file's source and checksum before proceeding.",
+        PkgbuildParser.reviewable_local_source_content(&.{ 0, 159, 146, 150 }),
+    );
+    try std.testing.expectEqualStrings("#!/bin/sh\nexit 0", PkgbuildParser.reviewable_local_source_content("#!/bin/sh\nexit 0"));
 }
 
 test "replace_arithmetic: simple expression" {
