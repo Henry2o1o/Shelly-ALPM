@@ -541,6 +541,8 @@ pub fn build(b: *std.Build) void {
             "removeAppImageFromLocalDb removes an orphaned entry by name",
             "installAppImage preserves an existing install when staged validation fails",
             "installAppImage atomically replaces a validated AppImage",
+            "installAppImage follows a symlinked install directory",
+            "installAppImage creates a missing directory beneath a symlinked parent",
             "installAppImage reads desktop metadata and icons through standard AppImage symlinks",
             "installAppImage restores the previous binary when database commit fails",
         },
