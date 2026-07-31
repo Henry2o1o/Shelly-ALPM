@@ -16,6 +16,10 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+    const shelly_http = b.dependency("shelly_http", .{
+        .target = target,
+        .optimize = optimize,
+    });
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -63,6 +67,7 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("alpm_c", alpm_c);
     mod.addImport("operation_context", operation_context_mod);
+    mod.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
     mod.linkSystemLibrary("archive", .{});
 
     // PackageManager imports only the backend's data-only protocol module.
@@ -281,6 +286,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     downloader_test_module.addImport("operation_context", operation_context_mod);
+    downloader_test_module.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
     const downloader_tests = b.addTest(.{ .name = "downloader-test", .root_module = downloader_test_module });
     const run_downloader_tests = b.addRunArtifact(downloader_tests);
     const downloader_test_step = b.step("downloader-test", "Run safe downloader and cancellation tests");

@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const module = b.addModule("ShellyHttp", .{
-        .root_source_file = b.path("http_client.zig"),
+        .root_source_file = b.path("src/http_client.zig"),
         .target = target,
         .optimize = optimize,
     });

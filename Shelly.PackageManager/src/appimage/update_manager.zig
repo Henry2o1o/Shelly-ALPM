@@ -1,5 +1,5 @@
 const std = @import("std");
-const HttpClient = @import("../shared/http_client.zig");
+const HttpClient = @import("ShellyHttp");
 const appimage = @import("bindings.zig").appimage;
 const builtin = @import("builtin");
 const appimage_manager = @import("manager.zig");
