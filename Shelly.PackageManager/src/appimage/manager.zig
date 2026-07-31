@@ -93,7 +93,12 @@ pub const AppImageManager = struct {
         defer self.allocator.free(backup_path);
         defer std.Io.Dir.cwd().deleteFile(self.io, backup_path) catch {};
 
-        try std.Io.Dir.cwd().createDirPath(self.io, self.install_directory);
+        var install_dir = try std.Io.Dir.cwd().createDirPathOpen(
+            self.io,
+            self.install_directory,
+            .{},
+        );
+        defer install_dir.close(self.io);
         try self.copyFile(location, staging_path);
         try self.setExecutable(staging_path);
 
@@ -1466,6 +1471,96 @@ test "installAppImage atomically replaces a validated AppImage" {
     defer std.testing.allocator.free(desktop);
     try std.testing.expect(std.mem.indexOf(u8, desktop, installed_path) != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, ".shelly-install-") == null);
+}
+
+test "installAppImage follows a symlinked install directory" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    const source_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "source" });
+    defer std.testing.allocator.free(source_dir);
+    const install_target = try std.fs.path.join(std.testing.allocator, &.{ root, "install-target" });
+    defer std.testing.allocator.free(install_target);
+    const install_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "install-link" });
+    defer std.testing.allocator.free(install_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, source_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, install_target);
+    try std.Io.Dir.cwd().symLink(std.testing.io, install_target, install_dir, .{});
+
+    const source_path = try std.fs.path.join(std.testing.allocator, &.{ source_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(source_path);
+    const installed_path = try std.fs.path.join(std.testing.allocator, &.{ install_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(installed_path);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ root, "config", "appimages.db" });
+    defer std.testing.allocator.free(db_path);
+    try writeTestAppImageDb(source_path, validTestAppImage);
+
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+    const manager = AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = environ,
+        .install_directory = install_dir,
+        .local_db_path = db_path,
+    };
+
+    try std.testing.expect(try manager.installAppImage(source_path));
+
+    const installed = try readTestAppImageDb(std.testing.allocator, installed_path);
+    defer std.testing.allocator.free(installed);
+    try std.testing.expectEqualStrings(validTestAppImage, installed);
+    try expectOnlyInstalledAppImage(install_target, "Editor.AppImage");
+}
+
+test "installAppImage creates a missing directory beneath a symlinked parent" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    const source_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "source" });
+    defer std.testing.allocator.free(source_dir);
+    const parent_target = try std.fs.path.join(std.testing.allocator, &.{ root, "parent-target" });
+    defer std.testing.allocator.free(parent_target);
+    const parent_link = try std.fs.path.join(std.testing.allocator, &.{ root, "parent-link" });
+    defer std.testing.allocator.free(parent_link);
+    const install_dir = try std.fs.path.join(std.testing.allocator, &.{ parent_link, "install" });
+    defer std.testing.allocator.free(install_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, source_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, parent_target);
+    try std.Io.Dir.cwd().symLink(std.testing.io, parent_target, parent_link, .{});
+
+    const source_path = try std.fs.path.join(std.testing.allocator, &.{ source_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(source_path);
+    const installed_path = try std.fs.path.join(std.testing.allocator, &.{ install_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(installed_path);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ root, "config", "appimages.db" });
+    defer std.testing.allocator.free(db_path);
+    try writeTestAppImageDb(source_path, validTestAppImage);
+
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+    const manager = AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = environ,
+        .install_directory = install_dir,
+        .local_db_path = db_path,
+    };
+
+    try std.testing.expect(try manager.installAppImage(source_path));
+
+    const installed = try readTestAppImageDb(std.testing.allocator, installed_path);
+    defer std.testing.allocator.free(installed);
+    try std.testing.expectEqualStrings(validTestAppImage, installed);
+    try expectOnlyInstalledAppImage(install_dir, "Editor.AppImage");
 }
 
 test "installAppImage reads desktop metadata and icons through standard AppImage symlinks" {
