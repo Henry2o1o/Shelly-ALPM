@@ -442,6 +442,7 @@ pub const ShellyWindow = extern struct {
             .flatpak => "flatpak",
             .app_image => "appimage",
             .recommend => "recommend",
+            .update => "update",
             .shelly_search => null,
         };
     }

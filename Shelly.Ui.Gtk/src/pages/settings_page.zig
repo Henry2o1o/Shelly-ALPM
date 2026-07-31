@@ -1064,6 +1064,7 @@ const default_page_entries = [_]DefaultPageEntry{
     .{ .label = "Flatpak", .value = .flatpak },
     .{ .label = "AppImage", .value = .app_image },
     .{ .label = "Shelly Search", .value = .shelly_search },
+    .{ .label = "Update", .value = .update },
 };
 
 const NavModeEntry = struct {
@@ -1107,6 +1108,7 @@ fn populateDropdowns(p: *ShellySettingsPage.Private) void {
             .flatpak => translations._("Flatpak"),
             .app_image => translations._("AppImage"),
             .shelly_search => translations._("Shelly Search"),
+            .update => translations._("Update"),
         };
         gtk.StringList.append(page_strings, label);
     }
