@@ -161,6 +161,8 @@ pub fn writeAurPackageDetail(context: *runtime.RuntimeContext, package: AurPacka
     try w.optionalJoined("Make Depends", package.make_depends);
     try w.optionalJoined("Optional Depends", package.optional_depends);
     try w.optionalJoined("Check Depends", package.check_depends);
+    try w.optionalJoined("Required By", package.required_by);
+    try w.optionalJoined("Optional For", package.optional_for);
     try w.optionalJoined("Conflicts With", package.conflicts);
     try w.optionalJoined("Replaces", package.replaces);
     try w.optionalJoined("Keywords", package.keywords);

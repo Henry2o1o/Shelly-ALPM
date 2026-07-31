@@ -430,12 +430,12 @@ pub const Manager = struct {
                 .explicit = package.install_reason() == .Explicit,
             });
         }
-        const response = try self.aur_client.getInfo(names.items);
-        defer {
-            self.allocator.free(response.response_type);
-            if (response.error_message) |message| self.allocator.free(message);
-        }
+        var response = try self.aur_client.getInfo(names.items);
+        errdefer response.deinit(self.allocator);
         try applyInstalledState(self.allocator, response.results, installed.items);
+        try self.applyLocalReverseDependencies(response.results);
+        self.allocator.free(response.response_type);
+        if (response.error_message) |message| self.allocator.free(message);
         return response.results;
     }
 
@@ -457,10 +457,23 @@ pub const Manager = struct {
         const names = try self.allocator.alloc([]const u8, count);
         defer self.allocator.free(names);
         for (search_response.results[0..count], names) |package, *name| name.* = package.name;
-        const info_response = try self.aur_client.getInfo(names);
+        var info_response = try self.aur_client.getInfo(names);
+        errdefer info_response.deinit(self.allocator);
+        try self.applyLocalReverseDependencies(info_response.results);
         self.allocator.free(info_response.response_type);
         if (info_response.error_message) |message| self.allocator.free(message);
         return info_response.results;
+    }
+
+    fn applyLocalReverseDependencies(self: *Self, packages: []models.Package) !void {
+        for (packages) |*package| {
+            const name_z = try self.allocator.dupeZ(u8, package.name);
+            defer self.allocator.free(name_z);
+            if (!self.alpm.is_package_installed(name_z)) continue;
+            const local_package = try self.alpm.get_single_installed_package(name_z) orelse continue;
+            package.required_by = try local_package.owned_required_by(self.allocator);
+            package.optional_for = try local_package.owned_optional_for(self.allocator);
+        }
     }
 
     pub fn getPackagesNeedingUpdate(self: *Self, check_devel: bool) ![]models.Update {

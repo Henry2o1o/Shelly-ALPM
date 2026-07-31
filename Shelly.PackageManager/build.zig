@@ -327,6 +327,7 @@ pub fn build(b: *std.Build) void {
             "get_required_packages returns NoHandle when the handle is null",
             "get_required_packages rejects empty package and database names",
             "get_required_packages returns owned local reverse dependencies",
+            "Package owned reverse dependency queries return local required and optional names",
             "get_required_packages returns an empty result for an unknown package",
             "get_required_packages rejects an unknown sync database",
             "get_required_packages resolves a named sync database",
@@ -360,7 +361,7 @@ pub fn build(b: *std.Build) void {
     const required_packages_tests = b.addTest(.{
         .name = "required-packages-test",
         .root_module = mod,
-        .filters = &.{"get_required_packages"},
+        .filters = &.{ "get_required_packages", "Package owned reverse dependency queries" },
     });
     const run_required_packages_tests = b.addRunArtifact(required_packages_tests);
     const required_packages_test_step = b.step(

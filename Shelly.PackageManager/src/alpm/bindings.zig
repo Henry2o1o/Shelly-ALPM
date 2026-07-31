@@ -333,6 +333,20 @@ pub const libalpm = struct {
             return .{ .node = alpm.alpm_pkg_compute_requiredby(self.ptr) };
         }
 
+        /// Returns allocator-owned package names and releases libalpm's
+        /// computed list before returning. The caller owns the returned slice
+        /// and every string in it.
+        pub fn owned_optional_for(self: Package, allocator: std.mem.Allocator) std.mem.Allocator.Error![][]const u8 {
+            return dupeComputedStrings(allocator, alpm.alpm_pkg_compute_optionalfor(self.ptr));
+        }
+
+        /// Returns allocator-owned package names and releases libalpm's
+        /// computed list before returning. The caller owns the returned slice
+        /// and every string in it.
+        pub fn owned_required_by(self: Package, allocator: std.mem.Allocator) std.mem.Allocator.Error![][]const u8 {
+            return dupeComputedStrings(allocator, alpm.alpm_pkg_compute_requiredby(self.ptr));
+        }
+
         pub fn files(self: Package) AlpmFileList {
             return AlpmFileList{ .ptr = alpm.alpm_pkg_get_files(self.ptr) };
         }
@@ -1059,6 +1073,34 @@ pub const libalpm = struct {
         };
     }
 
+    fn dupeComputedStrings(
+        allocator: std.mem.Allocator,
+        list: [*c]alpm.alpm_list_t,
+    ) std.mem.Allocator.Error![][]const u8 {
+        defer {
+            alpm.alpm_list_free_inner(list, alpm.free);
+            alpm.alpm_list_free(list);
+        }
+
+        var result: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (result.items) |item| allocator.free(item);
+            result.deinit(allocator);
+        }
+
+        var node = list;
+        while (node != null) : (node = node.*.next) {
+            const data = node.*.data orelse continue;
+            const value = asStr(data) orelse continue;
+            const owned = try allocator.dupe(u8, value);
+            result.append(allocator, owned) catch |err| {
+                allocator.free(owned);
+                return err;
+            };
+        }
+        return result.toOwnedSlice(allocator);
+    }
+
     fn asStr(data: *anyopaque) ?[:0]const u8 {
         return std.mem.span(@as([*c]const u8, @ptrCast(data)));
     }
@@ -1081,6 +1123,8 @@ test "iterator-returning methods type-check" {
     _ = &libalpm.Package.conflicts;
     _ = &libalpm.Package.optional_for;
     _ = &libalpm.Package.required_by;
+    _ = &libalpm.Package.owned_optional_for;
+    _ = &libalpm.Package.owned_required_by;
     _ = &libalpm.AlpmPackageGroup.packages;
     // PackageConflict accessors have no other callers, so force them too.
     _ = &libalpm.PackageConflict.packageOne;

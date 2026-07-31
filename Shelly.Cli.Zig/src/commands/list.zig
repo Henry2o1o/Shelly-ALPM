@@ -84,6 +84,8 @@ pub const AurItem = struct {
     groups: ?[]const []const u8 = null,
     licenses: ?[]const []const u8 = null,
     keywords: ?[]const []const u8 = null,
+    required_by: ?[]const []const u8 = null,
+    optional_for: ?[]const []const u8 = null,
     explicit: bool = false,
 };
 
@@ -671,6 +673,8 @@ fn writeAurJson(json: *std.json.Stringify, item: AurItem) !void {
     try field(json, "Groups", item.groups);
     try field(json, "License", item.licenses);
     try field(json, "Keywords", item.keywords);
+    try field(json, "RequiredBy", item.required_by);
+    try field(json, "OptionalFor", item.optional_for);
     try field(json, "Explicit", item.explicit);
     try json.endObject();
 }
@@ -1051,6 +1055,8 @@ fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
         .groups = try copyOptionalStrings(allocator, native.groups),
         .licenses = try copyOptionalStrings(allocator, native.licenses),
         .keywords = try copyOptionalStrings(allocator, native.keywords),
+        .required_by = try copyOptionalStrings(allocator, native.required_by),
+        .optional_for = try copyOptionalStrings(allocator, native.optional_for),
         .explicit = native.explicit,
     };
     return .{ .aur = .{ .items = items, .arena = arena } };
@@ -1261,7 +1267,13 @@ test "AUR filters apply to JSON and UI structured output" {
     const manifest = try spec.Manifest.load(arena.allocator());
     const items = [_]AurItem{
         .{ .name = "dependency-package", .version = "1", .explicit = false },
-        .{ .name = "explicit-package", .version = "2", .explicit = true },
+        .{
+            .name = "explicit-package",
+            .version = "2",
+            .required_by = &.{"desktop-meta"},
+            .optional_for = &.{"shell-extras"},
+            .explicit = true,
+        },
     };
     const runner: Runner = .{ .data = @constCast(&items), .call = struct {
         fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, _: bool) !Result {
@@ -1288,6 +1300,8 @@ test "AUR filters apply to JSON and UI structured output" {
     try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &json_outcome.dispatch, runner));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "explicit-package") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "dependency-package") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"RequiredBy\":[\"desktop-meta\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"OptionalFor\":[\"shell-extras\"]") != null);
 
     stdout.writer.end = 0;
     const ui_outcome = try parseTestArguments(

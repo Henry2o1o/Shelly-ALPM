@@ -75,6 +75,8 @@ pub const AurPackage = struct {
     groups: ?[]const []const u8 = null,
     licenses: ?[]const []const u8 = null,
     keywords: ?[]const []const u8 = null,
+    required_by: ?[]const []const u8 = null,
+    optional_for: ?[]const []const u8 = null,
     explicit: bool = false,
 };
 
@@ -926,6 +928,8 @@ fn writeAurPackagesJson(writer: *std.Io.Writer, packages: []const AurPackage) !v
         try field(&json, "Groups", package.groups);
         try field(&json, "License", package.licenses);
         try field(&json, "Keywords", package.keywords);
+        try field(&json, "RequiredBy", package.required_by);
+        try field(&json, "OptionalFor", package.optional_for);
         try field(&json, "Explicit", package.explicit);
         try json.endObject();
     }
@@ -1038,6 +1042,8 @@ fn copyAurPackage(allocator: std.mem.Allocator, package: Zigalpm.aur.models.Pack
         .groups = try copyOptionalStrings(allocator, package.groups),
         .licenses = try copyOptionalStrings(allocator, package.licenses),
         .keywords = try copyOptionalStrings(allocator, package.keywords),
+        .required_by = try copyOptionalStrings(allocator, package.required_by),
+        .optional_for = try copyOptionalStrings(allocator, package.optional_for),
         .explicit = package.explicit,
     };
 }
@@ -1046,7 +1052,7 @@ fn copyOptionalString(allocator: std.mem.Allocator, value: ?[]const u8) !?[]cons
     return if (value) |text| try allocator.dupe(u8, text) else null;
 }
 
-fn copyOptionalStrings(allocator: std.mem.Allocator, value: ?[][]u8) !?[]const []const u8 {
+fn copyOptionalStrings(allocator: std.mem.Allocator, value: ?[]const []const u8) !?[]const []const u8 {
     return if (value) |items| try copyStrings(allocator, items) else null;
 }
 
@@ -1430,7 +1436,14 @@ test "AUR detail search renders package metadata and structured output" {
         fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
             try std.testing.expect(optionEnabled(invocation, "--detail"));
             return .{ .aur = .{
-                .detail = .{ .name = "yay", .version = "12", .package_base = "yay", .maintainer = "dev" },
+                .detail = .{
+                    .name = "yay",
+                    .version = "12",
+                    .package_base = "yay",
+                    .maintainer = "dev",
+                    .required_by = &.{ "aur-helper-ui", "desktop-meta" },
+                    .optional_for = &.{"shell-extras"},
+                },
             } };
         }
     }.run };
@@ -1443,6 +1456,10 @@ test "AUR detail search renders package metadata and structured output" {
     try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
     var rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Total results") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Required By") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "aur-helper-ui") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Optional For") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "shell-extras") != null);
 
     stdout.writer.end = 0;
     outcome = try parser.parse(
@@ -1454,6 +1471,8 @@ test "AUR detail search renders package metadata and structured output" {
     rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"Name\":\"yay\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PackageBase\":\"yay\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"RequiredBy\":[\"aur-helper-ui\",\"desktop-meta\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"OptionalFor\":[\"shell-extras\"]") != null);
 }
 
 test "search validates AUR query length and positive pagination before backend execution" {
