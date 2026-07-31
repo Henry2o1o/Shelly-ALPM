@@ -70,6 +70,8 @@
                   <object class="GtkColumnView" id="package_grid">
                     <property name="hexpand">true</property>
                     <property name="vexpand">true</property>
+                    <property name="show-column-separators">false</property>
+                    <property name="show-row-separators">false</property>
                     <child>
                       <object class="GtkColumnViewColumn" id="check_column">
                         <property name="title"></property>
@@ -77,6 +79,7 @@
                     </child>
                     <child>
                       <object class="GtkColumnViewColumn" id="name_column">
+
                         <property name="title" translatable="yes">Name</property>
                         <property name="expand">true</property>
                       </object>
