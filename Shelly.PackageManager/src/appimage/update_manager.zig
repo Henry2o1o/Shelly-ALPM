@@ -267,7 +267,10 @@ pub const UpdateManager = struct {
                     self.emitMissingRepository(app.name);
                     return null;
                 };
-                return self.check_github_update(owner, repo, app.name, app.version, app.allow_prerelease);
+                return self.providerUpdateOrWarn(
+                    app.name,
+                    try self.check_github_update(owner, repo, app.name, app.version, app.allow_prerelease),
+                );
             },
             .gitlab => {
                 const owner = app.repo_owner orelse {
@@ -278,7 +281,10 @@ pub const UpdateManager = struct {
                     self.emitMissingRepository(app.name);
                     return null;
                 };
-                return self.check_gitlab_update(owner, repo, app.name, app.version, app.allow_prerelease);
+                return self.providerUpdateOrWarn(
+                    app.name,
+                    try self.check_gitlab_update(owner, repo, app.name, app.version, app.allow_prerelease),
+                );
             },
             .codeberg => {
                 const owner = app.repo_owner orelse {
@@ -289,14 +295,20 @@ pub const UpdateManager = struct {
                     self.emitMissingRepository(app.name);
                     return null;
                 };
-                return self.check_codeberg_update(owner, repo, app.name, app.version, app.allow_prerelease);
+                return self.providerUpdateOrWarn(
+                    app.name,
+                    try self.check_codeberg_update(owner, repo, app.name, app.version, app.allow_prerelease),
+                );
             },
             .forgejo => {
                 if (app.update_url.len == 0) {
                     self.emitStatusFmt(.warning, "AppImage {s} has no Forgejo update URL.", .{app.name});
                     return null;
                 }
-                return self.check_forgejo_update(app.update_url, app.name, app.version, app.allow_prerelease);
+                return self.providerUpdateOrWarn(
+                    app.name,
+                    try self.check_forgejo_update(app.update_url, app.name, app.version, app.allow_prerelease),
+                );
             },
         }
     }
@@ -590,6 +602,105 @@ pub const UpdateManager = struct {
         return true;
     }
 
+    fn isAssetNameSeparator(character: u8) bool {
+        return character == '-' or character == '_' or std.ascii.isWhitespace(character);
+    }
+
+    fn isVersionToken(token: []const u8) bool {
+        if (token.len == 0) return false;
+
+        var index: usize = 0;
+        if ((token[0] == 'v' or token[0] == 'V') and token.len > 1) index = 1;
+
+        var component_has_digit = false;
+        var separator_count: usize = 0;
+        while (index < token.len) : (index += 1) {
+            const character = token[index];
+            if (std.ascii.isDigit(character)) {
+                component_has_digit = true;
+                continue;
+            }
+            if (character != '.' or !component_has_digit or index + 1 == token.len) return false;
+            separator_count += 1;
+            component_has_digit = false;
+        }
+        return component_has_digit and separator_count > 0;
+    }
+
+    fn normalizeAppImageStem(allocator: std.mem.Allocator, stem: []const u8) ![]u8 {
+        var normalized: std.ArrayList(u8) = .empty;
+        errdefer normalized.deinit(allocator);
+
+        var token_start: usize = 0;
+        while (token_start < stem.len) {
+            while (token_start < stem.len and isAssetNameSeparator(stem[token_start])) : (token_start += 1) {}
+            if (token_start == stem.len) break;
+
+            var token_end = token_start;
+            while (token_end < stem.len and !isAssetNameSeparator(stem[token_end])) : (token_end += 1) {}
+            const token = stem[token_start..token_end];
+            if (!isVersionToken(token)) {
+                if (normalized.items.len > 0) try normalized.append(allocator, '-');
+                for (token) |character| try normalized.append(allocator, std.ascii.toLower(character));
+            }
+            token_start = token_end;
+        }
+        return normalized.toOwnedSlice(allocator);
+    }
+
+    fn selectReleaseAssetUrl(
+        allocator: std.mem.Allocator,
+        assets: []const std.json.Value,
+        app_name: []const u8,
+        url_field: []const u8,
+    ) !?[]const u8 {
+        const normalized_app_name = try normalizeAppImageStem(allocator, app_name);
+        defer allocator.free(normalized_app_name);
+
+        var compatible_count: usize = 0;
+        var compatible_url: ?[]const u8 = null;
+        var exact_count: usize = 0;
+        var exact_url: ?[]const u8 = null;
+        var normalized_count: usize = 0;
+        var normalized_url: ?[]const u8 = null;
+
+        for (assets) |asset| {
+            if (asset != .object) continue;
+            const name_value = asset.object.get("name") orelse continue;
+            const url_value = asset.object.get(url_field) orelse continue;
+            if (name_value != .string or url_value != .string) continue;
+            if (!endsWithIgnoreCase(name_value.string, ".AppImage")) continue;
+            if (!isHttpUrl(url_value.string)) continue;
+            if (!isCorrectArchitecture(name_value.string)) continue;
+
+            compatible_count += 1;
+            compatible_url = url_value.string;
+
+            const asset_stem = std.fs.path.stem(name_value.string);
+            if (std.ascii.eqlIgnoreCase(asset_stem, app_name)) {
+                exact_count += 1;
+                exact_url = url_value.string;
+                continue;
+            }
+
+            const normalized_asset_name = try normalizeAppImageStem(allocator, asset_stem);
+            defer allocator.free(normalized_asset_name);
+            if (normalized_app_name.len > 0 and
+                std.mem.eql(u8, normalized_asset_name, normalized_app_name))
+            {
+                normalized_count += 1;
+                normalized_url = url_value.string;
+            }
+        }
+
+        if (exact_count == 1) return exact_url;
+        if (exact_count > 1) return null;
+        if (normalized_count == 1) return normalized_url;
+        if (normalized_count > 1) return null;
+        if (compatible_count == 1) return compatible_url;
+        return null;
+    }
+
     pub fn gitea_to_releases_api(allocator: std.mem.Allocator, domain: []const u8, owner: []const u8, repo: []const u8) ![]u8 {
         return std.fmt.allocPrint(allocator, "https://{s}/api/v1/repos/{s}/{s}/releases", .{ domain, owner, repo });
     }
@@ -676,53 +787,17 @@ pub const UpdateManager = struct {
         const tag_name_val = rel.object.get("tag_name") orelse return null;
         const latest_version = if (tag_name_val == .string) tag_name_val.string else return null;
 
-        var download_url: ?[]const u8 = null;
-
-        const assets_val = rel.object.get("assets") orelse {
-            return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, "", current_version));
-        };
+        const assets_val = rel.object.get("assets") orelse return null;
 
         if (assets_val != .array) return null;
+        const download_url = try selectReleaseAssetUrl(
+            allocator,
+            assets_val.array.items,
+            app_name,
+            "browser_download_url",
+        ) orelse return null;
 
-        var appimage_assets: std.ArrayList(std.json.Value) = .empty;
-        defer appimage_assets.deinit(allocator);
-        for (assets_val.array.items) |asset| {
-            const name_val = asset.object.get("name") orelse continue;
-            if (name_val != .string) continue;
-            if (!std.ascii.eqlIgnoreCase(std.fs.path.stem(name_val.string), app_name)) continue;
-            if (endsWithIgnoreCase(name_val.string, ".AppImage")) {
-                try appimage_assets.append(allocator, asset);
-            }
-        }
-
-        switch (appimage_assets.items.len) {
-            1 => {
-                if (appimage_assets.items[0].object.get("browser_download_url")) |url_val| {
-                    if (url_val == .string) download_url = url_val.string;
-                }
-            },
-            0 => {},
-            else => {
-                for (appimage_assets.items) |asset| {
-                    const name_val = asset.object.get("name") orelse continue;
-                    if (name_val != .string) continue;
-                    if (isCorrectArchitecture(name_val.string)) {
-                        const url_val = asset.object.get("browser_download_url") orelse continue;
-                        if (url_val == .string) {
-                            download_url = url_val.string;
-                            break;
-                        }
-                    }
-                }
-                if (download_url == null) {
-                    if (appimage_assets.items[0].object.get("browser_download_url")) |url_val| {
-                        if (url_val == .string) download_url = url_val.string;
-                    }
-                }
-            },
-        }
-
-        return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, download_url orelse "", current_version));
+        return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, download_url, current_version));
     }
 
     pub fn check_gitlab_update(self: UpdateManager, owner: []const u8, repo: []const u8, app_name: []const u8, current_version: []const u8, allow_prerelease: bool) !?appimage.AppImageUpdate {
@@ -773,58 +848,21 @@ pub const UpdateManager = struct {
         const tag_name_val = rel.object.get("tag_name") orelse return null;
         const latest_version = if (tag_name_val == .string) tag_name_val.string else return null;
 
-        var download_url: ?[]const u8 = null;
-
-        const assets_val = rel.object.get("assets") orelse {
-            return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, "", current_version));
-        };
+        const assets_val = rel.object.get("assets") orelse return null;
 
         const links_val = if (assets_val == .object) assets_val.object.get("links") else null;
-        if (links_val == null) {
-            return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, "", current_version));
-        }
+        if (links_val == null) return null;
 
         const links = links_val.?;
         if (links != .array) return null;
+        const download_url = try selectReleaseAssetUrl(
+            allocator,
+            links.array.items,
+            app_name,
+            "url",
+        ) orelse return null;
 
-        var appimage_links: std.ArrayList(std.json.Value) = .empty;
-        defer appimage_links.deinit(allocator);
-        for (links.array.items) |link| {
-            const name_val = link.object.get("name") orelse continue;
-            if (name_val != .string) continue;
-            if (endsWithIgnoreCase(name_val.string, ".AppImage")) {
-                try appimage_links.append(allocator, link);
-            }
-        }
-
-        switch (appimage_links.items.len) {
-            1 => {
-                if (appimage_links.items[0].object.get("url")) |url_val| {
-                    if (url_val == .string) download_url = url_val.string;
-                }
-            },
-            0 => {},
-            else => {
-                for (appimage_links.items) |link| {
-                    const name_val = link.object.get("name") orelse continue;
-                    if (name_val != .string) continue;
-                    if (isCorrectArchitecture(name_val.string)) {
-                        const url_val = link.object.get("url") orelse continue;
-                        if (url_val == .string) {
-                            download_url = url_val.string;
-                            break;
-                        }
-                    }
-                }
-                if (download_url == null) {
-                    if (appimage_links.items[0].object.get("url")) |url_val| {
-                        if (url_val == .string) download_url = url_val.string;
-                    }
-                }
-            },
-        }
-
-        return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, download_url orelse "", current_version));
+        return @as(?appimage.AppImageUpdate, try makeUpdate(allocator, app_name, latest_version, download_url, current_version));
     }
 
     fn makeUpdate(
@@ -944,6 +982,17 @@ pub const UpdateManager = struct {
 
     fn emitMissingRepository(self: UpdateManager, app_name: []const u8) void {
         self.emitStatusFmt(.warning, "AppImage {s} has incomplete repository update configuration.", .{app_name});
+    }
+
+    fn providerUpdateOrWarn(self: UpdateManager, app_name: []const u8, result: ?appimage.AppImageUpdate) ?appimage.AppImageUpdate {
+        if (result == null) {
+            self.emitStatusFmt(
+                .warning,
+                "No compatible downloadable AppImage release asset was found for {s}.",
+                .{app_name},
+            );
+        }
+        return result;
     }
 
     fn emitStatus(self: UpdateManager, kind: events.StatusKind, message: []const u8) void {
@@ -1234,8 +1283,8 @@ test "parse_github_response: returns null for invalid json" {
 test "parse_github_response: skips prerelease when allow_prerelease=false" {
     const body =
         \\[
-        \\  {"tag_name":"2025.701.0","prerelease":true,"assets":[]},
-        \\  {"tag_name":"2025.630.0","prerelease":false,"assets":[]}
+        \\  {"tag_name":"2025.701.0","prerelease":true,"assets":[{"name":"osu.AppImage","browser_download_url":"https://example.com/prerelease/osu.AppImage"}]},
+        \\  {"tag_name":"2025.630.0","prerelease":false,"assets":[{"name":"osu.AppImage","browser_download_url":"https://example.com/stable/osu.AppImage"}]}
         \\]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "osu", "0.0.0", false);
@@ -1247,8 +1296,8 @@ test "parse_github_response: skips prerelease when allow_prerelease=false" {
 test "parse_github_response: includes prerelease when allow_prerelease=true" {
     const body =
         \\[
-        \\  {"tag_name":"2025.701.0","prerelease":true,"assets":[]},
-        \\  {"tag_name":"2025.630.0","prerelease":false,"assets":[]}
+        \\  {"tag_name":"2025.701.0","prerelease":true,"assets":[{"name":"osu.AppImage","browser_download_url":"https://example.com/prerelease/osu.AppImage"}]},
+        \\  {"tag_name":"2025.630.0","prerelease":false,"assets":[{"name":"osu.AppImage","browser_download_url":"https://example.com/stable/osu.AppImage"}]}
         \\]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "osu", "0.0.0", true);
@@ -1296,9 +1345,132 @@ test "parse_github_response: picks exact installed basename when multiple AppIma
     try std.testing.expectEqualStrings("https://example.com/DuckStation-x64.AppImage", result.?.download_url);
 }
 
+test "parse_github_response: selects versioned assets reported in issue 1525" {
+    const Case = struct {
+        app_name: []const u8,
+        current_version: []const u8,
+        body: []const u8,
+        expected_url: []const u8,
+    };
+    const cases = [_]Case{
+        .{
+            .app_name = "goverlay-1.8.8-x86_64",
+            .current_version = "1.8.8",
+            .body =
+            \\[{"tag_name":"1.8.10","prerelease":false,"assets":[
+            \\  {"name":"goverlay-1.8.10-aarch64.AppImage","browser_download_url":"https://example.com/goverlay-1.8.10-aarch64.AppImage"},
+            \\  {"name":"goverlay-1.8.10-x86_64.AppImage","browser_download_url":"https://example.com/goverlay-1.8.10-x86_64.AppImage"}
+            \\]}]
+            ,
+            .expected_url = "https://example.com/goverlay-1.8.10-x86_64.AppImage",
+        },
+        .{
+            .app_name = "waywallen-x86_64",
+            .current_version = "v0.2.5",
+            .body =
+            \\[{"tag_name":"v0.2.6","prerelease":false,"assets":[
+            \\  {"name":"waywallen-0.2.6-x86_64.AppImage","browser_download_url":"https://example.com/waywallen-0.2.6-x86_64.AppImage"}
+            \\]}]
+            ,
+            .expected_url = "https://example.com/waywallen-0.2.6-x86_64.AppImage",
+        },
+        .{
+            .app_name = "QIDIStudio_Ubuntu24",
+            .current_version = "v2.06.00.51",
+            .body =
+            \\[{"tag_name":"v2.07.02.10","prerelease":false,"assets":[
+            \\  {"name":"QIDIStudio_v02.07.02.10_Ubuntu22.AppImage","browser_download_url":"https://example.com/QIDIStudio_v02.07.02.10_Ubuntu22.AppImage"},
+            \\  {"name":"QIDIStudio_v02.07.02.10_Ubuntu24.AppImage","browser_download_url":"https://example.com/QIDIStudio_v02.07.02.10_Ubuntu24.AppImage"}
+            \\]}]
+            ,
+            .expected_url = "https://example.com/QIDIStudio_v02.07.02.10_Ubuntu24.AppImage",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try UpdateManager.parse_github_response(
+            std.testing.allocator,
+            case.body,
+            case.app_name,
+            case.current_version,
+            false,
+        );
+        defer if (result) |update_result| update_result.deinit(std.testing.allocator);
+        try std.testing.expect(result != null);
+        try std.testing.expectEqualStrings(case.expected_url, result.?.download_url);
+        try std.testing.expect(result.?.is_update_available);
+    }
+}
+
+test "parse_github_response: refuses ambiguous compatible AppImage assets" {
+    const body =
+        \\[{"tag_name":"v2.0.0","prerelease":false,"assets":[
+        \\  {"name":"editor-standard-x86_64.AppImage","browser_download_url":"https://example.com/editor-standard-x86_64.AppImage"},
+        \\  {"name":"editor-portable-x86_64.AppImage","browser_download_url":"https://example.com/editor-portable-x86_64.AppImage"}
+        \\]}]
+    ;
+    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "editor", "v1.0.0", false);
+    try std.testing.expectEqual(@as(?appimage.AppImageUpdate, null), result);
+}
+
+test "parse_github_response: ignores AppImage assets without a valid download URL" {
+    const body =
+        \\[{"tag_name":"v2.0.0","prerelease":false,"assets":[
+        \\  {"name":"editor.AppImage","browser_download_url":""},
+        \\  {"name":"editor-x86_64.AppImage","browser_download_url":"file:///tmp/editor.AppImage"}
+        \\]}]
+    ;
+    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "editor", "v1.0.0", false);
+    try std.testing.expectEqual(@as(?appimage.AppImageUpdate, null), result);
+}
+
+test "parse_github_response: rejects a sole incompatible architecture asset" {
+    const body = if (std.mem.eql(u8, UpdateManager.getSystemArchitecture(), "x86_64"))
+        \\[{"tag_name":"v2.0.0","prerelease":false,"assets":[
+        \\  {"name":"editor-aarch64.AppImage","browser_download_url":"https://example.com/editor-aarch64.AppImage"}
+        \\]}]
+    else
+        \\[{"tag_name":"v2.0.0","prerelease":false,"assets":[
+        \\  {"name":"editor-x86_64.AppImage","browser_download_url":"https://example.com/editor-x86_64.AppImage"}
+        \\]}]
+    ;
+    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "editor", "v1.0.0", false);
+    try std.testing.expectEqual(@as(?appimage.AppImageUpdate, null), result);
+}
+
+test "parse_github_response: normalized matching is case insensitive" {
+    const body =
+        \\[{"tag_name":"v2.0.0","prerelease":false,"assets":[
+        \\  {"name":"mytool-2.0.AppImage","browser_download_url":"https://example.com/mytool-2.0.AppImage"},
+        \\  {"name":"another-tool.AppImage","browser_download_url":"https://example.com/another-tool.AppImage"}
+        \\]}]
+    ;
+    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "MyTool-1.0", "v1.0.0", false);
+    defer if (result) |update_result| update_result.deinit(std.testing.allocator);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("https://example.com/mytool-2.0.AppImage", result.?.download_url);
+}
+
+test "parse_github_response: skips malformed assets before selecting a valid one" {
+    const body =
+        \\[{"tag_name":"v2.0.0","prerelease":false,"assets":[
+        \\  null,
+        \\  "not-an-object",
+        \\  {"name":42,"browser_download_url":"https://example.com/wrong-name-type.AppImage"},
+        \\  {"name":"missing-url.AppImage"},
+        \\  {"name":"wrong-url-type.AppImage","browser_download_url":42},
+        \\  {"name":"editor.AppImage","browser_download_url":"https://example.com/editor.AppImage"}
+        \\]}]
+    ;
+    const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "editor", "v1.0.0", false);
+    defer if (result) |update_result| update_result.deinit(std.testing.allocator);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("https://example.com/editor.AppImage", result.?.download_url);
+}
+
 test "parse_github_response: is_update_available false when version matches" {
     const body =
-        \\[{"tag_name":"2025.630.0","prerelease":false,"assets":[]}]
+        \\[{"tag_name":"2025.630.0","prerelease":false,"assets":[{"name":"osu.AppImage","browser_download_url":"https://example.com/osu.AppImage"}]}]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "osu", "2025.630.0", false);
     defer if (result) |r| r.deinit(std.testing.allocator);
@@ -1306,14 +1478,12 @@ test "parse_github_response: is_update_available false when version matches" {
     try std.testing.expect(!result.?.is_update_available);
 }
 
-test "parse_github_response: no assets key returns dto with empty download_url" {
+test "parse_github_response: no assets key returns null" {
     const body =
         \\[{"tag_name":"2025.630.0","prerelease":false}]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "osu", "0.0.0", false);
-    defer if (result) |r| r.deinit(std.testing.allocator);
-    try std.testing.expect(result != null);
-    try std.testing.expectEqualStrings("", result.?.download_url);
+    try std.testing.expectEqual(@as(?appimage.AppImageUpdate, null), result);
 }
 
 test "parse_gitlab_response: returns null for empty array" {
@@ -1325,8 +1495,8 @@ test "parse_gitlab_response: returns null for empty array" {
 test "parse_gitlab_response: skips upcoming_release when allow_prerelease=false" {
     const body =
         \\[
-        \\  {"tag_name":"v2.0.0","upcoming_release":true,"assets":{"links":[]}},
-        \\  {"tag_name":"v1.9.0","upcoming_release":false,"assets":{"links":[]}}
+        \\  {"tag_name":"v2.0.0","upcoming_release":true,"assets":{"links":[{"name":"myapp.AppImage","url":"https://example.com/upcoming/myapp.AppImage"}]}},
+        \\  {"tag_name":"v1.9.0","upcoming_release":false,"assets":{"links":[{"name":"myapp.AppImage","url":"https://example.com/stable/myapp.AppImage"}]}}
         \\]
     ;
     const result = try UpdateManager.parse_gitlab_response(std.testing.allocator, body, "myapp", "0.0.0", false);
@@ -1338,8 +1508,8 @@ test "parse_gitlab_response: skips upcoming_release when allow_prerelease=false"
 test "parse_gitlab_response: includes upcoming_release when allow_prerelease=true" {
     const body =
         \\[
-        \\  {"tag_name":"v2.0.0","upcoming_release":true,"assets":{"links":[]}},
-        \\  {"tag_name":"v1.9.0","upcoming_release":false,"assets":{"links":[]}}
+        \\  {"tag_name":"v2.0.0","upcoming_release":true,"assets":{"links":[{"name":"myapp.AppImage","url":"https://example.com/upcoming/myapp.AppImage"}]}},
+        \\  {"tag_name":"v1.9.0","upcoming_release":false,"assets":{"links":[{"name":"myapp.AppImage","url":"https://example.com/stable/myapp.AppImage"}]}}
         \\]
     ;
     const result = try UpdateManager.parse_gitlab_response(std.testing.allocator, body, "myapp", "0.0.0", true);
@@ -1370,14 +1540,25 @@ test "parse_gitlab_response: picks single AppImage link" {
     try std.testing.expect(result.?.is_update_available);
 }
 
-test "parse_gitlab_response: no assets key returns dto with empty download_url" {
+test "parse_gitlab_response: selects a case-insensitive versioned match among multiple links" {
+    const body =
+        \\[{"tag_name":"v2.0.0","upcoming_release":false,"assets":{"links":[
+        \\  {"name":"editor-standard-2.0.AppImage","url":"https://example.com/editor-standard-2.0.AppImage"},
+        \\  {"name":"editor-pro-2.0.AppImage","url":"https://example.com/editor-pro-2.0.AppImage"}
+        \\]}}]
+    ;
+    const result = try UpdateManager.parse_gitlab_response(std.testing.allocator, body, "Editor_Pro-1.0", "v1.0.0", false);
+    defer if (result) |update_result| update_result.deinit(std.testing.allocator);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("https://example.com/editor-pro-2.0.AppImage", result.?.download_url);
+}
+
+test "parse_gitlab_response: no assets key returns null" {
     const body =
         \\[{"tag_name":"v1.9.0","upcoming_release":false}]
     ;
     const result = try UpdateManager.parse_gitlab_response(std.testing.allocator, body, "myapp", "0.0.0", false);
-    defer if (result) |r| r.deinit(std.testing.allocator);
-    try std.testing.expect(result != null);
-    try std.testing.expectEqualStrings("", result.?.download_url);
+    try std.testing.expectEqual(@as(?appimage.AppImageUpdate, null), result);
 }
 
 test "gitea_to_releases_api builds correct url" {
@@ -1414,8 +1595,8 @@ test "parse_github_response: codeberg/forgejo style response (same shape as gith
 test "parse_github_response: forgejo skips prerelease when allow_prerelease=false" {
     const body =
         \\[
-        \\  {"tag_name":"v2.0.0-beta","prerelease":true,"assets":[]},
-        \\  {"tag_name":"v1.9.0","prerelease":false,"assets":[]}
+        \\  {"tag_name":"v2.0.0-beta","prerelease":true,"assets":[{"name":"myapp.AppImage","browser_download_url":"https://example.com/prerelease/myapp.AppImage"}]},
+        \\  {"tag_name":"v1.9.0","prerelease":false,"assets":[{"name":"myapp.AppImage","browser_download_url":"https://example.com/stable/myapp.AppImage"}]}
         \\]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "myapp", "0.0.0", false);
@@ -1427,8 +1608,8 @@ test "parse_github_response: forgejo skips prerelease when allow_prerelease=fals
 test "parse_github_response: forgejo includes prerelease when allow_prerelease=true" {
     const body =
         \\[
-        \\  {"tag_name":"v2.0.0-beta","prerelease":true,"assets":[]},
-        \\  {"tag_name":"v1.9.0","prerelease":false,"assets":[]}
+        \\  {"tag_name":"v2.0.0-beta","prerelease":true,"assets":[{"name":"myapp.AppImage","browser_download_url":"https://example.com/prerelease/myapp.AppImage"}]},
+        \\  {"tag_name":"v1.9.0","prerelease":false,"assets":[{"name":"myapp.AppImage","browser_download_url":"https://example.com/stable/myapp.AppImage"}]}
         \\]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "myapp", "0.0.0", true);
@@ -1478,14 +1659,12 @@ test "build_static_url: current version Unknown always reports update available"
     try std.testing.expect(result.?.is_update_available);
 }
 
-test "parse_gitlab_response: no links key returns dto with empty download_url" {
+test "parse_gitlab_response: no links key returns null" {
     const body =
         \\[{"tag_name":"v1.9.0","upcoming_release":false,"assets":{}}]
     ;
     const result = try UpdateManager.parse_gitlab_response(std.testing.allocator, body, "myapp", "0.0.0", false);
-    defer if (result) |r| r.deinit(std.testing.allocator);
-    try std.testing.expect(result != null);
-    try std.testing.expectEqualStrings("", result.?.download_url);
+    try std.testing.expectEqual(@as(?appimage.AppImageUpdate, null), result);
 }
 
 test "build_static_url: name is preserved in result" {
@@ -1507,7 +1686,7 @@ test "build_static_url: download_url is preserved verbatim" {
 
 test "parse_github_response: is_update_available true when current is Unknown" {
     const body =
-        \\[{"tag_name":"v1.0.0","prerelease":false,"assets":[]}]
+        \\[{"tag_name":"v1.0.0","prerelease":false,"assets":[{"name":"myapp.AppImage","browser_download_url":"https://example.com/myapp.AppImage"}]}]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "myapp", "Unknown", false);
     defer if (result) |r| r.deinit(std.testing.allocator);
@@ -1517,7 +1696,7 @@ test "parse_github_response: is_update_available true when current is Unknown" {
 
 test "parse_github_response: is_update_available false when versions match" {
     const body =
-        \\[{"tag_name":"v1.0.0","prerelease":false,"assets":[]}]
+        \\[{"tag_name":"v1.0.0","prerelease":false,"assets":[{"name":"myapp.AppImage","browser_download_url":"https://example.com/myapp.AppImage"}]}]
     ;
     const result = try UpdateManager.parse_github_response(std.testing.allocator, body, "myapp", "v1.0.0", false);
     defer if (result) |r| r.deinit(std.testing.allocator);
@@ -1527,7 +1706,7 @@ test "parse_github_response: is_update_available false when versions match" {
 
 test "parse_gitlab_response: is_update_available true when current is Unknown" {
     const body =
-        \\[{"tag_name":"v3.0.0","upcoming_release":false,"assets":{"links":[]}}]
+        \\[{"tag_name":"v3.0.0","upcoming_release":false,"assets":{"links":[{"name":"myapp.AppImage","url":"https://example.com/myapp.AppImage"}]}}]
     ;
     const result = try UpdateManager.parse_gitlab_response(std.testing.allocator, body, "myapp", "Unknown", false);
     defer if (result) |r| r.deinit(std.testing.allocator);
@@ -1537,7 +1716,7 @@ test "parse_gitlab_response: is_update_available true when current is Unknown" {
 
 test "parse_gitlab_response: is_update_available false when versions match" {
     const body =
-        \\[{"tag_name":"v3.0.0","upcoming_release":false,"assets":{"links":[]}}]
+        \\[{"tag_name":"v3.0.0","upcoming_release":false,"assets":{"links":[{"name":"myapp.AppImage","url":"https://example.com/myapp.AppImage"}]}}]
     ;
     const result = try UpdateManager.parse_gitlab_response(std.testing.allocator, body, "myapp", "v3.0.0", false);
     defer if (result) |r| r.deinit(std.testing.allocator);
@@ -1694,6 +1873,46 @@ test "get_update returns optional owned results for configured providers" {
     const incomplete = appimage.AppImage{ .name = "Incomplete", .update_type = .github };
     try std.testing.expect((try manager.get_update(&incomplete)) == null);
     try std.testing.expectEqual(events.StatusKind.warning, capture.last_status.?);
+}
+
+test "providerUpdateOrWarn warns only when no provider asset is available" {
+    const expected_message = "No compatible downloadable AppImage release asset was found for Editor.";
+    const Capture = struct {
+        count: usize = 0,
+        last_status: ?events.StatusKind = null,
+        message_matches: bool = false,
+
+        fn status(data: ?*anyopaque, args: events.StatusArgs) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.count += 1;
+            self.last_status = args.kind;
+            self.message_matches = std.mem.eql(u8, args.message, expected_message);
+        }
+    };
+
+    var dispatcher = events.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    var capture: Capture = .{};
+    _ = try dispatcher.addStatusHandler(.{ .function = Capture.status, .data = &capture });
+
+    var manager = makeUpdateManager(std.testing.allocator, "unused", "unused");
+    manager.setEventDispatcher(&dispatcher);
+
+    try std.testing.expect(manager.providerUpdateOrWarn("Editor", null) == null);
+    try std.testing.expectEqual(@as(usize, 1), capture.count);
+    try std.testing.expectEqual(events.StatusKind.warning, capture.last_status.?);
+    try std.testing.expect(capture.message_matches);
+
+    const available = appimage.AppImageUpdate{
+        .name = "Editor",
+        .version = "v2.0.0",
+        .download_url = "https://example.com/Editor.AppImage",
+        .is_update_available = true,
+    };
+    const returned = manager.providerUpdateOrWarn("Editor", available);
+    try std.testing.expect(returned != null);
+    try std.testing.expectEqualStrings(available.download_url, returned.?.download_url);
+    try std.testing.expectEqual(@as(usize, 1), capture.count);
 }
 
 test "get_updates returns an owned update list" {
