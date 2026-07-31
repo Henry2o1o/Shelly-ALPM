@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/http_client.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = target.result.os.tag == .linux,
     });
 
     const tests = b.addTest(.{ .root_module = module });
