@@ -20,6 +20,7 @@ const Tray = zsn.Tray;
 const MenuItem = zsn.MenuItem;
 const ItemType = zsn.ItemType;
 const Action = zsn.Action;
+const Pixmap = zsn.Pixmap;
 
 const Repo = @import("models/update.zig").CheckUpdatesPackage;
 const Aur = @import("models/update.zig").CheckUpdatesAur;
@@ -232,7 +233,8 @@ pub fn main(init: std.process.Init) !void {
     var t = try Tray.init(&service, .{
         .id = "shelly.shellyorg.Notifications",
         .title = "Shelly Notifications",
-        .icon_name = "shelly",
+        .icon_name = "shelly-shell-symbolic",
+        .icon_pixmap = &.{},
         .attention_icon_name = "dialog-warning",
     });
     defer t.deinit();
@@ -292,6 +294,7 @@ pub fn main(init: std.process.Init) !void {
                 .app_name = "Shelly",
                 .icon = "shelly",
                 .summary = n.summary,
+
                 .body = n.body,
                 .on_activate = &openShelly,
                 .ctx = &runner,
