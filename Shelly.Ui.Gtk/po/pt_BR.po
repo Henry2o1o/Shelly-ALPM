@@ -1495,40 +1495,40 @@ msgid "Had an issue loading your packages. Check if you have a db lock."
 msgstr "Não foi possível carregar seus pacotes. Verifique se há um bloqueio no banco de dados (db lock)."
 
 msgid "Show Explicit Only"
-msgstr "Mostrar apenas explcícitos"
+msgstr "Mostrar apenas explícitos"
 
 msgid "Show only explicitly installed packages"
-msgstr "Mostra apenas os pacotes explicitamente instalados"
+msgstr "Mostrar apenas pacotes instalados explicitamente"
 
 msgid "Hide Detail Pane"
 msgstr "Esconder painel de detalhes"
 
 msgid "Toggle output"
-msgstr ""
+msgstr "Exibir saída"
 
 msgid "Drop AppImage here to install"
-msgstr ""
+msgstr "Arraste sua AppImage até aqui para instalar"
 
 msgid "Get more information about Update URL / Repository Info"
-msgstr ""
+msgstr "Obter mais informações sobre a URL de atualizações/ Informações do repositório"
 
 msgid "e.g. owner/repo or https://..."
-msgstr ""
+msgstr "Ex: dono/repo ou https:// ..."
 
 msgid "Invalid format. Use owner/repo (e.g., seafoam-labs/shelly-alpm)"
-msgstr ""
+msgstr "Formato inválido. Use dono/repo (ex: seafoam-labs/shelly-alpm)"
 
 msgid "Allow Prerelease"
-msgstr ""
+msgstr "Permitir versões de teste"
 
 msgid "Launch Flags"
-msgstr ""
+msgstr "Flags de inicialização"
 
 msgid "Language"
-msgstr ""
+msgstr "Língua"
 
 msgid "Enable Recommended"
-msgstr ""
+msgstr "Habilitar pacotes recomendados"
 
 msgid ":"
 msgstr ""
@@ -1536,172 +1536,175 @@ msgstr ""
 msgid ""
 "If enabled, Shelly will use appstream icons in the package list and details "
 "pages."
-msgstr ""
+msgstr "Se habilitado, o Shelly irá utilizar ícones appstream na lista de pacotes "
+"e na página de detalhes"
 
 msgid ""
 "If enabled, Shelly will use a symbolic svg icon instead of the default image "
 "one."
-msgstr ""
+msgstr "Se habilitado, o Shelly irá utilizar um ícone SVG simbólico em vez "
+"da imagem pradrão"
 
 msgid "AppImage Install Path"
-msgstr ""
+msgstr "Caminho de instalação das AppImages"
 
 msgid "Select Directory"
-msgstr ""
+msgstr "Selecionar diretório"
 
 msgid "Force a synchronization of the package database."
-msgstr ""
+msgstr "Forçar sincronização da base de dados de pacotes."
 
 msgid ""
 "Removes the db.lck file if it was left behind by an interrupted alpm process."
 msgstr ""
+"Remove o arquivo (db.lck) caso seja criado por um processo alpm interrompido."
 
 msgid "Remove corrupted/orphaned packages."
-msgstr ""
+msgstr "Remover pacotes corrompidos/órfãos."
 
 msgid "v0.0.0"
 msgstr ""
 
 msgid "Search the AUR by name or keyword"
-msgstr ""
+msgstr "Procure a AUR por nome ou palavra-chave"
 
 msgid "Show only packages already installed on this system"
-msgstr ""
+msgstr "Mostrar apenas os pacotes já instalados neste sistema"
 
 msgid "Search the AUR"
-msgstr ""
+msgstr "Pesquisar na AUR"
 
 msgid "The AUR has no browsable index type a package name to begin."
-msgstr ""
+msgstr "A AUR não possui um índice navegável. Digite o nome de um pacote para começar. "
 
 msgid "Run the --check function during package build"
-msgstr ""
+msgstr "Executar a função --check durante package build"
 
 msgid "Hide the detail pane on the right"
-msgstr ""
+msgstr "Esconder o painel de detalhes à direita"
 
 msgid "Skip"
-msgstr ""
+msgstr "Pular"
 
 msgid "No special permissions requested"
-msgstr ""
+msgstr "Nenhuma permissão especial solicitada"
 
 msgid "Review PKGBUILD changes"
-msgstr ""
+msgstr "Revoisar mudanças no PKGBUILD"
 
 msgid "Warnings"
-msgstr ""
+msgstr "Avisos"
 
 msgid "Source Files"
-msgstr ""
+msgstr "Arquivos de fonte"
 
 msgid "Removing Remote"
-msgstr ""
+msgstr "Removendo remota"
 
 msgid "Adding Remote"
-msgstr ""
+msgstr "Adicionando remota"
 
 msgid "Removing Flatpak"
-msgstr ""
+msgstr "Removendo Flatpak"
 
 msgid "Choose a Flatpak file"
-msgstr ""
+msgstr "Escolha um arquivo Flatpak"
 
 msgid "Flatpak files"
-msgstr ""
+msgstr "Arquivos Flatpak"
 
 msgid "Unsupported file type. Choose a .flatpak or .flatpakref file."
-msgstr ""
+msgstr "Arquivo não compatível. Escolha um arquivo .flatpak ou .flatpakref."
 
 msgid "Installing local flatpak"
-msgstr ""
+msgstr "Instalando Flatpak local"
 
 msgid "Installation failed."
-msgstr ""
+msgstr "Instalação falhou."
 
 msgid "Installation complete."
-msgstr ""
+msgstr "Instalação completa"
 
 msgid "Choose file..."
-msgstr ""
+msgstr "Escolha um arquivo..."
 
 msgid "Discover"
-msgstr ""
+msgstr "Descobrir"
 
 msgid "Categories"
-msgstr ""
+msgstr "Categorias"
 
 msgid "Verified"
-msgstr ""
+msgstr "Verificado"
 
 msgid "Show less"
-msgstr ""
+msgstr "Mostrar menos"
 
 msgid "Installing flatpak"
-msgstr ""
+msgstr "Instalando Flatpak"
 
 msgid "Permissions"
-msgstr ""
+msgstr "Permissões"
 
 msgid "Unknown developer"
-msgstr ""
+msgstr "Desenvolvedor desconhecido"
 
 msgid "Version: Unknown"
-msgstr ""
+msgstr "Versão: Desconhecida"
 
 msgid "Size: Loading..."
-msgstr ""
+msgstr "Tamanho: Carregando..."
 
 msgid "Size: Unknown"
-msgstr ""
+msgstr "Tamanho: Desconhecido"
 
 msgid "License"
-msgstr ""
+msgstr "Licença"
 
 msgid "License: Unknown"
-msgstr ""
+msgstr "Licença: Desconhecida"
 
 msgid "No summary available"
-msgstr ""
+msgstr "Sem resumo disponível"
 
 msgid "Size: Unavailable"
-msgstr ""
+msgstr "Tamanho: Indisponível"
 
 msgid "Unable to load screenshot"
-msgstr ""
+msgstr "Não foi possível carregar captura de tela"
 
 msgid "Unable to download screenshot"
-msgstr ""
+msgstr "Não foi possível baixar captura de tela"
 
 msgid "Unable to display screenshot"
-msgstr ""
+msgstr "Não foi possível mostrar captura de tela"
 
 msgid "Open link in browser"
-msgstr ""
+msgstr "Abrir link no navegador"
 
 msgid "Homepage"
-msgstr ""
+msgstr "Página inicial"
 
 msgid "Bug tracker"
-msgstr ""
+msgstr "Rastreador de bugs"
 
 msgid "Donation"
-msgstr ""
+msgstr "Doações"
 
 msgid "FAQ"
 msgstr ""
 
 msgid "Help"
-msgstr ""
+msgstr "Ajuda"
 
 msgid "Vcs-browser"
 msgstr ""
 
 msgid "Contact"
-msgstr ""
+msgstr "Contato"
 
 msgid "Translate"
-msgstr ""
+msgstr "Traduzir"
 
 msgid "Unable to allocate memory while loading Flatpak data."
 msgstr ""
