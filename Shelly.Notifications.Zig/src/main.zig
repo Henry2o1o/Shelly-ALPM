@@ -342,6 +342,8 @@ pub fn main(init: std.process.Init) !void {
     var updates = Updates.init(allocator, init.io, &runner);
     defer updates.deinit();
 
+    try service.onExternalSignal("com.shellyorg.shelly", "Refresh", onUiRefresh, &updates);
+
     var mstate = MenuState.init(allocator, buildMenu);
     defer mstate.deinit();
     mstate.ctx = &updates;
@@ -592,6 +594,12 @@ fn formatCheckTime(arena: std.mem.Allocator, ts: i64) ![]const u8 {
     return std.fmt.allocPrint(arena, "Last Check: {d:0>2}:{d:0>2} {d:0>2}/{d:0>2}", .{
         dt.hour, dt.minute, dt.day, dt.month,
     });
+}
+
+fn onUiRefresh(ctx: ?*anyopaque, msg: zsn.Message) void {
+    _ = msg;
+    const updates: *Updates = @ptrCast(@alignCast(ctx.?));
+    wakeWorker(updates.io);
 }
 
 fn onTrayActivate(ctx: ?*anyopaque, x: i32, y: i32) void {
