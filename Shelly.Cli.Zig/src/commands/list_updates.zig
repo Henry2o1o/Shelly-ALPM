@@ -2,7 +2,9 @@ const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
+const format = @import("../output/format.zig");
 const output = @import("../output/config.zig");
+const colors = @import("../output/colors.zig");
 const table = @import("../output/table.zig");
 const parser = @import("../cli/parser.zig");
 const shortcodes = @import("../cli/shortcodes.zig");
@@ -139,11 +141,9 @@ pub fn resultCount(result: *const Result) usize {
     };
 }
 
-const SizeDisplay = enum {
-    bytes,
-    megabytes,
-    gigabytes,
-};
+const SizeDisplay = format.SizeDisplay;
+const loadSizeDisplay = format.loadSizeDisplay;
+const formatSize = format.formatSignedSize;
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -503,7 +503,7 @@ fn writePlain(context: *runtime.RuntimeContext, result: *const Result) !void {
 }
 
 fn writeStandardPlain(context: *runtime.RuntimeContext, updates: []const StandardUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "0;255;0", "All packages are up to date!");
+    if (updates.len == 0) return writeColoredLine(context, .success, "All packages are up to date!");
 
     var storage = std.heap.ArenaAllocator.init(context.allocator);
     defer storage.deinit();
@@ -529,11 +529,11 @@ fn writeStandardPlain(context: *runtime.RuntimeContext, updates: []const Standar
     );
     try context.stdout.writeByte('\n');
     const message = try std.fmt.allocPrint(allocator, "{d} standard packages can be updated", .{updates.len});
-    try writeColoredLine(context, "255;255;0", message);
+    try writeColoredLine(context, .warning, message);
 }
 
 fn writeAurPlain(context: *runtime.RuntimeContext, updates: []const AurUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "255;255;0", "All AUR packages are up to date.");
+    if (updates.len == 0) return writeColoredLine(context, .warning, "All AUR packages are up to date.");
 
     var storage = std.heap.ArenaAllocator.init(context.allocator);
     defer storage.deinit();
@@ -560,11 +560,11 @@ fn writeAurPlain(context: *runtime.RuntimeContext, updates: []const AurUpdate) !
         output.supportsAnsi(context),
     );
     const message = try std.fmt.allocPrint(allocator, "AUR Total: {d} packages need updates", .{updates.len});
-    try writeColoredLine(context, "255;255;0", message);
+    try writeColoredLine(context, .warning, message);
 }
 
 fn writeAppImagePlain(context: *runtime.RuntimeContext, updates: []const AppImageUpdate) !void {
-    if (updates.len == 0) return writeColoredLine(context, "255;255;0", "No appimage updates available");
+    if (updates.len == 0) return writeColoredLine(context, .warning, "No appimage updates available");
     for (updates) |update| {
         const message = try std.fmt.allocPrint(
             context.allocator,
@@ -572,7 +572,7 @@ fn writeAppImagePlain(context: *runtime.RuntimeContext, updates: []const AppImag
             .{ update.name, update.version },
         );
         defer context.allocator.free(message);
-        try writeColoredLine(context, "255;255;0", message);
+        try writeColoredLine(context, .warning, message);
     }
 }
 
@@ -602,19 +602,15 @@ fn writeFlatpakPlain(context: *runtime.RuntimeContext, updates: []const FlatpakU
     );
     try context.stdout.writeByte('\n');
     const message = try std.fmt.allocPrint(allocator, "Flatpak Total: {d} packages", .{updates.len});
-    try writeColoredLine(context, "255;255;0", message);
+    try writeColoredLine(context, .warning, message);
 }
 
 fn writeColoredLine(
     context: *runtime.RuntimeContext,
-    color: []const u8,
+    color: colors.Color,
     message: []const u8,
 ) !void {
-    if (output.supportsAnsi(context)) {
-        try context.stdout.print("\x1b[38;2;{s}m{s}\x1b[0m\n", .{ color, message });
-    } else {
-        try context.stdout.print("{s}\n", .{message});
-    }
+    try colors.printLine(context, color, "{s}", .{message});
 }
 
 fn sortedStandard(allocator: std.mem.Allocator, updates: []const StandardUpdate) ![]StandardUpdate {
@@ -645,32 +641,6 @@ fn sortedFlatpak(allocator: std.mem.Allocator, updates: []const FlatpakUpdate) !
         }
     }.lessThan);
     return sorted;
-}
-
-fn loadSizeDisplay(context: *runtime.RuntimeContext) !SizeDisplay {
-    const manager = config_manager.Manager.init(context);
-    const configuration = manager.read() catch return .megabytes;
-    const value = configuration.values.get("FileSizeDisplay") orelse return .megabytes;
-    if (value != .string) return .megabytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Bytes")) return .bytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Gigabytes")) return .gigabytes;
-    return .megabytes;
-}
-
-fn formatSize(allocator: std.mem.Allocator, display: SizeDisplay, bytes: i64) ![]const u8 {
-    return switch (display) {
-        .bytes => std.fmt.allocPrint(allocator, "{d} B", .{bytes}),
-        .megabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} MiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1048576.0},
-        ),
-        .gigabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} GiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1073741824.0},
-        ),
-    };
 }
 
 fn truncate(value: []const u8, maximum: usize) []const u8 {

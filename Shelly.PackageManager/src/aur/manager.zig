@@ -6,6 +6,7 @@ const alpm_events = @import("../alpm/events.zig");
 const pkgbuild_parser = @import("../pkgbuild/pkgbuild_parser.zig");
 const homograph_validator = @import("../pkgbuild/homograph_validator.zig");
 const post_install_validator = @import("../pkgbuild/post_install_validator.zig");
+const local_source_validator = @import("../pkgbuild/local_source_validator.zig");
 const validation = @import("../pkgbuild/shared_validtor.zig");
 const operation_api = @import("operation_context");
 const MakePackageConfiguration = @import("makepackage.zig").MakePackageConfiguration;
@@ -21,6 +22,7 @@ pub const version = @import("version.zig");
 pub const native_events = alpm_events;
 
 const AlpmManager = alpm_module.Manager;
+pub const ReverseDependencyOptions = alpm_module.ReverseDependencyOptions;
 const TransFlag = alpm_bindings.libalpm.TransFlag;
 const PkgbuildInfo = pkgbuild_parser.pkgbuild_info;
 const ParsedDependency = pkgbuild_parser.parsed_dep;
@@ -57,23 +59,27 @@ pub const PkgbuildApprovalHandler = struct {
 pub const PkgbuildValidation = struct {
     post_install: validation.ValidationResult,
     homograph: validation.ValidationResult,
+    local_source: validation.ValidationResult,
 
     pub fn deinit(self: *PkgbuildValidation, allocator: std.mem.Allocator) void {
         self.post_install.deinit(allocator);
         self.homograph.deinit(allocator);
+        self.local_source.deinit(allocator);
         self.* = undefined;
     }
 
     pub fn hasFindings(self: *const PkgbuildValidation) bool {
-        return self.post_install.has_findings or self.homograph.has_findings;
+        return self.post_install.has_findings or self.homograph.has_findings or self.local_source.has_findings;
     }
 
     pub fn flatten(self: *const PkgbuildValidation, allocator: std.mem.Allocator) ![]ValidationFinding {
         const post = self.post_install.findings.items;
         const homograph = self.homograph.findings.items;
-        const findings = try allocator.alloc(ValidationFinding, post.len + homograph.len);
+        const local_source = self.local_source.findings.items;
+        const findings = try allocator.alloc(ValidationFinding, post.len + homograph.len + local_source.len);
         @memcpy(findings[0..post.len], post);
-        @memcpy(findings[post.len..], homograph);
+        @memcpy(findings[post.len .. post.len + homograph.len], homograph);
+        @memcpy(findings[post.len + homograph.len ..], local_source);
         return findings;
     }
 };
@@ -88,18 +94,24 @@ pub fn validatePkgbuild(
     var info = try parser.parser_content(content, base_directory);
     defer info.deinit(allocator);
 
-    return validatePkgbuildInfo(allocator, &info);
+    return validatePkgbuildInfo(allocator, io, &info, base_directory, content);
 }
 
 pub fn validatePkgbuildInfo(
     allocator: std.mem.Allocator,
+    io: std.Io,
     info: *const PkgbuildInfo,
+    base_directory: ?[]const u8,
+    content: ?[]const u8,
 ) !PkgbuildValidation {
-    var post_install = try (post_install_validator.PostInstallValidator{ .allocator = allocator }).validate(info.*);
+    var post_install = try (post_install_validator.PostInstallValidator{ .allocator = allocator }).validateWithContent(info.*, content);
     errdefer post_install.deinit(allocator);
+    var homograph = try (homograph_validator.HomographValidator{ .allocator = allocator }).validate(info.*);
+    errdefer homograph.deinit(allocator);
     return .{
         .post_install = post_install,
-        .homograph = try (homograph_validator.HomographValidator{ .allocator = allocator }).validate(info.*),
+        .homograph = homograph,
+        .local_source = try (local_source_validator.LocalSourceValidator{ .allocator = allocator, .io = io }).validate(info.*, base_directory),
     };
 }
 
@@ -410,6 +422,16 @@ pub const Manager = struct {
     }
 
     pub fn getInstalledPackages(self: *Self) ![]models.Package {
+        return self.getInstalledPackagesWithReverseDependencies(.{
+            .required_by = true,
+            .optional_for = true,
+        });
+    }
+
+    pub fn getInstalledPackagesWithReverseDependencies(
+        self: *Self,
+        reverse_dependencies: ReverseDependencyOptions,
+    ) ![]models.Package {
         var operation_scope = OperationScope.init(self, .search, null);
         operation_scope.attach();
         defer operation_scope.finish(.success);
@@ -430,12 +452,12 @@ pub const Manager = struct {
                 .explicit = package.install_reason() == .Explicit,
             });
         }
-        const response = try self.aur_client.getInfo(names.items);
-        defer {
-            self.allocator.free(response.response_type);
-            if (response.error_message) |message| self.allocator.free(message);
-        }
+        var response = try self.aur_client.getInfo(names.items);
+        errdefer response.deinit(self.allocator);
         try applyInstalledState(self.allocator, response.results, installed.items);
+        try self.applyLocalReverseDependencies(response.results, reverse_dependencies);
+        self.allocator.free(response.response_type);
+        if (response.error_message) |message| self.allocator.free(message);
         return response.results;
     }
 
@@ -457,10 +479,33 @@ pub const Manager = struct {
         const names = try self.allocator.alloc([]const u8, count);
         defer self.allocator.free(names);
         for (search_response.results[0..count], names) |package, *name| name.* = package.name;
-        const info_response = try self.aur_client.getInfo(names);
+        var info_response = try self.aur_client.getInfo(names);
+        errdefer info_response.deinit(self.allocator);
+        try self.applyLocalReverseDependencies(info_response.results, .{
+            .required_by = true,
+            .optional_for = true,
+        });
         self.allocator.free(info_response.response_type);
         if (info_response.error_message) |message| self.allocator.free(message);
         return info_response.results;
+    }
+
+    fn applyLocalReverseDependencies(
+        self: *Self,
+        packages: []models.Package,
+        reverse_dependencies: ReverseDependencyOptions,
+    ) !void {
+        if (!reverse_dependencies.required_by and !reverse_dependencies.optional_for) return;
+        for (packages) |*package| {
+            const name_z = try self.allocator.dupeZ(u8, package.name);
+            defer self.allocator.free(name_z);
+            if (!self.alpm.is_package_installed(name_z)) continue;
+            const local_package = try self.alpm.get_single_installed_package(name_z) orelse continue;
+            if (reverse_dependencies.required_by)
+                package.required_by = try local_package.owned_required_by(self.allocator);
+            if (reverse_dependencies.optional_for)
+                package.optional_for = try local_package.owned_optional_for(self.allocator);
+        }
     }
 
     pub fn getPackagesNeedingUpdate(self: *Self, check_devel: bool) ![]models.Update {
@@ -542,17 +587,21 @@ pub const Manager = struct {
         var vcs_store_changed = false;
         for (candidates.items) |*candidate| {
             if (candidate.first_seen) {
-                const entries = candidate.owned_entries.?;
-                for (entries, candidate.remote_shas) |*entry, *remote_sha| {
-                    const sha = remote_sha.slice();
-                    if (sha.len == 0) continue;
-                    const owned_sha = try self.allocator.dupe(u8, sha);
-                    self.allocator.free(entry.commit_sha);
-                    entry.commit_sha = owned_sha;
+                const local = installed.items[candidate.installed_index];
+                candidate.needs_update = firstSeenVcsNeedsUpdate(local.version, candidate.remote_shas);
+                if (!candidate.needs_update) {
+                    const entries = candidate.owned_entries.?;
+                    for (entries, candidate.remote_shas) |*entry, *remote_sha| {
+                        const sha = remote_sha.slice();
+                        if (sha.len == 0) continue;
+                        const owned_sha = try self.allocator.dupe(u8, sha);
+                        self.allocator.free(entry.commit_sha);
+                        entry.commit_sha = owned_sha;
+                    }
+                    try self.vcs_store.set(candidate.package_name, entries);
+                    vcs_store_changed = true;
+                    continue;
                 }
-                try self.vcs_store.set(candidate.package_name, entries);
-                vcs_store_changed = true;
-                continue;
             }
             if (try backfillMissingVcsBaselines(&self.vcs_store, candidate))
                 vcs_store_changed = true;
@@ -1203,7 +1252,7 @@ pub const Manager = struct {
         errdefer info.deinit(self.allocator);
         try requireReviewInputs(self.allocator, self.io(), cache_path, &info);
 
-        var validation_results = try validatePkgbuildInfo(self.allocator, &info);
+        var validation_results = try validatePkgbuildInfo(self.allocator, self.io(), &info, cache_path, new_pkgbuild);
         errdefer validation_results.deinit(self.allocator);
         const digest = try reviewDigest(self.allocator, self.io(), cache_path, new_pkgbuild, &info);
 
@@ -1933,6 +1982,31 @@ const RemoteSha = struct {
         return self.bytes[0..self.len];
     }
 };
+
+fn installedVcsCommit(installed_version: []const u8) ?[]const u8 {
+    const marker = std.mem.lastIndexOf(u8, installed_version, ".g") orelse return null;
+    const start = marker + 2;
+    var end = start;
+    while (end < installed_version.len and std.ascii.isHex(installed_version[end])) : (end += 1) {}
+    if (end - start < 7) return null;
+    return installed_version[start..end];
+}
+
+fn firstSeenVcsNeedsUpdate(installed_version: []const u8, remote_shas: []const RemoteSha) bool {
+    const installed_commit = installedVcsCommit(installed_version) orelse return false;
+    var fetched_any = false;
+    for (remote_shas) |*remote_sha| {
+        const sha = remote_sha.slice();
+        if (sha.len == 0) continue;
+        fetched_any = true;
+        if (sha.len >= installed_commit.len and
+            std.ascii.eqlIgnoreCase(sha[0..installed_commit.len], installed_commit))
+        {
+            return false;
+        }
+    }
+    return fetched_any;
+}
 
 const VcsCheckCandidate = struct {
     package_name: []const u8,
@@ -3036,6 +3110,14 @@ test "VCS package checks execute concurrently and retain per-package results" {
     try std.testing.expect(candidates[1].needs_update);
     try std.testing.expectEqualStrings("new", candidates[0].remote_shas[0].slice());
     try std.testing.expectEqualStrings("new", candidates[1].remote_shas[0].slice());
+
+    var changed = [_]RemoteSha{RemoteSha.fromSlice("dcaed638f1a486650c67063543708cf1313dfb14").?};
+    try std.testing.expect(firstSeenVcsNeedsUpdate("0.46.r29.g34c6095-1", &changed));
+    try std.testing.expect(!firstSeenVcsNeedsUpdate("26.36.0602723.r6.gdcaed63-1", &changed));
+    try std.testing.expect(!firstSeenVcsNeedsUpdate("0.46-1", &changed));
+
+    var unavailable = [_]RemoteSha{.{}};
+    try std.testing.expect(!firstSeenVcsNeedsUpdate("0.46.r29.g34c6095-1", &unavailable));
 }
 
 test "VCS checks retry and baseline transiently failed sources" {

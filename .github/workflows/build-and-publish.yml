@@ -32,6 +32,12 @@ jobs:
           zig build abi-test
           zig build integration-test
 
+      - name: Build and test HTTP client
+        run: |
+          cd Shelly.Http
+          zig build
+          zig build test
+
       - name: Build and test PackageManager
         run: |
           cd Shelly.PackageManager

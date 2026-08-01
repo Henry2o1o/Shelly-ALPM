@@ -1193,11 +1193,15 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--show-hidden", &.{"-w"}, "Include hidden packages"),
         flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
         flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
+        flag("--required-by", &.{}, "Include packages that directly require each package"),
+        flag("--optional-for", &.{}, "Include packages that directly use each package optionally"),
     };
     if (pathIs(action, type_name, "list", "aur")) return &.{
         flag("--show-hidden", &.{}, "Include hidden packages"),
         flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
         flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
+        flag("--required-by", &.{}, "Include packages that directly require each package"),
+        flag("--optional-for", &.{}, "Include packages that directly use each package optionally"),
     };
     if (pathIs(action, type_name, "list-updates", "aur") or
         pathIs(action, type_name, "list-updates", "all")) return &.{flag(
@@ -1367,6 +1371,20 @@ pub const SharedModifier = struct {
 // Shared semantic modifiers are defined once here. A type still receives only
 // the modifiers that apply to it; all other source options remain type-specific.
 pub const shared_modifiers = [_]SharedModifier{
+    .{
+        .action = "list",
+        .type_names = &.{ "standard", "aur" },
+        .name = "--required-by",
+        .aliases = &.{},
+        .description = "Include packages that directly require each listed package",
+    },
+    .{
+        .action = "list",
+        .type_names = &.{ "standard", "aur" },
+        .name = "--optional-for",
+        .aliases = &.{},
+        .description = "Include packages that directly use each listed package optionally",
+    },
     .{
         .action = "install",
         .type_names = &.{ "standard", "aur" },

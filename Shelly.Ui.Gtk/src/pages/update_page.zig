@@ -5,7 +5,7 @@ const glib = bindings.glib;
 const gio = bindings.gio;
 const gobject = bindings.gobject;
 const support = @import("support.zig");
-const TrayDBus = @import("../services/dbus.zig").TrayDBus;
+const TrayDBus = @import("../services/dbus.zig").DBus;
 const size_helper = @import("../helpers/size_converts.zig").SizeConverter;
 
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;

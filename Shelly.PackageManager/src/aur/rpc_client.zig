@@ -1,7 +1,7 @@
 const std = @import("std");
 const models = @import("models.zig");
 const operation_api = @import("operation_context");
-const HttpClient = @import("../shared/http_client.zig");
+const HttpClient = @import("ShellyHttp");
 
 pub const default_rpc_url = "https://aur.archlinux.org/rpc/";
 pub const default_cgit_url = "https://aur.archlinux.org/cgit/aur.git/plain";

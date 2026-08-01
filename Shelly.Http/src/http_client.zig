@@ -25,6 +25,7 @@ const assert = std.debug.assert;
 const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const HostName = std.Io.net.HostName;
+const resolver = @import("resolver.zig");
 const IpAddress = std.Io.net.IpAddress;
 const Socket = std.Io.net.Socket;
 const Stream = std.Io.net.Stream;
@@ -2236,9 +2237,9 @@ fn resolveFamily(
     var canonical_name_buffer: [HostName.max_len]u8 = undefined;
     var lookup_buffer: [max_resolved_addresses_per_family]HostName.LookupResult = undefined;
     var lookup_queue: Io.Queue(HostName.LookupResult) = .init(&lookup_buffer);
-    // HostName.lookup produces into lookup_queue, so its consumer must be able
+    // resolver.lookup produces into lookup_queue, so its consumer must be able
     // to run concurrently even when the ordinary async worker limit is full.
-    var lookup_future = io.concurrent(HostName.lookup, .{ host, io, &lookup_queue, .{
+    var lookup_future = io.concurrent(resolver.lookup, .{ host, io, &lookup_queue, .{
         .port = port,
         .family = family,
         .canonical_name_buffer = &canonical_name_buffer,
@@ -3158,7 +3159,7 @@ test "Happy Eyeballs starts alternate DNS immediately when the preferred family 
     try testing.expect(state.lookup_ip4_future != null);
 }
 
-test "Happy Eyeballs reaches an IPv4 localhost server through the Zig resolver" {
+test "Happy Eyeballs reaches an IPv4 localhost server through the configured resolver" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
 
     var threaded: Io.Threaded = .init(testing.allocator, .{});

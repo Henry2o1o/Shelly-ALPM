@@ -109,6 +109,7 @@ The native Zig components can be built and tested independently:
 
 ```bash
 (cd Shelly.Flatpak.Backend && zig build integration-test)
+(cd Shelly.Http && zig build test)
 (cd Shelly.PackageManager && zig build test)
 (cd Shelly.Cli.Zig && zig build test)
 (cd Shelly.Ui.Gtk && zig build test)
@@ -171,6 +172,7 @@ Shelly is structured into several components:
 - **Shelly.Cli.Zig**: Command-line interface for terminal and UI operations.
 - **Shelly.Flatpak.Backend**: Optional versioned shared library containing all
   libflatpak/GLib-native implementation details.
+- **Shelly.Http**: Standalone HTTP client with a compatibility TLS implementation.
 - **Shelly-Notifications**: Tray service to manage notifactions the Shelly-UI.
 - **Shelly.PackageManager**: Core libalpm/AUR/AppImage logic plus the
   backend-neutral Flatpak facade and secure loader.
@@ -185,6 +187,7 @@ scripts/test-flatpak-separation.sh
 
 ```bash
 (cd Shelly.Flatpak.Backend && zig build test abi-test parity-test integration-test)
+(cd Shelly.Http && zig build test)
 (cd Shelly.PackageManager && zig build test)
 (cd Shelly.Cli.Zig && zig build test)
 ```
