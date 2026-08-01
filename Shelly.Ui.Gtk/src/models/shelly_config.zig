@@ -15,6 +15,7 @@ pub const ShellyTabs = enum(u8) {
     app_image = 3,
     shelly_search = 4,
     recommend = 5,
+    update = 6,
 };
 
 pub const DayOfWeek = enum(u8) {

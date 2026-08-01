@@ -645,7 +645,8 @@ pub const Renderer = struct {
         if (question.options.len == 0 or self.context.stdin == null) return &.{};
         try self.context.stdout.print("{s}\n", .{question.prompt});
         for (question.options, 0..) |option, index| {
-            try self.context.stdout.print("  {d}) {s}\n", .{ index + 1, option.label });
+            const installed = if (option.is_installed) "Installed" else "Not Installed";
+            try self.context.stdout.print("  {d}) {s} : {s} : {s}\n", .{ index + 1, option.label, option.description, installed });
         }
         try self.context.stdout.writeAll("Select numbers separated by commas (none): ");
         try self.context.stdout.flush();
