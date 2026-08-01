@@ -1435,73 +1435,73 @@ msgid "Reinstall"
 msgstr "Reinstalar"
 
 msgid "Add Ignore"
-msgstr ""
+msgstr "Adicionar aos ignorados"
 
 msgid "Add Hold"
-msgstr ""
+msgstr "Manter versão atual"
 
 msgid "Make Explicit"
-msgstr ""
+msgstr "Marcar como explícito"
 
 msgid "Mark Dependency"
-msgstr ""
+msgstr "Marcar como dependência"
 
 msgid "Package actions"
-msgstr ""
+msgstr "Ações do pacote"
 
 msgid "Information"
-msgstr ""
+msgstr "Informação"
 
 msgid "7 of 7 updates included"
-msgstr ""
+msgstr "7 de 7 atualizações inclusas"
 
 msgid "Check all enabled sources again"
-msgstr ""
+msgstr "Verificar todas as fontes habilitadas novamente"
 
 msgid "Check Again"
-msgstr ""
+msgstr "Verificar novamente"
 
 msgid "Upgrade"
-msgstr ""
+msgstr "Atualizar"
 
 msgid "Checking for updates…"
-msgstr ""
+msgstr "Procurando por atualizações..."
 
 msgid "Your system is up to date"
-msgstr ""
+msgstr "Seu sistema está atualizado"
 
 msgid "Could not check for updates"
-msgstr ""
+msgstr "Não foi possível verificar atualizações"
 
 msgid "Installed Only"
-msgstr ""
+msgstr "Apenas pacotes instalados"
 
 msgid "Show only installed packages"
-msgstr ""
+msgstr "Mostrar apenas pacotes instalados"
 
 msgid "Selected Packages"
-msgstr ""
+msgstr "Pacotes selecionados"
 
 msgid "0 Selected"
-msgstr ""
+msgstr "0 Selecionados"
 
 msgid "Grid View"
-msgstr ""
+msgstr "Visualização em grade"
 
 msgid "List View"
-msgstr ""
+msgstr "Visualização em lista"
 
 msgid "Had an issue loading your packages. Check if you have a db lock."
-msgstr ""
+msgstr "Não foi possível carregar seus pacotes. Verifique se há um bloqueio no banco de dados (db lock)."
 
 msgid "Show Explicit Only"
-msgstr ""
+msgstr "Mostrar apenas explcícitos"
 
 msgid "Show only explicitly installed packages"
-msgstr ""
+msgstr "Mostra apenas os pacotes explicitamente instalados"
 
 msgid "Hide Detail Pane"
-msgstr ""
+msgstr "Esconder painel de detalhes"
 
 msgid "Toggle output"
 msgstr ""
