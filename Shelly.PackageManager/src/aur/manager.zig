@@ -1326,7 +1326,7 @@ pub const Manager = struct {
                 .message = finding.message,
             };
 
-            const prompt = try std.fmt.allocPrint(self.allocator, "Proceed with update to {s}?", .{request.package_name});
+            const prompt = try std.fmt.allocPrint(self.allocator, "Proceed with reviewed build of {s}?", .{request.package_name});
             defer self.allocator.free(prompt);
 
             var answer = try operation.ask(.{
@@ -1487,31 +1487,18 @@ pub const Manager = struct {
         const package_base = try self.resolvePkgbase(package_name);
         const cache_path = try self.cachePath(package_base);
         defer self.allocator.free(cache_path);
-        const expected_remote = try std.fmt.allocPrint(
+        const remote = try std.fmt.allocPrint(
             self.allocator,
             "{s}/{s}.git",
             .{ self.aur_git_base_url, package_base },
         );
-        defer self.allocator.free(expected_remote);
-        const git_dir = try std.fs.path.join(self.allocator, &.{ cache_path, ".git" });
-        defer self.allocator.free(git_dir);
-        var clone_needed = true;
-        if (std.Io.Dir.cwd().statFile(self.io(), git_dir, .{})) |_| {
-            var remote = try self.runAsInvokingUser(&.{ "git", "-C", cache_path, "remote", "get-url", "origin" }, null, null);
-            defer remote.deinit(self.allocator);
-            if (remote.exit_code == 0 and std.mem.eql(u8, std.mem.trim(u8, remote.stdout, " \t\r\n"), expected_remote)) {
-                var pull = try self.runAsInvokingUser(&.{ "git", "-C", cache_path, "pull", "--ff-only" }, null, null);
-                defer pull.deinit(self.allocator);
-                clone_needed = pull.exit_code != 0;
-            }
-        } else |_| {}
-        if (clone_needed) {
-            self.cleanBuildArtifacts(cache_path);
-            if (!(try self.removeCacheDirectory(cache_path))) return false;
-            var clone = try self.runAsInvokingUser(&.{ "git", "clone", expected_remote, cache_path }, null, null);
-            defer clone.deinit(self.allocator);
-            if (clone.exit_code != 0) return false;
-        }
+        defer self.allocator.free(remote);
+
+        if (!(try self.removeCacheDirectory(cache_path))) return false;
+        var clone = try self.runAsInvokingUser(&.{ "git", "clone", remote, cache_path }, null, null);
+        defer clone.deinit(self.allocator);
+        if (clone.exit_code != 0) return false;
+
         const pkgbuild_path = try std.fs.path.join(self.allocator, &.{ cache_path, "PKGBUILD" });
         defer self.allocator.free(pkgbuild_path);
         _ = std.Io.Dir.cwd().statFile(self.io(), pkgbuild_path, .{}) catch return false;
@@ -2828,17 +2815,17 @@ test "fixture checkout cannot invoke fake makepkg before review and integrity ga
     );
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, marker_path, .{}));
 
-    approval.accepted = false;
-    var changed_prepared = try manager.preparePackageForBuild("demo", null);
-    defer changed_prepared.deinit(allocator);
-    try std.testing.expectError(
-        error.PkgbuildReviewDeclined,
-        manager.buildPreparedPackage(&changed_prepared, false),
+    var refreshed_prepared = try manager.preparePackageForBuild("demo", null);
+    defer refreshed_prepared.deinit(allocator);
+    const refreshed_source = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        checkout_source,
+        allocator,
+        .limited(max_file_size),
     );
-    try std.testing.expectEqual(@as(usize, 3), approval.calls);
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, marker_path, .{}));
-
-    try writeFixtureFile(io, checkout_source, "#!/bin/sh\necho reviewed\n", false);
+    defer allocator.free(refreshed_source);
+    try std.testing.expectEqualStrings("#!/bin/sh\necho reviewed\n", refreshed_source);
+    try std.testing.expectEqual(@as(usize, 2), approval.calls);
     try std.testing.expect(try manager.buildPreparedPackage(&prepared, false));
     try std.Io.Dir.cwd().access(io, marker_path, .{});
 }
