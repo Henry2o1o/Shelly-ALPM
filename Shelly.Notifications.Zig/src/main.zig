@@ -304,6 +304,15 @@ pub fn main(init: std.process.Init) !void {
     var service = try Service.init(allocator, init.io, init.environ_map);
     defer service.deinit();
 
+    const SINGLETON_NAME = "org.shellyorg.Notifications";
+
+    if (try service.nameHasOwner(SINGLETON_NAME)) {
+        std.debug.print("[tray] another instance running, exiting\n", .{});
+        std.process.exit(0);
+    }
+    try service.requestName(SINGLETON_NAME); // <-- the missing step: acquire it
+    std.debug.print("[tray] acquired singleton name\n", .{});
+
     var runner = AppRunner.init(allocator, init.io, init.environ_map);
     defer runner.deinit();
 
