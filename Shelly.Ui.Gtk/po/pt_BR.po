@@ -1384,54 +1384,55 @@ msgid "Review the PKGBUILD changes before continuing."
 msgstr "Revise as mudanças no PKGBUILD antes de continuar"
 
 msgid "Accept Changes"
-msgstr "Aceitar Mudanças"
+msgstr "Aceitar mudanças"
 
 msgid "Changes"
 msgstr "Mudanças"
 
 msgid "Review Changes"
-msgstr "Revisar Mudanças"
+msgstr "Revisar mudanças"
 
 msgid "Additional Options"
-msgstr ""
+msgstr "Opcões adicionais"
 
 msgid "Show Runtimes"
-msgstr ""
+msgstr "Mostrar runtimes"
 
 msgid "Install source"
-msgstr ""
+msgstr "Instalar fonte"
 
 msgid "Show more"
-msgstr ""
+msgstr "Mostrar mais"
 
 msgid "App Permissions"
-msgstr ""
+msgstr "Permissões do aplicativo"
 
 msgid "Install a local Flatpak"
-msgstr ""
+msgstr "Instalar um Flatpak local"
 
 msgid ""
 "Choose a .flatpak bundle from your system and install it for the current "
 "user or system-wide."
-msgstr ""
+msgstr "Selecione um bundle .flatpak no seu sistema e instale para o "
+"usuário atual ou globalmente"
 
 msgid "Bundle"
 msgstr ""
 
 msgid "Choose file…"
-msgstr ""
+msgstr "Escolha um arquivo..."
 
 msgid "Install for"
-msgstr ""
+msgstr "Instalar para"
 
 msgid "Browse"
-msgstr ""
+msgstr "Navegar"
 
 msgid "Shelly"
 msgstr ""
 
 msgid "Reinstall"
-msgstr ""
+msgstr "Reinstalar"
 
 msgid "Add Ignore"
 msgstr ""
