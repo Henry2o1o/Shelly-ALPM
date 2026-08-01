@@ -1665,7 +1665,7 @@ pub const Manager = struct {
             target_names.deinit(self.allocator);
         }
         if (shoot_orphans) {
-            const orphans = self.get_orphans() catch return TransactionError.OrphanShootFailed;
+            const orphans = self.get_orphans(false) catch return TransactionError.OrphanShootFailed;
             defer libalpm.OwnedPackage.deinitSlice(self.allocator, orphans);
 
             for (orphans) |orphan| {
@@ -1676,7 +1676,11 @@ pub const Manager = struct {
                 };
             }
             if (!dry_run) {
-                self.remove_packages(target_names.items, .{ .nosave = true, .recurse = true, .cascade = true }, true) catch |err| {
+                self.remove_packages(target_names.items, TransFlag{
+                    .nosave = true,
+                    .recurse = true,
+                    .unneeded = true,
+                }, true) catch |err| {
                     return err;
                 };
             }
@@ -1963,7 +1967,8 @@ pub const Manager = struct {
         return arch_list.toOwnedSlice(self.allocator);
     }
 
-    fn get_orphans(self: *Manager) TransactionError![]libalpm.OwnedPackage {
+    fn get_orphans(self: *Manager, remove_optional_for: bool) TransactionError![]libalpm.OwnedPackage {
+        // TODO: implement A <-> B circular dependency removal
         if (self.handle == null) return TransactionError.NoHandle;
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
         var pkgs_list = rawLibalpm.alpm_db_get_pkgcache(local_db) orelse return TransactionError.DatabaseReadFailed;
@@ -1979,6 +1984,14 @@ pub const Manager = struct {
             var bool_required_by = false;
             while (required_by.next()) |_| {
                 bool_required_by = true;
+                break;
+            }
+            if (!remove_optional_for) {
+                var optional_for = pkg.optional_for();
+                while (optional_for.next()) |_| {
+                    bool_required_by = true;
+                    break;
+                }
             }
             if (bool_required_by) continue;
             var owned_package = libalpm.OwnedPackage.init(self.allocator, pkg) catch return TransactionError.OutOfMemory;
