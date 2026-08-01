@@ -1,16 +1,7 @@
 const std = @import("std");
+
+const zeit = @import("zeit");
 const zsn = @import("zsn");
-const runtime = @import("runtime.zig");
-const ShellyCli = @import("services/shelly-cli.zig").ShellyCli;
-const ShellyConfig = @import("services/config.zig").ConfigResolver;
-const next_notification = @import("services/next_notification.zig");
-const ConfigWatcher = @import("services/config-watcher.zig").ConfigWatcher;
-const AppRunner = @import("services/app_runner.zig").AppRunner;
-
-const CheckUpdatesPackage = @import("models/update.zig").CheckUpdatesPackage;
-const CheckUpdatesAur = @import("models/update.zig").CheckUpdatesAur;
-const CheckUpdatesFlatpak = @import("models/update.zig").CheckUpdatesFlatpak;
-
 const Service = zsn.Service;
 const MenuController = zsn.MenuController;
 const Notifier = zsn.Notifier;
@@ -22,16 +13,41 @@ const ItemType = zsn.ItemType;
 const Action = zsn.Action;
 const Pixmap = zsn.Pixmap;
 
+const CheckUpdatesPackage = @import("models/update.zig").CheckUpdatesPackage;
+const CheckUpdatesAur = @import("models/update.zig").CheckUpdatesAur;
+const CheckUpdatesFlatpak = @import("models/update.zig").CheckUpdatesFlatpak;
 const Repo = @import("models/update.zig").CheckUpdatesPackage;
 const Aur = @import("models/update.zig").CheckUpdatesAur;
 const Flatpak = @import("models/update.zig").CheckUpdatesFlatpak;
+const runtime = @import("runtime.zig");
+const AppRunner = @import("services/app_runner.zig").AppRunner;
+const ConfigWatcher = @import("services/config-watcher.zig").ConfigWatcher;
+const ShellyConfig = @import("services/config.zig").ConfigResolver;
+const next_notification = @import("services/next_notification.zig");
+const ShellyCli = @import("services/shelly-cli.zig").ShellyCli;
 
 var quit_index: usize = 0;
 var open_index: usize = 0;
+var check_update_index: usize = 0;
 var run_update_index: usize = 0;
 var open_shelly_index: usize = 0;
 
+var icon_name: [:0]const u8 = undefined;
+var attention_icon_name: [:0]const u8 = undefined;
+
+var icon_buf: [256:0]u8 = undefined;
+var updates_buf: [256:0]u8 = undefined;
+
+var wake_gen: std.atomic.Value(u32) = .init(0);
+var launch_requested = std.atomic.Value(bool).init(false);
+var quit_requested = std.atomic.Value(bool).init(false);
+
 const NotifText = struct { summary: [:0]u8, body: [:0]u8 };
+
+const IconsToUse = struct {
+    icon_name: []const u8,
+    attention_icon_name: []const u8,
+};
 
 const Updates = struct {
     mutex: std.Io.Mutex = .init,
@@ -44,6 +60,8 @@ const Updates = struct {
 
     needs_refresh: bool = false,
     pending_notif: ?NotifText = null,
+    needs_config_change: bool = false,
+    last_check: i64 = 0,
 
     fn init(allocator: std.mem.Allocator, io: std.Io, runner: *AppRunner) Updates {
         return .{ .allocator = allocator, .io = io, .runner = runner };
@@ -93,6 +111,12 @@ const Updates = struct {
         self.needs_refresh = true;
     }
 
+    fn signalConfigChange(self: *Updates) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        self.needs_config_change = true;
+    }
+
     fn queueNotif(self: *Updates, summary: []const u8, body: []const u8) void {
         const s = self.allocator.dupeZ(u8, summary) catch return;
         const b = self.allocator.dupeZ(u8, body) catch {
@@ -124,11 +148,24 @@ const Updates = struct {
         return n;
     }
 
+    fn takeConfigChange(self: *Updates) bool {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const r = self.needs_config_change;
+        self.needs_config_change = false;
+        return r;
+    }
+
     fn freeNotif(self: *Updates, n: NotifText) void {
         self.allocator.free(n.summary);
         self.allocator.free(n.body);
     }
 };
+
+fn wakeWorker(io: std.Io) void {
+    _ = wake_gen.fetchAdd(1, .release);
+    io.futexWake(u32, &wake_gen.raw, 1);
+}
 
 const Worker = struct {
     updates: *Updates,
@@ -147,7 +184,7 @@ const Worker = struct {
                 self.config.mutex.lockUncancelable(self.io);
                 defer self.config.mutex.unlock(self.io);
                 const cfg = self.config.get() catch |e| {
-                    std.log.warn("[worker] config get failed: {any}, using 1h", .{e});
+                    std.log.warn("[worker] config get failed: {any}, using 10h", .{e});
                     break :blk 36000;
                 };
                 break :blk next_notification.getNextSeconds(self.gpa, self.io, cfg) catch |e| {
@@ -156,19 +193,29 @@ const Worker = struct {
                 };
             };
 
-            std.log.info("[worker] next check in: {d}", .{secs});
-            std.debug.print("[worker] sleeping {d}s until next check\n", .{secs});
+            std.log.info("[worker] next check in: {d}s (or on request)", .{secs});
+            std.debug.print("[worker] waiting {d}s until next check (interruptible)\n", .{secs});
 
             _ = self.config.dirty.swap(false, .seq_cst);
-            var remaining = secs;
-            while (remaining > 0) {
-                const chunk = @min(remaining, 30);
-                self.io.sleep(.fromSeconds(chunk), .awake) catch return;
-                if (self.config.dirty.swap(false, .seq_cst)) {
-                    std.debug.print("[worker] config changed, recomputing schedule\n", .{});
-                    break;
-                }
-                remaining -= chunk;
+
+            const expected = wake_gen.load(.acquire);
+            self.io.futexWaitTimeout(
+                u32,
+                &wake_gen.raw,
+                expected,
+                .{ .duration = .{ .raw = .fromSeconds(secs), .clock = .awake } },
+            ) catch {};
+
+            if (self.config.dirty.swap(false, .seq_cst)) {
+                std.debug.print("[worker] config changed, recomputing schedule\n", .{});
+                const icons = getIconsToUse(self.config);
+                @memcpy(icon_buf[0..icons.icon_name.len], icons.icon_name);
+                icon_buf[icons.icon_name.len] = 0;
+                @memcpy(updates_buf[0..icons.attention_icon_name.len], icons.attention_icon_name);
+                updates_buf[icons.attention_icon_name.len] = 0;
+                icon_name = icon_buf[0..icons.icon_name.len :0];
+                attention_icon_name = updates_buf[0..icons.attention_icon_name.len :0];
+                self.updates.signalConfigChange();
             }
         }
     }
@@ -209,6 +256,10 @@ const Worker = struct {
 
         std.debug.print("[worker] {d} updates found\n", .{count});
 
+        const now_ts = std.Io.Clock.now(.real, self.io);
+        const seconds = @divFloor(now_ts.nanoseconds, std.time.ns_per_s);
+        self.updates.last_check = @intCast(seconds);
+
         self.updates.signalRefresh();
         if (count > 0) {
             var buf: [128]u8 = undefined;
@@ -217,6 +268,32 @@ const Worker = struct {
         }
     }
 };
+
+fn getIconsToUse(config: *ShellyConfig) IconsToUse {
+    const conf = config.get() catch return .{
+        .icon_name = "shelly-tray",
+        .attention_icon_name = "shelly-update",
+    };
+
+    if (conf.TrayIconPath.len > 0 or conf.TrayUpdatesIconPath.len > 0) {
+        return .{
+            .icon_name = conf.TrayIconPath,
+            .attention_icon_name = conf.TrayUpdatesIconPath,
+        };
+    }
+
+    if (conf.UseSymbolicTray) {
+        return .{
+            .icon_name = "shelly-shell-symbolic",
+            .attention_icon_name = "shelly-updates-symbolic",
+        };
+    }
+
+    return .{
+        .icon_name = "shelly-tray",
+        .attention_icon_name = "shelly-update",
+    };
+}
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -230,12 +307,31 @@ pub fn main(init: std.process.Init) !void {
     var runner = AppRunner.init(allocator, init.io, init.environ_map);
     defer runner.deinit();
 
+    var config = try ShellyConfig.init(allocator, runtime.io, runtime.environ_map);
+    defer config.deinit();
+    try config.load();
+
+    const startIcons = getIconsToUse(&config);
+
+    @memcpy(icon_buf[0..startIcons.icon_name.len], startIcons.icon_name);
+    icon_buf[startIcons.icon_name.len] = 0;
+
+    @memcpy(updates_buf[0..startIcons.attention_icon_name.len], startIcons.attention_icon_name);
+    updates_buf[startIcons.attention_icon_name.len] = 0;
+
+    icon_name = icon_buf[0..startIcons.icon_name.len :0];
+    attention_icon_name = updates_buf[0..startIcons.attention_icon_name.len :0];
+
+    std.debug.print("[main] icon_name={s} attention_icon_name={s}\n", .{ icon_name, attention_icon_name });
+
     var t = try Tray.init(&service, .{
         .id = "shelly.shellyorg.Notifications",
         .title = "Shelly Notifications",
-        .icon_name = "shelly-shell-symbolic",
+        .icon_name = icon_name,
         .icon_pixmap = &.{},
-        .attention_icon_name = "dialog-warning",
+        .attention_icon_name = attention_icon_name,
+        .on_activate = &onTrayActivate,
+        .user_ctx = &runner,
     });
     defer t.deinit();
     _ = try t.register();
@@ -253,10 +349,6 @@ pub fn main(init: std.process.Init) !void {
 
     var menu_ctrl = MenuController.init(&service, &mstate, t.name, "/MenuBar");
     _ = try menu_ctrl.register();
-
-    var config = try ShellyConfig.init(allocator, runtime.io, runtime.environ_map);
-    defer config.deinit();
-    try config.load();
 
     var watcher = try ConfigWatcher.init(allocator, &config, "settings.json");
     defer watcher.deinit();
@@ -290,6 +382,9 @@ pub fn main(init: std.process.Init) !void {
 
         if (updates.takeNotif()) |n| {
             defer updates.freeNotif(n);
+
+            std.debug.print("[loop] notify: {s} {s}\n", .{ n.summary, n.body });
+
             _ = notifier.notify(.{
                 .app_name = "Shelly",
                 .icon = "shelly",
@@ -299,14 +394,35 @@ pub fn main(init: std.process.Init) !void {
                 .on_activate = &openShelly,
                 .ctx = &runner,
             }) catch |e| std.debug.print("[loop] notify: {any}\n", .{e});
+
+            try t.emitNewIcon(attention_icon_name);
+        }
+
+        if (updates.takeConfigChange()) {
+            if (icon_name.len > 0) {
+                _ = t.emitNewIcon(icon_name) catch |e| std.debug.print("[loop] notify: {any}\n", .{e});
+            }
+            if (attention_icon_name.len > 0) {
+                _ = t.emitNewIcon(attention_icon_name) catch |e| std.debug.print("[loop] notify: {any}\n", .{e});
+            }
+        }
+
+        if (launch_requested.swap(false, .seq_cst)) {
+            runner.activateOrLaunch(&service) catch |e|
+                std.debug.print("[loop] activate/launch failed: {any}\n", .{e});
+        }
+
+        if (quit_requested.swap(false, .seq_cst)) {
+            runner.quitUi(&service) catch |e| std.debug.print("[loop] quit ui: {any}\n", .{e});
+            std.process.exit(0);
         }
     }
 }
 
 fn openShelly(ctx: ?*anyopaque, id: u32) void {
     _ = id;
-    const runner: *AppRunner = @ptrCast(@alignCast(ctx.?));
-    runner.launchApp() catch |e| std.debug.print("[shelly] launch failed: {any}\n", .{e});
+    _ = ctx;
+    launch_requested.store(true, .seq_cst);
 }
 
 fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
@@ -322,6 +438,13 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
     try addItem(arena, &items, &tray_index, "Update Packages", true, true, .normal);
     run_update_index = tray_index;
     try addItem(arena, &items, &tray_index, "Check for updates", true, true, .normal);
+    check_update_index = tray_index;
+    try addItem(arena, &items, &tray_index, "", false, true, .separator);
+    const label = if (updates.last_check == 0)
+        try arena.dupe(u8, "Last Check: never")
+    else
+        try formatCheckTime(arena, updates.last_check);
+    try addItem(arena, &items, &tray_index, label, false, true, .normal);
     try addItem(arena, &items, &tray_index, "", false, true, .separator);
 
     const count = updates.total();
@@ -435,19 +558,48 @@ fn onEvent(ctx: ?*anyopaque, id: i32) void {
     const updates: *Updates = @ptrCast(@alignCast(ctx.?));
     std.debug.print("id: {}\n", .{id});
 
-    if (id == quit_index) std.process.exit(0);
+    if (id == quit_index) {
+        quit_requested.store(true, .seq_cst);
+    }
 
     if (id == run_update_index) {
         updates.runner.spawnFixedUpdate() catch |e|
             std.debug.print("[menu] update spawn failed: {any}\n", .{e});
     }
 
+    std.debug.print("id: {}\n", .{id});
+    std.debug.print("check_update_index: {}\n", .{check_update_index});
+    if (id == check_update_index) {
+        wakeWorker(updates.io);
+    }
+
     if (id == open_shelly_index) {
-        updates.runner.launchApp() catch |e|
-            std.debug.print("[menu] open failed: {any}\n", .{e});
+        launch_requested.store(true, .seq_cst);
     }
 }
 
+fn formatCheckTime(arena: std.mem.Allocator, ts: i64) ![]const u8 {
+    if (ts == 0) return arena.dupe(u8, "Last Check: never");
+
+    var local = zeit.local(arena, runtime.io, .{}) catch {
+        return arena.dupe(u8, "Last Check: unknown");
+    };
+    defer local.deinit();
+
+    const inst = zeit.instant(.{ .unix_timestamp = ts }, &local);
+    const dt = inst.time();
+
+    return std.fmt.allocPrint(arena, "Last Check: {d:0>2}:{d:0>2} {d:0>2}/{d:0>2}", .{
+        dt.hour, dt.minute, dt.day, dt.month,
+    });
+}
+
+fn onTrayActivate(ctx: ?*anyopaque, x: i32, y: i32) void {
+    _ = ctx;
+    _ = x;
+    _ = y;
+    launch_requested.store(true, .seq_cst);
+}
 test {
     std.testing.refAllDecls(@This());
     _ = @import("services/next_notification.zig");
