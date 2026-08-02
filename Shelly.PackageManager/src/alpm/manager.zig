@@ -302,7 +302,7 @@ pub const Manager = struct {
         self.handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err) orelse {
             const code: c_int = @intCast(err);
             const message = std.fmt.allocPrint(self.allocator, "alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))}) catch "Unknown Failure";
-            defer if (message) |owned| self.allocator.free(owned);
+            defer self.allocator.free(message);
 
             if (init_operation) |*operation| {
                 operation.reportError(error.InitFailed, message, "alpm", code, false);
@@ -836,7 +836,10 @@ pub const Manager = struct {
         // Starts transaction impleentation
         var trans_flags = trans_flags_arg;
         if (trans_flags.dbonly) trans_flags.nodeps = true;
-        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
+            return TransactionError.TransInitFailed;
+        }
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
         for (packages.items) |pkg| {
@@ -987,7 +990,10 @@ pub const Manager = struct {
         var trans_flags = flags;
         if (trans_flags.dbonly) trans_flags.nodeps = true;
 
-        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
+            return TransactionError.TransInitFailed;
+        }
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
         for (package_pointers.items) |pkg_ptr| {
@@ -1049,6 +1055,7 @@ pub const Manager = struct {
         if (trans_flags.dbonly) trans_flags.nodeps = true;
 
         if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
             return TransactionError.TransInitFailed;
         }
         var transaction_active = true;
@@ -1650,7 +1657,10 @@ pub const Manager = struct {
         var trans_flags = flags;
         if (trans_flags.dbonly) trans_flags.nodeps = true;
 
-        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
+            return TransactionError.TransInitFailed;
+        }
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
         for (package_list) |pkg_name| {
@@ -3192,9 +3202,14 @@ const OperationScope = struct {
     previous: ?*operation_api.Operation = null,
     cancellation_subscription: ?operation_api.SubscriptionId = null,
     attached: bool = false,
+    initial_error_generation: usize,
 
     fn init(manager: *Manager, kind: operation_api.OperationKind, subject: ?[]const u8) OperationScope {
-        var scope: OperationScope = .{ .manager = manager, .previous = manager.dispatcher.operation };
+        var scope: OperationScope = .{
+            .manager = manager,
+            .previous = manager.dispatcher.operation,
+            .initial_error_generation = manager.dispatcher.errorGeneration(),
+        };
         if (scope.previous) |parent| {
             scope.operation = parent.child(.{ .backend = .alpm, .kind = kind, .subject = subject });
         } else if (manager.operation_context) |context| {
@@ -3216,13 +3231,11 @@ const OperationScope = struct {
 
     fn fail(self: *OperationScope) void {
         if (self.operation) |*operation| {
-            if (!operation.isCancelled()) operation.reportError(
-                error.AlpmOperationFailed,
-                "ALPM operation failed",
-                "alpm",
-                null,
-                false,
-            );
+            if (!operation.isCancelled() and
+                self.manager.dispatcher.errorGeneration() == self.initial_error_generation)
+            {
+                self.manager.dispatcher.raiseError(.{ .message = "ALPM operation failed" });
+            }
         }
         const status: operation_api.CompletionStatus = if (self.operation) |*operation|
             if (operation.isCancelled()) .cancelled else .failed
@@ -3250,6 +3263,128 @@ const OperationScope = struct {
         if (manager.handle) |handle| _ = rawLibalpm.alpm_trans_interrupt(handle);
     }
 };
+
+test "OperationScope does not duplicate a detailed ALPM error" {
+    const Capture = struct {
+        failures: usize = 0,
+        last_message: []const u8 = "",
+
+        fn event(data: ?*anyopaque, value: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (value) {
+                .failure => |failure| {
+                    self.failures += 1;
+                    self.last_message = failure.message;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribe(.{ .function = Capture.event, .data = &capture });
+    defer _ = context.unsubscribe(subscription);
+
+    var manager: Manager = undefined;
+    manager.handle = null;
+    manager.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer manager.dispatcher.deinit();
+    manager.operation_context = &context;
+
+    var scope = OperationScope.init(&manager, .install, "example");
+    scope.attach();
+    manager.dispatcher.raiseError(.{ .message = "detailed ALPM failure" });
+    scope.fail();
+
+    try testing.expectEqual(@as(usize, 1), capture.failures);
+    try testing.expectEqualStrings("detailed ALPM failure", capture.last_message);
+}
+
+test "OperationScope emits one generic ALPM error when no detail was reported" {
+    const Capture = struct {
+        failures: usize = 0,
+        last_message: []const u8 = "",
+
+        fn event(data: ?*anyopaque, value: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (value) {
+                .failure => |failure| {
+                    self.failures += 1;
+                    self.last_message = failure.message;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribe(.{ .function = Capture.event, .data = &capture });
+    defer _ = context.unsubscribe(subscription);
+
+    var manager: Manager = undefined;
+    manager.handle = null;
+    manager.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer manager.dispatcher.deinit();
+    manager.operation_context = &context;
+
+    var scope = OperationScope.init(&manager, .install, "example");
+    scope.attach();
+    scope.fail();
+
+    try testing.expectEqual(@as(usize, 1), capture.failures);
+    try testing.expectEqualStrings("ALPM operation failed", capture.last_message);
+}
+
+test "nested OperationScopes do not duplicate a detailed ALPM error" {
+    const Capture = struct {
+        failures: usize = 0,
+        last_message: []const u8 = "",
+
+        fn event(data: ?*anyopaque, value: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (value) {
+                .failure => |failure| {
+                    self.failures += 1;
+                    self.last_message = failure.message;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribe(.{ .function = Capture.event, .data = &capture });
+    defer _ = context.unsubscribe(subscription);
+
+    var manager: Manager = undefined;
+    manager.handle = null;
+    manager.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer manager.dispatcher.deinit();
+    manager.operation_context = &context;
+
+    var parent = OperationScope.init(&manager, .update, null);
+    parent.attach();
+    var child = OperationScope.init(&manager, .sync, null);
+    child.attach();
+    manager.dispatcher.raiseError(.{ .message = "nested detailed ALPM failure" });
+    child.fail();
+    parent.fail();
+
+    try testing.expectEqual(@as(usize, 1), capture.failures);
+    try testing.expectEqualStrings("nested detailed ALPM failure", capture.last_message);
+}
 
 fn hasDeletedSharedLibrary(maps: []const u8) bool {
     var lines = std.mem.splitScalar(u8, maps, '\n');

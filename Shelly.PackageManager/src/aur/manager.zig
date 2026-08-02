@@ -232,7 +232,7 @@ pub const Manager = struct {
         options: InitOptions,
     ) !*Self {
         const temporary_root = if (options.use_temp_path) options.temp_path else null;
-        const alpm = try AlpmManager.init(allocator, environ, .{ .config_path = options.config_path, .root = options.root, .temp_root_path = temporary_root });
+        const alpm = try AlpmManager.init(allocator, environ, .{ .config_path = options.config_path, .use_root = options.root, .temp_root_path = temporary_root });
         errdefer alpm.deinit();
         const makepkg_config = try MakePackageConfiguration.init(alpm.io(), allocator);
         errdefer makepkg_config.deinit();

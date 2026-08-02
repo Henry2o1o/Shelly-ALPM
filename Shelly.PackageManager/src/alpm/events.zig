@@ -97,6 +97,7 @@ pub const Dispatcher = struct {
     question_response: QuestionResponse,
     operation: ?*operation_api.Operation,
     common_question_response: ?operation_api.OwnedQuestionResponse,
+    error_generation: std.atomic.Value(usize),
 
     allocator: std.mem.Allocator,
 
@@ -117,6 +118,7 @@ pub const Dispatcher = struct {
             .question_response = .{},
             .operation = null,
             .common_question_response = null,
+            .error_generation = .init(0),
         };
     }
 
@@ -363,7 +365,12 @@ pub const Dispatcher = struct {
         self.question_mutex.unlock(io);
     }
 
+    pub fn errorGeneration(self: *const Dispatcher) usize {
+        return self.error_generation.load(.monotonic);
+    }
+
     pub fn raiseError(self: *Dispatcher, args: ErrorArgs) void {
+        _ = self.error_generation.fetchAdd(1, .monotonic);
         if (self.operation) |operation| operation.reportError(error.AlpmOperationFailed, args.message, "alpm", null, false);
         self.dispatch(ErrorArgs, &self.errorEvents, args);
     }
