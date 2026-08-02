@@ -36,6 +36,14 @@
             .url = "git+https://github.com/Seafoam-Labs/zsn.git#1d771e10e68021cb9e0a5c61fb3b8cd155aa8ce7",
             .hash = "zsn-0.0.0-_ggIZuSTAADQvhE6jytwhB3OVnASHKFlck31LHML3F2t",
         },
+        .zeit = .{
+            .url = "git+https://github.com/rockorager/zeit?ref=v0.9.0#b1c1c2fcbc71fd7799a316bbcf0ff88d06d80ccc",
+            .hash = "zeit-0.9.0-5I6bk2m9AgBSMH8-L6rYJkwuQAyhXplnfxnvTSGzVHUR",
+        },
+        .conch = .{
+            .url = "git+https://github.com/Seafoam-Labs/conch#8f93225b4fa19e9a57b215f5f68b04a4dba65d13",
+            .hash = "conch-0.0.1-k9bFopLbAADEC8abKBiXaAro8wVAESAkhFMKVt8exO8P",
+        },
     },
     .paths = .{
         "build.zig",
