@@ -1504,7 +1504,7 @@ msgid "Hide Detail Pane"
 msgstr "Esconder painel de detalhes"
 
 msgid "Toggle output"
-msgstr "Exibir saída"
+msgstr "Exibir resultado"
 
 msgid "Drop AppImage here to install"
 msgstr "Arraste sua AppImage até aqui para instalar"
@@ -1525,7 +1525,7 @@ msgid "Launch Flags"
 msgstr "Flags de inicialização"
 
 msgid "Language"
-msgstr "Língua"
+msgstr "Idioma"
 
 msgid "Enable Recommended"
 msgstr "Ativar pacotes recomendados"
@@ -1566,7 +1566,7 @@ msgid "v0.0.0"
 msgstr ""
 
 msgid "Search the AUR by name or keyword"
-msgstr "Procure a AUR por nome ou palavra-chave"
+msgstr "Procure na AUR por nome ou palavra-chave"
 
 msgid "Show only packages already installed on this system"
 msgstr "Mostrar apenas os pacotes já instalados neste sistema"
@@ -1575,10 +1575,10 @@ msgid "Search the AUR"
 msgstr "Pesquisar na AUR"
 
 msgid "The AUR has no browsable index type a package name to begin."
-msgstr "A AUR não possui um índice navegável. Digite o nome de um pacote para começar. "
+msgstr "A AUR não possui um índice visualizável. Digite o nome de um pacote para começar. "
 
 msgid "Run the --check function during package build"
-msgstr "Executar a função --check durante package build"
+msgstr "Executar a função --check durante compilação de pacote"
 
 msgid "Hide the detail pane on the right"
 msgstr "Esconder o painel de detalhes à direita"
@@ -1599,7 +1599,7 @@ msgid "Source Files"
 msgstr "Arquivos de fonte"
 
 msgid "Removing Remote"
-msgstr "Removendo remota"
+msgstr "Removendo o remoto"
 
 msgid "Adding Remote"
 msgstr "Adicionando remota"
@@ -1629,7 +1629,7 @@ msgid "Choose file..."
 msgstr "Escolha um arquivo..."
 
 msgid "Discover"
-msgstr "Descobrir"
+msgstr "Explorar"
 
 msgid "Categories"
 msgstr "Categorias"
@@ -1692,7 +1692,7 @@ msgid "Donation"
 msgstr "Doações"
 
 msgid "FAQ"
-msgstr ""
+msgstr "Perguntas Frequentes"
 
 msgid "Help"
 msgstr "Ajuda"
@@ -1716,7 +1716,7 @@ msgid "Unable to load Flatpak applications."
 msgstr "Não foi possível carregar aplicações Flatpak."
 
 msgid "No Flatpak applications are available."
-msgstr "Nenhuma aplicação Flatpak disponível."
+msgstr "Nenhuma aplicação Flatpak está disponível."
 
 msgid "Installed Size"
 msgstr "Tamanho instalado"
@@ -1725,7 +1725,7 @@ msgid "Download Size"
 msgstr "Tamanho do download"
 
 msgid "Build Date"
-msgstr "Data de construção"
+msgstr "Data de compilação"
 
 msgid "Install Reason"
 msgstr "Motivo da instalação"
@@ -1758,7 +1758,7 @@ msgid "Failed to start operation."
 msgstr "Falha ao inicializar a operação."
 
 msgid "Pending"
-msgstr "Pendente"
+msgstr "Em espera"
 
 msgid "Synchronizing databases"
 msgstr "Sincronizando bases de dados"
@@ -1767,7 +1767,7 @@ msgid "Downloading"
 msgstr "Baixando"
 
 msgid "Building"
-msgstr "Construindo"
+msgstr "Compilando"
 
 msgid "Packaging"
 msgstr "Empacotando"
@@ -2045,7 +2045,7 @@ msgid "Build and install the selected packages? This may take a while."
 msgstr "Compilar e instalar os pacotes selecionados? Isso pode demorar um pouco."
 
 msgid "Build"
-msgstr "Construir"
+msgstr "Compilar"
 
 msgid "Installing AUR packages"
 msgstr "Instalando pacotes AUR"
@@ -2057,7 +2057,7 @@ msgid "Dismiss"
 msgstr "Ignorar"
 
 msgid "Filesystem"
-msgstr "Sistema de Arquivo"
+msgstr "Sistema de Arquivos"
 
 msgid "Devices"
 msgstr "Dispositivos"
@@ -2250,7 +2250,7 @@ msgid "Failed to add systemd startup service"
 msgstr "Falha ao adicionar serviço de inicialização do systemd"
 
 msgid "Failed to remove systemd startup service"
-msgstr "Falha ao remover serviço de inicialização systemd"
+msgstr "Falha ao remover serviço de inicialização do systemd"
 
 msgid "Cleaning package cache"
 msgstr "Limpando cache de pacotes"
@@ -2262,7 +2262,7 @@ msgid ""
 "The Arch User Repository is community-maintained. Packages are not "
 "officially vetted — only enable if you trust what you install."
 msgstr ""
-"O repositório de usuários do Arch (AUR) é mantido pela comunidade. Pacotes "
+"O Arch User Repository (AUR) é mantido pela comunidade. Pacotes "
 "não são verificadas oficialmente. Só habilite essa funcionalidade se você "
 "confia no que está instalando."
 
