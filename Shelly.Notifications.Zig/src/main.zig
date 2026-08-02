@@ -26,6 +26,12 @@ const ShellyConfig = @import("services/config.zig").ConfigResolver;
 const next_notification = @import("services/next_notification.zig");
 const ShellyCli = @import("services/shelly-cli.zig").ShellyCli;
 
+const log_worker = std.log.scoped(.worker);
+const log_tray = std.log.scoped(.tray);
+const log_main = std.log.scoped(.main);
+const log_loop = std.log.scoped(.loop);
+const log_menu = std.log.scoped(.menu);
+
 var quit_index: usize = 0;
 var open_index: usize = 0;
 var check_update_index: usize = 0;
@@ -177,24 +183,24 @@ const Worker = struct {
     fn run(self: *Worker) void {
         while (true) {
             self.pollOnce() catch |e| {
-                std.debug.print("[worker] check failed: {any}\n", .{e});
+                log_worker.err("check failed: {any}", .{e});
             };
 
             const secs: u32 = blk: {
                 self.config.mutex.lockUncancelable(self.io);
                 defer self.config.mutex.unlock(self.io);
                 const cfg = self.config.get() catch |e| {
-                    std.log.warn("[worker] config get failed: {any}, using 10h", .{e});
+                    log_worker.warn("config get failed: {any}, using 10h", .{e});
                     break :blk 36000;
                 };
                 break :blk next_notification.getNextSeconds(self.gpa, self.io, cfg) catch |e| {
-                    std.log.warn("[worker] schedule calc failed: {any}, using 10h", .{e});
+                    log_worker.warn("schedule calc failed: {any}, using 10h", .{e});
                     break :blk 36000;
                 };
             };
 
-            std.log.info("[worker] next check in: {d}s (or on request)", .{secs});
-            std.debug.print("[worker] waiting {d}s until next check (interruptible)\n", .{secs});
+            log_worker.info("next check in: {d}s (or on request)", .{secs});
+            log_worker.debug("waiting {d}s until next check (interruptible)", .{secs});
 
             _ = self.config.dirty.swap(false, .seq_cst);
 
@@ -207,7 +213,7 @@ const Worker = struct {
             ) catch {};
 
             if (self.config.dirty.swap(false, .seq_cst)) {
-                std.debug.print("[worker] config changed, recomputing schedule\n", .{});
+                log_worker.info("config changed, recomputing schedule", .{});
                 const icons = getIconsToUse(self.config);
                 @memcpy(icon_buf[0..icons.icon_name.len], icons.icon_name);
                 icon_buf[icons.icon_name.len] = 0;
@@ -254,7 +260,7 @@ const Worker = struct {
             break :blk self.updates.total();
         };
 
-        std.debug.print("[worker] {d} updates found\n", .{count});
+        log_worker.info("{d} updates found", .{count});
 
         const now_ts = std.Io.Clock.now(.real, self.io);
         const seconds = @divFloor(now_ts.nanoseconds, std.time.ns_per_s);
@@ -307,11 +313,11 @@ pub fn main(init: std.process.Init) !void {
     const SINGLETON_NAME = "org.shellyorg.Notifications";
 
     if (try service.nameHasOwner(SINGLETON_NAME)) {
-        std.debug.print("[tray] another instance running, exiting\n", .{});
+        log_tray.info("another instance running, exiting", .{});
         std.process.exit(0);
     }
     try service.requestName(SINGLETON_NAME); // <-- the missing step: acquire it
-    std.debug.print("[tray] acquired singleton name\n", .{});
+    log_tray.info("acquired singleton name", .{});
 
     var runner = AppRunner.init(allocator, init.io, init.environ_map);
     defer runner.deinit();
@@ -331,7 +337,7 @@ pub fn main(init: std.process.Init) !void {
     icon_name = icon_buf[0..startIcons.icon_name.len :0];
     attention_icon_name = updates_buf[0..startIcons.attention_icon_name.len :0];
 
-    std.debug.print("[main] icon_name={s} attention_icon_name={s}\n", .{ icon_name, attention_icon_name });
+    log_main.info("icon_name={s} attention_icon_name={s}", .{ icon_name, attention_icon_name });
 
     var t = try Tray.init(&service, .{
         .id = "shelly.shellyorg.Notifications",
@@ -385,27 +391,26 @@ pub fn main(init: std.process.Init) !void {
                 .clock = .awake,
             },
         }) catch |e| {
-            std.debug.print("[loop] tick error: {any}\n", .{e});
+            log_loop.err("tick error: {any}", .{e});
         };
 
         if (updates.takeRefresh()) {
-            menu_ctrl.invalidate() catch |e| std.debug.print("[loop] invalidate: {any}\n", .{e});
+            menu_ctrl.invalidate() catch |e| log_loop.err("invalidate: {any}", .{e});
         }
 
         if (updates.takeNotif()) |n| {
             defer updates.freeNotif(n);
 
-            std.debug.print("[loop] notify: {s} {s}\n", .{ n.summary, n.body });
+            log_loop.info("notify: {s} {s}", .{ n.summary, n.body });
             const t0 = std.Io.Clock.now(.awake, init.io);
             _ = notifier.notify(.{
                 .app_name = "Shelly",
                 .icon = "shelly",
                 .summary = n.summary,
-
                 .body = n.body,
                 .on_activate = &openShelly,
                 .ctx = &runner,
-            }) catch |e| std.debug.print("[loop] notify: {any}\n", .{e});
+            }) catch |e| log_loop.err("notify: {any}", .{e});
             const t1 = std.Io.Clock.now(.awake, init.io);
             logIfSlow("notify", t0, t1);
             try t.emitNewIcon(attention_icon_name);
@@ -413,23 +418,23 @@ pub fn main(init: std.process.Init) !void {
 
         if (updates.takeConfigChange()) {
             if (icon_name.len > 0) {
-                _ = t.emitNewIcon(icon_name) catch |e| std.debug.print("[loop] notify: {any}\n", .{e});
+                _ = t.emitNewIcon(icon_name) catch |e| log_loop.err("notify: {any}", .{e});
             }
             if (attention_icon_name.len > 0) {
-                _ = t.emitNewIcon(attention_icon_name) catch |e| std.debug.print("[loop] notify: {any}\n", .{e});
+                _ = t.emitNewIcon(attention_icon_name) catch |e| log_loop.err("notify: {any}", .{e});
             }
         }
 
         if (launch_requested.swap(false, .seq_cst)) {
             const t0 = std.Io.Clock.now(.awake, init.io);
             runner.activateOrLaunch(&service) catch |e|
-                std.debug.print("[loop] activate/launch failed: {any}\n", .{e});
+                log_loop.err("activate/launch failed: {any}", .{e});
             const t1 = std.Io.Clock.now(.awake, init.io);
             logIfSlow("activateOrLaunch", t0, t1);
         }
 
         if (quit_requested.swap(false, .seq_cst)) {
-            runner.quitUi(&service) catch |e| std.debug.print("[loop] quit ui: {any}\n", .{e});
+            runner.quitUi(&service) catch |e| log_loop.err("quit ui: {any}", .{e});
             std.process.exit(0);
         }
         const loop_end = std.Io.Clock.now(.awake, init.io);
@@ -574,7 +579,7 @@ fn addItemWithSubmenu(
 
 fn onEvent(ctx: ?*anyopaque, id: i32) void {
     const updates: *Updates = @ptrCast(@alignCast(ctx.?));
-    std.debug.print("id: {}\n", .{id});
+    log_menu.debug("id: {}", .{id});
 
     if (id == quit_index) {
         quit_requested.store(true, .seq_cst);
@@ -582,11 +587,10 @@ fn onEvent(ctx: ?*anyopaque, id: i32) void {
 
     if (id == run_update_index) {
         updates.runner.spawnFixedUpdate() catch |e|
-            std.debug.print("[menu] update spawn failed: {any}\n", .{e});
+            log_menu.err("update spawn failed: {any}", .{e});
     }
 
-    std.debug.print("id: {}\n", .{id});
-    std.debug.print("check_update_index: {}\n", .{check_update_index});
+    log_menu.debug("check_update_index: {}", .{check_update_index});
     if (id == check_update_index) {
         wakeWorker(updates.io);
     }
@@ -633,6 +637,6 @@ fn logIfSlow(name: []const u8, t0: anytype, t1: anytype) void {
     const elapsed_ns = t1.nanoseconds - t0.nanoseconds;
     const elapsed_ms = @divFloor(elapsed_ns, std.time.ns_per_ms);
     if (elapsed_ms > 500) {
-        std.debug.print("[loop] {s} took {d}ms\n", .{ name, elapsed_ms });
+        log_loop.info("{s} took {d}ms", .{ name, elapsed_ms });
     }
 }

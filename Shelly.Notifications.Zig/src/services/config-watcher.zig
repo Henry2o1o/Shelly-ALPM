@@ -2,6 +2,8 @@ const std = @import("std");
 const linux = std.os.linux;
 const ConfigResolver = @import("config.zig").ConfigResolver;
 
+const log = std.log.scoped(.watcher);
+
 pub const ConfigWatcher = struct {
     resolver: *ConfigResolver,
     allocator: std.mem.Allocator,
@@ -94,10 +96,10 @@ pub const ConfigWatcher = struct {
 
             if (self.changedSinceLast()) {
                 self.resolver.reload() catch |e| {
-                    std.log.warn("[watcher] reload failed: {any}", .{e});
+                    log.warn("reload failed: {any}", .{e});
                     continue;
                 };
-                std.log.info("[watcher] config reloaded from disk", .{});
+                log.info("config reloaded from disk", .{});
             }
         }
     }

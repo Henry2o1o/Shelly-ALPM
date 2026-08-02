@@ -6,6 +6,8 @@ const ShellyTabs = shelly_config.ShellyTabs;
 const ViewType = shelly_config.ViewType;
 const xdg_paths = @import("xdg_paths.zig").xdg_paths;
 
+const log = std.log.scoped(.config);
+
 const settings_path = "shelly/settings.json";
 
 const max_settings_size: Io.Limit = .limited(1 << 20);
@@ -213,7 +215,7 @@ fn parseTolerant(allocator: std.mem.Allocator, source: std.json.Value) ShellyCon
         .object => |o| o,
         else => {
             // TODO: Change to warn after https://codeberg.org/ziglang/zig/issues/35189
-            std.log.info(
+            log.info(
                 "shelly config: top-level JSON value is not an object; using defaults",
                 .{},
             );
@@ -227,7 +229,7 @@ fn parseTolerant(allocator: std.mem.Allocator, source: std.json.Value) ShellyCon
                 @field(config, field.name) = value;
             } else {
                 // TODO: Change to warn after https://codeberg.org/ziglang/zig/issues/35189
-                std.log.info(
+                log.info(
                     "shelly config: ignoring invalid value for '{s}', using default",
                     .{field.name},
                 );
