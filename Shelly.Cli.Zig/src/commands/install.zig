@@ -550,7 +550,7 @@ fn installRepositoryPackages(
     invocation: *const parser.Invocation,
     package_names: []const []const u8,
 ) !void {
-    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, null, true, null);
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
@@ -594,7 +594,7 @@ fn installLocalPackage(
     const inspector: Zigalpm.local.Inspector = .{ .allocator = context.allocator, .io = context.io };
 
     if (try inspector.isArchPackage(absolute_path)) {
-        const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, null, true, null);
+        const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
         defer manager.deinit();
         manager.setOperationContext(operation_context);
         defer manager.setOperationContext(null);
@@ -652,11 +652,7 @@ fn runAur(
     if (!isAurVersionInstall(invocation) and
         optionEnabled(invocation, "--build-deps") and invocation.positionals.len > 1)
         return error.MultipleDependencyTargets;
-    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
-        .root = true,
-        .use_chroot = optionEnabled(invocation, "--chroot"),
-        .no_check = !optionEnabled(invocation, "--check"),
-    });
+    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{ .root = true, .use_chroot = optionEnabled(invocation, "--chroot"), .no_check = !optionEnabled(invocation, "--check"), .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);

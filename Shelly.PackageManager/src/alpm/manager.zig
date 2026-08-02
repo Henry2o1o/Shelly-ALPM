@@ -154,6 +154,13 @@ const RestartCheckOptions = struct {
     restart_services: bool = true,
 };
 
+pub const InitOptions = struct {
+    config_path: ?[]const u8 = null,
+    use_root: bool = false,
+    temp_root_path: ?[]const u8 = null,
+    operation_context: ?*operation_api.OperationContext = null,
+};
+
 pub const Manager = struct {
     handle: libalpm.Handle = null,
     is_initialized: bool = false,
@@ -189,13 +196,20 @@ pub const Manager = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         environ: std.process.Environ,
-        configPath: ?[]const u8,
-        use_root: bool,
-        temp_root_path: ?[]const u8,
+        options: InitOptions,
     ) InitError!*Manager {
-        const config_path = configPath orelse "/etc/pacman.conf";
+        const config_path = options.config_path orelse "/etc/pacman.conf";
         const self = allocator.create(Manager) catch return InitError.InitFailed;
         errdefer allocator.destroy(self);
+
+        var init_operation: ?operation_api.Operation = if (options.operation_context) |context|
+            context.begin(.{ .backend = .alpm, .kind = .configure, .subject = "libalpm" })
+        else
+            null;
+
+        var completion: operation_api.CompletionStatus = .failed;
+        defer if (init_operation) |*operation| operation.finish(completion);
+
         const owned_config_path = allocator.dupe(u8, config_path) catch return InitError.InitFailed;
         errdefer allocator.free(owned_config_path);
         self.* = Manager{
@@ -207,10 +221,17 @@ pub const Manager = struct {
             .dispatcher = events.Dispatcher.init(allocator),
             .threaded = .init(allocator, .{ .environ = environ }),
             .config = undefined,
-            .is_root = use_root,
-            .temp_root_path = temp_root_path orelse "",
+            .is_root = options.use_root,
+            .temp_root_path = options.temp_root_path orelse "",
             .download_address_family_policy = defaultDownloadAddressFamilyPolicy(),
+            .operation_context = options.operation_context,
         };
+
+        if (init_operation) |*operation| {
+            self.dispatcher.setOperation(operation);
+        }
+        defer self.dispatcher.setOperation(null);
+
         errdefer self.threaded.deinit();
         errdefer self.dispatcher.deinit();
         self.config = configuration.Configuration.parse(allocator, self.io(), config_path) catch {
@@ -278,18 +299,24 @@ pub const Manager = struct {
 
         var err: rawLibalpm.alpm_errno_t = 0;
 
-        const handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err) orelse {
-            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {
+        self.handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err) orelse {
+            const code: c_int = @intCast(err);
+            const message = std.fmt.allocPrint(self.allocator, "alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))}) catch "Unknown Failure";
+            defer if (message) |owned| self.allocator.free(owned);
+
+            if (init_operation) |*operation| {
+                operation.reportError(error.InitFailed, message, "alpm", code, false);
+            } else {
                 std.log.err("alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))});
-            };
+            }
             return error.InitFailed;
         };
 
-        self.handle = handle;
         self.is_initialized = true;
 
         self.applyConfig(self.config);
         self.setupCallbacks();
+        completion = .success;
         return self;
     }
 

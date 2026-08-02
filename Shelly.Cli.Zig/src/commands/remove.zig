@@ -201,7 +201,7 @@ fn runStandard(
 
     if (partition.alpm.len > 0) {
         const dependency_removal = dependencyRemoval(invocation, true, true);
-        const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, null, true, null);
+        const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
         defer manager.deinit();
         manager.setOperationContext(operation_context);
         defer manager.setOperationContext(null);
@@ -226,7 +226,7 @@ fn runAur(
     invocation: *const parser.Invocation,
 ) !void {
     const dependency_removal = dependencyRemoval(invocation, false, false);
-    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{ .root = true });
+    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{ .root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);

@@ -318,13 +318,10 @@ fn runReal(
 ) !Result {
     switch (backend) {
         .standard => {
-            const manager = try Zigalpm.AlpmManager.init(
-                context.allocator,
-                context.environ,
-                null,
-                true,
-                null,
-            );
+            const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{
+                .use_root = true,
+                .operation_context = operation_context,
+            });
             defer manager.deinit();
             manager.setOperationContext(operation_context);
             defer manager.setOperationContext(null);
