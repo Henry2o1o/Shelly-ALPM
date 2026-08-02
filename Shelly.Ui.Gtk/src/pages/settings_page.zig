@@ -297,7 +297,9 @@ pub const ShellySettingsPage = extern struct {
 
         p.save_guard = true;
         applyConfig(p, cfg);
+        populatePageDropdown(p, cfg);
         p.save_guard = false;
+
         applyScheduleVisibility(p);
         applyTrayVisibility(p);
     }
@@ -332,6 +334,7 @@ pub const ShellySettingsPage = extern struct {
         try svc.set(updated);
         try svc.save();
 
+        populatePageDropdown(p, &updated);
         applyScheduleVisibility(p);
         applyTrayVisibility(p);
 
@@ -366,6 +369,10 @@ pub const ShellySettingsPage = extern struct {
             p.toast.show(.@"error", translations._("Failed to save settings"));
             return;
         };
+
+        p.save_guard = true;
+        populatePageDropdown(p, cfg);
+        p.save_guard = false;
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.applyConfig();
@@ -1099,21 +1106,6 @@ const language_entries = [_]struct {
 };
 
 fn populateDropdowns(p: *ShellySettingsPage.Private) void {
-    const page_strings = gtk.StringList.new(null);
-    inline for (default_page_entries) |entry| {
-        const label = switch (entry.value) {
-            .recommend => translations._("Recommended"),
-            .packages => translations._("Packages"),
-            .aur => translations._("AUR"),
-            .flatpak => translations._("Flatpak"),
-            .app_image => translations._("AppImage"),
-            .shelly_search => translations._("Shelly Search"),
-            .update => translations._("Update"),
-        };
-        gtk.StringList.append(page_strings, label);
-    }
-    gtk.DropDown.setModel(p.default_page_drop, page_strings.as(gio.ListModel));
-
     const nav_strings = gtk.StringList.new(null);
     inline for (nav_mode_entries) |entry| {
         gtk.StringList.append(nav_strings, entry.label);
@@ -1143,6 +1135,37 @@ fn populateDropdowns(p: *ShellySettingsPage.Private) void {
         gtk.StringList.append(lang_strings, label);
     }
     gtk.DropDown.setModel(p.language_drop, lang_strings.as(gio.ListModel));
+}
+
+fn populatePageDropdown(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
+    const page_strings = gtk.StringList.new(null);
+    for (default_page_entries) |entry| {
+        const is_enabled = switch (entry.value) {
+            .recommend => cfg.RecommendedEnabled,
+            .packages => true,
+            .aur => cfg.AurEnabled,
+            .flatpak => cfg.FlatPackEnabled,
+            .app_image => cfg.AppImageEnabled,
+            .shelly_search => cfg.ShellySearchEnabled,
+            .update => true,
+        };
+
+        if (!is_enabled) continue;
+
+        const label = switch (entry.value) {
+            .recommend => translations._("Recommended"),
+            .packages => translations._("Packages"),
+            .aur => translations._("AUR"),
+            .flatpak => translations._("Flatpak"),
+            .app_image => translations._("AppImage"),
+            .shelly_search => translations._("Shelly Search"),
+            .update => translations._("Update"),
+        };
+
+        gtk.StringList.append(page_strings, label);
+    }
+    std.log.warn("page_strings: {any}", .{page_strings});
+    gtk.DropDown.setModel(p.default_page_drop, page_strings.as(gio.ListModel));
 }
 
 fn obtainConfigService() !*ConfigResolver {
