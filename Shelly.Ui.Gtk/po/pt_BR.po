@@ -1728,7 +1728,7 @@ msgid "Build Date"
 msgstr "Data de construção"
 
 msgid "Install Reason"
-msgstr "Razão da instalação"
+msgstr "Motivo da instalação"
 
 msgid "Optional Depends"
 msgstr "Dependências opcionais"
