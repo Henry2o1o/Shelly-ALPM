@@ -1489,7 +1489,7 @@ msgid "Grid View"
 msgstr "Exibição em grade"
 
 msgid "List View"
-msgstr "Visualização em lista"
+msgstr "Exibição em lista"
 
 msgid "Had an issue loading your packages. Check if you have a db lock."
 msgstr "Não foi possível carregar seus pacotes. Verifique se há um bloqueio no banco de dados (db lock)."
