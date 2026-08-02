@@ -22,7 +22,6 @@ pub fn main(init: std.process.Init) void {
 
     const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();
-    const gapp = gobject.ext.as(gio.Application, app);
 
     _ = gio.Application.signals.startup.connect(
         app,
