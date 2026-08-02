@@ -337,7 +337,6 @@ pub const ShellySettingsPage = extern struct {
         const lang_value = language_entries[gtk.DropDown.getSelected(p.language_drop)].value;
         _ = translations.initWithLocale(lang_value);
 
-        populatePageDropdown(p, &updated);
         applyScheduleVisibility(p);
         applyTrayVisibility(p);
 
