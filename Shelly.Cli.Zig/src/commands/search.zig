@@ -275,9 +275,7 @@ fn runStandard(
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
-        null,
-        false,
-        null,
+        .{ .use_root = false },
     );
     defer manager.deinit();
     if (show_hidden and !manager.show_hidden_packages) _ = manager.toggle_hidden_packages();

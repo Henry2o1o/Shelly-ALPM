@@ -339,6 +339,8 @@ pub fn build(b: *std.Build) void {
             "get_required_packages rejects an unknown sync database",
             "get_required_packages resolves a named sync database",
             "Manager.init rejects a temp root that aliases DBPath without deleting the local database",
+            "Manager.init emits a successful configure operation when a context is provided",
+            "remove_packages emits the database lock failure through its operation context",
             "get_single_installed_package returns a package when it exists",
             "get_installed_packages lists packages from a temporary database",
             "get_single_installed_package matches an entry from get_installed_packages",
@@ -359,6 +361,9 @@ pub fn build(b: *std.Build) void {
             "database batch barrier synchronizes its directory",
             "process-wide address-family default is configurable",
             "onDownloadEvent does not duplicate progress when a common operation is attached",
+            "OperationScope does not duplicate a detailed ALPM error",
+            "OperationScope emits one generic ALPM error when no detail was reported",
+            "nested OperationScopes do not duplicate a detailed ALPM error",
         },
     });
     const run_alpm_query_tests = b.addRunArtifact(alpm_query_tests);

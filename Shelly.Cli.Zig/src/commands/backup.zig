@@ -205,13 +205,7 @@ fn collectState(_: ?*anyopaque, context: *runtime.RuntimeContext) !State {
     var flatpaks: std.ArrayList(Flatpak) = .empty;
 
     {
-        const manager = try Zigalpm.AlpmManager.init(
-            context.allocator,
-            context.environ,
-            null,
-            false,
-            null,
-        );
+        const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = false });
         defer manager.deinit();
         if (!manager.show_hidden_packages) _ = manager.toggle_hidden_packages();
 
