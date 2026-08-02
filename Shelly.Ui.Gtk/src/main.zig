@@ -40,7 +40,13 @@ pub fn main(init: std.process.Init) void {
     );
 
     const status = gio.Application.run(gapp, 0, null);
-    tryStopTray(runtime.io, std.heap.c_allocator);
+
+    const is_remote = gio.Application.getIsRemote(gapp);
+    std.debug.print("[shelly-ui] run returned, is_remote={d}, status={d}\n", .{ is_remote, status });
+    if (is_remote == 0) {
+        std.debug.print("[shelly-ui] PRIMARY exiting, calling tryStopTray\n", .{});
+        tryStopTray(runtime.io, std.heap.c_allocator);
+    }
     runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
 }
@@ -95,9 +101,26 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
         std.log.warn("settings: failed to load config service: {t}", .{err});
     };
 
+    if (runtime.config) |svc| {
+        const cfg = svc.get() catch |err| {
+            std.log.warn("settings: failed to get config: {t}", .{err});
+            return;
+        };
+
+        if (cfg.Culture.len > 0) {
+            var cul_buf: [256:0]u8 = undefined;
+            @memcpy(cul_buf[0..cfg.Culture.len], cfg.Culture);
+            cul_buf[cfg.Culture.len] = 0;
+            const cul = cul_buf[0..cfg.Culture.len :0];
+            std.debug.print("culture = {s}\n", .{cul});
+            const ok = translations.initWithLocale("pt_BR");
+            std.debug.print("[i18n] init ok={}, culture=pt_BR\n", .{ok});
+        }
+    }
+
     tryStartTray(runtime.io, std.heap.c_allocator);
 
-     setupGnomeThemePreference();
+    setupGnomeThemePreference();
 
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
@@ -140,7 +163,6 @@ fn setupGnomeThemePreference() void {
         value.setBoolean(1);
         base_object.setProperty("gtk-application-prefer-dark-theme", &value);
     }
-
 
     _ = glib.setenv(
         "GTK_APPLICATION_PREFER_DARK_THEME",

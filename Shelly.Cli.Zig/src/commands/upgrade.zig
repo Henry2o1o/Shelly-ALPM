@@ -367,9 +367,7 @@ fn prepareStandardUpgradePreview(
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
-        null,
-        false,
-        database_path,
+        .{ .use_root = false, .temp_root_path = database_path },
     );
     defer manager.deinit();
     try manager.sync_for_update_check(false);
@@ -596,13 +594,7 @@ fn runStandard(
             _ = news.showUnread(context) catch {};
         }
     }
-    const manager = try Zigalpm.AlpmManager.init(
-        context.allocator,
-        context.environ,
-        null,
-        true,
-        null,
-    );
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);

@@ -1,13 +1,15 @@
 const std = @import("std");
-const xdg_paths = @import("helpers/xdg_paths.zig");
+const xdg_paths = @import("services/xdg_paths.zig");
 
 // src/shellpers/runtime.zig
 pub var io: std.Io = undefined;
 pub var environ_map: *std.process.Environ.Map = undefined;
 pub var data_home: []const u8 = "";
+pub var allocator: std.mem.Allocator = undefined;
 
 pub fn setup(init: std.process.Init) void {
     io = init.io;
     environ_map = init.environ_map;
+    allocator = init.arena.allocator();
     data_home = xdg_paths.xdgDataHome(init.arena.allocator(), init.environ_map) catch "";
 }
