@@ -219,7 +219,7 @@ pub const PkgbuildParser = struct {
             else
                 null;
 
-        const depends = try self.resolve_array_field(content, &vars, "depends");
+        const depends = try self.resolve_package_depends(content, &vars);
         const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
         const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
 
@@ -254,6 +254,19 @@ pub const PkgbuildParser = struct {
         };
     }
 
+    fn selected_package_body(self: PkgbuildParser, content: []const u8) !?[]const u8 {
+        const package_name = self.selected_package_name orelse return null;
+        const function_name = try std.fmt.allocPrint(
+            self.allocator,
+            "package_{s}",
+            .{package_name},
+        );
+        defer self.allocator.free(function_name);
+
+        return (try extract_function_body(content, function_name)) orelse
+            try extract_function_body(content, "package");
+    }
+
     fn resolve_install_assignment(
         self: PkgbuildParser,
         content: []const u8,
@@ -268,19 +281,7 @@ pub const PkgbuildParser = struct {
             null;
         errdefer if (assignment) |current| self.allocator.free(current.value);
 
-        const package_name = self.selected_package_name orelse return assignment;
-        const function_name = try std.fmt.allocPrint(
-            self.allocator,
-            "package_{s}",
-            .{package_name},
-        );
-        defer self.allocator.free(function_name);
-
-        var package_body = try extract_function_body(content, function_name);
-        if (package_body == null)
-            package_body = try extract_function_body(content, "package");
-
-        if (package_body) |body| {
+        if (try self.selected_package_body(content)) |body| {
             if (try parse_variable(body, "install")) |value| {
                 const owned_value = try self.allocator.dupe(u8, value);
                 if (assignment) |current| self.allocator.free(current.value);
@@ -326,6 +327,35 @@ pub const PkgbuildParser = struct {
             self.allocator.free(raw);
         }
         return self.resolve_variable_references(content, vars, raw);
+    }
+
+    fn resolve_package_depends(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8)) ![][]const u8 {
+        const global = try self.resolve_array_field(content, vars, "depends");
+        errdefer {
+            for (global) |item| self.allocator.free(item);
+            self.allocator.free(global);
+        }
+
+        const package_body = try self.selected_package_body(content) orelse return global;
+        const raw_scoped = try self.parse_array(package_body, "depends");
+        defer {
+            for (raw_scoped) |item| self.allocator.free(item);
+            self.allocator.free(raw_scoped);
+        }
+        if (raw_scoped.len == 0) return global;
+
+        const scoped = try self.resolve_variable_references(content, vars, raw_scoped);
+        errdefer {
+            for (scoped) |item| self.allocator.free(item);
+            self.allocator.free(scoped);
+        }
+
+        const combined = try self.allocator.alloc([]const u8, global.len + scoped.len);
+        @memcpy(combined[0..global.len], global);
+        @memcpy(combined[global.len..], scoped);
+        self.allocator.free(global);
+        self.allocator.free(scoped);
+        return combined;
     }
 
     fn tokenize(self: PkgbuildParser, expr: []const u8) ![][]const u8 {
@@ -4360,6 +4390,64 @@ test "parser_content: post_install resolved from install file" {
 
     try std.testing.expect(info.post_install != null);
     try std.testing.expectEqualStrings("echo \"from install file\"", info.post_install.?);
+}
+
+test "parser_content: flutter-3382-bin resolves dependencies declared in package" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "flutter-3382-bin",
+    };
+    const content =
+        \\_pkgname="flutter"
+        \\pkgname="$_pkgname-3382-bin"
+        \\pkgver=3.38.2
+        \\
+        \\package() {
+        \\  depends+=(
+        \\    clang
+        \\    cmake
+        \\    git
+        \\    lld
+        \\    llvm
+        \\    ninja
+        \\    unionfs-fuse
+        \\  )
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("flutter-3382-bin", info.pkg_name.?);
+    try std.testing.expectEqual(@as(usize, 7), info.depends.?.len);
+    try std.testing.expectEqualStrings("unionfs-fuse", info.depends.?[6]);
+    try std.testing.expectEqualStrings("unionfs-fuse", info.parsed_depends.?[6].name);
+}
+
+test "parser_content: selected split package isolates package-scoped dependencies" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-two",
+    };
+    const content =
+        \\pkgname=('demo-one' 'demo-two')
+        \\depends=('glibc')
+        \\
+        \\package_demo-one() {
+        \\  depends+=('gtk4')
+        \\}
+        \\
+        \\package_demo-two() {
+        \\  depends+=('readline')
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), info.depends.?.len);
+    try std.testing.expectEqualStrings("glibc", info.depends.?[0]);
+    try std.testing.expectEqualStrings("readline", info.depends.?[1]);
 }
 
 test "parser_content: selected split package resolves package-scoped install file" {
