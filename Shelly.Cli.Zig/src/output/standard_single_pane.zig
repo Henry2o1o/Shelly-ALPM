@@ -478,6 +478,12 @@ pub const Renderer = struct {
                 return .accepted;
             }
             if (question.kind == .review_changes) {
+                if (hasSecurityFindings(question)) {
+                    return self.askQuestion(question) catch {
+                        self.write_failed.store(true, .release);
+                        return defaultResponse(question);
+                    };
+                }
                 self.clearBars() catch self.write_failed.store(true, .release);
                 self.renderReview(question, false) catch self.write_failed.store(true, .release);
                 self.drawBars() catch self.write_failed.store(true, .release);
@@ -895,6 +901,11 @@ fn safeReviewDefault(question: Zigalpm.OperationQuestion) Zigalpm.OperationQuest
     };
 }
 
+fn hasSecurityFindings(question: Zigalpm.OperationQuestion) bool {
+    const review = question.review orelse return false;
+    return review.findings.len != 0;
+}
+
 fn defaultResponse(question: Zigalpm.OperationQuestion) Zigalpm.OperationQuestionResponse {
     return switch (question.default_response) {
         .default, .deferred => automaticResponse(question.kind),
@@ -1131,14 +1142,14 @@ test "single-pane renders complete transaction plans and build-time unknowns" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "1024 B") != null);
 }
 
-test "single-pane no-confirm renders risky PKGBUILD review and declines it" {
+test "single-pane risky PKGBUILD review bypasses no-confirm and requires approval" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
     var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stderr.deinit();
-    var stdin = std.Io.Reader.fixed("\n");
+    var stdin = std.Io.Reader.fixed("yes\n");
     var context: runtime.RuntimeContext = .{
         .allocator = arena.allocator(),
         .io = std.testing.io,
@@ -1180,15 +1191,16 @@ test "single-pane no-confirm renders risky PKGBUILD review and declines it" {
         .default_response = .declined,
     });
     defer answer.deinit(arena.allocator());
-    operation.finish(.cancelled);
+    operation.finish(.success);
 
-    try std.testing.expect(answer.response == .declined);
+    try std.testing.expect(answer.response == .accepted);
     const rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "PKGBUILD security warnings") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "curl used in post_install") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Source file: demo.install") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=1") == null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "(y/N)") != null);
 }
 
 test "interactive PKGBUILD review renders unified diff and honors risky default" {

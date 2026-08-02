@@ -59,12 +59,20 @@ pub const QuestionResponder = struct {
         const self: *QuestionResponder = @ptrCast(@alignCast(data.?));
         if (self.no_confirm) {
             if (question.kind == .review_changes) {
+                if (hasSecurityFindings(question)) return self.handleInteractive(question);
                 self.writeAutomaticReview(question) catch return .declined;
                 return safeReviewDefault(question);
             }
             return automaticResponse(question.kind);
         }
 
+        return self.handleInteractive(question);
+    }
+
+    fn handleInteractive(
+        self: *QuestionResponder,
+        question: Zigalpm.OperationQuestion,
+    ) Zigalpm.OperationQuestionResponse {
         switch (question.kind) {
             .confirmation => output.writeYesNoQuestionFrame(self.context, question) catch return .declined,
             .confirm_transaction => output.writeTransactionQuestionFrame(self.context, question) catch return .declined,
@@ -285,6 +293,11 @@ fn safeReviewDefault(question: Zigalpm.OperationQuestion) Zigalpm.OperationQuest
     };
 }
 
+fn hasSecurityFindings(question: Zigalpm.OperationQuestion) bool {
+    const review = question.review orelse return false;
+    return review.findings.len != 0;
+}
+
 fn automaticResponse(kind: Zigalpm.OperationQuestionKind) Zigalpm.OperationQuestionResponse {
     return switch (kind) {
         .confirmation, .confirm_transaction => .accepted,
@@ -368,7 +381,7 @@ test "UI operation reporter preserves percentages for every progress frame shape
     try std.testing.expect(!reporter.failed());
 }
 
-test "UI PKGBUILD review emits C# compatible frame and waits for matching answer" {
+test "UI risky PKGBUILD review bypasses no-confirm and waits for matching answer" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const response_json =
@@ -398,7 +411,7 @@ test "UI PKGBUILD review emits C# compatible frame and waits for matching answer
     var responder: QuestionResponder = .{
         .context = &context,
         .operation_context = &operation_context,
-        .no_confirm = false,
+        .no_confirm = true,
     };
     responder.attach();
     defer responder.detach();
