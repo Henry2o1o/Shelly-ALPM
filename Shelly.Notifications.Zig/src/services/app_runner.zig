@@ -1,7 +1,9 @@
 const std = @import("std");
-const conch = @import("zsn");
 
+const conch = @import("zsn");
 const Service = conch.Service;
+
+const log = std.log.scoped(.runner);
 
 pub const AppRunner = struct {
     allocator: std.mem.Allocator,
@@ -73,7 +75,14 @@ pub const AppRunner = struct {
     pub fn spawnFixedUpdate(self: *AppRunner) !void {
         const bash_cmd = "shelly; echo; read -rp 'Press Enter to close...'";
 
-        const terminal = self.findTerminalNoAlloc() orelse return error.NoTerminal;
+        const terminal = self.findTerminalNoAlloc() orelse {
+            log.warn(
+                "no terminal emulator found (checked $TERMINAL and {d} candidates)",
+                .{terminal_candidates.len},
+            );
+            return error.NoTerminal;
+        };
+        log.info("launching update shell in '{s}'", .{terminal});
 
         const use_dashdash = std.mem.eql(u8, terminal, "gnome-terminal") or
             std.mem.eql(u8, terminal, "kgx");
@@ -83,12 +92,15 @@ pub const AppRunner = struct {
         else
             &.{ "setsid", terminal, "-e", "bash", "-c", bash_cmd };
 
-        var child = try std.process.spawn(self.io, .{
+        var child = std.process.spawn(self.io, .{
             .argv = argv,
             .environ_map = self.environ_map,
             .stdout = .ignore,
             .stderr = .ignore,
-        });
+        }) catch |e| {
+            log.err("failed to spawn terminal '{s}': {any}", .{ terminal, e });
+            return e;
+        };
         _ = &child;
     }
 
@@ -97,47 +109,66 @@ pub const AppRunner = struct {
             "com.shellyorg.shelly",
             "/com/shellyorg/shelly",
             self.activation_token,
-        ) catch {
-            std.debug.print("[runner] shelly-ui not running, spawning\n", .{});
+        ) catch |e| {
+            log.warn("activate failed ({any}); spawning shelly-ui directly", .{e});
             try self.spawnWithToken();
             return;
         };
-        std.debug.print("[runner] activated existing shelly-ui window\n", .{});
+        log.info("activated existing shelly-ui window", .{});
     }
 
     fn spawnWithToken(self: *AppRunner) !void {
-        const argv: []const []const u8 = &.{ "setsid", self.shellyUiBin() };
+        const bin = self.shellyUiBin();
+        if (!self.isCommandAvailable(bin)) {
+            log.err("'{s}' not found on PATH; cannot launch UI", .{bin});
+            return error.ShellyUiNotFound;
+        }
+
+        const argv: []const []const u8 = &.{ "setsid", bin };
 
         if (self.activation_token) |token| {
             var env = try self.environ_map.clone(self.allocator);
             defer env.deinit();
             try env.put("XDG_ACTIVATION_TOKEN", token);
-            var child = try std.process.spawn(self.io, .{
+            var child = std.process.spawn(self.io, .{
                 .argv = argv,
                 .environ_map = &env,
                 .stdout = .ignore,
                 .stderr = .ignore,
-            });
+            }) catch |e| {
+                log.err("failed to spawn '{s}': {any}", .{ bin, e });
+                return e;
+            };
             _ = &child;
         } else {
-            var child = try std.process.spawn(self.io, .{
+            var child = std.process.spawn(self.io, .{
                 .argv = argv,
                 .environ_map = self.environ_map,
                 .stdout = .ignore,
                 .stderr = .ignore,
-            });
+            }) catch |e| {
+                log.err("failed to spawn '{s}': {any}", .{ bin, e });
+                return e;
+            };
             _ = &child;
         }
+        log.info("spawned '{s}' (token: {s})", .{
+            bin,
+            if (self.activation_token != null) "yes" else "no",
+        });
     }
 
     pub fn quitUi(self: *AppRunner, service: *Service) !void {
-        const pid = service.getProcessId("com.shellyorg.shelly") catch {
-            std.debug.print("[runner] shelly-ui not running, nothing to quit\n", .{});
+        const pid = service.getProcessId("com.shellyorg.shelly") catch |e| {
+            log.warn("could not resolve shelly-ui pid: {any}", .{e});
             return;
         };
         _ = self;
-        try std.posix.kill(@intCast(pid), std.posix.SIG.TERM);
-        std.debug.print("[runner] sent SIGTERM to shelly-ui (pid {d})\n", .{pid});
+        std.posix.kill(@intCast(pid), std.posix.SIG.TERM) catch |e| {
+            log.err("failed to signal pid {d}: {any}", .{ pid, e });
+            return e;
+        };
+        log.info("sent SIGTERM to shelly-ui (pid {d})", .{pid});
     }
 
     fn shellyUiBin(self: *AppRunner) []const u8 {
