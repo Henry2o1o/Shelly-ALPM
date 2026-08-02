@@ -264,7 +264,7 @@ pub const AurPage = extern struct {
             fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
                 const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
                 const label = gtk.Label.new("");
-                gtk.Widget.setHalign(label.as(gtk.Widget), .end);
+                gtk.Widget.setHalign(label.as(gtk.Widget), .start);
                 gtk.ColumnViewCell.setChild(cell, label.as(gtk.Widget));
             }
             fn bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {

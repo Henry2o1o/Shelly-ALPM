@@ -25,6 +25,7 @@ const assert = std.debug.assert;
 const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const HostName = std.Io.net.HostName;
+const resolver = @import("resolver.zig");
 const IpAddress = std.Io.net.IpAddress;
 const Socket = std.Io.net.Socket;
 const Stream = std.Io.net.Stream;
@@ -47,8 +48,8 @@ allocator: Allocator,
 /// Used for opening TCP connections.
 io: Io,
 
-/// Bounds the post-resolution address-family connection race. Callers that
-/// also need to bound DNS and TLS should apply a request-setup deadline.
+/// Bounds DNS resolution and the address-family connection race. TLS and
+/// response transfer deadlines remain the caller's responsibility.
 connect_timeout: Io.Timeout = .none,
 
 address_family_policy: AddressFamilyPolicy = .prefer_ipv4,
@@ -2004,14 +2005,6 @@ const HappyEyeballsState = struct {
 
         if (!state.started) {
             state.started = true;
-            if (state.overall_timeout != .none) {
-                try state.scheduleTimer(
-                    &state.deadline_timer,
-                    &state.deadline_generation,
-                    .deadline,
-                    state.overall_timeout.toDeadline(state.io),
-                );
-            }
         }
 
         state.immediate_next = false;
@@ -2126,6 +2119,18 @@ fn connectHostWithBackends(
     );
     defer state.deinit();
 
+    // The connection timeout covers DNS as well as socket establishment.
+    // Starting it only after the first address arrives leaves a failed or
+    // stalled resolver unbounded and can make callers look permanently hung.
+    if (state.overall_timeout != .none) {
+        try state.scheduleTimer(
+            &state.deadline_timer,
+            &state.deadline_generation,
+            .deadline,
+            state.overall_timeout.toDeadline(state.io),
+        );
+    }
+
     _ = try state.startLookup(host, port, preferredFamily(policy));
     if (usesBothFamilies(policy)) {
         try state.scheduleTimer(
@@ -2236,9 +2241,9 @@ fn resolveFamily(
     var canonical_name_buffer: [HostName.max_len]u8 = undefined;
     var lookup_buffer: [max_resolved_addresses_per_family]HostName.LookupResult = undefined;
     var lookup_queue: Io.Queue(HostName.LookupResult) = .init(&lookup_buffer);
-    // HostName.lookup produces into lookup_queue, so its consumer must be able
+    // resolver.lookup produces into lookup_queue, so its consumer must be able
     // to run concurrently even when the ordinary async worker limit is full.
-    var lookup_future = io.concurrent(HostName.lookup, .{ host, io, &lookup_queue, .{
+    var lookup_future = io.concurrent(resolver.lookup, .{ host, io, &lookup_queue, .{
         .port = port,
         .family = family,
         .canonical_name_buffer = &canonical_name_buffer,
@@ -3033,6 +3038,32 @@ fn pendingTestConnect(
     return error.Timeout;
 }
 
+test "Happy Eyeballs connection deadline includes DNS resolution" {
+    var threaded: Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const host = try HostName.init("stalled-resolution.test");
+    const started = Io.Timestamp.now(io, .awake);
+    try testing.expectError(error.Timeout, connectHostWithBackends(
+        host,
+        io,
+        443,
+        .ipv4_only,
+        .{
+            .mode = .stream,
+            .timeout = .{ .duration = .{
+                .raw = Io.Duration.fromMilliseconds(50),
+                .clock = .awake,
+            } },
+        },
+        .{},
+        .{ .resolveFn = pendingTestResolution },
+    ));
+    const elapsed = started.durationTo(Io.Timestamp.now(io, .awake));
+    try testing.expect(elapsed.nanoseconds < Io.Duration.fromSeconds(1).nanoseconds);
+}
+
 test "Happy Eyeballs keeps at most six connection attempts active" {
     var threaded: Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
@@ -3158,7 +3189,7 @@ test "Happy Eyeballs starts alternate DNS immediately when the preferred family 
     try testing.expect(state.lookup_ip4_future != null);
 }
 
-test "Happy Eyeballs reaches an IPv4 localhost server through the Zig resolver" {
+test "Happy Eyeballs reaches an IPv4 localhost server through the configured resolver" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
 
     var threaded: Io.Threaded = .init(testing.allocator, .{});

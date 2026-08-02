@@ -3,24 +3,13 @@ const Zigalpm = @import("Zigalpm");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output_config = @import("config.zig");
+const colors = @import("colors.zig");
+const Color = colors.Color;
+const fmt = @import("format.zig");
 const review_output = @import("review.zig");
 const runtime = @import("../runtime/context.zig");
 
-const Color = enum {
-    white,
-    green,
-    yellow,
-    red,
-    cyan,
-    dark_magenta,
-    gray,
-};
-
-const SizeDisplay = enum {
-    bytes,
-    megabytes,
-    gigabytes,
-};
+const SizeDisplay = fmt.SizeDisplay;
 
 const ProgressStyle = enum {
     blocks,
@@ -55,6 +44,8 @@ pub const CommandOperation = struct {
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
     ) anyerror!void,
+    success_message: ?[]const u8 = null,
+    failure_message: ?[]const u8 = null,
 };
 
 /// Runs a backend operation through the common non-UI lifecycle. Package
@@ -82,17 +73,17 @@ pub fn output(
         }
         if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
             try renderer.reportError(message);
-            try renderer.finish(false);
+            try renderer.finishWithMessage(false, command_operation.failure_message);
             return false;
         }
         const message = try std.fmt.allocPrint(context.allocator, "{t}", .{err});
         defer context.allocator.free(message);
         try renderer.reportError(message);
-        try renderer.finish(false);
+        try renderer.finishWithMessage(false, command_operation.failure_message);
         return false;
     };
 
-    try renderer.finish(true);
+    try renderer.finishWithMessage(true, command_operation.success_message);
     return !renderer.failed();
 }
 
@@ -165,14 +156,28 @@ pub const Renderer = struct {
     }
 
     pub fn finish(self: *Renderer, success: bool) !void {
+        return self.finishWithMessage(success, null);
+    }
+
+    pub fn finishWithMessage(
+        self: *Renderer,
+        success: bool,
+        message: ?[]const u8,
+    ) !void {
         self.mutex.lockUncancelable(self.context.io);
         defer self.mutex.unlock(self.context.io);
         try self.clearBars();
         self.bars.clearRetainingCapacity();
         if (success) {
-            try self.writeColoredLine(.green, ":: Transaction complete.", .{});
+            if (message) |value|
+                try self.writeColoredLine(.green, ":: {s}", .{value})
+            else
+                try self.writeColoredLine(.green, ":: Transaction complete.", .{});
         } else {
-            try self.writeColoredLine(.red, ":: Transaction failed.", .{});
+            if (message) |value|
+                try self.writeColoredLine(.red, ":: {s}", .{value})
+            else
+                try self.writeColoredLine(.red, ":: Transaction failed.", .{});
         }
         try self.flush();
     }
@@ -222,9 +227,9 @@ pub const Renderer = struct {
         if (std.mem.eql(u8, code, "alpm.scriptlet")) {
             const line = std.mem.trimEnd(u8, status.message, " \t\r\n");
             if (line.len == 0) {
-                try self.writeColoredLine(.dark_magenta, "Running scriptlet...", .{});
+                try self.writeColoredLine(.magenta, "Running scriptlet...", .{});
             } else {
-                try self.writeColoredLine(.dark_magenta, "Scriptlet: {s}", .{line});
+                try self.writeColoredLine(.magenta, "Scriptlet: {s}", .{line});
             }
         } else if (std.mem.eql(u8, code, "alpm.pacnew")) {
             try self.writeColoredLine(.yellow, ":: pacnew stored @ {s}{s}", .{
@@ -268,9 +273,9 @@ pub const Renderer = struct {
             if (std.mem.eql(u8, stage, "hook")) {
                 const line = update.message orelse "";
                 if (line.len == 0) {
-                    try self.writeColoredLine(.dark_magenta, "Running hook...", .{});
+                    try self.writeColoredLine(.magenta, "Running hook...", .{});
                 } else {
-                    try self.writeColoredLine(.dark_magenta, "Hook: {s}", .{line});
+                    try self.writeColoredLine(.magenta, "Hook: {s}", .{line});
                 }
                 return;
             }
@@ -290,7 +295,7 @@ pub const Renderer = struct {
         }
 
         const subject = update.message orelse progress.envelope.subject orelse "unknown";
-        const name = std.fs.path.basename(subject);
+        const name = try self.progressDisplayName(progress.envelope.backend, subject);
         const percentage_count: u64 = if (update.percentage) |percentage|
             @intFromFloat(std.math.clamp(percentage, 0, 100))
         else
@@ -359,6 +364,15 @@ pub const Renderer = struct {
             .total = bar.total,
             .percentage = bar.percentage,
         };
+    }
+
+    fn progressDisplayName(
+        self: *Renderer,
+        backend: Zigalpm.OperationBackend,
+        subject: []const u8,
+    ) ![]const u8 {
+        if (backend != .flatpak) return std.fs.path.basename(subject);
+        return formatFlatpakRef(self.owned_data.allocator(), subject);
     }
 
     fn appendFinalized(self: *Renderer, operation_id: u64, name: []const u8, action: []const u8) !void {
@@ -440,9 +454,9 @@ pub const Renderer = struct {
 
     fn writeColoredLine(self: *Renderer, color: Color, comptime format: []const u8, args: anytype) !void {
         if (self.animate) try self.clearBars();
-        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll(colorCode(color));
+        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll(colors.colorCode(color));
         try self.context.stdout.print(format, args);
-        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll("\x1b[0m");
+        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll(colors.reset);
         try self.context.stdout.writeByte('\n');
         if (self.animate) try self.drawBars();
     }
@@ -631,7 +645,8 @@ pub const Renderer = struct {
         if (question.options.len == 0 or self.context.stdin == null) return &.{};
         try self.context.stdout.print("{s}\n", .{question.prompt});
         for (question.options, 0..) |option, index| {
-            try self.context.stdout.print("  {d}) {s}\n", .{ index + 1, option.label });
+            const installed = if (option.is_installed) "Installed" else "Not Installed";
+            try self.context.stdout.print("  {d}) {s} : {s} : {s}\n", .{ index + 1, option.label, option.description, installed });
         }
         try self.context.stdout.writeAll("Select numbers separated by commas (none): ");
         try self.context.stdout.flush();
@@ -653,7 +668,7 @@ fn loadSettings(context: *runtime.RuntimeContext) !Settings {
     const manager = config_manager.Manager.init(context);
     const config = manager.read() catch try config_model.Config.defaults(context.allocator);
     return .{
-        .size_display = parseSizeDisplay(stringValue(&config, "FileSizeDisplay") orelse "Megabytes"),
+        .size_display = fmt.parseSizeDisplay(stringValue(&config, "FileSizeDisplay") orelse "Megabytes"),
         .progress_style = parseProgressStyle(stringValue(&config, "ProgressBarStyle") orelse "Blocks"),
         .bar_width = integerValue(&config, "ProgressBarWidth") orelse 20,
     };
@@ -670,12 +685,6 @@ fn integerValue(config: *const config_model.Config, key: []const u8) ?usize {
         .integer => |integer| if (integer > 0) @intCast(integer) else null,
         else => null,
     };
-}
-
-fn parseSizeDisplay(value: []const u8) SizeDisplay {
-    if (std.ascii.eqlIgnoreCase(value, "Bytes")) return .bytes;
-    if (std.ascii.eqlIgnoreCase(value, "Gigabytes")) return .gigabytes;
-    return .megabytes;
 }
 
 fn parseProgressStyle(value: []const u8) ProgressStyle {
@@ -774,6 +783,25 @@ fn progressAction(progress: anytype) []const u8 {
     return operationAction(progress.envelope.kind);
 }
 
+fn formatFlatpakRef(
+    allocator: std.mem.Allocator,
+    reference: []const u8,
+) ![]const u8 {
+    var parts = std.mem.splitScalar(u8, reference, '/');
+    const kind = parts.next() orelse return reference;
+    const id = parts.next() orelse return reference;
+    const architecture = parts.next() orelse return reference;
+    const branch = parts.next() orelse return reference;
+    if (kind.len == 0 or id.len == 0 or architecture.len == 0 or
+        branch.len == 0 or parts.next() != null)
+        return reference;
+    return std.fmt.allocPrint(
+        allocator,
+        "{s} ({s}, {s}, {s})",
+        .{ id, branch, architecture, kind },
+    );
+}
+
 fn operationAction(kind: Zigalpm.OperationKind) []const u8 {
     return switch (kind) {
         .install => "Install",
@@ -792,6 +820,23 @@ fn operationAction(kind: Zigalpm.OperationKind) []const u8 {
 
 fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
     return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
+}
+
+test "Flatpak progress references retain application identity and context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    try std.testing.expectEqualStrings(
+        "org.freedesktop.Platform (25.08, x86_64, runtime)",
+        try formatFlatpakRef(
+            arena.allocator(),
+            "runtime/org.freedesktop.Platform/x86_64/25.08",
+        ),
+    );
+    try std.testing.expectEqualStrings(
+        "org.example.App",
+        try formatFlatpakRef(arena.allocator(), "org.example.App"),
+    );
 }
 
 fn terminalWidth(context: *const runtime.RuntimeContext) usize {
@@ -833,18 +878,6 @@ fn renderBar(
             }
         },
     }
-}
-
-fn colorCode(color: Color) []const u8 {
-    return switch (color) {
-        .white => "\x1b[37m",
-        .green => "\x1b[32m",
-        .yellow => "\x1b[33m",
-        .red => "\x1b[31m",
-        .cyan => "\x1b[36m",
-        .dark_magenta => "\x1b[35m",
-        .gray => "\x1b[90m",
-    };
 }
 
 fn automaticResponse(kind: Zigalpm.OperationQuestionKind) Zigalpm.OperationQuestionResponse {

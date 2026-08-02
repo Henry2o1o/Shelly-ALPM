@@ -116,6 +116,7 @@ pub const FlatpakInstallView = extern struct {
         download_size: i64 = 0,
         installed_size: i64 = 0,
         permissions: []const []const u8 = &.{},
+        permissions_alloc: ?[][]const u8 = null,
         app: *AppstreamAppObject,
         failed: bool = false,
     };
@@ -343,7 +344,7 @@ pub const FlatpakInstallView = extern struct {
             if (remote.Scope == .user) "user" else "system",
         });
 
-        const argv = ShellyCommands.install_flatpak(std.heap.c_allocator, app.getId(), remote.Scope) catch return;
+        const argv = ShellyCommands.install_flatpak(std.heap.c_allocator, app.getId(), remote.Scope, remote.Name) catch return;
         defer std.mem.Allocator.free(std.heap.c_allocator, argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -398,13 +399,14 @@ pub const FlatpakInstallView = extern struct {
         if (p.disposed) return;
         const app = p.selected_app orelse return;
 
-        const scope = resolve_addon_scope(addon, app.getRemotes());
-        std.log.info("Flatpak addon install: addon={s} scope={s}", .{
+        const addon_remote = resolveAddonRemote(addon, app.getRemotes());
+        std.log.info("Flatpak addon install: addon={s} remote={s} scope={s}", .{
             addon.Id,
-            if (scope == .user) "user" else "system",
+            if (addon_remote.name.len > 0) addon_remote.name else "(default)",
+            if (addon_remote.scope == .user) "user" else "system",
         });
 
-        const argv = ShellyCommands.install_flatpak_ex(std.heap.c_allocator, addon.Id, scope, true) catch return;
+        const argv = ShellyCommands.install_flatpak_ex(std.heap.c_allocator, addon.Id, addon_remote.scope, addon_remote.name, true) catch return;
         defer std.mem.Allocator.free(std.heap.c_allocator, argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -624,7 +626,23 @@ pub const FlatpakInstallView = extern struct {
         }
         load.download_size = parsed.value.hits[0].download_size;
         load.installed_size = parsed.value.hits[0].installed_size;
-        load.permissions = parsed.value.hits[0].permissions;
+
+        const perms = parsed.value.hits[0].permissions;
+        if (perms.len > 0) {
+            const owned_perms_slices = std.heap.c_allocator.alloc([]const u8, perms.len) catch {
+                load.failed = true;
+                _ = glib.idleAdd(&remote_info_complete, load);
+                return;
+            };
+            for (perms, 0..) |perm, i| {
+                owned_perms_slices[i] = std.heap.c_allocator.dupeZ(u8, perm) catch "";
+            }
+            load.permissions = @as([]const []const u8, @ptrCast(owned_perms_slices));
+            load.permissions_alloc = owned_perms_slices;
+        } else {
+            load.permissions = &.{};
+            load.permissions_alloc = null;
+        }
 
         _ = glib.idleAdd(&remote_info_complete, load);
     }
@@ -662,12 +680,20 @@ pub const FlatpakInstallView = extern struct {
         load.page.as(gobject.Object).unref();
         std.heap.c_allocator.free(load.remote);
         std.heap.c_allocator.free(load.app_id);
+        if (load.permissions_alloc) |slices| {
+            for (slices) |s| {
+                if (s.len > 0) {
+                    std.heap.c_allocator.free(s);
+                }
+            }
+            std.heap.c_allocator.free(slices);
+        }
         std.heap.c_allocator.destroy(load);
     }
 
     fn set_description(self: *Self, description: [:0]const u8) void {
         const p = self.priv();
-        if (description_split_index(description)) |index| {
+        if (descriptionSplitIndex(description)) |index| {
             const preview = g_strndup(description.ptr, index);
             defer glib.free(preview);
             gtk.Label.setLabel(p.overlay_description_label, preview);
@@ -687,7 +713,7 @@ pub const FlatpakInstallView = extern struct {
         const carousel = Carousel.new();
         var count: usize = 0;
         for (app.getScreenshots()) |screenshot| {
-            const screenshot_url = first_screenshot_url(screenshot) orelse continue;
+            const screenshot_url = firstScreenshotUrl(screenshot) orelse continue;
             const picture = gtk.Picture.new();
             gtk.Picture.setCanShrink(picture, 1);
             gtk.Picture.setContentFit(picture, .contain);
@@ -1194,7 +1220,7 @@ pub const FlatpakInstallView = extern struct {
     };
 };
 
-fn description_split_index(description: []const u8) ?usize {
+fn descriptionSplitIndex(description: []const u8) ?usize {
     var newline_count: usize = 0;
     for (description, 0..) |character, index| {
         if (character != '\n') continue;
@@ -1204,7 +1230,7 @@ fn description_split_index(description: []const u8) ?usize {
     return null;
 }
 
-fn first_screenshot_url(screenshot: flatpak.AppstreamScreenshot) ?[:0]const u8 {
+fn firstScreenshotUrl(screenshot: flatpak.AppstreamScreenshot) ?[:0]const u8 {
     for (screenshot.Images) |image| {
         if (image.Url.len > 0) return image.Url.ptr[0..image.Url.len :0];
     }
@@ -1212,21 +1238,21 @@ fn first_screenshot_url(screenshot: flatpak.AppstreamScreenshot) ?[:0]const u8 {
 }
 
 test "Flatpak details split descriptions only when additional lines exist" {
-    try std.testing.expectEqual(@as(?usize, 13), description_split_index("one\ntwo\nthree\nfour"));
-    try std.testing.expectEqual(@as(?usize, null), description_split_index("one\ntwo\nthree"));
-    try std.testing.expectEqual(@as(?usize, null), description_split_index("one\ntwo\nthree\n"));
+    try std.testing.expectEqual(@as(?usize, 13), descriptionSplitIndex("one\ntwo\nthree\nfour"));
+    try std.testing.expectEqual(@as(?usize, null), descriptionSplitIndex("one\ntwo\nthree"));
+    try std.testing.expectEqual(@as(?usize, null), descriptionSplitIndex("one\ntwo\nthree\n"));
 }
 
 test "Flatpak details find the first usable screenshot URL" {
     const no_images: flatpak.AppstreamScreenshot = .{};
-    try std.testing.expect(first_screenshot_url(no_images) == null);
+    try std.testing.expect(firstScreenshotUrl(no_images) == null);
 
     const images = [_]flatpak.AppstreamImage{
         .{},
         .{ .Url = "https://example.test/screenshot.png" },
     };
     const screenshot: flatpak.AppstreamScreenshot = .{ .Images = &images };
-    try std.testing.expectEqualStrings("https://example.test/screenshot.png", first_screenshot_url(screenshot).?);
+    try std.testing.expectEqualStrings("https://example.test/screenshot.png", firstScreenshotUrl(screenshot).?);
 }
 
 test "Flatpak details map AppStream URL types to C# icons" {
@@ -1243,15 +1269,22 @@ test "Flatpak details capitalize AppStream URL type labels" {
     try std.testing.expectEqualStrings("", FlatpakInstallView.format_url_type(&buffer, ""));
 }
 
-fn resolve_addon_scope(addon: *const flatpak.AppstreamApp, parent_remotes: []const flatpak.Remote) flatpak.InstallLevel {
+const AddonRemote = struct {
+    name: []const u8 = "",
+    scope: flatpak.InstallLevel = .system,
+};
+
+fn resolveAddonRemote(addon: *const flatpak.AppstreamApp, parent_remotes: []const flatpak.Remote) AddonRemote {
     for (addon.Remotes) |remote| {
         for (parent_remotes) |parent_remote| {
-            if (std.mem.eql(u8, remote.Name, parent_remote.Name)) return remote.Scope;
+            if (std.mem.eql(u8, remote.Name, parent_remote.Name)) {
+                return .{ .name = remote.Name, .scope = remote.Scope };
+            }
         }
     }
-    if (addon.Remotes.len > 0) return addon.Remotes[0].Scope;
-    if (parent_remotes.len > 0) return parent_remotes[0].Scope;
-    return .system;
+    if (addon.Remotes.len > 0) return .{ .name = addon.Remotes[0].Name, .scope = addon.Remotes[0].Scope };
+    if (parent_remotes.len > 0) return .{ .name = parent_remotes[0].Name, .scope = parent_remotes[0].Scope };
+    return .{};
 }
 
 test "Flatpak addon scope resolution prefers matching parent remote" {
@@ -1264,14 +1297,25 @@ test "Flatpak addon scope resolution prefers matching parent remote" {
         .Id = "org.example.App.Locale",
         .Remotes = &.{.{ .Name = "flathub-beta", .Scope = .user }},
     };
-    try std.testing.expectEqual(flatpak.InstallLevel.user, resolve_addon_scope(&matching, &parent_remotes));
+    const matching_resolved = resolveAddonRemote(&matching, &parent_remotes);
+    try std.testing.expectEqualStrings("flathub-beta", matching_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.user, matching_resolved.scope);
 
     const addon_only = flatpak.AppstreamApp{
         .Id = "org.example.App.Locale",
         .Remotes = &.{.{ .Name = "custom", .Scope = .user }},
     };
-    try std.testing.expectEqual(flatpak.InstallLevel.user, resolve_addon_scope(&addon_only, &parent_remotes));
+    const addon_only_resolved = resolveAddonRemote(&addon_only, &parent_remotes);
+    try std.testing.expectEqualStrings("custom", addon_only_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.user, addon_only_resolved.scope);
 
     const no_addon_remotes = flatpak.AppstreamApp{ .Id = "org.example.App.Locale" };
-    try std.testing.expectEqual(flatpak.InstallLevel.system, resolve_addon_scope(&no_addon_remotes, &parent_remotes));
+    const no_addon_resolved = resolveAddonRemote(&no_addon_remotes, &parent_remotes);
+    try std.testing.expectEqualStrings("flathub", no_addon_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.system, no_addon_resolved.scope);
+
+    const empty = flatpak.AppstreamApp{ .Id = "org.example.App.Locale" };
+    const empty_resolved = resolveAddonRemote(&empty, &.{});
+    try std.testing.expectEqualStrings("", empty_resolved.name);
+    try std.testing.expectEqual(flatpak.InstallLevel.system, empty_resolved.scope);
 }

@@ -14,6 +14,7 @@ const IconDownloadService = @import("services/icon_fetcher.zig").downloadIconsIn
 pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
     runtime.environ_map = init.environ_map;
+
     if (!translations.init()) {
         std.log.warn("translations: failed to initialize gettext", .{});
     }
@@ -102,6 +103,8 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
 
     tryStartTray(runtime.io, std.heap.c_allocator);
 
+     setupGnomeThemePreference();
+
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }
@@ -112,6 +115,44 @@ fn tryStartTray(io: std.Io, alloc: std.mem.Allocator) void {
         if (!cfg.TrayEnabled) return;
     }
     tray_service.start(io, alloc);
+}
+
+fn setupGnomeThemePreference() void {
+    const desktop = runtime.environ_map.get("XDG_CURRENT_DESKTOP") orelse return;
+
+    std.debug.print("desktop = {s}\n", .{desktop});
+
+    if (!std.mem.containsAtLeast(u8, desktop, 1, "GNOME")) {
+        return;
+    }
+
+    const settings = gio.Settings.new("org.gnome.desktop.interface");
+
+    const scheme = settings.getString("color-scheme");
+
+    const prefer_dark = std.mem.eql(u8, std.mem.span(scheme), "prefer-dark");
+
+    std.debug.print("prefer_dark = {}\n", .{prefer_dark});
+
+    if (prefer_dark) {
+        const gtk_settings = gtk.Settings.getDefault() orelse {
+            std.debug.print("Failed to fetch GtkSettings layout.\n", .{});
+            return;
+        };
+        const base_object = @as(*gobject.Object, @ptrCast(@alignCast(gtk_settings)));
+        var value = std.mem.zeroes(gobject.Value);
+        const bool_type = gobject.typeFromName("gboolean");
+        _ = value.init(bool_type);
+        value.setBoolean(1);
+        base_object.setProperty("gtk-application-prefer-dark-theme", &value);
+    }
+
+
+    _ = glib.setenv(
+        "GTK_APPLICATION_PREFER_DARK_THEME",
+        if (prefer_dark) "1" else "0",
+        1,
+    );
 }
 
 test {

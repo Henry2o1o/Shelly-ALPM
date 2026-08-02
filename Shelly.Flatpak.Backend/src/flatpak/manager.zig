@@ -319,7 +319,8 @@ pub const Manager = struct {
             return error.InstallationCreateFailed;
         }
         defer rawflatpak.g_object_unref(installation_system);
-        const sys_result = try upgrade_installation(self, installation_system);
+        self.emitStatus(.information, "Checking system Flatpak installation for updates");
+        const sys_result = try upgrade_installation(self, installation_system, .SYSTEM);
 
         const installation_user = rawflatpak.flatpak_installation_new_user(cancellable, &g_error);
         if (installation_user == null or g_error != null) {
@@ -327,7 +328,8 @@ pub const Manager = struct {
             return error.InstallationCreateFailed;
         }
         defer rawflatpak.g_object_unref(installation_user);
-        const user_result = try upgrade_installation(self, installation_user);
+        self.emitStatus(.information, "Checking user Flatpak installation for updates");
+        const user_result = try upgrade_installation(self, installation_user, .USER);
 
         return sys_result and user_result;
     }
@@ -1272,7 +1274,11 @@ pub const Manager = struct {
         return error.FlatpakError;
     }
 
-    fn upgrade_installation(self: Manager, installation: [*c]rawflatpak.FlatpakInstallation) !bool {
+    fn upgrade_installation(
+        self: Manager,
+        installation: [*c]rawflatpak.FlatpakInstallation,
+        scope: flatpak.Scope,
+    ) !bool {
         const cancellable: *rawflatpak.GCancellable = rawflatpak.g_cancellable_new();
         var g_error: ?*rawflatpak.GError = null;
         defer rawflatpak.g_object_unref(cancellable);
@@ -1287,7 +1293,7 @@ pub const Manager = struct {
         }
         defer rawflatpak.g_ptr_array_unref(update_refs_ptr);
         if (update_refs_ptr.*.len == 0) {
-            self.emitStatus(.information, "No Flatpak updates available");
+            self.emitStatus(.information, upgradeNoUpdatesMessage(scope));
             return true;
         }
 
@@ -1314,7 +1320,7 @@ pub const Manager = struct {
         connectTransactionCallbacks(trans_ptr, &callback_context);
 
         const result = rawflatpak.flatpak_transaction_run(trans_ptr, cancellable, &g_error);
-        return self.finishTransaction(result, g_error, "Flatpak upgrade completed");
+        return self.finishTransaction(result, g_error, upgradeCompletedMessage(scope));
     }
 
     /// Return the exact unused refs that a Flatpak purify operation would
@@ -1815,11 +1821,46 @@ fn containsIgnoreCaseValue(haystack: []const u8, needle: []const u8) bool {
     return false;
 }
 
+fn upgradeNoUpdatesMessage(scope: flatpak.Scope) []const u8 {
+    return switch (scope) {
+        .SYSTEM => "No system Flatpak updates available",
+        .USER => "No user Flatpak updates available",
+        .UNKNOWN => "No Flatpak updates available",
+    };
+}
+
+fn upgradeCompletedMessage(scope: flatpak.Scope) []const u8 {
+    return switch (scope) {
+        .SYSTEM => "System Flatpak upgrade completed",
+        .USER => "User Flatpak upgrade completed",
+        .UNKNOWN => "Flatpak upgrade completed",
+    };
+}
+
 test "installed Flatpak resolution matches IDs and friendly names" {
     try std.testing.expect(matchesInstalled("org.mozilla.firefox", "Firefox", "org.mozilla.firefox"));
     try std.testing.expect(matchesInstalled("org.mozilla.firefox", "Firefox", "mozilla"));
     try std.testing.expect(matchesInstalled("org.mozilla.firefox", "Firefox", "fire"));
     try std.testing.expect(!matchesInstalled("org.mozilla.firefox", "Firefox", "chromium"));
+}
+
+test "Flatpak upgrade status messages identify installation scope" {
+    try std.testing.expectEqualStrings(
+        "No system Flatpak updates available",
+        upgradeNoUpdatesMessage(.SYSTEM),
+    );
+    try std.testing.expectEqualStrings(
+        "No user Flatpak updates available",
+        upgradeNoUpdatesMessage(.USER),
+    );
+    try std.testing.expectEqualStrings(
+        "System Flatpak upgrade completed",
+        upgradeCompletedMessage(.SYSTEM),
+    );
+    try std.testing.expectEqualStrings(
+        "User Flatpak upgrade completed",
+        upgradeCompletedMessage(.USER),
+    );
 }
 
 test "Flatpak manager exposes strict-parity operations" {

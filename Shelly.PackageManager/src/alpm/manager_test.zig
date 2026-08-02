@@ -122,7 +122,7 @@ const SyncTestWorkspace = struct {
         name: []const u8,
         version: []const u8,
     ) !void {
-        return self.addLocalPackageWithDependencies(allocator, name, version, &.{});
+        return self.addLocalPackageWithDependencyTypes(allocator, name, version, &.{}, &.{});
     }
 
     fn addLocalPackageWithDependencies(
@@ -131,6 +131,27 @@ const SyncTestWorkspace = struct {
         name: []const u8,
         version: []const u8,
         dependencies: []const []const u8,
+    ) !void {
+        return self.addLocalPackageWithDependencyTypes(allocator, name, version, dependencies, &.{});
+    }
+
+    fn addLocalPackageWithOptionalDependencies(
+        self: *const SyncTestWorkspace,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        version: []const u8,
+        optional_dependencies: []const []const u8,
+    ) !void {
+        return self.addLocalPackageWithDependencyTypes(allocator, name, version, &.{}, optional_dependencies);
+    }
+
+    fn addLocalPackageWithDependencyTypes(
+        self: *const SyncTestWorkspace,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        version: []const u8,
+        dependencies: []const []const u8,
+        optional_dependencies: []const []const u8,
     ) !void {
         const package_dir = try std.fmt.allocPrint(
             allocator,
@@ -155,6 +176,13 @@ const SyncTestWorkspace = struct {
         else
             try std.fmt.allocPrint(allocator, "%DEPENDS%\n{s}\n\n", .{dependency_values});
         defer allocator.free(dependency_section);
+        const optional_dependency_values = try std.mem.join(allocator, "\n", optional_dependencies);
+        defer allocator.free(optional_dependency_values);
+        const optional_dependency_section = if (optional_dependencies.len == 0)
+            try allocator.dupe(u8, "")
+        else
+            try std.fmt.allocPrint(allocator, "%OPTDEPENDS%\n{s}\n\n", .{optional_dependency_values});
+        defer allocator.free(optional_dependency_section);
         const desc = try std.fmt.allocPrint(
             allocator,
             "%NAME%\n{s}\n\n" ++
@@ -163,8 +191,9 @@ const SyncTestWorkspace = struct {
                 "%ARCH%\nany\n\n" ++
                 "%REASON%\n0\n\n" ++
                 "%VALIDATION%\nnone\n\n" ++
+                "{s}" ++
                 "{s}",
-            .{ name, version, dependency_section },
+            .{ name, version, dependency_section, optional_dependency_section },
         );
         defer allocator.free(desc);
 
@@ -531,6 +560,135 @@ test "get_required_packages returns owned local reverse dependencies" {
     try testing.expect(containsRequiredPackage(required, "shelly-required-first"));
     try testing.expect(containsRequiredPackage(required, "shelly-required-second"));
     try testing.expect(!containsRequiredPackage(required, "shelly-unrelated"));
+}
+
+test "Package owned reverse dependency queries return local required and optional names" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-reverse-target", "1.0-1");
+    try workspace.addLocalPackageWithDependencies(
+        allocator,
+        "shelly-required-consumer",
+        "1.0-1",
+        &.{"shelly-reverse-target>=1"},
+    );
+    try workspace.addLocalPackageWithOptionalDependencies(
+        allocator,
+        "shelly-optional-first",
+        "1.0-1",
+        &.{"shelly-reverse-target: Optional target support"},
+    );
+    try workspace.addLocalPackageWithOptionalDependencies(
+        allocator,
+        "shelly-optional-second",
+        "1.0-1",
+        &.{"shelly-reverse-target"},
+    );
+    try workspace.addLocalPackageWithOptionalDependencies(
+        allocator,
+        "shelly-optional-unrelated",
+        "1.0-1",
+        &.{"another-target: Unrelated support"},
+    );
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const target = (try mgr.get_single_installed_package("shelly-reverse-target")) orelse
+        return error.TestFailed;
+    const required_by = try target.owned_required_by(allocator);
+    defer deinitRequiredPackageNames(allocator, required_by);
+    const optional_for = try target.owned_optional_for(allocator);
+    defer deinitRequiredPackageNames(allocator, optional_for);
+
+    try testing.expectEqual(@as(usize, 1), required_by.len);
+    try testing.expect(containsRequiredPackage(required_by, "shelly-required-consumer"));
+    try testing.expectEqual(@as(usize, 2), optional_for.len);
+    try testing.expect(containsRequiredPackage(optional_for, "shelly-optional-first"));
+    try testing.expect(containsRequiredPackage(optional_for, "shelly-optional-second"));
+    try testing.expect(!containsRequiredPackage(optional_for, "shelly-optional-unrelated"));
+}
+
+test "installed package snapshots selectively include direct reverse dependencies" {
+    const allocator = testing.allocator;
+
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "shelly-snapshot-target", "1.0-1");
+    try workspace.addLocalPackageWithDependencies(
+        allocator,
+        "shelly-snapshot-direct",
+        "1.0-1",
+        &.{"shelly-snapshot-target"},
+    );
+    try workspace.addLocalPackageWithDependencies(
+        allocator,
+        "shelly-snapshot-indirect",
+        "1.0-1",
+        &.{"shelly-snapshot-direct"},
+    );
+    try workspace.addLocalPackageWithOptionalDependencies(
+        allocator,
+        "shelly-snapshot-optional",
+        "1.0-1",
+        &.{"shelly-snapshot-target: Optional integration"},
+    );
+
+    const mgr = try Manager.init(allocator, testing.environ, workspace.config_path, false, null);
+    defer mgr.deinit();
+
+    const default_packages = try mgr.get_installed_packages();
+    defer libalpm.OwnedPackage.deinitSlice(allocator, default_packages);
+    const default_target = findOwnedPackage(default_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expectEqual(@as(usize, 0), default_target.required_by().len);
+    try testing.expectEqual(@as(usize, 0), default_target.optional_for().len);
+
+    const required_packages = try mgr.get_installed_packages_with_reverse_dependencies(.{
+        .required_by = true,
+    });
+    defer libalpm.OwnedPackage.deinitSlice(allocator, required_packages);
+    const required_target = findOwnedPackage(required_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expect(containsReversePackage(required_target.required_by(), "shelly-snapshot-direct"));
+    try testing.expect(!containsReversePackage(required_target.required_by(), "shelly-snapshot-indirect"));
+    try testing.expectEqual(@as(usize, 0), required_target.optional_for().len);
+
+    const optional_packages = try mgr.get_installed_packages_with_reverse_dependencies(.{
+        .optional_for = true,
+    });
+    defer libalpm.OwnedPackage.deinitSlice(allocator, optional_packages);
+    const optional_target = findOwnedPackage(optional_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expectEqual(@as(usize, 0), optional_target.required_by().len);
+    try testing.expect(containsReversePackage(optional_target.optional_for(), "shelly-snapshot-optional"));
+
+    const both_packages = try mgr.get_installed_packages_with_reverse_dependencies(.{
+        .required_by = true,
+        .optional_for = true,
+    });
+    defer libalpm.OwnedPackage.deinitSlice(allocator, both_packages);
+    const both_target = findOwnedPackage(both_packages, "shelly-snapshot-target") orelse
+        return error.TestFailed;
+    try testing.expect(containsReversePackage(both_target.required_by(), "shelly-snapshot-direct"));
+    try testing.expect(containsReversePackage(both_target.optional_for(), "shelly-snapshot-optional"));
+}
+
+fn containsReversePackage(names: anytype, expected: []const u8) bool {
+    for (names) |name| {
+        if (std.mem.eql(u8, name, expected)) return true;
+    }
+    return false;
 }
 
 test "get_required_packages returns an empty result for an unknown package" {

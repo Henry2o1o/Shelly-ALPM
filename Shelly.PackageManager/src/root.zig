@@ -17,6 +17,7 @@ pub const alpm = struct {
     pub const SigLevel = bindings.libalpm.SigLevel;
     pub const OwnedPackage = bindings.libalpm.OwnedPackage;
     pub const OwnedPackageWithUpdate = bindings.libalpm.OwnedPackageWithUpdate;
+    pub const ReverseDependencyOptions = manager.ReverseDependencyOptions;
     pub const DependencySatisfier = manager.DependencySatisfier;
     pub const RestartReport = manager.RestartReport;
     pub const AffectedProcess = manager.AffectedProcess;
@@ -153,7 +154,7 @@ pub const local = struct {
 pub const operation = @import("operation_context");
 
 /// Zig 0.16 HTTP client with a compact, VPN-compatible TLS ClientHello.
-pub const HttpClient = @import("shared/http_client.zig");
+pub const HttpClient = @import("ShellyHttp");
 
 pub const shared = struct {
     pub const downloader = @import("shared/downloader.zig");

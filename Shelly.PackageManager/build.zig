@@ -16,6 +16,10 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+    const shelly_http = b.dependency("shelly_http", .{
+        .target = target,
+        .optimize = optimize,
+    });
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -63,6 +67,7 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("alpm_c", alpm_c);
     mod.addImport("operation_context", operation_context_mod);
+    mod.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
     mod.linkSystemLibrary("archive", .{});
 
     // PackageManager imports only the backend's data-only protocol module.
@@ -281,6 +286,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     downloader_test_module.addImport("operation_context", operation_context_mod);
+    downloader_test_module.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
     const downloader_tests = b.addTest(.{ .name = "downloader-test", .root_module = downloader_test_module });
     const run_downloader_tests = b.addRunArtifact(downloader_tests);
     const downloader_test_step = b.step("downloader-test", "Run safe downloader and cancellation tests");
@@ -327,6 +333,8 @@ pub fn build(b: *std.Build) void {
             "get_required_packages returns NoHandle when the handle is null",
             "get_required_packages rejects empty package and database names",
             "get_required_packages returns owned local reverse dependencies",
+            "Package owned reverse dependency queries return local required and optional names",
+            "installed package snapshots selectively include direct reverse dependencies",
             "get_required_packages returns an empty result for an unknown package",
             "get_required_packages rejects an unknown sync database",
             "get_required_packages resolves a named sync database",
@@ -360,7 +368,11 @@ pub fn build(b: *std.Build) void {
     const required_packages_tests = b.addTest(.{
         .name = "required-packages-test",
         .root_module = mod,
-        .filters = &.{"get_required_packages"},
+        .filters = &.{
+            "get_required_packages",
+            "Package owned reverse dependency queries",
+            "installed package snapshots selectively include direct reverse dependencies",
+        },
     });
     const run_required_packages_tests = b.addRunArtifact(required_packages_tests);
     const required_packages_test_step = b.step(
@@ -520,12 +532,19 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "AppImage dispatcher forwards typed status and download progress",
             "AppImage classification is case insensitive and extension based",
+            "AppImage metadata discovery rejects symlinks outside the extraction root",
             "test isAppImage",
             "get_update returns optional owned results for configured providers",
+            "providerUpdateOrWarn",
             "get_updates returns an owned update list",
             "AppImage update manager forwards downloader progress",
             "AppImage updates honor shared cancellation",
             "update: returns false when app not found in db",
+            "parse_github_response:",
+            "parse_gitlab_response:",
+            "configureUpdates:",
+            "configure_updates persists a normalized Forgejo release-page URL",
+            "configure_updates leaves the database unchanged when Forgejo validation fails",
             "getAppImagesFromLocalDb maps C# AppImage V2 fields",
             "getAppImagesFromLocalDb normalizes nullable C# strings",
             "getAppImagesFromLocalDb maps every C# update type",
@@ -536,6 +555,9 @@ pub fn build(b: *std.Build) void {
             "removeAppImageFromLocalDb removes an orphaned entry by name",
             "installAppImage preserves an existing install when staged validation fails",
             "installAppImage atomically replaces a validated AppImage",
+            "installAppImage follows a symlinked install directory",
+            "installAppImage creates a missing directory beneath a symlinked parent",
+            "installAppImage reads desktop metadata and icons through standard AppImage symlinks",
             "installAppImage restores the previous binary when database commit fails",
         },
     });

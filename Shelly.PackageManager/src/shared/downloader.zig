@@ -1,6 +1,6 @@
 const std = @import("std");
 const operations = @import("operation_context");
-pub const HttpClient = @import("http_client.zig");
+pub const HttpClient = @import("ShellyHttp");
 
 pub const AddressFamilyPolicy = HttpClient.AddressFamilyPolicy;
 

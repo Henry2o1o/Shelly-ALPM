@@ -545,11 +545,11 @@ pub const variants = [_]Variant{
         .action_code = 'S',
         .type_code = 'a',
         .help = .{
-            .description = "Search the AUR RPC, fetch exact package PKGBUILDs, or append high-confidence standard repository matches.",
+            .description = "Search the AUR RPC, fetch exact package PKGBUILDs, append high-confidence standard repository matches, or show complete metadata for one AUR package.",
             .implementation = "Zigalpm.AurManager.searchPackages / fetchPkgbuild; Zigalpm.AlpmManager.get_available_packages when --standard is passed",
             .arguments = &.{.{
                 .name = "query",
-                .description = "Search words joined for an AUR RPC query, or exact AUR package names when --pkgbuild is passed",
+                .description = "Search words joined for an AUR RPC query, or exact AUR package names when --pkgbuild or --detail is passed",
             }},
             .options = &.{
                 .{
@@ -559,6 +559,10 @@ pub const variants = [_]Variant{
                 .{
                     .name = "--pkgbuild",
                     .description = "Fetch and display the PKGBUILD for each exact AUR package name",
+                },
+                .{
+                    .name = "--detail",
+                    .description = "Show complete metadata for one exact AUR package name",
                 },
             },
         },
@@ -1034,6 +1038,7 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
             &.{"-p"},
             "Fetch and display each exact AUR package PKGBUILD",
         ),
+        flag("--detail", &.{ "--info", "-d" }, "Show complete metadata for one exact AUR package name"),
     };
     if (pathIs(action, type_name, "search", "flatpak")) return &.{
         integerOption("--limit", &.{}, "Maximum results per page"),
@@ -1062,6 +1067,12 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--bundle", &.{"-u"}, "Treat the package operand as a local Flatpak bundle"),
         flag("--repair", &.{"-f"}, "Repair an installed Flatpak while preserving configuration"),
     };
+    if (pathIs(action, type_name, "install", "appimage")) return &.{stringOption(
+        "--install-path",
+        &.{},
+        "Directory to install the AppImage into; overrides the configured AppImageInstallPath",
+        false,
+    )};
 
     if (pathIs(action, type_name, "upgrade", "standard")) return &.{flag(
         "--all",
@@ -1182,11 +1193,15 @@ fn optionDefinitions(comptime action: []const u8, comptime type_name: []const u8
         flag("--show-hidden", &.{"-w"}, "Include hidden packages"),
         flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
         flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
+        flag("--required-by", &.{}, "Include packages that directly require each package"),
+        flag("--optional-for", &.{}, "Include packages that directly use each package optionally"),
     };
     if (pathIs(action, type_name, "list", "aur")) return &.{
         flag("--show-hidden", &.{}, "Include hidden packages"),
         flag("--explicitOnly", &.{"-e"}, "List explicitly installed packages only"),
         flag("--dependencyOnly", &.{"-d"}, "List dependency-installed packages only"),
+        flag("--required-by", &.{}, "Include packages that directly require each package"),
+        flag("--optional-for", &.{}, "Include packages that directly use each package optionally"),
     };
     if (pathIs(action, type_name, "list-updates", "aur") or
         pathIs(action, type_name, "list-updates", "all")) return &.{flag(
@@ -1356,6 +1371,20 @@ pub const SharedModifier = struct {
 // Shared semantic modifiers are defined once here. A type still receives only
 // the modifiers that apply to it; all other source options remain type-specific.
 pub const shared_modifiers = [_]SharedModifier{
+    .{
+        .action = "list",
+        .type_names = &.{ "standard", "aur" },
+        .name = "--required-by",
+        .aliases = &.{},
+        .description = "Include packages that directly require each listed package",
+    },
+    .{
+        .action = "list",
+        .type_names = &.{ "standard", "aur" },
+        .name = "--optional-for",
+        .aliases = &.{},
+        .description = "Include packages that directly use each listed package optionally",
+    },
     .{
         .action = "install",
         .type_names = &.{ "standard", "aur" },
