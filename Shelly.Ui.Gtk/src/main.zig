@@ -97,7 +97,7 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
 
     tryStartTray(runtime.io, std.heap.c_allocator);
 
-     setupGnomeThemePreference();
+    setupGnomeThemePreference();
 
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
@@ -140,7 +140,6 @@ fn setupGnomeThemePreference() void {
         value.setBoolean(1);
         base_object.setProperty("gtk-application-prefer-dark-theme", &value);
     }
-
 
     _ = glib.setenv(
         "GTK_APPLICATION_PREFER_DARK_THEME",
