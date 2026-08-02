@@ -1,7 +1,7 @@
 project(
     'shelly-notifications',
     ['vala', 'c'],
-    version: '3.0.1.1',
+    version: '3.0.2',
     meson_version: '>= 0.56.0',
 )
 

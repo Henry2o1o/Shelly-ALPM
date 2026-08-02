@@ -2,7 +2,7 @@
 # Maintainer: Caroline Snyder <hirpeng@gmail.com>
 pkgbase=shelly
 pkgname=('shelly' 'shelly-flatpak-backend')
-pkgver=3.0.1+1
+pkgver=3.0.2
 pkgrel=2
 arch=('x86_64')
 url="https://github.com/Seafoam-Labs/Shelly-ALPM"
