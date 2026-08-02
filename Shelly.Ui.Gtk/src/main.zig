@@ -40,7 +40,13 @@ pub fn main(init: std.process.Init) void {
     );
 
     const status = gio.Application.run(gapp, 0, null);
-    tryStopTray(runtime.io, std.heap.c_allocator);
+
+    const is_remote = gio.Application.getIsRemote(gapp);
+    std.debug.print("[shelly-ui] run returned, is_remote={d}, status={d}\n", .{ is_remote, status });
+    if (is_remote == 0) {
+        std.debug.print("[shelly-ui] PRIMARY exiting, calling tryStopTray\n", .{});
+        tryStopTray(runtime.io, std.heap.c_allocator);
+    }
     runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
 }
