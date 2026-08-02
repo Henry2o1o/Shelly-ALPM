@@ -334,6 +334,9 @@ pub const ShellySettingsPage = extern struct {
         try svc.set(updated);
         try svc.save();
 
+        const lang_value = language_entries[gtk.DropDown.getSelected(p.language_drop)].value;
+        _ = translations.initWithLocale(lang_value);
+
         populatePageDropdown(p, &updated);
         applyScheduleVisibility(p);
         applyTrayVisibility(p);
@@ -369,6 +372,9 @@ pub const ShellySettingsPage = extern struct {
             p.toast.show(.@"error", translations._("Failed to save settings"));
             return;
         };
+
+        const lang_value = language_entries[gtk.DropDown.getSelected(p.language_drop)].value;
+        _ = translations.initWithLocale(lang_value);
 
         p.save_guard = true;
         populatePageDropdown(p, cfg);
@@ -1164,7 +1170,6 @@ fn populatePageDropdown(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void
 
         gtk.StringList.append(page_strings, label);
     }
-    std.log.warn("page_strings: {any}", .{page_strings});
     gtk.DropDown.setModel(p.default_page_drop, page_strings.as(gio.ListModel));
 }
 
