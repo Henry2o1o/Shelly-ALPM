@@ -49,7 +49,7 @@ msgid "All packages are up to date"
 msgstr "Todos os pacotes estão atualizados"
 
 msgid "just now"
-msgstr "agora mesmo"
+msgstr "agora"
 
 msgid "{0} min ago"
 msgstr "{0} minutos atrás"
@@ -154,7 +154,7 @@ msgid "Keywords"
 msgstr "Palavras-chave"
 
 msgid "Provides"
-msgstr "Provê"
+msgstr "Oferece"
 
 msgid "Conflicts"
 msgstr "Conflitos"
@@ -1202,7 +1202,7 @@ msgid "Update Strategy"
 msgstr "Estratégia de atualizações"
 
 msgid "Update URL / Repository Info"
-msgstr "Atualizar URL / Informações do repositório"
+msgstr "URL de Atualização / Informações do repositório"
 
 msgid "e.g. repo or https://..."
 msgstr "ex: repo ou https://..."
@@ -1465,7 +1465,7 @@ msgid "Upgrade"
 msgstr "Atualizar"
 
 msgid "Checking for updates…"
-msgstr "Procurando por atualizações..."
+msgstr "Verificando atualizações..."
 
 msgid "Your system is up to date"
 msgstr "Seu sistema está atualizado"
@@ -1590,7 +1590,7 @@ msgid "No special permissions requested"
 msgstr "Nenhuma permissão especial solicitada"
 
 msgid "Review PKGBUILD changes"
-msgstr "Revoisar mudanças no PKGBUILD"
+msgstr "Revisar mudanças no PKGBUILD"
 
 msgid "Warnings"
 msgstr "Avisos"
@@ -2054,7 +2054,7 @@ msgid "Removing AUR packages"
 msgstr "Removendo pacotes Aur"
 
 msgid "Dismiss"
-msgstr "Dispensar"
+msgstr "Ignorar"
 
 msgid "Filesystem"
 msgstr "Sistema de Arquivo"
@@ -2181,7 +2181,7 @@ msgid ""
 "Customize how Shelly looks and behaves. All of these can be changed later in "
 "preferences."
 msgstr ""
-"Customize a aparência e comportamento do Shelly. Todas essas mudanças podem ser "
+"Customize a aparência e estilo do Shelly. Todas essas mudanças podem ser "
 "alteradas posteriormente nas preferências"
 
 msgid "Navigation Style"
