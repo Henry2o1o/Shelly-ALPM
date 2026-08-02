@@ -96,9 +96,9 @@ const Updates = struct {
             self.allocator.free(e.Name);
             self.allocator.free(e.Version);
         }
-        self.repo.clearRetainingCapacity();
-        self.aur.clearRetainingCapacity();
-        self.flatpak.clearRetainingCapacity();
+        self.repo.clearAndFree(self.allocator);
+        self.aur.clearAndFree(self.allocator);
+        self.flatpak.clearAndFree(self.allocator);
     }
 
     fn total(self: *Updates) usize {
@@ -378,6 +378,7 @@ pub fn main(init: std.process.Init) !void {
     defer worker_thread.join();
 
     while (true) {
+        const loop_start = std.Io.Clock.now(.awake, init.io);
         _ = service.tickTimeout(.{
             .duration = .{
                 .raw = .fromMilliseconds(250),
@@ -395,7 +396,7 @@ pub fn main(init: std.process.Init) !void {
             defer updates.freeNotif(n);
 
             std.debug.print("[loop] notify: {s} {s}\n", .{ n.summary, n.body });
-
+            const t0 = std.Io.Clock.now(.awake, init.io);
             _ = notifier.notify(.{
                 .app_name = "Shelly",
                 .icon = "shelly",
@@ -405,7 +406,8 @@ pub fn main(init: std.process.Init) !void {
                 .on_activate = &openShelly,
                 .ctx = &runner,
             }) catch |e| std.debug.print("[loop] notify: {any}\n", .{e});
-
+            const t1 = std.Io.Clock.now(.awake, init.io);
+            logIfSlow("notify", t0, t1);
             try t.emitNewIcon(attention_icon_name);
         }
 
@@ -419,14 +421,19 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (launch_requested.swap(false, .seq_cst)) {
+            const t0 = std.Io.Clock.now(.awake, init.io);
             runner.activateOrLaunch(&service) catch |e|
                 std.debug.print("[loop] activate/launch failed: {any}\n", .{e});
+            const t1 = std.Io.Clock.now(.awake, init.io);
+            logIfSlow("activateOrLaunch", t0, t1);
         }
 
         if (quit_requested.swap(false, .seq_cst)) {
             runner.quitUi(&service) catch |e| std.debug.print("[loop] quit ui: {any}\n", .{e});
             std.process.exit(0);
         }
+        const loop_end = std.Io.Clock.now(.awake, init.io);
+        logIfSlow("full loop iteration", loop_start, loop_end);
     }
 }
 
@@ -620,4 +627,12 @@ fn onTrayActivate(ctx: ?*anyopaque, x: i32, y: i32) void {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("services/next_notification.zig");
+}
+
+fn logIfSlow(name: []const u8, t0: anytype, t1: anytype) void {
+    const elapsed_ns = t1.nanoseconds - t0.nanoseconds;
+    const elapsed_ms = @divFloor(elapsed_ns, std.time.ns_per_ms);
+    if (elapsed_ms > 500) {
+        std.debug.print("[loop] {s} took {d}ms\n", .{ name, elapsed_ms });
+    }
 }
