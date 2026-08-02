@@ -836,7 +836,7 @@ msgid "Use chroot"
 msgstr "Usar chroot"
 
 msgid "Build packages in a clean chroot environment"
-msgstr "Construir pacotes em um ambiente chroot limpo"
+msgstr "Compilar pacotes em um ambiente chroot limpo"
 
 msgid "Run checks"
 msgstr "Executar verificações"
@@ -2012,7 +2012,7 @@ msgid "中文（简体）"
 msgstr ""
 
 msgid "The AUR has no browsable index — type a package name to begin."
-msgstr "A AUR não tem um índice navegável. Digite um nome de pacote para começar."
+msgstr "A AUR não tem um índice visualizável. Digite um nome de pacote para começar."
 
 msgid "No packages found"
 msgstr "Nenhum pacote encontrado"
@@ -2039,7 +2039,7 @@ msgid "Remove the selected AUR packages?"
 msgstr "Remover os pacotes AUR selecionados?"
 
 msgid "Build from AUR"
-msgstr "Construir a partir da AUR"
+msgstr "Compilar a partir da AUR"
 
 msgid "Build and install the selected packages? This may take a while."
 msgstr "Compilar e instalar os pacotes selecionados? Isso pode demorar um pouco."
