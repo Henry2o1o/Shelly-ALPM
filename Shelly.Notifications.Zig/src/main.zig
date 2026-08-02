@@ -26,6 +26,9 @@ const ShellyConfig = @import("services/config.zig").ConfigResolver;
 const next_notification = @import("services/next_notification.zig");
 const ShellyCli = @import("services/shelly-cli.zig").ShellyCli;
 
+const translations = @import("services/translations.zig");
+const trans = translations._;
+
 const log_worker = std.log.scoped(.worker);
 const log_tray = std.log.scoped(.tray);
 const log_main = std.log.scoped(.main);
@@ -269,8 +272,8 @@ const Worker = struct {
         self.updates.signalRefresh();
         if (count > 0) {
             var buf: [128]u8 = undefined;
-            const body = std.fmt.bufPrintZ(&buf, "{d} updates available", .{count}) catch "0 updates";
-            self.updates.queueNotif("Updates available", body);
+            const body = std.fmt.bufPrintZ(&buf, "{d} {s}", .{ count, trans("updates available") }) catch "0 updates";
+            self.updates.queueNotif(trans("Updates available"), body);
         }
     }
 };
@@ -306,6 +309,8 @@ pub fn main(init: std.process.Init) !void {
     runtime.allocator = allocator;
     runtime.io = init.io;
     runtime.environ_map = init.environ_map;
+
+    _ = translations.init();
 
     var service = try Service.init(allocator, init.io, init.environ_map);
     defer service.deinit();
@@ -447,15 +452,15 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
     var items = std.ArrayList(MenuItem).empty;
     var tray_index: usize = 0;
 
-    try addItem(arena, &items, &tray_index, "Open Shelly", true, true, .normal);
+    try addItem(arena, &items, &tray_index, trans("Open Shelly"), true, true, .normal);
     open_shelly_index = tray_index;
-    try addItem(arena, &items, &tray_index, "Update Packages", true, true, .normal);
+    try addItem(arena, &items, &tray_index, trans("Update Packages"), true, true, .normal);
     run_update_index = tray_index;
-    try addItem(arena, &items, &tray_index, "Check for updates", true, true, .normal);
+    try addItem(arena, &items, &tray_index, trans("Check for updates"), true, true, .normal);
     check_update_index = tray_index;
     try addItem(arena, &items, &tray_index, "", false, true, .separator);
     const label = if (updates.last_check == 0)
-        try arena.dupe(u8, "Last Check: never")
+        try arena.dupe(u8, trans("Last Check: Never"))
     else
         try formatCheckTime(arena, updates.last_check);
     try addItem(arena, &items, &tray_index, label, false, true, .normal);
@@ -464,7 +469,7 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
     const count = updates.total();
     if (count == 0) {
         tray_index += 1;
-        try addItem(arena, &items, &tray_index, "No updates", false, true, .normal);
+        try addItem(arena, &items, &tray_index, trans("No updates"), false, true, .normal);
     } else {
         if (updates.repo.items.len > 0) {
             tray_index += 1;
@@ -510,7 +515,7 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
     }
 
     try addItem(arena, &items, &tray_index, "", true, true, .separator);
-    try addItem(arena, &items, &tray_index, "Exit", true, true, .normal);
+    try addItem(arena, &items, &tray_index, trans("Exit"), true, true, .normal);
     quit_index = tray_index;
 
     return .{ .root = .{ .id = 0, .children = try items.toOwnedSlice(arena) } };
@@ -592,7 +597,7 @@ fn onEvent(ctx: ?*anyopaque, id: i32) void {
 }
 
 fn formatCheckTime(arena: std.mem.Allocator, ts: i64) ![]const u8 {
-    if (ts == 0) return arena.dupe(u8, "Last Check: never");
+    if (ts == 0) return arena.dupe(u8, trans("Last Check: never"));
 
     var local = zeit.local(arena, runtime.io, .{}) catch {
         return arena.dupe(u8, "Last Check: unknown");
@@ -602,8 +607,12 @@ fn formatCheckTime(arena: std.mem.Allocator, ts: i64) ![]const u8 {
     const inst = zeit.instant(.{ .unix_timestamp = ts }, &local);
     const dt = inst.time();
 
-    return std.fmt.allocPrint(arena, "Last Check: {d:0>2}:{d:0>2} {d:0>2}/{d:0>2}", .{
-        dt.hour, dt.minute, dt.day, dt.month,
+    return std.fmt.allocPrint(arena, "{s} {d:0>2}:{d:0>2} {d:0>2}/{d:0>2}", .{
+        trans("Last Check:"),
+        dt.hour,
+        dt.minute,
+        dt.day,
+        dt.month,
     });
 }
 
