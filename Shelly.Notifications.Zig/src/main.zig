@@ -316,7 +316,7 @@ pub fn main(init: std.process.Init) !void {
         log_tray.info("another instance running, exiting", .{});
         std.process.exit(0);
     }
-    try service.requestName(SINGLETON_NAME); // <-- the missing step: acquire it
+    try service.requestName(SINGLETON_NAME);
     log_tray.info("acquired singleton name", .{});
 
     var runner = AppRunner.init(allocator, init.io, init.environ_map);
@@ -384,7 +384,6 @@ pub fn main(init: std.process.Init) !void {
     defer worker_thread.join();
 
     while (true) {
-        const loop_start = std.Io.Clock.now(.awake, init.io);
         _ = service.tickTimeout(.{
             .duration = .{
                 .raw = .fromMilliseconds(250),
@@ -402,7 +401,6 @@ pub fn main(init: std.process.Init) !void {
             defer updates.freeNotif(n);
 
             log_loop.info("notify: {s} {s}", .{ n.summary, n.body });
-            const t0 = std.Io.Clock.now(.awake, init.io);
             _ = notifier.notify(.{
                 .app_name = "Shelly",
                 .icon = "shelly",
@@ -411,8 +409,6 @@ pub fn main(init: std.process.Init) !void {
                 .on_activate = &openShelly,
                 .ctx = &runner,
             }) catch |e| log_loop.err("notify: {any}", .{e});
-            const t1 = std.Io.Clock.now(.awake, init.io);
-            logIfSlow("notify", t0, t1);
             try t.emitNewIcon(attention_icon_name);
         }
 
@@ -426,19 +422,14 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (launch_requested.swap(false, .seq_cst)) {
-            const t0 = std.Io.Clock.now(.awake, init.io);
             runner.activateOrLaunch(&service) catch |e|
                 log_loop.err("activate/launch failed: {any}", .{e});
-            const t1 = std.Io.Clock.now(.awake, init.io);
-            logIfSlow("activateOrLaunch", t0, t1);
         }
 
         if (quit_requested.swap(false, .seq_cst)) {
             runner.quitUi(&service) catch |e| log_loop.err("quit ui: {any}", .{e});
             std.process.exit(0);
         }
-        const loop_end = std.Io.Clock.now(.awake, init.io);
-        logIfSlow("full loop iteration", loop_start, loop_end);
     }
 }
 
@@ -631,12 +622,4 @@ fn onTrayActivate(ctx: ?*anyopaque, x: i32, y: i32) void {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("services/next_notification.zig");
-}
-
-fn logIfSlow(name: []const u8, t0: anytype, t1: anytype) void {
-    const elapsed_ns = t1.nanoseconds - t0.nanoseconds;
-    const elapsed_ms = @divFloor(elapsed_ns, std.time.ns_per_ms);
-    if (elapsed_ms > 500) {
-        log_loop.info("{s} took {d}ms", .{ name, elapsed_ms });
-    }
 }
