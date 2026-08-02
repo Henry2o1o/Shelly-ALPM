@@ -146,9 +146,7 @@ fn discoverStandard(
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
-        null,
-        false,
-        null,
+        .{ .use_root = false },
     );
     defer manager.deinit();
     const packages = try manager.get_available_packages();

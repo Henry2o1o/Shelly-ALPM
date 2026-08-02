@@ -669,9 +669,10 @@ fn runStandard(context: *runtime.RuntimeContext) !Result {
     var manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
-        null,
-        false,
-        database_path,
+        .{
+            .use_root = false,
+            .temp_root_path = database_path,
+        },
     );
     defer manager.deinit();
     try manager.sync_for_update_check(force_standard_database_refresh);

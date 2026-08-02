@@ -550,7 +550,7 @@ fn installRepositoryPackages(
     invocation: *const parser.Invocation,
     package_names: []const []const u8,
 ) !void {
-    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, null, true, null);
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
@@ -594,7 +594,7 @@ fn installLocalPackage(
     const inspector: Zigalpm.local.Inspector = .{ .allocator = context.allocator, .io = context.io };
 
     if (try inspector.isArchPackage(absolute_path)) {
-        const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, null, true, null);
+        const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
         defer manager.deinit();
         manager.setOperationContext(operation_context);
         defer manager.setOperationContext(null);
@@ -652,11 +652,7 @@ fn runAur(
     if (!isAurVersionInstall(invocation) and
         optionEnabled(invocation, "--build-deps") and invocation.positionals.len > 1)
         return error.MultipleDependencyTargets;
-    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
-        .root = true,
-        .use_chroot = optionEnabled(invocation, "--chroot"),
-        .no_check = !optionEnabled(invocation, "--check"),
-    });
+    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{ .root = true, .use_chroot = optionEnabled(invocation, "--chroot"), .no_check = !optionEnabled(invocation, "--check"), .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
@@ -987,7 +983,7 @@ fn classifyPackageSource(value: []const u8) PackageSource {
         std.mem.indexOfScalar(u8, value, '\\') != null or
         std.mem.startsWith(u8, value, "~") or
         std.fs.path.isAbsolute(value) or
-        std.fs.path.extension(value).len > 0) return .{ .file = value };
+        Zigalpm.local.file_inspector.isSupportedArchive(value)) return .{ .file = value };
     return .{ .repository = value };
 }
 
@@ -1789,9 +1785,10 @@ test "install backend failures return a failing exit code and transaction result
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
 }
 
-test "standard source classification preserves repository names files and URLs" {
+test "standard source classification preserves dotted repository names files and URLs" {
     try std.testing.expect(classifyPackageSource("core/linux") == .repository);
     try std.testing.expect(classifyPackageSource("linux") == .repository);
+    try std.testing.expect(classifyPackageSource("dotnet-sdk-8.0") == .repository);
     try std.testing.expect(classifyPackageSource("./demo.pkg.tar.zst") == .file);
     try std.testing.expect(classifyPackageSource("demo.pkg.tar.zst") == .file);
     try std.testing.expect(classifyPackageSource("https://example.test/demo.pkg.tar.zst") == .url);

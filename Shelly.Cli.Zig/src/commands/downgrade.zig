@@ -535,13 +535,7 @@ fn discoverReal(
     operation_context: *Zigalpm.OperationContext,
     package_name: []const u8,
 ) !CandidateSet {
-    const manager = try Zigalpm.AlpmManager.init(
-        context.allocator,
-        context.environ,
-        null,
-        true,
-        null,
-    );
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
@@ -571,13 +565,7 @@ fn installReal(
     operation_context: *Zigalpm.OperationContext,
     candidate: *const Zigalpm.alpm.DowngradeCandidate,
 ) !void {
-    const manager = try Zigalpm.AlpmManager.init(
-        context.allocator,
-        context.environ,
-        null,
-        true,
-        null,
-    );
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
@@ -595,13 +583,7 @@ fn ignoreReal(
     operation_context: *Zigalpm.OperationContext,
     package_name: []const u8,
 ) !void {
-    const manager = try Zigalpm.AlpmManager.init(
-        context.allocator,
-        context.environ,
-        null,
-        true,
-        null,
-    );
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);

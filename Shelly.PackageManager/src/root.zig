@@ -12,6 +12,7 @@ pub const alpm = struct {
     pub const archive_manager = @import("alpm/archive_manager.zig");
     pub const pacfile_manager = @import("alpm/pacfile_manager.zig");
 
+    pub const InitOptions = manager.InitOptions;
     pub const Manager = manager.Manager;
     pub const TransFlag = bindings.libalpm.TransFlag;
     pub const SigLevel = bindings.libalpm.SigLevel;
@@ -167,6 +168,7 @@ pub const shared = struct {
     pub const Operation = operation.Operation;
 };
 
+pub const AlpmManagerInitOptions = alpm.InitOptions;
 pub const AlpmManager = alpm.Manager;
 pub const CacheManager = alpm.CacheManager;
 pub const PacfileManager = alpm.PacfileManager;

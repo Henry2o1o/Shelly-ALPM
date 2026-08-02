@@ -41,6 +41,7 @@ pub const InitOptions = struct {
     cache_root: ?[]const u8 = null,
     aur_git_base_url: []const u8 = "https://aur.archlinux.org",
     makepkg_command: ?[]const u8 = null,
+    operation_context: ?*operation_api.OperationContext = null,
 };
 
 pub const PkgbuildDiffRequest = struct {
@@ -231,7 +232,7 @@ pub const Manager = struct {
         options: InitOptions,
     ) !*Self {
         const temporary_root = if (options.use_temp_path) options.temp_path else null;
-        const alpm = try AlpmManager.init(allocator, environ, options.config_path, options.root, temporary_root);
+        const alpm = try AlpmManager.init(allocator, environ, .{ .config_path = options.config_path, .use_root = options.root, .temp_root_path = temporary_root });
         errdefer alpm.deinit();
         const makepkg_config = try MakePackageConfiguration.init(alpm.io(), allocator);
         errdefer makepkg_config.deinit();
@@ -283,6 +284,7 @@ pub const Manager = struct {
             .chroot_path = chroot_path,
             .use_chroot = options.use_chroot,
             .no_check = options.no_check,
+            .operation_context = options.operation_context,
         };
         self.vcs_store.loadFile(self.io(), self.vcs_store_path) catch {};
         self.importOtherAurHelperCaches() catch {};
