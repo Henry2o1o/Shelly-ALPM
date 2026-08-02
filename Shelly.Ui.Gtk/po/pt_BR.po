@@ -1486,7 +1486,7 @@ msgid "0 Selected"
 msgstr "0 Selecionados"
 
 msgid "Grid View"
-msgstr "Visualização em grade"
+msgstr "Exibição em grade"
 
 msgid "List View"
 msgstr "Visualização em lista"
