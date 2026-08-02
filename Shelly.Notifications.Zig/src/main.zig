@@ -304,9 +304,7 @@ pub fn main(init: std.process.Init) !void {
     var service = try Service.init(allocator, init.io, init.environ_map);
     defer service.deinit();
 
-    // early in main:
-
-    const SINGLETON_NAME = "this.doesnt.work";
+    const SINGLETON_NAME = "org.shellyorg.Notifications";
 
     if (try service.nameHasOwner(SINGLETON_NAME)) {
         std.debug.print("[tray] another instance running, exiting\n", .{});
@@ -426,7 +424,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (quit_requested.swap(false, .seq_cst)) {
-            //      runner.quitUi(&service) catch |e| std.debug.print("[loop] quit ui: {any}\n", .{e});
+            runner.quitUi(&service) catch |e| std.debug.print("[loop] quit ui: {any}\n", .{e});
             std.process.exit(0);
         }
     }
