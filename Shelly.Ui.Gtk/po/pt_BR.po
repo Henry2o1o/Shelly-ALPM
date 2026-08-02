@@ -2042,7 +2042,7 @@ msgid "Build from AUR"
 msgstr "Construir a partir da AUR"
 
 msgid "Build and install the selected packages? This may take a while."
-msgstr "Construir e instalar os pacotes selecionados? Isso pode demorar um pouco."
+msgstr "Compilar e instalar os pacotes selecionados? Isso pode demorar um pouco."
 
 msgid "Build"
 msgstr "Construir"
