@@ -279,9 +279,12 @@ pub const Manager = struct {
         var err: rawLibalpm.alpm_errno_t = 0;
 
         const handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err) orelse {
-            std.log.err("alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))});
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {
+                std.log.err("alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))});
+            };
             return error.InitFailed;
         };
+
         self.handle = handle;
         self.is_initialized = true;
 
@@ -4377,6 +4380,25 @@ test "handleErrorMessage emits a known error description" {
     try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.Memory), null);
 
     try testing.expect(std.mem.indexOf(u8, cap.text(), "Memory allocation failed.") != null);
+}
+
+test "handleErrorMessage emits the expected database lock error" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    });
+
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.HandleLock), null);
+
+    try testing.expectEqualStrings(
+        "unable to lock database\n" ++
+            "You have a db.lck. It's at /var/lib/pacman/db.lck. You should probably delete that.\n",
+        cap.text(),
+    );
 }
 
 test "handleErrorMessage handles the Ok error without details" {
