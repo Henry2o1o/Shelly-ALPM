@@ -1420,7 +1420,7 @@ msgid "Bundle"
 msgstr ""
 
 msgid "Choose file…"
-msgstr "Escolha um arquivo..."
+msgstr "Escolha um arquivo…"
 
 msgid "Install for"
 msgstr "Instalar para"
