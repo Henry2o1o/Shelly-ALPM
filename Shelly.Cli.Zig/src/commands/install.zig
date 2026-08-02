@@ -987,7 +987,7 @@ fn classifyPackageSource(value: []const u8) PackageSource {
         std.mem.indexOfScalar(u8, value, '\\') != null or
         std.mem.startsWith(u8, value, "~") or
         std.fs.path.isAbsolute(value) or
-        std.fs.path.extension(value).len > 0) return .{ .file = value };
+        Zigalpm.local.file_inspector.isSupportedArchive(value)) return .{ .file = value };
     return .{ .repository = value };
 }
 
@@ -1789,9 +1789,10 @@ test "install backend failures return a failing exit code and transaction result
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
 }
 
-test "standard source classification preserves repository names files and URLs" {
+test "standard source classification preserves dotted repository names files and URLs" {
     try std.testing.expect(classifyPackageSource("core/linux") == .repository);
     try std.testing.expect(classifyPackageSource("linux") == .repository);
+    try std.testing.expect(classifyPackageSource("dotnet-sdk-8.0") == .repository);
     try std.testing.expect(classifyPackageSource("./demo.pkg.tar.zst") == .file);
     try std.testing.expect(classifyPackageSource("demo.pkg.tar.zst") == .file);
     try std.testing.expect(classifyPackageSource("https://example.test/demo.pkg.tar.zst") == .url);
