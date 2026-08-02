@@ -254,7 +254,7 @@ msgid ""
 "the logs and attach them to your report so the team can check whether the "
 "issue came from the PKGBUILD or from Shelly."
 msgstr ""
-"O Shelly não conseguiu terminar de compilar ou instalar os pacotes AUR "
+"Shelly não conseguiu terminar de compilar ou instalar os pacotes AUR "
 "selecionados {0}. Exporte os logs e anexe-os ao seu relatório para que a "
 "equipe verifique se o problema veio do PKGBUILD ou do Shelly."
 
@@ -335,7 +335,7 @@ msgid ""
 "logs and attach them to your report so the team can check whether the issue "
 "came from the PKGBUILD or from Shelly."
 msgstr ""
-"O Shelly não conseguiu terminar de compilar ou instalar os {0} selecionados. "
+"Shelly não conseguiu terminar de compilar ou instalar os {0} selecionados. "
 "Exporte os logs e anexe-os ao seu relatório para que a equipe verifique se o "
 "problema veio do PKGBUILD ou do Shelly."
 
@@ -537,7 +537,7 @@ msgid ""
 "It is not advised you do partial system updates. Are you sure you want to "
 "continue?"
 msgstr ""
-"Atualizar o sistema parcialmente é contraindicado. Você tem certeza que você "
+"Não é recomendado atualizar o sistema parcialmente. Você tem certeza que você "
 "quer continuar?"
 
 msgid ""
@@ -627,7 +627,7 @@ msgid "Image Files"
 msgstr "Arquivos de imagem"
 
 msgid "Enable AUR?"
-msgstr "Habilitar AUR"
+msgstr "Ativar AUR"
 
 msgid ""
 "The Arch User Repository (AUR) is a community-driven repository. Packages "
@@ -1010,19 +1010,19 @@ msgid "General"
 msgstr "Geral"
 
 msgid "Enable AUR"
-msgstr "Habilitar AUR"
+msgstr "Ativar AUR"
 
 msgid "Enable Flatpak"
-msgstr "Habilitar Flatpak"
+msgstr "Ativar Flatpak"
 
 msgid "Enable Recommended Page"
-msgstr "Habilitar página de recomendações"
+msgstr "Ativar página de recomendações"
 
 msgid "Enable AppImage"
-msgstr "Habilitar AppImage"
+msgstr "Ativar AppImage"
 
 msgid "Enable Tray Icon"
-msgstr "Habilitar ícone de bandeja"
+msgstr "Ativar ícone de bandeja"
 
 msgid "Use weekly schedule"
 msgstr "Usar agenda semanal"
@@ -1061,7 +1061,7 @@ msgid "Look & Feel"
 msgstr "Aparência e comportamento"
 
 msgid "Icons Enabled"
-msgstr "Habilitar ícones"
+msgstr "Ativar ícones"
 
 #, csharp-format
 msgid "Review PKGBUILD changes for {0}"
@@ -1127,10 +1127,10 @@ msgid "Remove Cache on Uninstall"
 msgstr "Remover cache ao desinstalar"
 
 msgid "Enable Shelly Search"
-msgstr "Habilitar pesquisa Shelly"
+msgstr "Ativar pesquisa Shelly"
 
 msgid "Enable Webview Visualization (experimental)"
-msgstr "Habilitar visualização webview (experimental)"
+msgstr "Ativar visualização webview (experimental)"
 
 msgid "Parallel Downloads"
 msgstr "Downloads em paralelo"
@@ -1262,7 +1262,7 @@ msgid "Let's get you set up with some basic configurations."
 msgstr "Vamos ajudar você a definir algumas configurações básicas."
 
 msgid "Enable AUR Support"
-msgstr "Habilitar suporte AUR"
+msgstr "Ativar suporte AUR"
 
 msgid ""
 "Access the Arch User Repository for a vast collection of community-"
@@ -1274,13 +1274,13 @@ msgstr ""
 "portanto, tenha cuidado ao usá-lo."
 
 msgid "Enable Flatpak Support"
-msgstr "Habilitar suporte ao Flatpak"
+msgstr "Ativar suporte ao Flatpak"
 
 msgid "Enable support for Flatpak applications from Flathub and other remotes."
-msgstr "Habilitar suporte para aplicações do Flathub ou outras remotas."
+msgstr "Ativar suporte para aplicações do Flathub ou outras remotas."
 
 msgid "Enable AppImage Support"
-msgstr "Habilitar suporte para AppImages"
+msgstr "Ativar suporte para AppImages"
 
 msgid "Manage and configure updates for AppImage applications easily."
 msgstr "Gerencie e configure atualizações para AppImages com facilidade"
@@ -1375,7 +1375,7 @@ msgid "Downgrade"
 msgstr "Fazer downgrade"
 
 msgid "Enable Package Downgrade"
-msgstr "Habilitar downgrade de pacotes"
+msgstr "Ativar downgrade de pacotes"
 
 msgid "PKGBUILD Diff - {0}"
 msgstr "Diff PKGBUILD - {0}"
@@ -1528,7 +1528,7 @@ msgid "Language"
 msgstr "Língua"
 
 msgid "Enable Recommended"
-msgstr "Habilitar pacotes recomendados"
+msgstr "Ativar pacotes recomendados"
 
 msgid ":"
 msgstr ""
@@ -1543,7 +1543,7 @@ msgid ""
 "If enabled, Shelly will use a symbolic svg icon instead of the default image "
 "one."
 msgstr "Se habilitado, o Shelly irá utilizar um ícone SVG simbólico em vez "
-"da imagem pradrão"
+"da imagem padrão"
 
 msgid "AppImage Install Path"
 msgstr "Caminho de instalação das AppImages"
@@ -1890,7 +1890,7 @@ msgid "Recommendations"
 msgstr "Recomendações"
 
 msgid "Remove from selection"
-msgstr "Remover a paritr da seleção"
+msgstr "Remover a partir da seleção"
 
 msgid "remove"
 msgstr "remover"
@@ -1961,7 +1961,7 @@ msgid "Purifying packages"
 msgstr "Purificando pacotes"
 
 msgid "Enable"
-msgstr "Habilitar"
+msgstr "Ativar"
 
 msgid "AUR enabled"
 msgstr "AUR habilitada"
@@ -2267,7 +2267,7 @@ msgstr ""
 "confia no que está instalando."
 
 msgid "Enable Recommended?"
-msgstr "Habilitar pacotes recomendados?"
+msgstr "Ativar pacotes recomendados?"
 
 msgid ""
 "Recommended shows curated package suggestions based on your installed "
