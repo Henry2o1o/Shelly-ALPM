@@ -625,9 +625,10 @@ pub const Manager = struct {
     }
 
     pub fn updatePackages(self: *Self, package_names: []const []const u8) !void {
+        var completion: operation_api.CompletionStatus = .success;
         var operation_scope = OperationScope.init(self, .update, if (package_names.len == 0) null else package_names[0]);
         operation_scope.attach();
-        defer operation_scope.finish(.success);
+        defer operation_scope.finish(completion);
         errdefer operation_scope.fail();
         try self.checkCancelled();
         const message = try std.mem.join(self.allocator, ", ", package_names);
@@ -635,7 +636,15 @@ pub const Manager = struct {
         const text = try std.fmt.allocPrint(self.allocator, "Updating {d} packages: {s}", .{ package_names.len, message });
         defer self.allocator.free(text);
         self.raiseInfo(.informational_output, null, text, null, null);
-        try self.installPackagesImpl(package_names);
+        var result = try self.installPackagesImpl(package_names);
+        defer result.deinit(self.allocator);
+
+        if (result.failures.len > 0) {
+            for (result.failures, 0..) |failure, index| {
+                self.raisePackageProgress(.aur_package_failed, failure.package_name, index + 1, result.failures.len, failure.reason);
+                completion = .failed;
+            }
+        }
     }
 
     pub fn fetchPkgbuild(self: *Self, package_name: []const u8) ![]u8 {
@@ -688,14 +697,37 @@ pub const Manager = struct {
     }
 
     pub fn installPackages(self: *Self, package_names: []const []const u8) !void {
+        var completion: operation_api.CompletionStatus = .success;
         var operation_scope = OperationScope.init(self, .install, if (package_names.len == 0) null else package_names[0]);
         operation_scope.attach();
-        defer operation_scope.finish(.success);
+        defer operation_scope.finish(completion);
         errdefer operation_scope.fail();
-        try self.installPackagesImpl(package_names);
+
+        var result = try self.installPackagesImpl(package_names);
+        defer result.deinit(self.allocator);
+
+        if (result.failures.len > 0) {
+            for (result.failures, 0..) |failure, index| {
+                self.raisePackageProgress(.aur_package_failed, failure.package_name, index + 1, result.failures.len, failure.reason);
+                completion = .failed;
+            }
+        }
     }
 
-    fn installPackagesImpl(self: *Self, package_names: []const []const u8) !void {
+    const PackageFailure = struct {
+        package_name: []const u8,
+        reason: []const u8,
+    };
+
+    const PackageResult = struct {
+        failures: []const PackageFailure,
+
+        fn deinit(self: *PackageResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.failures);
+        }
+    };
+
+    fn installPackagesImpl(self: *Self, package_names: []const []const u8) !PackageResult {
         try self.checkCancelled();
         try self.alpm.refresh();
 
@@ -712,6 +744,9 @@ pub const Manager = struct {
             plan.selected_optional = try self.selectOptionalDependencies(&plan.prepared.info);
         try self.confirmInstallPlans(plans.items);
 
+        var failures: std.ArrayList(PackageFailure) = .empty;
+        defer failures.deinit(self.allocator);
+
         for (plans.items, 0..) |*plan, index| {
             const prepared = &plan.prepared;
             const package_name = prepared.package_name;
@@ -727,6 +762,7 @@ pub const Manager = struct {
             try self.prepareBuildDirectory(prepared.cache_path);
             self.raisePackageProgress(.aur_build_start, package_name, current, plans.items.len, "Building package with makepkg");
             if (!(try self.buildPreparedPackage(prepared, false))) {
+                try failures.append(self.allocator, .{ .package_name = package_name, .reason = "Failed to build package" });
                 self.raisePackageProgress(.aur_package_failed, package_name, current, plans.items.len, "Failed to build package with makepkg");
                 continue;
             }
@@ -735,6 +771,7 @@ pub const Manager = struct {
             const package_files = try self.selectBuiltPackageFiles(prepared.cache_path, requested_names);
             defer builder.deinitPaths(self.allocator, package_files);
             if (package_files.len == 0) {
+                try failures.append(self.allocator, .{ .package_name = package_name, .reason = "No matching package files produced by makepkg" });
                 self.raisePackageProgress(.aur_package_failed, package_name, current, plans.items.len, "No matching package files produced by makepkg");
                 continue;
             }
@@ -757,6 +794,7 @@ pub const Manager = struct {
             for (requested_names) |requested_name|
                 self.raisePackageProgress(.aur_package_completed, requested_name, current, plans.items.len, "");
         }
+        return PackageResult{ .failures = failures.items };
     }
 
     fn prepareInstallPlans(
