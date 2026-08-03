@@ -3073,6 +3073,153 @@ test "all requested PKGBUILDs are reviewed before the first build" {
     try std.testing.expectEqual(@as(usize, 1), failure_capture.count);
 }
 
+test "AUR package failures are emitted after all builds and fail the operation" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const root = try temporary.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const remote_root = try std.fs.path.join(allocator, &.{ root, "remotes" });
+    defer allocator.free(remote_root);
+    const cache_root = try std.fs.path.join(allocator, &.{ root, "cache" });
+    defer allocator.free(cache_root);
+    const alpm_root = try std.fs.path.join(allocator, &.{ root, "alpm-root" });
+    defer allocator.free(alpm_root);
+    const db_path = try std.fs.path.join(allocator, &.{ root, "db" });
+    defer allocator.free(db_path);
+    const package_cache = try std.fs.path.join(allocator, &.{ root, "packages" });
+    defer allocator.free(package_cache);
+    try std.Io.Dir.cwd().createDirPath(io, remote_root);
+    try std.Io.Dir.cwd().createDirPath(io, cache_root);
+    try std.Io.Dir.cwd().createDirPath(io, alpm_root);
+    try std.Io.Dir.cwd().createDirPath(io, db_path);
+    try std.Io.Dir.cwd().createDirPath(io, package_cache);
+    try createAurFixtureRepository(allocator, io, remote_root, "failure-one", null);
+    try createAurFixtureRepository(allocator, io, remote_root, "failure-two", null);
+
+    const fake_makepkg_path = try std.fs.path.join(allocator, &.{ root, "fake-makepkg" });
+    defer allocator.free(fake_makepkg_path);
+    try writeFixtureFile(io, fake_makepkg_path, "#!/bin/sh\nexit 1\n", true);
+
+    const config_path = try std.fs.path.join(allocator, &.{ root, "pacman.conf" });
+    defer allocator.free(config_path);
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\nArchitecture = auto\nSigLevel = Never\nRootDir = {s}\nDBPath = {s}\nCacheDir = {s}\n",
+        .{ alpm_root, db_path, package_cache },
+    );
+    defer allocator.free(config);
+    try writeFixtureFile(io, config_path, config, false);
+
+    var operation_context = operation_api.OperationContext.init(allocator, io);
+    defer operation_context.deinit();
+    operation_context.setQuestionHandler(.{
+        .function = struct {
+            fn answer(_: ?*anyopaque, question: operation_api.Question) operation_api.QuestionResponse {
+                return switch (question.kind) {
+                    .review_changes, .confirm_transaction => .accepted,
+                    else => .default,
+                };
+            }
+        }.answer,
+    });
+
+    const Capture = struct {
+        expected_kind: operation_api.OperationKind = .install,
+        build_starts: usize = 0,
+        failure_statuses: usize = 0,
+        failure_progress: usize = 0,
+        failure_one: usize = 0,
+        failure_two: usize = 0,
+        emitted_before_all_builds: bool = false,
+        completion_before_failures: bool = false,
+        completion: ?operation_api.CompletionStatus = null,
+
+        fn reset(self: *@This(), kind: operation_api.OperationKind) void {
+            self.* = .{ .expected_kind = kind };
+        }
+
+        fn handle(data: ?*anyopaque, event: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            const envelope = switch (event) {
+                inline else => |payload| payload.envelope,
+            };
+            if (envelope.backend != .aur or
+                envelope.kind != self.expected_kind or
+                envelope.parent_id != null) return;
+
+            switch (event) {
+                .status => |status| {
+                    const code = status.code orelse return;
+                    if (std.mem.eql(u8, code, "aur_build_start")) {
+                        self.build_starts += 1;
+                    } else if (std.mem.eql(u8, code, "aur_package_failed")) {
+                        self.failure_statuses += 1;
+                        if (self.build_starts != 2) self.emitted_before_all_builds = true;
+                        std.debug.assert(std.mem.eql(u8, status.message, "Failed to build package"));
+                    }
+                },
+                .progress => |progress| {
+                    const stage = progress.update.stage orelse return;
+                    if (!std.mem.eql(u8, stage, "aur_package_failed")) return;
+                    self.failure_progress += 1;
+                    if (self.build_starts != 2) self.emitted_before_all_builds = true;
+                    const name = progress.update.message orelse return;
+                    if (std.mem.eql(u8, name, "failure-one")) self.failure_one += 1;
+                    if (std.mem.eql(u8, name, "failure-two")) self.failure_two += 1;
+                },
+                .completed => |completed| {
+                    self.completion = completed.status;
+                    self.completion_before_failures = self.failure_statuses != 2 or self.failure_progress != 2;
+                },
+                else => {},
+            }
+        }
+    };
+    var capture: Capture = .{};
+    const subscription = try operation_context.subscribe(.{
+        .function = Capture.handle,
+        .data = &capture,
+    });
+    defer _ = operation_context.unsubscribe(subscription);
+
+    var manager = try Manager.init(allocator, std.testing.environ, .{
+        .config_path = config_path,
+        .cache_root = cache_root,
+        .aur_git_base_url = remote_root,
+        .makepkg_command = fake_makepkg_path,
+    });
+    defer manager.deinit();
+    manager.setOperationContext(&operation_context);
+    defer manager.setOperationContext(null);
+    _ = try manager.cachePkgbase("failure-one", "failure-one");
+    _ = try manager.cachePkgbase("failure-two", "failure-two");
+
+    const package_names = &.{ "failure-one", "failure-two" };
+    try manager.installPackages(package_names);
+    try std.testing.expectEqual(@as(usize, 2), capture.build_starts);
+    try std.testing.expectEqual(@as(usize, 2), capture.failure_statuses);
+    try std.testing.expectEqual(@as(usize, 2), capture.failure_progress);
+    try std.testing.expectEqual(@as(usize, 1), capture.failure_one);
+    try std.testing.expectEqual(@as(usize, 1), capture.failure_two);
+    try std.testing.expect(!capture.emitted_before_all_builds);
+    try std.testing.expect(!capture.completion_before_failures);
+    try std.testing.expectEqual(operation_api.CompletionStatus.failed, capture.completion.?);
+
+    capture.reset(.update);
+    try manager.updatePackages(package_names);
+    try std.testing.expectEqual(@as(usize, 2), capture.build_starts);
+    try std.testing.expectEqual(@as(usize, 2), capture.failure_statuses);
+    try std.testing.expectEqual(@as(usize, 2), capture.failure_progress);
+    try std.testing.expectEqual(@as(usize, 1), capture.failure_one);
+    try std.testing.expectEqual(@as(usize, 1), capture.failure_two);
+    try std.testing.expect(!capture.emitted_before_all_builds);
+    try std.testing.expect(!capture.completion_before_failures);
+    try std.testing.expectEqual(operation_api.CompletionStatus.failed, capture.completion.?);
+}
+
 test "AUR operation-hooked public APIs compile" {
     var run = false;
     std.mem.doNotOptimizeAway(&run);
