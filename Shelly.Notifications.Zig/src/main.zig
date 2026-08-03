@@ -47,7 +47,6 @@ var attention_icon_name: [:0]const u8 = undefined;
 var icon_buf: [256:0]u8 = undefined;
 var updates_buf: [256:0]u8 = undefined;
 
-var wake_gen: std.atomic.Value(u32) = .init(0);
 var launch_requested = std.atomic.Value(bool).init(false);
 var quit_requested = std.atomic.Value(bool).init(false);
 
@@ -171,11 +170,6 @@ const Updates = struct {
     }
 };
 
-fn wakeWorker(io: std.Io) void {
-    _ = wake_gen.fetchAdd(1, .release);
-    io.futexWake(u32, &wake_gen.raw, 1);
-}
-
 const Worker = struct {
     updates: *Updates,
     cli: ShellyCli,
@@ -207,10 +201,10 @@ const Worker = struct {
 
             _ = self.config.dirty.swap(false, .seq_cst);
 
-            const expected = wake_gen.load(.acquire);
+            const expected = runtime.wake_gen.load(.acquire);
             self.io.futexWaitTimeout(
                 u32,
-                &wake_gen.raw,
+                &runtime.wake_gen.raw,
                 expected,
                 .{ .duration = .{ .raw = .fromSeconds(secs), .clock = .awake } },
             ) catch {};
@@ -588,7 +582,7 @@ fn onEvent(ctx: ?*anyopaque, id: i32) void {
 
     log_menu.debug("check_update_index: {}", .{check_update_index});
     if (id == check_update_index) {
-        wakeWorker(updates.io);
+        runtime.wakeWorker();
     }
 
     if (id == open_shelly_index) {
@@ -618,8 +612,8 @@ fn formatCheckTime(arena: std.mem.Allocator, ts: i64) ![]const u8 {
 
 fn onUiRefresh(ctx: ?*anyopaque, msg: zsn.Message) void {
     _ = msg;
-    const updates: *Updates = @ptrCast(@alignCast(ctx.?));
-    wakeWorker(updates.io);
+    _ = ctx;
+    runtime.wakeWorker();
 }
 
 fn onTrayActivate(ctx: ?*anyopaque, x: i32, y: i32) void {
