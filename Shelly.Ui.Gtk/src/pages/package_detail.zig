@@ -227,6 +227,8 @@ pub const PackageDetail = extern struct {
         if (package.BuildDate.len > 0) add_spec_row(p.spec_box, translations._("Build Date"), package.BuildDate);
         if (package.InstallReason.len > 0) add_spec_row(p.spec_box, translations._("Install Reason"), package.InstallReason);
 
+        if (package.Url) |u| if (u.len > 0) add_url_spec_row(p.spec_box, translations._("URL"), u);
+
         clear_box(p.sections_box);
         const alloc = (p.arena orelse return).allocator();
 
@@ -257,6 +259,29 @@ pub const PackageDetail = extern struct {
         gtk.Label.setXalign(val, 1);
         gtk.Label.setEllipsize(val, .end);
         gtk.Widget.addCssClass(val.as(gtk.Widget), "spec-value");
+        gtk.Box.append(row, val.as(gtk.Widget));
+        gtk.Box.append(box, row.as(gtk.Widget));
+    }
+
+    fn add_url_spec_row(box: *gtk.Box, label: []const u8, value: []const u8) void {
+        var lbuf: [64]u8 = undefined;
+        const row = gtk.Box.new(.horizontal, 8);
+        gtk.Widget.setMarginTop(row.as(gtk.Widget), 10);
+        gtk.Widget.setMarginBottom(row.as(gtk.Widget), 10);
+        gtk.Widget.addCssClass(row.as(gtk.Widget), "spec-row");
+        const key = gtk.Label.new(c_string.cstr(&lbuf, label));
+        gtk.Widget.setHalign(key.as(gtk.Widget), .start);
+        gtk.Label.setXalign(key, 0);
+        gtk.Widget.addCssClass(key.as(gtk.Widget), "dim-label");
+        gtk.Box.append(row, key.as(gtk.Widget));
+        var mbuf: [256]u8 = undefined;
+        const markup = std.fmt.bufPrintZ(&mbuf, "<a href=\"{s}\">{s}</a>", .{ value, value }) catch return;
+        const val = gtk.Label.new(null);
+        gtk.Label.setMarkup(val, markup);
+        gtk.Widget.setHalign(val.as(gtk.Widget), .end);
+        gtk.Widget.setHexpand(val.as(gtk.Widget), 1);
+        gtk.Label.setXalign(val, 1);
+        gtk.Label.setEllipsize(val, .end);
         gtk.Box.append(row, val.as(gtk.Widget));
         gtk.Box.append(box, row.as(gtk.Widget));
     }
