@@ -1202,7 +1202,7 @@ msgid "Update Strategy"
 msgstr "Estratégia de atualizações"
 
 msgid "Update URL / Repository Info"
-msgstr "URL de Atualização / Informações do repositório"
+msgstr "Endereço de Atualização / Informações do repositório"
 
 msgid "e.g. repo or https://..."
 msgstr "ex: repo ou https://..."
@@ -1510,7 +1510,7 @@ msgid "Drop AppImage here to install"
 msgstr "Arraste sua AppImage até aqui para instalar"
 
 msgid "Get more information about Update URL / Repository Info"
-msgstr "Obter mais informações sobre a URL de atualizações/ Informações do repositório"
+msgstr "Obter mais informações sobre o endereço de atualizações/ Informações do repositório"
 
 msgid "e.g. owner/repo or https://..."
 msgstr "Ex: dono/repo ou https:// ..."
@@ -1602,7 +1602,7 @@ msgid "Removing Remote"
 msgstr "Removendo o remoto"
 
 msgid "Adding Remote"
-msgstr "Adicionando remota"
+msgstr "Adicionando o remoto"
 
 msgid "Removing Flatpak"
 msgstr "Removendo Flatpak"
