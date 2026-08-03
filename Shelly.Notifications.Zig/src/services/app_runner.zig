@@ -2,6 +2,8 @@ const std = @import("std");
 
 const conch = @import("zsn");
 const Service = conch.Service;
+const wakeWorker = @import("../main.zig").wakeWorker;
+const runtime = @import("../runtime.zig");
 
 const log = std.log.scoped(.runner);
 
@@ -101,7 +103,13 @@ pub const AppRunner = struct {
             log.err("failed to spawn terminal '{s}': {any}", .{ terminal, e });
             return e;
         };
-        _ = &child;
+
+        _ = child.wait(runtime.io) catch |e| {
+            log.warn("failed to wait for terminal process: {any}", .{e});
+        };
+        log.info("update finished, terminal closed", .{});
+
+        runtime.wakeWorker();
     }
 
     pub fn activateOrLaunch(self: *AppRunner, service: *Service) !void {
