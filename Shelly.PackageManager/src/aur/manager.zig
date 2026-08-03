@@ -762,8 +762,7 @@ pub const Manager = struct {
             try self.prepareBuildDirectory(prepared.cache_path);
             self.raisePackageProgress(.aur_build_start, package_name, current, plans.items.len, "Building package with makepkg");
             if (!(try self.buildPreparedPackage(prepared, false))) {
-                try failures.append(self.allocator, .{ .package_name = package_name, .reason = "Failed to build package" });
-                self.raisePackageProgress(.aur_package_failed, package_name, current, plans.items.len, "Failed to build package with makepkg");
+                try failures.append(self.allocator, .{ .package_name = self.allocator.dupe(u8, package_name) catch "", .reason = "Failed to build package" });
                 continue;
             }
             self.raisePackageProgress(.aur_build_done, package_name, current, plans.items.len, "");
@@ -771,8 +770,7 @@ pub const Manager = struct {
             const package_files = try self.selectBuiltPackageFiles(prepared.cache_path, requested_names);
             defer builder.deinitPaths(self.allocator, package_files);
             if (package_files.len == 0) {
-                try failures.append(self.allocator, .{ .package_name = package_name, .reason = "No matching package files produced by makepkg" });
-                self.raisePackageProgress(.aur_package_failed, package_name, current, plans.items.len, "No matching package files produced by makepkg");
+                try failures.append(self.allocator, .{ .package_name = self.allocator.dupe(u8, package_name) catch "", .reason = "No matching package files produced by makepkg" });
                 continue;
             }
             self.raisePackageProgress(.aur_install_start, package_name, current, plans.items.len, "");
@@ -794,7 +792,7 @@ pub const Manager = struct {
             for (requested_names) |requested_name|
                 self.raisePackageProgress(.aur_package_completed, requested_name, current, plans.items.len, "");
         }
-        return PackageResult{ .failures = failures.items };
+        return PackageResult{ .failures = failures.toOwnedSlice(self.allocator) };
     }
 
     fn prepareInstallPlans(
