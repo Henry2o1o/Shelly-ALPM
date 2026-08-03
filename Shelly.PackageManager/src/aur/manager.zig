@@ -747,7 +747,13 @@ pub const Manager = struct {
         try self.confirmInstallPlans(plans.items);
 
         var failures: std.ArrayList(PackageFailure) = .empty;
-        defer failures.deinit(self.allocator);
+
+        errdefer {
+            for (failures.items) |failure| {
+                self.allocator.free(failure.package_name);
+            }
+            failures.deinit(self.allocator);
+        }
 
         for (plans.items, 0..) |*plan, index| {
             const prepared = &plan.prepared;
@@ -764,7 +770,14 @@ pub const Manager = struct {
             try self.prepareBuildDirectory(prepared.cache_path);
             self.raisePackageProgress(.aur_build_start, package_name, current, plans.items.len, "Building package with makepkg");
             if (!(try self.buildPreparedPackage(prepared, false))) {
-                try failures.append(self.allocator, .{ .package_name = self.allocator.dupe(u8, package_name) catch return error.OutOfMemory, .reason = "Failed to build package" });
+                const owned_name = try self.allocator.dupe(u8, package_name);
+                failures.append(self.allocator, .{
+                    .package_name = owned_name,
+                    .reason = "Failed to build package",
+                }) catch |err| {
+                    self.allocator.free(owned_name);
+                    return err;
+                };
                 continue;
             }
             self.raisePackageProgress(.aur_build_done, package_name, current, plans.items.len, "");
@@ -772,7 +785,14 @@ pub const Manager = struct {
             const package_files = try self.selectBuiltPackageFiles(prepared.cache_path, requested_names);
             defer builder.deinitPaths(self.allocator, package_files);
             if (package_files.len == 0) {
-                try failures.append(self.allocator, .{ .package_name = self.allocator.dupe(u8, package_name) catch "", .reason = "No matching package files produced by makepkg" });
+                const owned_name = try self.allocator.dupe(u8, package_name);
+                failures.append(self.allocator, .{
+                    .package_name = owned_name,
+                    .reason = "No matching package files produced by makepkg",
+                }) catch |err| {
+                    self.allocator.free(owned_name);
+                    return err;
+                };
                 continue;
             }
             self.raisePackageProgress(.aur_install_start, package_name, current, plans.items.len, "");
@@ -794,7 +814,7 @@ pub const Manager = struct {
             for (requested_names) |requested_name|
                 self.raisePackageProgress(.aur_package_completed, requested_name, current, plans.items.len, "");
         }
-        return PackageResult{ .failures = failures.toOwnedSlice(self.allocator) catch return error.OutOfMemory };
+        return .{ .failures = try failures.toOwnedSlice(self.allocator) };
     }
 
     fn prepareInstallPlans(
