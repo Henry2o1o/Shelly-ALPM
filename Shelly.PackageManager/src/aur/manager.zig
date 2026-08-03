@@ -723,6 +723,8 @@ pub const Manager = struct {
         failures: []const PackageFailure,
 
         fn deinit(self: *PackageResult, allocator: std.mem.Allocator) void {
+            for (self.failures) |failure|
+                allocator.free(failure.package_name);
             allocator.free(self.failures);
         }
     };
@@ -762,7 +764,7 @@ pub const Manager = struct {
             try self.prepareBuildDirectory(prepared.cache_path);
             self.raisePackageProgress(.aur_build_start, package_name, current, plans.items.len, "Building package with makepkg");
             if (!(try self.buildPreparedPackage(prepared, false))) {
-                try failures.append(self.allocator, .{ .package_name = self.allocator.dupe(u8, package_name) catch "", .reason = "Failed to build package" });
+                try failures.append(self.allocator, .{ .package_name = self.allocator.dupe(u8, package_name) catch return error.OutOfMemory, .reason = "Failed to build package" });
                 continue;
             }
             self.raisePackageProgress(.aur_build_done, package_name, current, plans.items.len, "");
@@ -792,7 +794,7 @@ pub const Manager = struct {
             for (requested_names) |requested_name|
                 self.raisePackageProgress(.aur_package_completed, requested_name, current, plans.items.len, "");
         }
-        return PackageResult{ .failures = failures.toOwnedSlice(self.allocator) };
+        return PackageResult{ .failures = failures.toOwnedSlice(self.allocator) catch return error.OutOfMemory };
     }
 
     fn prepareInstallPlans(
