@@ -561,7 +561,7 @@ pub const PackagePage = extern struct {
 
         const needle = p.search_text[0..p.search_len];
 
-        return @intFromBool(contains_ignore_case(pkg.getName(), needle));
+        return @intFromBool(contains_ignore_case(pkg.getName(), needle) or contains_ignore_case(pkg.getDescription(), needle));
     }
 
     fn contains_ignore_case(haystack: []const u8, needle: []const u8) bool {
