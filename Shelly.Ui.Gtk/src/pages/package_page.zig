@@ -196,8 +196,18 @@ pub const PackagePage = extern struct {
         attachSorter(p.repository_column, sorters.stringSorter(PackageObject, &PackageObject.getRepository));
         attachSorter(p.version_column, sorters.stringSorter(PackageObject, &PackageObject.getVersion));
 
+        const group = gio.SimpleActionGroup.new();
+        const action = gio.SimpleAction.new("focus", null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, &onFocusSearch, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "search", group.as(gio.ActionGroup));
+
         applyOptionsFromConfig(self);
         support.connectLifecycle(Self, self);
+    }
+
+    fn onFocusSearch(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = gtk.Widget.grabFocus(self.priv().search_entry.as(gtk.Widget));
     }
 
     fn attachSorter(column: *gtk.ColumnViewColumn, sorter: *gtk.Sorter) void {
