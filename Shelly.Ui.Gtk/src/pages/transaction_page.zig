@@ -635,17 +635,10 @@ pub const TransactionPage = extern struct {
             const arena = p.arena orelse return;
             var end: gtk.TextIter = undefined;
             gtk.TextBuffer.getEndIter(buffer, &end);
-            const start_off = gtk.TextIter.getOffset(&end);
             const start_mark = gtk.TextBuffer.createMark(buffer, null, &end, 1);
             gtk.TextBuffer.insert(buffer, &end, text_z, @intCast(normalized.len));
-            const after_text_off = gtk.TextIter.getOffset(&end);
             const end_mark = gtk.TextBuffer.createMark(buffer, null, &end, 0);
             gtk.TextBuffer.insert(buffer, &end, "\n", 1);
-            const after_nl_off = gtk.TextIter.getOffset(&end);
-
-            std.debug.print("  NEW {s}: normlen={} off {}->{}->{} (text='{s}')\n", .{
-                key, normalized.len, start_off, after_text_off, after_nl_off, normalized,
-            });
 
             const owned_key = arena.allocator().dupe(u8, key) catch return;
             p.progress_lines.put(arena.allocator(), owned_key, .{ .start = start_mark, .end = end_mark }) catch return;
