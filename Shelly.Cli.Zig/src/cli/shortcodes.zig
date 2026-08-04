@@ -117,12 +117,12 @@ pub fn translate(
     const path = try std.fmt.allocPrint(
         allocator,
         "shelly {s} {s}",
-        .{ variant.action, variant.type_name },
+        .{ variant.action.name(), variant.name },
     );
     const command = manifest.findByPath(path) orelse return error.InvalidCatalog;
 
     var result: std.ArrayList([]const u8) = .empty;
-    try result.appendSlice(allocator, &.{ variant.action, variant.type_name });
+    try result.appendSlice(allocator, &.{ variant.action.name(), variant.name });
     for (token[3..]) |modifier| {
         const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
         if (findLocalOption(command, alias) != null) {
@@ -136,7 +136,7 @@ pub fn translate(
         return .{ .failure = try std.fmt.allocPrint(
             allocator,
             "Unknown modifier '{c}' for '{s} {s}'. Valid modifiers: {s}",
-            .{ modifier, variant.action, variant.type_name, try validModifiers(allocator, manifest, command) },
+            .{ modifier, variant.action.name(), variant.name, try validModifiers(allocator, manifest, command) },
         ) };
     }
     try result.appendSlice(allocator, args[1..]);
@@ -190,12 +190,12 @@ fn translateStandaloneAction(
     const path = try std.fmt.allocPrint(
         allocator,
         "shelly {s} {s}",
-        .{ variant.action, variant.type_name },
+        .{ variant.action.name(), variant.name },
     );
     const command = manifest.findByPath(path) orelse return error.InvalidCatalog;
 
     var result: std.ArrayList([]const u8) = .empty;
-    try result.append(allocator, variant.action);
+    try result.append(allocator, variant.action.name());
     for (token[2..]) |modifier| {
         const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
         if (findLocalOption(command, alias) != null) {
@@ -209,7 +209,7 @@ fn translateStandaloneAction(
         return .{ .failure = try std.fmt.allocPrint(
             allocator,
             "Unknown modifier '{c}' for '{s}'. Valid modifiers: {s}",
-            .{ modifier, variant.action, try validModifiers(allocator, manifest, command) },
+            .{ modifier, variant.action.name(), try validModifiers(allocator, manifest, command) },
         ) };
     }
     try result.appendSlice(allocator, args[1..]);
@@ -249,7 +249,7 @@ fn translateCombinedSearch(
             try modifiers.append(allocator, code);
             continue;
         };
-        if (!std.mem.eql(u8, variant.action, "search")) {
+        if (variant.action != .search) {
             try modifiers.append(allocator, code);
             continue;
         }
@@ -270,7 +270,7 @@ fn translateCombinedSearch(
         const path = try std.fmt.allocPrint(
             allocator,
             "shelly {s} {s}",
-            .{ variant.action, variant.type_name },
+            .{ variant.action.name(), variant.name },
         );
         try commands.append(allocator, manifest.findByPath(path) orelse return error.InvalidCatalog);
     }
@@ -278,7 +278,7 @@ fn translateCombinedSearch(
     var expanded: std.ArrayList([]const []const u8) = .empty;
     for (selected.items, commands.items) |variant, command| {
         var result: std.ArrayList([]const u8) = .empty;
-        try result.appendSlice(allocator, &.{ variant.action, variant.type_name });
+        try result.appendSlice(allocator, &.{ variant.action.name(), variant.name });
         for (modifiers.items) |modifier| {
             const alias = try std.fmt.allocPrint(allocator, "-{c}", .{modifier});
             if (findLocalOption(command, alias) != null) {
@@ -326,7 +326,7 @@ fn findRecursiveHelpOption(manifest: *const spec.Manifest, alias: []const u8) ?*
 fn validTypes(allocator: std.mem.Allocator, action_code: u8) ![]const u8 {
     var result: std.ArrayList(u8) = .empty;
     for (catalog.variants) |variant| {
-        if (variant.action_code != action_code or variant.type_code == null) continue;
+        if (variant.action.code() != action_code or variant.type_code == null) continue;
         if (result.items.len > 0) try result.appendSlice(allocator, ", ");
         try result.append(allocator, variant.type_code.?);
     }
@@ -733,16 +733,16 @@ test "every catalog leaf supports native long-form help and shortcode help" {
         const long_form = try @import("parser.zig").parse(
             allocator,
             &manifest,
-            &.{ variant.action, variant.type_name, "--help" },
+            &.{ variant.action.name(), variant.name, "--help" },
         );
         try std.testing.expect(long_form == .help);
-        try std.testing.expectEqualStrings(variant.action, long_form.help.parentPath.?["shelly ".len..]);
+        try std.testing.expectEqualStrings(variant.action.name(), long_form.help.parentPath.?["shelly ".len..]);
 
-        if (variant.action_code == null or variant.type_code == null) continue;
+        const type_code = variant.type_code orelse continue;
         const token = try std.fmt.allocPrint(
             allocator,
             "-{c}{c}h",
-            .{ variant.action_code.?, variant.type_code.? },
+            .{ variant.action.code(), type_code },
         );
         const translated = try translate(allocator, &manifest, &.{token});
         const translated_arguments = translated.arguments() orelse return error.ShortcodeTranslationFailed;

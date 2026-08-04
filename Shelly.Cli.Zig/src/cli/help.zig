@@ -528,7 +528,7 @@ fn modifierMustBeSeparate(command: *const spec.Command, modifier: u8) bool {
     const action_code = command.actionCode orelse return false;
     if (action_code != 'S') return false;
     const variant = catalog.findVariantByCodes(action_code, modifier) orelse return false;
-    return std.mem.eql(u8, variant.action, "search");
+    return variant.action == .search;
 }
 
 fn displayTypeCode(command: *const spec.Command) ?u8 {
