@@ -3,7 +3,7 @@ msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
 "POT-Creation-Date: 2026-07-03 00:26+0000\n"
-"PO-Revision-Date: 2026-07-31 22:11+0200\n"
+"PO-Revision-Date: 2026-08-04 21:24+0200\n"
 "Last-Translator: helge1o1o1@gmail.com\n"
 "Language-Team: Deutschland (Deutsch) helge1o1o1@gmail.com\n"
 "Language: de\n"
@@ -862,6 +862,11 @@ msgstr "Update verfügbar: {0}"
 
 msgid "Invalid URL. Must start with http:// or https://"
 msgstr "Ungültige URL. Muss mit http:// oder https:// beginnen"
+
+msgid ""
+"Invalid Forgejo URL. Use http(s)://host/owner/repo or http(s)://host/owner/"
+"repo/releases"
+msgstr ""
 
 msgid "Select AppImage to Install"
 msgstr "AppImage zum Installieren auswählen"
@@ -2208,3 +2213,161 @@ msgstr "Update"
 
 msgid "Utilities"
 msgstr "Hilfsprogramme"
+
+msgid "Recommended Packages"
+msgstr "Empfohlene Pakete"
+
+msgid "Curated suggestions from Seafoam Labs"
+msgstr "Ausgewählte Empfehlungen von Seafoam Labs"
+
+msgid "Refresh the recommended packages list from the network"
+msgstr "Liste der empfohlenen Pakete aus dem Netzwerk aktualisieren"
+
+msgid "Preview Pkgbuild"
+msgstr "PKGBUILD-Vorschau"
+
+msgid "Show Dependency Only"
+msgstr "Nur Abhängigkeit anzeigen"
+
+msgid "Show dependency packages on;y"
+msgstr "Nur Abhängigkeitspakete anzeigen"
+
+msgid "Welcome to Shelly v3"
+msgstr "Willkommen bei Shelly v3"
+
+msgid ""
+"Shelly is a modern package manager for Arch Linux. Configure your sources "
+"and preferences to get started. We have recently rewritte both the GUI and "
+"CLI in zig with a new modified UI off our previous designs."
+msgstr ""
+"Shelly ist ein moderner Paketmanager für Arch Linux. Konfiguriere deine "
+"Quellen und Einstellungen, um loszulegen. Wir haben vor Kurzem sowohl die "
+"GUI als auch die CLI in Zig neu geschrieben und dabei die Benutzeroberfläche "
+"auf Basis unserer früheren Entwürfe überarbeitet."
+
+msgid "Select Your Sources"
+msgstr "Wähle deine Quellen aus"
+
+msgid ""
+"Choose which package sources you want to browse. You can always change this "
+"later in settings."
+msgstr ""
+"Wähle aus, welche Paketquellen du durchsuchen möchtest. Du kannst dies "
+"später jederzeit in den Einstellungen ändern."
+
+msgid "Arch User Repository community packages"
+msgstr "Community-Pakete des Arch User Repository"
+
+msgid "Sandboxed universal Linux applications"
+msgstr "In Sandbox isolierte universelle Linux-Anwendungen"
+
+msgid "Portable self-contained application bundles"
+msgstr "Portable, in sich geschlossene Anwendungspakete"
+
+msgid "Curated picks based on your installed software"
+msgstr "Ausgewählte Empfehlungen basierend auf deiner installierten Software"
+
+msgid "Look and Feel"
+msgstr "Optik und Handhabung"
+
+msgid ""
+"Customize how Shelly looks and behaves. All of these can be changed later in "
+"preferences."
+msgstr ""
+"Passe das Aussehen und Verhalten von Shelly an. All diese Einstellungen "
+"lassen sich später unter Einstellungen ändern."
+
+msgid "Navigation Style"
+msgstr "Navigationsstil"
+
+msgid "Sidebar"
+msgstr "Seitenleiste"
+
+msgid "Vertical icon rail on the left"
+msgstr "Vertikale Symbolleiste auf der linken Seite"
+
+msgid "Top Bar"
+msgstr "Leiste oben"
+
+msgid "Horizontal tab switcher at the top"
+msgstr "Horizontaler Tab-Umschalter im oberen Bereich"
+
+msgid "System Tray"
+msgstr "System-Tray"
+
+msgid "Run in system tray when minimized"
+msgstr "Bei Minimierung im Infobereich ausführen"
+
+msgid "Next"
+msgstr "Weiter"
+
+msgid "Start Shelly"
+msgstr "Shelly starten"
+
+msgid "Navigation style"
+msgstr "Navigationsstil"
+
+msgid "Maintenance and repair tools for your Shelly installation."
+msgstr "Wartungs- und Reparaturwerkzeuge für deine Shelly-Installation."
+
+msgid "Run"
+msgstr "Starten"
+
+msgid "Clean Package Cache"
+msgstr "Paket-Cache bereinigen"
+
+msgid ""
+"Removes old cached package versions, keeping the selected number per package."
+msgstr ""
+"Entfernt alte zwischengespeicherte Paketversionen und behält die ausgewählte "
+"Anzahl pro Paket bei."
+
+msgid "Keep"
+msgstr "Behalten"
+
+msgid "Number of cached versions to keep per package"
+msgstr ""
+"Anzahl der zwischengespeicherten Versionen, die pro Paket aufbewahrt werden "
+"sollen"
+
+msgid "Review PKGBUILD"
+msgstr "PKGBUILD überprüfen"
+
+msgid "Tray enabled"
+msgstr "Tray aktivieren"
+
+msgid "Tray disabled, but autostart service remains"
+msgstr "Tray-Funktion deaktiviert, aber Autostart-Dienst bleibt bestehen"
+
+msgid "Tray disabled"
+msgstr "Tray deaktiviert"
+
+msgid "Failed to add systemd startup service"
+msgstr "Fehler beim Hinzufügen des Systemd-Startdienstes"
+
+msgid "Failed to remove systemd startup service"
+msgstr "Systemd-Startdienstes entfernen fehlgeschlagen"
+
+msgid "Cleaning package cache"
+msgstr "Paket-Cache bereinigen"
+
+msgid "Welcome"
+msgstr "Willkommen"
+
+msgid ""
+"The Arch User Repository is community-maintained. Packages are not "
+"officially vetted — only enable if you trust what you install."
+msgstr ""
+"Das Arch User Repository wird von der Community gepflegt. Die Pakete werden "
+"nicht offiziell überprüft – nutze es nur, wenn du dem vertraust, was du "
+"installierst."
+
+msgid "Enable Recommended?"
+msgstr "Empfohlen aktivieren?"
+
+msgid ""
+"Recommended shows curated package suggestions based on your installed "
+"software. Package data is fetched from external sources."
+msgstr ""
+"Empfohlene Programme bieten Paketvorschläge, die auf deiner installierten "
+"Software basieren. Die Paketdaten werden aus externen Quellen abgerufen."
