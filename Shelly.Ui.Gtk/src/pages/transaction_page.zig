@@ -16,6 +16,7 @@ const runtime = @import("../services/runtime.zig");
 const MultiSelectDialog = @import("../dialog/page/multiselect.zig").MultiSelectDialog;
 const PkgbuildReviewDialog = @import("../dialog/page/pkg_build.zig").PkgbuildReviewDialog;
 const PlanDialog = @import("../dialog/page/plan.zig").PlanDialog;
+const ProviderDialog = @import("../dialog/page/provider.zig").ProviderDialog;
 const translations = @import("../helpers/translations.zig");
 
 pub const TransactionRequest = struct {
@@ -760,7 +761,20 @@ pub const TransactionPage = extern struct {
                 gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
             },
             .select_one => |q| {
-                _ = q;
+                std.debug.print("select_one: {s}\n", .{q.prompt});
+                pending.on_dismiss = &dismiss_question;
+                pending.dismiss_ctx = self;
+
+                const dialog = ProviderDialog.new(
+                    pending.arena.allocator(),
+                    "Select Provider",
+                    q.options,
+                    &on_single_select_response,
+                    pending,
+                );
+
+                gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
+                gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
             },
             .pkgbuild => |q| {
                 var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -847,6 +861,27 @@ pub const TransactionPage = extern struct {
 
         if (confirmed) {
             pending.operation.answerOptDeps(pending.questionId(), selected) catch {
+                pending.operation.cancel();
+            };
+        } else {
+            pending.operation.answerOptDeps(pending.questionId(), &.{}) catch {
+                pending.operation.cancel();
+            };
+        }
+
+        if (pending.on_dismiss) |cb| {
+            if (pending.dismiss_ctx) |c| cb(c);
+        }
+        pending.destroy();
+    }
+
+    fn on_single_select_response(ctx: ?*anyopaque, confirmed: bool, selected: usize) void {
+        const pending: *PendingQuestion = @ptrCast(@alignCast(ctx.?));
+        if (pending.completed) return;
+        pending.completed = true;
+
+        if (confirmed) {
+            pending.operation.answerProvider(pending.questionId(), selected) catch {
                 pending.operation.cancel();
             };
         } else {
