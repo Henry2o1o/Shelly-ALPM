@@ -520,6 +520,7 @@ pub fn build(b: *std.Build) void {
             "VCS checks retry and baseline transiently failed sources",
             "helper cache identity recognizes installed split-package members",
             "all requested PKGBUILDs are reviewed before the first build",
+            "AUR package failures are emitted after all builds and fail the operation",
             "AUR operation-hooked public APIs compile",
             "build progress parser recognizes makepkg percentage lines",
             "streaming process execution forwards stdout stderr and a final unterminated line",
