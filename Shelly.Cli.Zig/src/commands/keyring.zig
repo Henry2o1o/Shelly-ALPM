@@ -22,16 +22,15 @@ const RunOutcome = struct {
     failed_key: ?[]const u8 = null,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn call(
+        _: Real,
         context: *runtime.RuntimeContext,
         arguments: []const []const u8,
-    ) anyerror!u8,
+    ) !u8 {
+        return runPacmanKey(context, arguments);
+    }
 };
-
-const real_runner: Runner = .{ .call = runPacmanKey };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -47,14 +46,14 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     const action = actionForPath(invocation.command.path) orelse return 1;
     const opening = try openingMessage(context.allocator, action, invocation.positionals);
     defer context.allocator.free(opening);
@@ -93,16 +92,15 @@ fn runAction(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
     action: Action,
-    runner: Runner,
-) !RunOutcome {
+    runner: anytype,
+) anyerror!RunOutcome {
     switch (action) {
-        .init => return .{ .exit_code = try runner.call(runner.data, context, &.{ "pacman-key", "--init" }) },
-        .list => return .{ .exit_code = try runner.call(runner.data, context, &.{ "pacman-key", "--list-keys" }) },
-        .refresh => return .{ .exit_code = try runner.call(runner.data, context, &.{ "pacman-key", "--refresh-keys" }) },
+        .init => return .{ .exit_code = try runner.call(context, &.{ "pacman-key", "--init" }) },
+        .list => return .{ .exit_code = try runner.call(context, &.{ "pacman-key", "--list-keys" }) },
+        .refresh => return .{ .exit_code = try runner.call(context, &.{ "pacman-key", "--refresh-keys" }) },
         .lsign => {
             for (invocation.positionals) |key| {
                 const exit_code = try runner.call(
-                    runner.data,
                     context,
                     &.{ "pacman-key", "--lsign-key", key },
                 );
@@ -116,7 +114,7 @@ fn runAction(
             arguments[0] = "pacman-key";
             arguments[1] = "--populate";
             @memcpy(arguments[2..], invocation.positionals);
-            return .{ .exit_code = try runner.call(runner.data, context, arguments) };
+            return .{ .exit_code = try runner.call(context, arguments) };
         },
         .recv => {
             const keyserver = optionValue(invocation, "--keyserver");
@@ -132,13 +130,12 @@ fn runAction(
                 arguments[invocation.positionals.len + 2] = "--keyserver";
                 arguments[invocation.positionals.len + 3] = server;
             }
-            return .{ .exit_code = try runner.call(runner.data, context, arguments) };
+            return .{ .exit_code = try runner.call(context, arguments) };
         },
     }
 }
 
 fn runPacmanKey(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     arguments: []const []const u8,
 ) !u8 {
@@ -317,27 +314,22 @@ test "keyring maps every action to structured pacman-key arguments" {
     const Capture = struct {
         expected: []const []const []const u8,
         index: usize = 0,
+
+        fn call(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            arguments: []const []const u8,
+        ) !u8 {
+            try std.testing.expect(self.index < self.expected.len);
+            const expected = self.expected[self.index];
+            try std.testing.expectEqual(expected.len, arguments.len);
+            for (expected, arguments) |wanted, actual|
+                try std.testing.expectEqualStrings(wanted, actual);
+            self.index += 1;
+            return 0;
+        }
     };
     var capture: Capture = .{ .expected = &expected_calls };
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                arguments: []const []const u8,
-            ) !u8 {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                try std.testing.expect(observed.index < observed.expected.len);
-                const expected = observed.expected[observed.index];
-                try std.testing.expectEqual(expected.len, arguments.len);
-                for (expected, arguments) |wanted, actual|
-                    try std.testing.expectEqualStrings(wanted, actual);
-                observed.index += 1;
-                return 0;
-            }
-        }.run,
-    };
 
     for ([_][]const []const u8{
         &.{ "keyring", "init" },
@@ -359,7 +351,7 @@ test "keyring maps every action to structured pacman-key arguments" {
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     }
     try std.testing.expectEqual(expected_calls.len, capture.index);
 }
@@ -375,17 +367,15 @@ test "keyring local signing stops at the first failed key" {
     );
     try std.testing.expect(outcome == .dispatch);
 
-    var calls: usize = 0;
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: []const []const u8) !u8 {
-                const count: *usize = @ptrCast(@alignCast(data.?));
-                count.* += 1;
-                return if (count.* == 2) 9 else 0;
-            }
-        }.run,
+    const Counter = struct {
+        calls: usize = 0,
+
+        fn call(self: *@This(), _: *runtime.RuntimeContext, _: []const []const u8) !u8 {
+            self.calls += 1;
+            return if (self.calls == 2) 9 else 0;
+        }
     };
+    var counter: Counter = .{};
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
     var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -397,8 +387,8 @@ test "keyring local signing stops at the first failed key" {
         .stderr = &stderr.writer,
     };
 
-    try std.testing.expectEqual(@as(u8, 9), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expectEqual(@as(usize, 2), calls);
+    try std.testing.expectEqual(@as(u8, 9), try executeWithRunner(&context, &outcome.dispatch, &counter));
+    try std.testing.expectEqual(@as(usize, 2), counter.calls);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Failed to sign key: BBBB") != null);
 }
 
@@ -413,11 +403,11 @@ test "keyring UI mode emits transaction lifecycle frames" {
     );
     try std.testing.expect(outcome == .dispatch);
 
-    const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: []const []const u8) !u8 {
+    const Success = struct {
+        fn call(_: @This(), _: *runtime.RuntimeContext, _: []const []const u8) !u8 {
             return 0;
         }
-    }.run };
+    };
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
     var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -429,7 +419,7 @@ test "keyring UI mode emits transaction lifecycle frames" {
         .stderr = &stderr.writer,
     };
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Success{}));
     const rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[JSON]") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, rendered, "[/JSON]"));

@@ -24,18 +24,17 @@ const RunError = error{
     AppImageProcessUnavailable,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn call(
+        _: Real,
         context: *runtime.RuntimeContext,
         backend: Backend,
         kill: bool,
         target: []const u8,
-    ) anyerror!bool,
+    ) !bool {
+        return runReal(context, backend, kill, target);
+    }
 };
-
-const real_runner: Runner = .{ .call = runReal };
 
 const RunningItem = struct {
     instance_id: []const u8,
@@ -59,11 +58,10 @@ const RunningResult = struct {
 };
 
 const RunningLister = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (?*anyopaque, *runtime.RuntimeContext) anyerror!RunningResult,
+    fn list(_: @This(), context: *runtime.RuntimeContext) !RunningResult {
+        return listRunningReal(context);
+    }
 };
-
-const real_running_lister: RunningLister = .{ .call = listRunningReal };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -71,18 +69,18 @@ pub fn dispatch(
 ) !?u8 {
     const backend = backendForPath(invocation.command.path) orelse return null;
     if (backend == .flatpak and listRequested(invocation))
-        return try listRunningWith(context, invocation, real_running_lister);
+        return try listRunningWith(context, invocation, RunningLister{});
     if (invocation.positionals.len == 0)
         return try reportRunValidationFailure(context, invocation, "A package is required unless listing running Flatpaks.");
-    return try executeWithRunner(context, invocation, backend, real_runner);
+    return try executeWithRunner(context, invocation, backend, Real{});
 }
 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
     backend: Backend,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     if (invocation.positionals.len == 0)
         return try reportRunValidationFailure(context, invocation, "A package is required unless listing running Flatpaks.");
     const kill = optionEnabled(invocation, "--kill");
@@ -90,7 +88,7 @@ fn executeWithRunner(
     try writeOpening(context, invocation, backend, kill, target);
     try flush(context);
 
-    const succeeded = runner.call(runner.data, context, backend, kill, target) catch |err| {
+    const succeeded = runner.call(context, backend, kill, target) catch |err| {
         const message = try std.fmt.allocPrint(
             context.allocator,
             "Unable to {s} {s}: {t}",
@@ -114,14 +112,14 @@ fn executeWithRunner(
 fn listRunningWith(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    lister: RunningLister,
-) !u8 {
+    lister: anytype,
+) anyerror!u8 {
     if (optionEnabled(invocation, "--kill"))
         return try reportRunValidationFailure(context, invocation, "--list and --kill cannot be used together.");
     if (optionEnabled(invocation, "--list") and invocation.positionals.len != 0)
         return try reportRunValidationFailure(context, invocation, "--list does not accept a package.");
 
-    var result = lister.call(lister.data, context) catch |err| {
+    var result = lister.list(context) catch |err| {
         const message = try std.fmt.allocPrint(context.allocator, "Unable to list running Flatpaks: {t}", .{err});
         defer context.allocator.free(message);
         if (invocation.globals.ui_mode)
@@ -148,7 +146,7 @@ fn listRunningWith(
     return 0;
 }
 
-fn listRunningReal(_: ?*anyopaque, context: *runtime.RuntimeContext) !RunningResult {
+fn listRunningReal(context: *runtime.RuntimeContext) !RunningResult {
     var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
     defer manager.deinit();
     const native_items = try manager.get_running_instances_flatpak();
@@ -235,7 +233,6 @@ fn reportRunValidationFailure(
 }
 
 fn runReal(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     backend: Backend,
     kill: bool,
@@ -663,13 +660,11 @@ test "run Flatpak list renders running instances in plain and JSON output" {
     const Capture = struct {
         items: []const RunningItem,
 
-        fn list(data: ?*anyopaque, _: *runtime.RuntimeContext) !RunningResult {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
+        fn list(self: *@This(), _: *runtime.RuntimeContext) !RunningResult {
             return .{ .items = self.items };
         }
     };
     var capture: Capture = .{ .items = &items };
-    const lister: RunningLister = .{ .data = &capture, .call = Capture.list };
 
     var plain_stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer plain_stdout.deinit();
@@ -682,7 +677,7 @@ test "run Flatpak list renders running instances in plain and JSON output" {
         .stderr = &stderr.writer,
     };
     var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "run", "flatpak", "list" });
-    try std.testing.expectEqual(@as(u8, 0), try listRunningWith(&context, &outcome.dispatch, lister));
+    try std.testing.expectEqual(@as(u8, 0), try listRunningWith(&context, &outcome.dispatch, &capture));
     for ([_][]const u8{ "Application", "org.example.Editor", "1234", "Total: 1 running Flatpak" }) |value|
         try std.testing.expect(std.mem.indexOf(u8, plain_stdout.writer.buffered(), value) != null);
 
@@ -690,7 +685,7 @@ test "run Flatpak list renders running instances in plain and JSON output" {
     defer json_stdout.deinit();
     context.stdout = &json_stdout.writer;
     outcome = try parser.parse(arena.allocator(), &manifest, &.{ "run", "flatpak", "--list", "--json" });
-    try std.testing.expectEqual(@as(u8, 0), try listRunningWith(&context, &outcome.dispatch, lister));
+    try std.testing.expectEqual(@as(u8, 0), try listRunningWith(&context, &outcome.dispatch, &capture));
     try std.testing.expectEqualStrings(
         "[{\"Application\":\"org.example.Editor\",\"Instance\":\"1234567890\",\"Pid\":1234,\"ChildPid\":1235,\"Arch\":\"x86_64\",\"Branch\":\"stable\"}]\n",
         json_stdout.writer.buffered(),
@@ -713,13 +708,13 @@ test "run Flatpak list rejects kill mode" {
         .stderr = &stderr.writer,
     };
     const Unused = struct {
-        fn list(_: ?*anyopaque, _: *runtime.RuntimeContext) !RunningResult {
+        fn list(_: @This(), _: *runtime.RuntimeContext) !RunningResult {
             return error.ShouldNotRun;
         }
     };
     try std.testing.expectEqual(
         @as(u8, 1),
-        try listRunningWith(&context, &outcome.dispatch, .{ .call = Unused.list }),
+        try listRunningWith(&context, &outcome.dispatch, Unused{}),
     );
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "--list and --kill cannot be used together") != null);
 }
@@ -741,14 +736,13 @@ test "run routes all four backend modes and renders completion" {
     const Capture = struct {
         calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
+        fn call(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
             kill: bool,
             target: []const u8,
         ) !bool {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
             try std.testing.expectEqualStrings(if (backend == .flatpak) "Flatpak" else "Editor", target);
             try std.testing.expectEqual(kill, self.calls > 2);
@@ -756,7 +750,6 @@ test "run routes all four backend modes and renders completion" {
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
 
     for ([_]struct { backend: []const u8, target: []const u8, kill: bool }{
         .{ .backend = "flatpak", .target = "Flatpak", .kill = false },
@@ -770,7 +763,7 @@ test "run routes all four backend modes and renders completion" {
             &.{ "run", sample.backend, sample.target };
         const outcome = try parser.parse(arena.allocator(), &manifest, arguments);
         const backend = backendForPath(outcome.dispatch.command.path).?;
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, backend, runner));
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, backend, &capture));
     }
 
     try std.testing.expectEqual(@as(usize, 4), capture.calls);
@@ -796,14 +789,14 @@ test "run backend failures are nonzero and UI mode stays framed" {
         .stderr = &stderr.writer,
     };
     const Failure = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, _: bool, _: []const u8) !bool {
+        fn call(_: @This(), _: *runtime.RuntimeContext, _: Backend, _: bool, _: []const u8) !bool {
             return false;
         }
     };
 
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, .appimage, .{ .call = Failure.run }),
+        try executeWithRunner(&context, &outcome.dispatch, .appimage, Failure{}),
     );
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
 }

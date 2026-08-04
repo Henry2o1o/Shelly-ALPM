@@ -27,51 +27,38 @@ pub const State = struct {
     flatpak: []const Flatpak,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-    ) anyerror!State,
+const Real = struct {
+    fn call(_: Real, context: *runtime.RuntimeContext) !State {
+        return collectState(context);
+    }
 };
 
-const real_runner: Runner = .{ .call = collectState };
-
 const InstallCaller = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
+    inner: *install.Caller,
+
+    fn call(
+        self: @This(),
         backend: install.Backend,
         targets: []const []const u8,
         options: install.CallOptions,
-    ) anyerror!u8,
+    ) !u8 {
+        return self.inner.call(backend, targets, options);
+    }
 };
-
-fn callInstall(
-    data: ?*anyopaque,
-    _: *runtime.RuntimeContext,
-    backend: install.Backend,
-    targets: []const []const u8,
-    options: install.CallOptions,
-) !u8 {
-    const caller: *install.Caller = @ptrCast(@alignCast(data.?));
-    return caller.call(backend, targets, options);
-}
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !?u8 {
     if (!std.mem.eql(u8, invocation.command.path, command_path)) return null;
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     const export_requested = optionEnabled(invocation, "--export");
     const import_requested = optionEnabled(invocation, "--import");
     if (!export_requested and !import_requested) {
@@ -84,7 +71,7 @@ fn executeWithRunner(
     }
     if (import_requested) return executeImport(context, invocation);
 
-    const state = runner.call(runner.data, context) catch |err| {
+    const state = runner.call(context) catch |err| {
         try writeFailure(context, invocation, err);
         return 1;
     };
@@ -165,7 +152,7 @@ fn importState(
         context,
         invocation,
         source,
-        .{ .data = &caller, .call = callInstall },
+        InstallCaller{ .inner = &caller },
     );
 }
 
@@ -173,8 +160,8 @@ fn importStateWithCaller(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
     source: []const u8,
-    caller: InstallCaller,
-) !void {
+    caller: anytype,
+) anyerror!void {
     const state = try parseBackupToml(context.allocator, source);
     const options: install.CallOptions = .{
         .no_confirm = invocation.globals.no_confirm,
@@ -188,18 +175,18 @@ fn importStateWithCaller(
 }
 
 fn installTargets(
-    context: *runtime.RuntimeContext,
-    caller: InstallCaller,
+    _: *runtime.RuntimeContext,
+    caller: anytype,
     backend: install.Backend,
     targets: []const []const u8,
     options: install.CallOptions,
-) !void {
+) anyerror!void {
     if (targets.len == 0) return;
-    if (try caller.call(caller.data, context, backend, targets, options) != 0)
+    if (try caller.call(backend, targets, options) != 0)
         return error.BackupPackageInstallFailed;
 }
 
-fn collectState(_: ?*anyopaque, context: *runtime.RuntimeContext) !State {
+fn collectState(context: *runtime.RuntimeContext) !State {
     var standard: std.ArrayList(Package) = .empty;
     var aur: std.ArrayList(Package) = .empty;
     var flatpaks: std.ArrayList(Flatpak) = .empty;
@@ -513,9 +500,11 @@ const sample_state: State = .{
     },
 };
 
-fn sampleRunner(_: ?*anyopaque, _: *runtime.RuntimeContext) !State {
-    return sample_state;
-}
+const SampleRunner = struct {
+    fn call(_: SampleRunner, _: *runtime.RuntimeContext) !State {
+        return sample_state;
+    }
+};
 
 const ImportState = struct {
     standard: []const []const u8 = &.{},
@@ -813,14 +802,12 @@ test "backup import delegates every backend to install with inherited globals" {
     const Capture = struct {
         calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
-            _: *runtime.RuntimeContext,
+        fn call(
+            self: *@This(),
             backend: install.Backend,
             targets: []const []const u8,
             options: install.CallOptions,
         ) !u8 {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             try std.testing.expect(options.no_confirm);
             try std.testing.expect(options.ui_mode);
             switch (self.calls) {
@@ -857,7 +844,7 @@ test "backup import delegates every backend to install with inherited globals" {
         \\  "org.mozilla.firefox",
         \\]
     ,
-        .{ .data = &capture, .call = Capture.run },
+        &capture,
     );
     try std.testing.expectEqual(@as(usize, 3), capture.calls);
 }
@@ -921,16 +908,17 @@ test "backup requires an operation before collecting package state" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    var called = false;
-    const runner: Runner = .{ .data = &called, .call = struct {
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext) !State {
-            const observed: *bool = @ptrCast(@alignCast(data.?));
-            observed.* = true;
+    const Capture = struct {
+        called: bool = false,
+
+        fn call(self: *@This(), _: *runtime.RuntimeContext) !State {
+            self.called = true;
             return sample_state;
         }
-    }.run };
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expect(!called);
+    };
+    var capture: Capture = .{};
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expect(!capture.called);
     try std.testing.expectEqualStrings(
         "No backup operation selected. Use --export or --import.\n",
         stderr.writer.buffered(),
@@ -995,7 +983,7 @@ test "backup export writes named TOML files to the requested directory" {
     };
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, .{ .call = sampleRunner }),
+        try executeWithRunner(&context, &outcome.dispatch, SampleRunner{}),
     );
 
     const saved = try temporary.dir.readFileAlloc(

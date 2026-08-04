@@ -141,35 +141,33 @@ pub const Result = union(Backend) {
     }
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn list(
+        _: Real,
         context: *runtime.RuntimeContext,
         backend: Backend,
         options: ListOptions,
-    ) anyerror!Result,
+    ) !Result {
+        return runReal(context, backend, options);
+    }
 };
-
-const real_runner: Runner = .{ .call = runReal };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !?u8 {
-    return dispatchWithRunner(context, invocation, real_runner);
+    return dispatchWithRunner(context, invocation, Real{});
 }
 
 fn dispatchWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !?u8 {
+    runner: anytype,
+) anyerror!?u8 {
     const backend = backendForPath(invocation.command.path) orelse return null;
     if (isFlatpakRemoteList(invocation))
         return try dispatchFlatpakRemote(context, invocation);
-    var result = runner.call(
-        runner.data,
+    var result = runner.list(
         context,
         backend,
         .{
@@ -952,7 +950,6 @@ fn truncate(value: []const u8, maximum: usize) []const u8 {
 }
 
 fn runReal(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     backend: Backend,
     options: ListOptions,
@@ -1241,24 +1238,22 @@ test "list routes long and requested uppercase short forms to package backends o
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        var observed: ?Backend = null;
-        const runner: Runner = .{
-            .data = &observed,
-            .call = struct {
-                fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, backend: Backend, _: ListOptions) !Result {
-                    const capture: *?Backend = @ptrCast(@alignCast(data.?));
-                    capture.* = backend;
-                    return switch (backend) {
-                        .standard => .{ .standard = .{ .items = &.{} } },
-                        .appimage => .{ .appimage = .{ .items = &.{} } },
-                        .aur => .{ .aur = .{ .items = &.{} } },
-                        .flatpak => .{ .flatpak = .{ .items = &.{} } },
-                    };
-                }
-            }.run,
+        const Observed = struct {
+            backend: ?Backend = null,
+
+            fn list(self: *@This(), _: *runtime.RuntimeContext, backend: Backend, _: ListOptions) !Result {
+                self.backend = backend;
+                return switch (backend) {
+                    .standard => .{ .standard = .{ .items = &.{} } },
+                    .appimage => .{ .appimage = .{ .items = &.{} } },
+                    .aur => .{ .aur = .{ .items = &.{} } },
+                    .flatpak => .{ .flatpak = .{ .items = &.{} } },
+                };
+            }
         };
-        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, runner));
-        try std.testing.expectEqual(case.backend, observed.?);
+        var observed: Observed = .{};
+        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &observed));
+        try std.testing.expectEqual(case.backend, observed.backend.?);
     }
 
     const uppercase_standard = try shortcodes.translate(arena.allocator(), &manifest, &.{"-LS"});
@@ -1302,15 +1297,12 @@ test "list reverse dependency modifiers are selective and backend scoped" {
         const Capture = struct {
             expected: Case,
             called: bool = false,
-        };
-        var capture = Capture{ .expected = case };
-        const runner: Runner = .{ .data = &capture, .call = struct {
-            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, backend: Backend, options: ListOptions) !Result {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                try std.testing.expectEqual(observed.expected.backend, backend);
-                try std.testing.expectEqual(observed.expected.required_by, options.required_by);
-                try std.testing.expectEqual(observed.expected.optional_for, options.optional_for);
-                observed.called = true;
+
+            fn list(self: *@This(), _: *runtime.RuntimeContext, backend: Backend, options: ListOptions) !Result {
+                try std.testing.expectEqual(self.expected.backend, backend);
+                try std.testing.expectEqual(self.expected.required_by, options.required_by);
+                try std.testing.expectEqual(self.expected.optional_for, options.optional_for);
+                self.called = true;
                 return switch (backend) {
                     .standard => .{ .standard = .{ .items = &.{} } },
                     .appimage => .{ .appimage = .{ .items = &.{} } },
@@ -1318,7 +1310,8 @@ test "list reverse dependency modifiers are selective and backend scoped" {
                     .flatpak => .{ .flatpak = .{ .items = &.{} } },
                 };
             }
-        }.run };
+        };
+        var capture = Capture{ .expected = case };
         const outcome = try parseTestArguments(arena.allocator(), &manifest, case.arguments);
         try std.testing.expect(outcome == .dispatch);
         var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -1331,7 +1324,7 @@ test "list reverse dependency modifiers are selective and backend scoped" {
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, runner));
+        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &capture));
         try std.testing.expect(capture.called);
     }
 
@@ -1363,13 +1356,15 @@ test "standard install-reason filters apply to structured output" {
             .optional_for = &.{"shell-extras"},
         },
     };
-    const runner: Runner = .{ .data = @constCast(&items), .call = struct {
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, options: ListOptions) !Result {
+    const Fixture = struct {
+        values: *const [2]StandardItem,
+
+        fn list(self: @This(), _: *runtime.RuntimeContext, _: Backend, options: ListOptions) !Result {
             try std.testing.expect(options.show_hidden);
-            const values: *const [2]StandardItem = @ptrCast(@alignCast(data.?));
-            return .{ .standard = .{ .items = values } };
+            return .{ .standard = .{ .items = self.values } };
         }
-    }.run };
+    };
+    const fixture = Fixture{ .values = &items };
     const outcome = try parseTestArguments(
         arena.allocator(),
         &manifest,
@@ -1385,7 +1380,7 @@ test "standard install-reason filters apply to structured output" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, fixture));
     const rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "explicit-package") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "dependency-package") == null);
@@ -1398,7 +1393,7 @@ test "standard install-reason filters apply to structured output" {
         &manifest,
         &.{ "list", "standard", "--show-hidden", "--required-by", "--optional-for" },
     );
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, fixture));
     const plain = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, plain, "Required By") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Optional For") != null);
@@ -1420,12 +1415,14 @@ test "AUR filters apply to JSON and UI structured output" {
             .explicit = true,
         },
     };
-    const runner: Runner = .{ .data = @constCast(&items), .call = struct {
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, _: ListOptions) !Result {
-            const values: *const [2]AurItem = @ptrCast(@alignCast(data.?));
-            return .{ .aur = .{ .items = values } };
+    const Fixture = struct {
+        values: *const [2]AurItem,
+
+        fn list(self: @This(), _: *runtime.RuntimeContext, _: Backend, _: ListOptions) !Result {
+            return .{ .aur = .{ .items = self.values } };
         }
-    }.run };
+    };
+    const fixture = Fixture{ .values = &items };
 
     const json_outcome = try parseTestArguments(
         arena.allocator(),
@@ -1442,7 +1439,7 @@ test "AUR filters apply to JSON and UI structured output" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &json_outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &json_outcome.dispatch, fixture));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "explicit-package") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "dependency-package") == null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"RequiredBy\":[\"desktop-meta\"]") != null);
@@ -1454,7 +1451,7 @@ test "AUR filters apply to JSON and UI structured output" {
         &manifest,
         &.{ "list", "aur", "--dependencyOnly", "--ui-mode" },
     );
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &ui_outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &ui_outcome.dispatch, fixture));
     const payload = try decodeFirstTestFrame(arena.allocator(), stdout.writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, payload, "dependency-package") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "explicit-package") == null);
@@ -1465,7 +1462,7 @@ test "AUR filters apply to JSON and UI structured output" {
         &manifest,
         &.{ "list", "aur", "--required-by", "--optional-for" },
     );
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, fixture));
     const plain = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, plain, "Required By") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Optional For") != null);

@@ -32,7 +32,7 @@ pub const variants = [_]types.Variant{
         .type_code = 'a',
         .description = "List installed AUR packages with available updates.",
         .implementation = "Zigalpm.AurManager.getPackagesNeedingUpdate",
-        .options = &.{flag("--show-hidden", &.{}, "Include hidden packages")},
+        .options = &.{ flag("--show-hidden", &.{}, "Include hidden packages"), flag("--no-dev", &.{}, "Does not check for -git builds") },
     },
     .{
         .action = .list_updates,

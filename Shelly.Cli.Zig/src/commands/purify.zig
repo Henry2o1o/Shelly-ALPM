@@ -41,40 +41,98 @@ const Result = struct {
     }
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    pub fn run(
+        _: Real,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         backend: Backend,
         options: Options,
-    ) anyerror!Result,
-};
+    ) !Result {
+        switch (backend) {
+            .standard => {
+                const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{
+                    .use_root = true,
+                    .operation_context = operation_context,
+                });
+                defer manager.deinit();
+                manager.setOperationContext(operation_context);
+                defer manager.setOperationContext(null);
+                const planning = options.plan_only or options.dry_run;
 
-const RunnerAdapter = struct {
-    runner: Runner,
-    backend: Backend,
-    options: Options,
-    result: ?Result = null,
+                if (!planning and options.cache_versions != null) {
+                    const cache_plan = options.cache_plan orelse return PurifyError.CachePlanMissing;
+                    var cache_manager = Zigalpm.alpm.CacheManager.init(
+                        context.allocator,
+                        context.io,
+                        .{
+                            .cache_directory = cache_plan.cache_directory,
+                            .handle = manager.handle,
+                        },
+                    );
+                    cache_manager.setOperationContext(operation_context);
+                    _ = try cache_manager.execute_cache_removal_plan(cache_plan);
+                }
 
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
-    ) !void {
-        const self: *RunnerAdapter = @ptrCast(@alignCast(data.?));
-        self.result = try self.runner.call(
-            self.runner.data,
-            context,
-            operation_context,
-            self.backend,
-            self.options,
-        );
+                var result: Result = .{
+                    .targets = try manager.purify(planning, options.orphans, true),
+                    .owns_targets = true,
+                };
+                errdefer result.deinit(context.allocator);
+
+                if (planning) {
+                    if (options.cache_versions) |keep| {
+                        var cache_manager = Zigalpm.alpm.CacheManager.init(
+                            context.allocator,
+                            context.io,
+                            .{
+                                .cache_directory = manager.config.cache_directory,
+                                .handle = manager.handle,
+                            },
+                        );
+                        cache_manager.setOperationContext(operation_context);
+                        var cache_plan = try cache_manager.plan_cache_cleanup(.{
+                            .keep = keep,
+                            .dry_run = options.dry_run,
+                        });
+                        errdefer cache_plan.deinit(context.allocator);
+                        try appendCacheTargets(context.allocator, &result, &cache_plan);
+                        result.cache_plan = cache_plan;
+                    }
+                }
+                return result;
+            },
+            .flatpak => {
+                var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
+                defer manager.deinit();
+                try manager.setOperationContext(operation_context);
+                defer manager.setOperationContext(null) catch {};
+                if (options.plan_only or options.dry_run) {
+                    const dependencies = try manager.list_unused_dependencies();
+                    defer Zigalpm.flatpak.UnusedDependency.deinitSlice(context.allocator, dependencies);
+                    const targets = try context.allocator.alloc([:0]const u8, dependencies.len);
+                    var initialized: usize = 0;
+                    errdefer {
+                        for (targets[0..initialized]) |target| context.allocator.free(target);
+                        context.allocator.free(targets);
+                    }
+                    for (dependencies, targets) |dependency, *target| {
+                        target.* = try std.fmt.allocPrintSentinel(
+                            context.allocator,
+                            "[{s}] {s}",
+                            .{ scopeName(dependency.scope), dependency.reference },
+                            0,
+                        );
+                        initialized += 1;
+                    }
+                    return .{ .targets = targets, .owns_targets = true };
+                }
+                if (!try manager.remove_unused_dependencies()) return PurifyError.BackendFailed;
+                return .{};
+            },
+        }
     }
 };
-
-const real_runner: Runner = .{ .call = runReal };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -88,14 +146,14 @@ pub fn dispatch(
         };
         if (elevated_exit) |exit_code| return exit_code;
     }
-    return dispatchWithRunner(context, invocation, real_runner);
+    return dispatchWithRunner(context, invocation, Real{});
 }
 
 fn dispatchWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !?u8 {
+    runner: anytype,
+) anyerror!?u8 {
     const backend = backendForPath(invocation.command.path) orelse return null;
     const options = optionsFor(invocation);
     var plan = buildPlan(context, backend, options, runner) catch |err| {
@@ -123,14 +181,13 @@ fn buildPlan(
     context: *runtime.RuntimeContext,
     backend: Backend,
     options: Options,
-    runner: Runner,
-) !Result {
+    runner: anytype,
+) anyerror!Result {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     defer operation_context.deinit();
     var plan_options = options;
     plan_options.plan_only = true;
-    return runner.call(
-        runner.data,
+    return runner.run(
         context,
         &operation_context,
         backend,
@@ -199,8 +256,8 @@ fn executeWithRunner(
     invocation: *const parser.Invocation,
     backend: Backend,
     options: Options,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     if (invocation.globals.ui_mode)
         return executeUi(context, invocation, backend, options, runner);
     if (invocation.globals.json and invocation.globals.no_confirm)
@@ -213,19 +270,38 @@ fn executeStandard(
     invocation: *const parser.Invocation,
     backend: Backend,
     options: Options,
-    runner: Runner,
-) !u8 {
-    var adapter: RunnerAdapter = .{
-        .runner = runner,
-        .backend = backend,
-        .options = options,
+    runner: anytype,
+) anyerror!u8 {
+    const RunnerAdapter = struct {
+        runner: @TypeOf(runner),
+        backend: Backend,
+        options: Options,
+        result: ?Result = null,
+
+        pub fn run(
+            self: *@This(),
+            runtime_context: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            _: *const parser.Invocation,
+        ) !void {
+            self.result = try self.runner.run(
+                runtime_context,
+                operation_context,
+                self.backend,
+                self.options,
+            );
+        }
     };
+    var adapter: RunnerAdapter = .{ .runner = runner, .backend = backend, .options = options };
     defer if (adapter.result) |*result| result.deinit(context.allocator);
     const succeeded = try standard_single_pane.output(
         context,
         openingMessage(backend, options),
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        &adapter,
+        invocation,
+        null,
+        null,
     );
     if (!succeeded) return 1;
     if (adapter.result == null) return 1;
@@ -237,8 +313,8 @@ fn executeQuiet(
     invocation: *const parser.Invocation,
     backend: Backend,
     options: Options,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -247,8 +323,7 @@ fn executeQuiet(
         defer operation_context.setQuestionHandler(null);
     }
 
-    var result = runner.call(
-        runner.data,
+    var result = runner.run(
         context,
         &operation_context,
         backend,
@@ -266,8 +341,8 @@ fn executeUi(
     invocation: *const parser.Invocation,
     backend: Backend,
     options: Options,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -288,8 +363,7 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionStart", openingMessage(backend, options));
     try ui_operation.flush(context);
 
-    var result = runner.call(
-        runner.data,
+    var result = runner.run(
         context,
         &operation_context,
         backend,
@@ -307,97 +381,6 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(backend, options));
     try ui_operation.flush(context);
     return if (reporter.failed()) 1 else 0;
-}
-
-fn runReal(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    operation_context: *Zigalpm.OperationContext,
-    backend: Backend,
-    options: Options,
-) !Result {
-    switch (backend) {
-        .standard => {
-            const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{
-                .use_root = true,
-                .operation_context = operation_context,
-            });
-            defer manager.deinit();
-            manager.setOperationContext(operation_context);
-            defer manager.setOperationContext(null);
-            const planning = options.plan_only or options.dry_run;
-
-            if (!planning and options.cache_versions != null) {
-                const cache_plan = options.cache_plan orelse return PurifyError.CachePlanMissing;
-                var cache_manager = Zigalpm.alpm.CacheManager.init(
-                    context.allocator,
-                    context.io,
-                    .{
-                        .cache_directory = cache_plan.cache_directory,
-                        .handle = manager.handle,
-                    },
-                );
-                cache_manager.setOperationContext(operation_context);
-                _ = try cache_manager.execute_cache_removal_plan(cache_plan);
-            }
-
-            var result: Result = .{
-                .targets = try manager.purify(planning, options.orphans, true),
-                .owns_targets = true,
-            };
-            errdefer result.deinit(context.allocator);
-
-            if (planning) {
-                if (options.cache_versions) |keep| {
-                    var cache_manager = Zigalpm.alpm.CacheManager.init(
-                        context.allocator,
-                        context.io,
-                        .{
-                            .cache_directory = manager.config.cache_directory,
-                            .handle = manager.handle,
-                        },
-                    );
-                    cache_manager.setOperationContext(operation_context);
-                    var cache_plan = try cache_manager.plan_cache_cleanup(.{
-                        .keep = keep,
-                        .dry_run = options.dry_run,
-                    });
-                    errdefer cache_plan.deinit(context.allocator);
-                    try appendCacheTargets(context.allocator, &result, &cache_plan);
-                    result.cache_plan = cache_plan;
-                }
-            }
-            return result;
-        },
-        .flatpak => {
-            var manager = Zigalpm.FlatpakManager{ .allocator = context.allocator, .io = context.io };
-            defer manager.deinit();
-            try manager.setOperationContext(operation_context);
-            defer manager.setOperationContext(null) catch {};
-            if (options.plan_only or options.dry_run) {
-                const dependencies = try manager.list_unused_dependencies();
-                defer Zigalpm.flatpak.UnusedDependency.deinitSlice(context.allocator, dependencies);
-                const targets = try context.allocator.alloc([:0]const u8, dependencies.len);
-                var initialized: usize = 0;
-                errdefer {
-                    for (targets[0..initialized]) |target| context.allocator.free(target);
-                    context.allocator.free(targets);
-                }
-                for (dependencies, targets) |dependency, *target| {
-                    target.* = try std.fmt.allocPrintSentinel(
-                        context.allocator,
-                        "[{s}] {s}",
-                        .{ scopeName(dependency.scope), dependency.reference },
-                        0,
-                    );
-                    initialized += 1;
-                }
-                return .{ .targets = targets, .owns_targets = true };
-            }
-            if (!try manager.remove_unused_dependencies()) return PurifyError.BackendFailed;
-            return .{};
-        },
-    }
 }
 
 fn appendCacheTargets(
@@ -733,14 +716,13 @@ test "destructive purify shows its plan before confirmation and mutates only aft
         plan_calls: usize = 0,
         mutation_calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             runtime_context: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: Backend,
             options: Options,
         ) !Result {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             if (options.plan_only) {
                 self.plan_calls += 1;
                 try std.testing.expect(options.orphans);
@@ -766,11 +748,10 @@ test "destructive purify shows its plan before confirmation and mutates only aft
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqual(@as(usize, 1), capture.plan_calls);
     try std.testing.expectEqual(@as(usize, 0), capture.mutation_calls);
@@ -785,7 +766,7 @@ test "destructive purify shows its plan before confirmation and mutates only aft
     capture = .{};
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqual(@as(usize, 1), capture.plan_calls);
     try std.testing.expectEqual(@as(usize, 1), capture.mutation_calls);
@@ -811,14 +792,13 @@ test "empty purify plans skip confirmation and backend mutation" {
     const Capture = struct {
         calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: Backend,
             options: Options,
         ) !Result {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
             try std.testing.expect(options.plan_only);
             return .{};
@@ -828,7 +808,7 @@ test "empty purify plans skip confirmation and backend mutation" {
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, .{ .data = &capture, .call = Capture.run }),
+        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqual(@as(usize, 1), capture.calls);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "No packages found") != null);
@@ -856,14 +836,13 @@ test "no-confirm JSON emits one plan before quiet execution" {
     const Capture = struct {
         calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: Backend,
             options: Options,
         ) !Result {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
             return if (options.plan_only)
                 .{ .targets = &.{"bad-cache.pkg.tar.zst"} }
@@ -875,7 +854,7 @@ test "no-confirm JSON emits one plan before quiet execution" {
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, .{ .data = &capture, .call = Capture.run }),
+        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqualStrings("[\"bad-cache.pkg.tar.zst\"]\n", stdout.writer.buffered());
     try std.testing.expectEqual(@as(usize, 2), capture.calls);
@@ -899,14 +878,13 @@ test "routes purify backends and preserves standard result formats" {
     const Capture = struct {
         calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             backend: Backend,
             options: Options,
         ) !Result {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
             if (options.plan_only) {
                 if (backend == .standard) {
@@ -919,14 +897,13 @@ test "routes purify backends and preserves standard result formats" {
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
 
     var outcome = try parser.parse(arena.allocator(), &manifest, &.{
         "purify", "standard", "--dry-run", "--orphans", "--json",
     });
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqualStrings(
         "[\"orphan-one\",\"bad-cache.pkg.tar.zst\"]\n",
@@ -937,7 +914,7 @@ test "routes purify backends and preserves standard result formats" {
     outcome = try parser.parse(arena.allocator(), &manifest, &.{ "purify", "flatpak", "--no-confirm" });
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
     );
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Transaction complete") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "runtime/org.example.Platform") != null);
@@ -963,8 +940,8 @@ test "purify UI emits result and transaction frames" {
         .stderr = &stderr.writer,
     };
     const Success = struct {
-        fn run(
-            _: ?*anyopaque,
+        pub fn run(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: Backend,
@@ -976,7 +953,7 @@ test "purify UI emits result and transaction frames" {
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, .{ .call = Success.run }),
+        try dispatchWithRunner(&context, &outcome.dispatch, Success{}),
     );
     const rendered = stdout.writer.buffered();
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered, "[JSON]"));
@@ -1027,14 +1004,13 @@ test "purify UI presents the plan before a compatible confirmation frame" {
     const Capture = struct {
         mutation_calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: Backend,
             options: Options,
         ) !Result {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             if (options.plan_only)
                 return .{ .targets = &.{"[user] runtime/org.example.Platform/x86_64/stable"} };
             self.mutation_calls += 1;
@@ -1048,7 +1024,7 @@ test "purify UI presents the plan before a compatible confirmation frame" {
         try dispatchWithRunner(
             &context,
             &outcome.dispatch,
-            .{ .data = &capture, .call = Capture.run },
+            &capture,
         ),
     );
     try std.testing.expectEqual(@as(usize, 1), capture.mutation_calls);
@@ -1093,8 +1069,8 @@ test "purify backend failures return nonzero" {
         .stderr = &stderr.writer,
     };
     const Failure = struct {
-        fn run(
-            _: ?*anyopaque,
+        pub fn run(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: Backend,
@@ -1106,6 +1082,6 @@ test "purify backend failures return nonzero" {
 
     try std.testing.expectEqual(
         @as(?u8, 1),
-        try dispatchWithRunner(&context, &outcome.dispatch, .{ .call = Failure.run }),
+        try dispatchWithRunner(&context, &outcome.dispatch, Failure{}),
     );
 }

@@ -25,31 +25,29 @@ const InstallError = error{
     UnsupportedLocalPackage,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    pub fn run(
+        _: Real,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         invocation: *const parser.Invocation,
-    ) anyerror!void,
-};
-
-const RunnerAdapter = struct {
-    runner: Runner,
-    invocation: *const parser.Invocation,
-
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
     ) !void {
-        const self: *RunnerAdapter = @ptrCast(@alignCast(data.?));
-        try self.runner.call(self.runner.data, context, operation_context, self.invocation);
+        if (std.mem.eql(u8, invocation.command.path, standard_command_path))
+            return runStandard(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, aur_command_path))
+            return runAur(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
+            return runAppImage(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
+            if (isFlatpakRepair(invocation))
+                return runFlatpakRepair(context, operation_context, invocation);
+            if (flatpakFileKind(invocation)) |kind|
+                return runFlatpakFile(context, operation_context, invocation, kind);
+            return runFlatpak(context, operation_context, invocation);
+        }
+        unreachable;
     }
 };
-
-const real_runner: Runner = .{ .call = runRealInstall };
 
 pub const Backend = enum {
     standard,
@@ -237,14 +235,14 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     if (requestsStandardUpgrade(invocation) and !invocation.globals.no_confirm) {
         const confirmed = if (invocation.globals.ui_mode)
             try confirmStandardUpgradeUi(context)
@@ -414,15 +412,17 @@ fn writeStandardUpgradePreview(
 fn executeStandard(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
-    var adapter: RunnerAdapter = .{ .runner = runner, .invocation = invocation };
+) anyerror!u8 {
     const succeeded = try standard_single_pane.output(
         context,
         opening,
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        runner,
+        invocation,
+        null,
+        null,
     );
     return if (succeeded) 0 else 1;
 }
@@ -430,9 +430,9 @@ fn executeStandard(
 fn executeUi(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
+) anyerror!u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -453,7 +453,7 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionStart", opening);
     try ui_operation.flush(context);
 
-    runner.call(runner.data, context, &operation_context, invocation) catch |err| {
+    runner.run(context, &operation_context, invocation) catch |err| {
         if (err == error.Cancelled) {
             try output.writeInfoFrame(context, "Operation cancelled.");
             try output.writeAlpmInfoFrame(context, "TransactionCancelled", "Installation cancelled.");
@@ -477,28 +477,6 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
     try ui_operation.flush(context);
     return if (reporter.failed()) 1 else 0;
-}
-
-fn runRealInstall(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    operation_context: *Zigalpm.OperationContext,
-    invocation: *const parser.Invocation,
-) !void {
-    if (std.mem.eql(u8, invocation.command.path, standard_command_path))
-        return runStandard(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, aur_command_path))
-        return runAur(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
-        return runAppImage(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, flatpak_command_path)) {
-        if (isFlatpakRepair(invocation))
-            return runFlatpakRepair(context, operation_context, invocation);
-        if (flatpakFileKind(invocation)) |kind|
-            return runFlatpakFile(context, operation_context, invocation, kind);
-        return runFlatpak(context, operation_context, invocation);
-    }
-    unreachable;
 }
 
 const PackageSource = union(enum) {
@@ -1190,20 +1168,18 @@ test "Flatpak repair lifecycle and elevation follow the installed scope" {
     const Capture = struct {
         called: bool = false,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             invocation: *const parser.Invocation,
         ) !void {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.called = true;
             try std.testing.expect(isFlatpakRepair(invocation));
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
     try std.testing.expect(std.mem.indexOf(
         u8,
@@ -1321,13 +1297,12 @@ test "install routes every action-first backend and forwards type-specific optio
         calls: usize = 0,
         paths: [6][]const u8 = undefined,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             invocation: *const parser.Invocation,
         ) !void {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.paths[self.calls] = invocation.command.path;
             self.calls += 1;
             if (std.mem.eql(u8, invocation.command.path, standard_command_path))
@@ -1348,7 +1323,6 @@ test "install routes every action-first backend and forwards type-specific optio
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
     const arguments = [_][]const []const u8{
         &.{ "install", "standard", "--no-deps", "demo" },
         &.{ "install", "appimage", "demo.AppImage" },
@@ -1360,7 +1334,7 @@ test "install routes every action-first backend and forwards type-specific optio
     for (arguments) |argv| {
         const outcome = try parser.parse(arena.allocator(), &manifest, argv);
         const invocation = outcome.dispatch;
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &invocation, runner));
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &invocation, &capture));
     }
     try std.testing.expectEqual(@as(usize, 6), capture.calls);
     try std.testing.expectEqualStrings(standard_command_path, capture.paths[0]);
@@ -1397,8 +1371,8 @@ test "AUR version install uses exact package and commit through the shared lifec
         .stderr = &stderr.writer,
     };
     const Capture = struct {
-        fn run(
-            _: ?*anyopaque,
+        pub fn run(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             invocation: *const parser.Invocation,
@@ -1411,7 +1385,7 @@ test "AUR version install uses exact package and commit through the shared lifec
     };
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, .{ .call = Capture.run }),
+        try executeWithRunner(&context, &outcome.dispatch, Capture{}),
     );
     const rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(
@@ -1477,7 +1451,7 @@ test "install uses the shared non-UI and UI transaction lifecycles" {
         .stderr = &stderr.writer,
     };
     const Success = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, invocation: *const parser.Invocation) !void {
+        pub fn run(_: @This(), _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, invocation: *const parser.Invocation) !void {
             if (!invocation.globals.ui_mode) return;
             var operation = operation_context.begin(.{
                 .backend = .aur,
@@ -1488,16 +1462,15 @@ test "install uses the shared non-UI and UI transaction lifecycles" {
             operation.progress(.{ .percentage = 42, .native_code = 200 });
         }
     };
-    const runner: Runner = .{ .call = Success.run };
 
     var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "install", "standard", "demo" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Success{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Installing packages: demo") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
 
     stdout.writer.end = 0;
     outcome = try parser.parse(arena.allocator(), &manifest, &.{ "install", "aur", "--ui-mode", "demo" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Success{}));
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
 }
 
@@ -1520,18 +1493,16 @@ test "standard install upgrade requires confirmation unless disabled" {
     const Capture = struct {
         called: bool = false,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: *const parser.Invocation,
         ) !void {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.called = true;
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
     const updates = [_]list_updates.StandardUpdate{.{
         .name = "linux",
         .current_version = "6.12.1-1",
@@ -1581,7 +1552,7 @@ test "standard install upgrade requires confirmation unless disabled" {
         &manifest,
         &.{ "install", "standard", "--upgrade", "--no-confirm", "demo" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
 
     outcome = try parser.parse(
@@ -1773,13 +1744,13 @@ test "install backend failures return a failing exit code and transaction result
         .stderr = &stderr.writer,
     };
     const Failure = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
+        pub fn run(_: @This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             return error.TestInstallFailure;
         }
     };
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, .{ .call = Failure.run }),
+        try executeWithRunner(&context, &outcome.dispatch, Failure{}),
     );
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "error: TestInstallFailure") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);

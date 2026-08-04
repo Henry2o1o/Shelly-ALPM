@@ -23,27 +23,22 @@ const RemoveError = error{
     FlatpakNotFound,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    pub fn run(
+        _: Real,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         invocation: *const parser.Invocation,
-    ) anyerror!void,
-};
-
-const RunnerAdapter = struct {
-    runner: Runner,
-    invocation: *const parser.Invocation,
-
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
     ) !void {
-        const self: *RunnerAdapter = @ptrCast(@alignCast(data.?));
-        try self.runner.call(self.runner.data, context, operation_context, self.invocation);
+        if (std.mem.eql(u8, invocation.command.path, standard_command_path))
+            return runStandard(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, aur_command_path))
+            return runAur(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
+            return runAppImage(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+            return runFlatpak(context, operation_context, invocation);
+        return RemoveError.BackendNotImplemented;
     }
 };
 
@@ -64,8 +59,6 @@ const DependencyRemoval = struct {
     keep_optional_dependencies: bool,
 };
 
-const real_runner: Runner = .{ .call = runRealRemove };
-
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
@@ -82,14 +75,14 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     const opening = try openingMessage(context.allocator, invocation);
     defer context.allocator.free(opening);
     return if (invocation.globals.ui_mode)
@@ -101,15 +94,17 @@ fn executeWithRunner(
 fn executeStandard(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
-    var adapter: RunnerAdapter = .{ .runner = runner, .invocation = invocation };
+) anyerror!u8 {
     const succeeded = try standard_single_pane.output(
         context,
         opening,
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        runner,
+        invocation,
+        null,
+        null,
     );
     return if (succeeded) 0 else 1;
 }
@@ -117,9 +112,9 @@ fn executeStandard(
 fn executeUi(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
+) anyerror!u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -140,7 +135,7 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionStart", opening);
     try ui_operation.flush(context);
 
-    runner.call(runner.data, context, &operation_context, invocation) catch |err| {
+    runner.run(context, &operation_context, invocation) catch |err| {
         const message = try std.fmt.allocPrint(context.allocator, "Removal failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
@@ -152,23 +147,6 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
     try ui_operation.flush(context);
     return if (reporter.failed()) 1 else 0;
-}
-
-fn runRealRemove(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    operation_context: *Zigalpm.OperationContext,
-    invocation: *const parser.Invocation,
-) !void {
-    if (std.mem.eql(u8, invocation.command.path, standard_command_path))
-        return runStandard(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, aur_command_path))
-        return runAur(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, appimage_command_path))
-        return runAppImage(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
-        return runFlatpak(context, operation_context, invocation);
-    return RemoveError.BackendNotImplemented;
 }
 
 fn runStandard(
@@ -650,13 +628,12 @@ test "routes every removal backend through shared output lifecycles" {
     const Capture = struct {
         calls: usize = 0,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             invocation: *const parser.Invocation,
         ) !void {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.calls += 1;
             if (std.mem.eql(u8, invocation.command.path, standard_command_path)) {
                 try std.testing.expect(optionEnabled(invocation, "--cascade"));
@@ -680,33 +657,32 @@ test "routes every removal backend through shared output lifecycles" {
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
 
     var outcome = try parser.parse(arena.allocator(), &manifest, &.{
         "remove", "standard", "--no-confirm", "-c", "-o", "--remove-config", "demo",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "demo") != null);
 
     stdout.writer.end = 0;
     outcome = try parser.parse(arena.allocator(), &manifest, &.{
         "remove", "aur", "--ui-mode", "-i", "demo-git",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
 
     stdout.writer.end = 0;
     outcome = try parser.parse(arena.allocator(), &manifest, &.{
         "remove", "appimage", "--no-confirm", "--remove-config", "Editor",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Editor") != null);
 
     stdout.writer.end = 0;
     outcome = try parser.parse(arena.allocator(), &manifest, &.{
         "remove", "flatpak", "--ui-mode", "-r", "--remove-config", "Example",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
     try std.testing.expectEqual(@as(usize, 4), capture.calls);
 }
@@ -730,14 +706,14 @@ test "remove backend failures return a nonzero status" {
         .stderr = &stderr.writer,
     };
     const Failure = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
+        pub fn run(_: @This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             return error.TestBackendFailure;
         }
     };
 
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, .{ .call = Failure.run }),
+        try executeWithRunner(&context, &outcome.dispatch, Failure{}),
     );
 }
 

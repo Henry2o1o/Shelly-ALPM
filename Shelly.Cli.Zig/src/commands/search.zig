@@ -139,30 +139,29 @@ const Result = union(enum) {
     flatpak: FlatpakResult,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn search(
+        _: Real,
         context: *runtime.RuntimeContext,
         invocation: *const parser.Invocation,
-    ) anyerror!Result,
+    ) !Result {
+        return runRealSearch(context, invocation);
+    }
 };
-
-const real_runner: Runner = .{ .call = runRealSearch };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !?u8 {
     if (!isSearchPath(invocation.command.path)) return null;
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     if (std.mem.eql(u8, invocation.command.path, aur_command_path)) {
         if (optionEnabled(invocation, "--detail")) {
             if (optionEnabled(invocation, "--pkgbuild"))
@@ -201,17 +200,18 @@ fn executeWithRunner(
         return writeFailure(context, invocation, "Page and limit must be greater than zero.");
     }
 
-    const result = runner.call(runner.data, context, invocation) catch |err| {
-        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message|
+    const result = runner.search(context, invocation) catch |err| {
+        const failure: anyerror = err;
+        if (Zigalpm.flatpak.errors.unavailableMessage(failure)) |message|
             return writeFailure(context, invocation, message);
-        const message = switch (err) {
+        const message = switch (failure) {
             error.NoPackageSpecified => "No package specified",
             error.PackageNotFound => try std.fmt.allocPrint(
                 context.allocator,
                 "No package named {s} found",
                 .{if (invocation.positionals.len > 0) invocation.positionals[0] else ""},
             ),
-            else => try std.fmt.allocPrint(context.allocator, "Search failed: {t}", .{err}),
+            else => try std.fmt.allocPrint(context.allocator, "Search failed: {t}", .{failure}),
         };
         return writeFailure(context, invocation, message);
     };
@@ -236,7 +236,6 @@ fn writeFailure(
 }
 
 fn runRealSearch(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !Result {
@@ -1220,29 +1219,26 @@ test "search routes all action-first types through one handler" {
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
 
-    const Capture = struct { calls: usize = 0 };
-    var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.calls += 1;
-                if (std.mem.eql(u8, invocation.command.path, standard_command_path))
-                    return .{ .standard = .{ .requested_packages = true } };
-                if (std.mem.eql(u8, invocation.command.path, aur_command_path))
-                    return .{ .aur = .{ .packages = &.{.{ .name = "yay", .version = "1" }} } };
-                return .{ .flatpak = .{
-                    .query = "editor",
-                    .packages = &.{},
-                    .page = 1,
-                    .limit = 21,
-                    .total_pages = 0,
-                    .total_hits = 0,
-                } };
-            }
-        }.run,
+    const Capture = struct {
+        calls: usize = 0,
+
+        fn search(self: *@This(), _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
+            self.calls += 1;
+            if (std.mem.eql(u8, invocation.command.path, standard_command_path))
+                return .{ .standard = .{ .requested_packages = true } };
+            if (std.mem.eql(u8, invocation.command.path, aur_command_path))
+                return .{ .aur = .{ .packages = &.{.{ .name = "yay", .version = "1" }} } };
+            return .{ .flatpak = .{
+                .query = "editor",
+                .packages = &.{},
+                .page = 1,
+                .limit = 21,
+                .total_pages = 0,
+                .total_hits = 0,
+            } };
+        }
     };
+    var capture: Capture = .{};
 
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
@@ -1256,13 +1252,13 @@ test "search routes all action-first types through one handler" {
     };
 
     const standard = try parser.parse(arena.allocator(), &manifest, &.{ "search", "standard", "--available", "vim" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &standard.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &standard.dispatch, &capture));
     stdout.writer.end = 0;
     const aur = try parser.parse(arena.allocator(), &manifest, &.{ "search", "aur", "yay" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &aur.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &aur.dispatch, &capture));
     stdout.writer.end = 0;
     const flatpak = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak.dispatch, &capture));
     try std.testing.expectEqual(@as(usize, 3), capture.calls);
 }
 
@@ -1282,8 +1278,8 @@ test "standard output preserves C# table columns and ranked result order" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
+    const StandardFixture = struct {
+        fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return .{ .standard = .{
                 .packages = &.{
                     .{ .name = "discord", .repository = "extra", .version = "1", .description = "Chat" },
@@ -1292,8 +1288,8 @@ test "standard output preserves C# table columns and ranked result order" {
                 .requested_packages = true,
             } };
         }
-    }.run };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    };
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, StandardFixture{}));
     const rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "│ Name") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Repository") != null);
@@ -1317,21 +1313,21 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
     };
 
     const aur = try parser.parse(arena.allocator(), &manifest, &.{ "search", "aur", "--standard", "yay" });
-    const aur_runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
+    const AurFixture = struct {
+        fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return .{ .aur = .{
                 .packages = &.{.{ .name = "yay", .version = "12", .maintainer = "dev" }},
                 .standard_packages = &.{.{ .name = "yay-bin", .version = "1", .repository = "extra" }},
             } };
         }
-    }.run };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &aur.dispatch, aur_runner));
+    };
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &aur.dispatch, AurFixture{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Total results: 2") != null);
 
     stdout.writer.end = 0;
     const flatpak = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "--page", "2", "--limit", "1", "editor", "--json" });
-    const flatpak_runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
+    const FlatpakFixture = struct {
+        fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return .{ .flatpak = .{
                 .query = "editor",
                 .packages = &.{.{
@@ -1349,8 +1345,8 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
                 .total_hits = 3,
             } };
         }
-    }.run };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak.dispatch, flatpak_runner));
+    };
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak.dispatch, FlatpakFixture{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"page\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "org.example.Editor") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"download_size\":1048576") != null);
@@ -1359,7 +1355,7 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
 
     stdout.writer.end = 0;
     const flatpak_plain = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak_plain.dispatch, flatpak_runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak_plain.dispatch, FlatpakFixture{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Download Size") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Installed Size") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shared=network") != null);
@@ -1380,8 +1376,8 @@ test "AUR pkgbuild search displays fetched content and structured output" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
+    const PkgbuildFixture = struct {
+        fn search(_: @This(), _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
             try std.testing.expect(optionEnabled(invocation, "--pkgbuild"));
             try std.testing.expectEqual(@as(usize, 2), invocation.positionals.len);
             return .{ .aur = .{ .pkgbuilds = &.{
@@ -1389,14 +1385,14 @@ test "AUR pkgbuild search displays fetched content and structured output" {
                 .{ .name = "missing", .pkgbuild = null },
             } } };
         }
-    }.run };
+    };
 
     var outcome = try parser.parse(
         arena.allocator(),
         &manifest,
         &.{ "search", "aur", "--pkgbuild", "yay", "missing" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, PkgbuildFixture{}));
     var rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Package build for: yay") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgname=yay\npkgver=12") != null);
@@ -1409,7 +1405,7 @@ test "AUR pkgbuild search displays fetched content and structured output" {
         &manifest,
         &.{ "search", "aur", "-p", "yay", "missing", "--json" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, PkgbuildFixture{}));
     rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"Name\":\"yay\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PkgBuild\":\"pkgname=yay\\npkgver=12\"") != null);
@@ -1430,8 +1426,8 @@ test "AUR detail search renders package metadata and structured output" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
+    const DetailFixture = struct {
+        fn search(_: @This(), _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
             try std.testing.expect(optionEnabled(invocation, "--detail"));
             return .{ .aur = .{
                 .detail = .{
@@ -1444,14 +1440,14 @@ test "AUR detail search renders package metadata and structured output" {
                 },
             } };
         }
-    }.run };
+    };
 
     var outcome = try parser.parse(
         arena.allocator(),
         &manifest,
         &.{ "search", "aur", "--detail", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, DetailFixture{}));
     var rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Total results") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Required By") != null);
@@ -1465,7 +1461,7 @@ test "AUR detail search renders package metadata and structured output" {
         &manifest,
         &.{ "search", "aur", "-d", "yay", "--json" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, DetailFixture{}));
     rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"Name\":\"yay\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PackageBase\":\"yay\"") != null);
@@ -1487,14 +1483,14 @@ test "search validates AUR query length and positive pagination before backend e
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
+    const ShouldNotRun = struct {
+        fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return error.ShouldNotRun;
         }
-    }.run };
+    };
 
     const short_aur = try parser.parse(arena.allocator(), &manifest, &.{ "search", "aur", "x" });
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &short_aur.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &short_aur.dispatch, ShouldNotRun{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "at least 2 characters") != null);
     stdout.writer.end = 0;
     const conflicting_aur = try parser.parse(
@@ -1502,7 +1498,7 @@ test "search validates AUR query length and positive pagination before backend e
         &manifest,
         &.{ "search", "aur", "--pkgbuild", "--standard", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &conflicting_aur.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &conflicting_aur.dispatch, ShouldNotRun{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --pkgbuild with --standard") != null);
     stdout.writer.end = 0;
     const detail_pkgbuild = try parser.parse(
@@ -1510,7 +1506,7 @@ test "search validates AUR query length and positive pagination before backend e
         &manifest,
         &.{ "search", "aur", "--detail", "--pkgbuild", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &detail_pkgbuild.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &detail_pkgbuild.dispatch, ShouldNotRun{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --detail with --pkgbuild") != null);
     stdout.writer.end = 0;
     const detail_standard = try parser.parse(
@@ -1518,11 +1514,11 @@ test "search validates AUR query length and positive pagination before backend e
         &manifest,
         &.{ "search", "aur", "--detail", "--standard", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &detail_standard.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &detail_standard.dispatch, ShouldNotRun{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --detail with --standard") != null);
     stdout.writer.end = 0;
     const bad_page = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor", "--page", "0" });
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &bad_page.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &bad_page.dispatch, ShouldNotRun{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "greater than zero") != null);
 }
 

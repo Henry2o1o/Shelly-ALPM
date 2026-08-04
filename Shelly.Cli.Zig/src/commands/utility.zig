@@ -26,17 +26,16 @@ const Selection = union(enum) {
     conflicting,
 };
 
-const PermissionRunner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn run(
+        _: @This(),
         context: *runtime.RuntimeContext,
         user: []const u8,
         path: []const u8,
-    ) anyerror!u8,
+    ) !u8 {
+        return runChown(context, user, path);
+    }
 };
-
-const real_permission_runner: PermissionRunner = .{ .call = runChown };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -58,15 +57,15 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try execute(context, invocation, operation, real_permission_runner);
+    return try execute(context, invocation, operation, Real{});
 }
 
 fn execute(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
     operation: Operation,
-    permission_runner: PermissionRunner,
-) !u8 {
+    permission_runner: anytype,
+) anyerror!u8 {
     return switch (operation) {
         .fix_permissions => fixPermissions(context, invocation, permission_runner),
         .repair_db => repairDb(context, invocation, default_database_directory),
@@ -147,8 +146,8 @@ fn writeSelectionError(context: *runtime.RuntimeContext, selection: Selection) !
 fn fixPermissions(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: PermissionRunner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     const user = try invokingUser(context) orelse {
         const message = "Could not determine the invoking user (SUDO_USER, DOAS_USER, or PKEXEC_UID).";
         try writeResponseMessage(context, invocation, false, message);
@@ -165,7 +164,7 @@ fn fixPermissions(
     for (paths) |path| {
         std.Io.Dir.accessAbsolute(context.io, path, .{}) catch continue;
         found = true;
-        const exit_code = runner.call(runner.data, context, user, path) catch |err| {
+        const exit_code = runner.run(context, user, path) catch |err| {
             failed = true;
             const message = try std.fmt.allocPrint(context.allocator, "Failed to fix ownership for {s}: {t}", .{ path, err });
             try writeResponseMessage(context, invocation, false, message);
@@ -229,7 +228,6 @@ fn writeResponseMessage(
 }
 
 fn runChown(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     user: []const u8,
     path: []const u8,
@@ -429,14 +427,13 @@ test "permission repair targets only existing Shelly user directories" {
 
     const Capture = struct {
         calls: usize = 0,
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, user: []const u8, path: []const u8) !u8 {
-            const capture: *@This() = @ptrCast(@alignCast(data.?));
+        fn run(self: *@This(), _: *runtime.RuntimeContext, user: []const u8, path: []const u8) !u8 {
             try std.testing.expectEqualStrings("tester", user);
-            if (capture.calls == 0)
+            if (self.calls == 0)
                 try std.testing.expect(std.mem.endsWith(u8, path, "/config/shelly"))
             else
                 try std.testing.expect(std.mem.endsWith(u8, path, "/cache/Shelly"));
-            capture.calls += 1;
+            self.calls += 1;
             return 0;
         }
     };
@@ -444,7 +441,7 @@ test "permission repair targets only existing Shelly user directories" {
     try std.testing.expectEqual(@as(u8, 0), try fixPermissions(
         &context,
         &invocation,
-        .{ .data = &capture, .call = Capture.run },
+        &capture,
     ));
     try std.testing.expectEqual(@as(usize, 2), capture.calls);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "Fixed ownership:"));

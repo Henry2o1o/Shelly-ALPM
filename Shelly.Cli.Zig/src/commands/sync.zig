@@ -15,33 +15,38 @@ const standard_command_path = "shelly sync standard";
 const appimage_command_path = "shelly sync appimage";
 const flatpak_command_path = "shelly sync flatpak";
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Standard = struct {
+    pub fn run(
+        _: Standard,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         invocation: *const parser.Invocation,
-    ) anyerror!void,
-};
-
-const StandardRunnerAdapter = struct {
-    runner: Runner,
-    invocation: *const parser.Invocation,
-
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
     ) !void {
-        const self: *StandardRunnerAdapter = @ptrCast(@alignCast(data.?));
-        try self.runner.call(self.runner.data, context, operation_context, self.invocation);
+        return runRealStandardSync(context, operation_context, invocation);
     }
 };
 
-const real_standard_runner: Runner = .{ .call = runRealStandardSync };
-const real_appimage_runner: Runner = .{ .call = runRealAppImageSync };
-const real_flatpak_runner: Runner = .{ .call = runRealFlatpakSync };
+const AppImage = struct {
+    pub fn run(
+        _: AppImage,
+        context: *runtime.RuntimeContext,
+        operation_context: *Zigalpm.OperationContext,
+        invocation: *const parser.Invocation,
+    ) !void {
+        return runRealAppImageSync(context, operation_context, invocation);
+    }
+};
+
+const Flatpak = struct {
+    pub fn run(
+        _: Flatpak,
+        context: *runtime.RuntimeContext,
+        operation_context: *Zigalpm.OperationContext,
+        invocation: *const parser.Invocation,
+    ) !void {
+        return runRealFlatpakSync(context, operation_context, invocation);
+    }
+};
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -71,23 +76,19 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(
-        context,
-        invocation,
-        if (is_standard)
-            real_standard_runner
-        else if (is_appimage)
-            real_appimage_runner
-        else
-            real_flatpak_runner,
-    );
+    if (is_standard)
+        return try executeWithRunner(context, invocation, Standard{})
+    else if (is_appimage)
+        return try executeWithRunner(context, invocation, AppImage{})
+    else
+        return try executeWithRunner(context, invocation, Flatpak{});
 }
 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     return if (invocation.globals.ui_mode)
         executeUi(context, invocation, runner)
     else
@@ -97,14 +98,16 @@ fn executeWithRunner(
 fn executeStandard(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
-    var adapter: StandardRunnerAdapter = .{ .runner = runner, .invocation = invocation };
+    runner: anytype,
+) anyerror!u8 {
     const succeeded = try standard_single_pane.output(
         context,
         openingMessage(invocation),
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = StandardRunnerAdapter.call },
+        runner,
+        invocation,
+        null,
+        null,
     );
     return if (succeeded) 0 else 1;
 }
@@ -112,8 +115,8 @@ fn executeStandard(
 fn executeUi(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -131,7 +134,7 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionStart", openingMessage(invocation));
     try ui_operation.flush(context);
 
-    runner.call(runner.data, context, &operation_context, invocation) catch |err| {
+    runner.run(context, &operation_context, invocation) catch |err| {
         if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
             try output.writeErrorFrame(context, message);
             try output.writeAlpmInfoFrame(context, "TransactionFailed", "Sync failed.");
@@ -156,7 +159,6 @@ fn executeUi(
 }
 
 fn runRealStandardSync(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
@@ -170,7 +172,6 @@ fn runRealStandardSync(
 }
 
 fn runRealAppImageSync(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
@@ -269,7 +270,6 @@ fn runRealAppImageSync(
 }
 
 fn runRealFlatpakSync(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
@@ -530,29 +530,27 @@ test "sync forwards force and applies no-confirm through the shared operation co
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const Capture = struct { force: bool = false, no_confirm: bool = false };
-    var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                runtime_context: *runtime.RuntimeContext,
-                operation_context: *Zigalpm.OperationContext,
-                invocation: *const parser.Invocation,
-            ) !void {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.force = optionEnabled(invocation, "--force");
-                var operation = operation_context.begin(.{ .backend = .alpm, .kind = .sync });
-                defer operation.finish(.success);
-                var response = try operation.ask(.{ .kind = .confirmation, .prompt = "Continue?" });
-                defer response.deinit(runtime_context.allocator);
-                observed.no_confirm = response.response == .accepted;
-            }
-        }.run,
-    };
+    const Capture = struct {
+        force: bool = false,
+        no_confirm: bool = false,
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+        pub fn run(
+            self: *@This(),
+            runtime_context: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            invocation: *const parser.Invocation,
+        ) !void {
+            self.force = optionEnabled(invocation, "--force");
+            var operation = operation_context.begin(.{ .backend = .alpm, .kind = .sync });
+            defer operation.finish(.success);
+            var response = try operation.ask(.{ .kind = .confirmation, .prompt = "Continue?" });
+            defer response.deinit(runtime_context.allocator);
+            self.no_confirm = response.response == .accepted;
+        }
+    };
+    var capture: Capture = .{};
+
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.force);
     try std.testing.expect(capture.no_confirm);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Synchronizing package databases...") != null);
@@ -577,28 +575,26 @@ test "Flatpak sync uses the AppStream path and standard non-UI lifecycle" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const Capture = struct { called: bool = false, force: bool = true };
-    var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                operation_context: *Zigalpm.OperationContext,
-                invocation: *const parser.Invocation,
-            ) !void {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.called = true;
-                observed.force = optionEnabled(invocation, "--force");
-                var operation = operation_context.begin(.{ .backend = .flatpak, .kind = .update });
-                defer operation.finish(.success);
-                operation.status(.success, "Flatpak AppStream catalog updated", "flatpak.appstream.updated", null);
-            }
-        }.run,
-    };
+    const Capture = struct {
+        called: bool = false,
+        force: bool = true,
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+        pub fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            invocation: *const parser.Invocation,
+        ) !void {
+            self.called = true;
+            self.force = optionEnabled(invocation, "--force");
+            var operation = operation_context.begin(.{ .backend = .flatpak, .kind = .update });
+            defer operation.finish(.success);
+            operation.status(.success, "Flatpak AppStream catalog updated", "flatpak.appstream.updated", null);
+        }
+    };
+    var capture: Capture = .{};
+
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
     try std.testing.expect(!capture.force);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Synchronizing Flatpak AppStream metadata...") != null);
@@ -699,31 +695,28 @@ test "Flatpak remote sync uses the shared transaction lifecycle" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const Capture = struct { called: bool = false };
-    var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                operation_context: *Zigalpm.OperationContext,
-                invocation: *const parser.Invocation,
-            ) !void {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.called = true;
-                try std.testing.expect(isFlatpakRemoteOperation(invocation, "add"));
-                var operation = operation_context.begin(.{
-                    .backend = .flatpak,
-                    .kind = .configure,
-                    .subject = invocation.positionals[2],
-                });
-                defer operation.finish(.success);
-                operation.status(.success, "Flatpak remote added", "flatpak.remote.added", null);
-            }
-        }.run,
+    const Capture = struct {
+        called: bool = false,
+
+        pub fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            invocation: *const parser.Invocation,
+        ) !void {
+            self.called = true;
+            try std.testing.expect(isFlatpakRemoteOperation(invocation, "add"));
+            var operation = operation_context.begin(.{
+                .backend = .flatpak,
+                .kind = .configure,
+                .subject = invocation.positionals[2],
+            });
+            defer operation.finish(.success);
+            operation.status(.success, "Flatpak remote added", "flatpak.remote.added", null);
+        }
     };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    var capture: Capture = .{};
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Adding Flatpak remote") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Flatpak remote added") != null);
@@ -759,24 +752,21 @@ test "AppImage sync routes long and shortcode forms with an optional package" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const Capture = struct { package: ?[]const u8 = null };
-    var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                operation_context: *Zigalpm.OperationContext,
-                invocation: *const parser.Invocation,
-            ) !void {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.package = invocation.positionals[0];
-                emitAppImageInfo(operation_context, "Selected AppImage metadata synchronized.");
-            }
-        }.run,
+    const Capture = struct {
+        package: ?[]const u8 = null,
+
+        pub fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            invocation: *const parser.Invocation,
+        ) !void {
+            self.package = invocation.positionals[0];
+            emitAppImageInfo(operation_context, "Selected AppImage metadata synchronized.");
+        }
     };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    var capture: Capture = .{};
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expectEqualStrings("Editor", capture.package.?);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Synchronizing AppImage metadata") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Selected AppImage metadata synchronized") != null);
@@ -896,7 +886,7 @@ test "real AppImage runner persists and normalizes Forgejo release-page URLs" {
     });
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, real_appimage_runner),
+        try executeWithRunner(&context, &outcome.dispatch, AppImage{}),
     );
 
     const app_images = try appimage_manager.getAppImagesFromLocalDb();
@@ -966,7 +956,7 @@ test "real AppImage runner rejects invalid Forgejo paths without reporting succe
     });
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, real_appimage_runner),
+        try executeWithRunner(&context, &outcome.dispatch, AppImage{}),
     );
     try std.testing.expect(
         std.mem.indexOf(u8, stdout.writer.buffered(), "InvalidAppImageUpdateConfiguration") != null,
@@ -1016,7 +1006,7 @@ test "real AppImage runner reports a missing install directory without failing" 
 
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, real_appimage_runner),
+        try executeWithRunner(&context, &outcome.dispatch, AppImage{}),
     );
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "directory does not exist. No AppImages to sync") != null);
 }
@@ -1084,19 +1074,17 @@ test "sync flushes its initial status before starting the backend" {
         .stdout = &stdout.interface,
         .stderr = &stderr.writer,
     };
-    const Capture = struct { writer: *TrackingWriter, initial_status_was_flushed: bool = false };
-    var capture: Capture = .{ .writer = &stdout };
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.initial_status_was_flushed = observed.writer.flush_count > 0;
-            }
-        }.run,
-    };
+    const Capture = struct {
+        writer: *TrackingWriter,
+        initial_status_was_flushed: bool = false,
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+        pub fn run(self: *@This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
+            self.initial_status_was_flushed = self.writer.flush_count > 0;
+        }
+    };
+    var capture: Capture = .{ .writer = &stdout };
+
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.initial_status_was_flushed);
 }
 
@@ -1117,13 +1105,13 @@ test "sync reports backend failures and returns a failure exit code" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
+    const Failure = struct {
+        pub fn run(_: @This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             return error.TestSyncFailure;
         }
-    }.run };
+    };
 
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, Failure{}));
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "error: TestSyncFailure") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
@@ -1146,8 +1134,8 @@ test "sync UI mode emits transaction frames" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const runner: Runner = .{ .call = struct {
-        fn run(_: ?*anyopaque, _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
+    const Download = struct {
+        pub fn run(_: @This(), _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             var operation = operation_context.begin(.{
                 .backend = .download,
                 .kind = .download,
@@ -1156,9 +1144,9 @@ test "sync UI mode emits transaction frames" {
             defer operation.finish(.success);
             operation.progress(.{ .bytes_completed = 50, .bytes_total = 100 });
         }
-    }.run };
+    };
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Download{}));
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
 }

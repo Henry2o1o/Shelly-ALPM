@@ -51,32 +51,22 @@ const Backend = enum {
     }
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn run(
+        _: Real,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         backend: Backend,
         invocation: *const parser.Invocation,
-    ) anyerror!void,
-};
-
-const RunnerAdapter = struct {
-    runner: Runner,
-    invocation: *const parser.Invocation,
-
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
     ) !void {
-        const self: *RunnerAdapter = @ptrCast(@alignCast(data.?));
-        try runSelected(self.runner, context, operation_context, self.invocation);
+        return switch (backend) {
+            .standard => runStandard(context, operation_context, invocation),
+            .aur => runAur(context, operation_context, invocation),
+            .flatpak => runFlatpakStep(context, operation_context, invocation),
+            .appimage => runAppImage(context, operation_context),
+        };
     }
 };
-
-const real_runner: Runner = .{ .call = runRealUpgrade };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -108,7 +98,7 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 const PreviewResult = struct {
@@ -116,13 +106,14 @@ const PreviewResult = struct {
     proceed: bool,
 };
 
-const PlanCollector = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const RealPlanCollector = struct {
+    fn collect(
+        _: RealPlanCollector,
         context: *runtime.RuntimeContext,
         backend: Backend,
-    ) anyerror!list_updates.Result,
+    ) !list_updates.Result {
+        return list_updates.collectUpdates(context, listUpdatesBackend(backend), false);
+    }
 };
 
 const UpgradePlan = struct {
@@ -149,28 +140,18 @@ const UpgradePlan = struct {
     }
 };
 
-const real_plan_collector: PlanCollector = .{ .call = collectPlanUpdates };
-
-fn collectPlanUpdates(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    backend: Backend,
-) !list_updates.Result {
-    return list_updates.collectUpdates(context, listUpdatesBackend(backend), false);
-}
-
 fn prepareAllUpgradePreview(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !PreviewResult {
-    return prepareAllUpgradePreviewWithCollector(context, invocation, real_plan_collector);
+    return prepareAllUpgradePreviewWithCollector(context, invocation, RealPlanCollector{});
 }
 
 fn prepareAllUpgradePreviewWithCollector(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    collector: PlanCollector,
-) !PreviewResult {
+    collector: anytype,
+) anyerror!PreviewResult {
     var plan = try buildAllUpgradePlan(context, invocation, collector);
     defer plan.deinit(context.allocator);
 
@@ -195,8 +176,8 @@ fn prepareAllUpgradePreviewWithCollector(
 fn buildAllUpgradePlan(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    collector: PlanCollector,
-) !UpgradePlan {
+    collector: anytype,
+) anyerror!UpgradePlan {
     var plan: UpgradePlan = .{};
     errdefer plan.deinit(context.allocator);
 
@@ -207,7 +188,7 @@ fn buildAllUpgradePlan(
         try context.stdout.print("{s}\n", .{collectingMessage(backend)});
         try context.stdout.flush();
 
-        var result = collector.call(collector.data, context, backend) catch |err| {
+        var result = collector.collect(context, backend) catch |err| {
             if (backend == .flatpak) {
                 if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
                     try output.writeWarning(context, message);
@@ -455,8 +436,8 @@ fn confirmPreparedUpgrade(context: *runtime.RuntimeContext, prompt: []const u8) 
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     return if (invocation.globals.ui_mode)
         executeUi(context, invocation, runner)
     else
@@ -466,19 +447,28 @@ fn executeWithRunner(
 fn executeStandard(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
-    var adapter: RunnerAdapter = .{ .runner = runner, .invocation = invocation };
+    runner: anytype,
+) anyerror!u8 {
+    const Selected = struct {
+        inner: @TypeOf(runner),
+
+        pub fn run(
+            self: @This(),
+            run_context: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            run_invocation: *const parser.Invocation,
+        ) anyerror!void {
+            try runSelected(self.inner, run_context, operation_context, run_invocation);
+        }
+    };
     const succeeded = try standard_single_pane.output(
         context,
         openingMessage(invocation),
         invocation.globals.no_confirm,
-        .{
-            .data = &adapter,
-            .call = RunnerAdapter.call,
-            .success_message = successMessage(invocation),
-            .failure_message = failureMessage(invocation),
-        },
+        Selected{ .inner = runner },
+        invocation,
+        successMessage(invocation),
+        failureMessage(invocation),
     );
     return if (succeeded) 0 else 1;
 }
@@ -486,8 +476,8 @@ fn executeStandard(
 fn executeUi(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -529,14 +519,13 @@ fn executeUi(
 }
 
 fn runSelected(
-    runner: Runner,
+    runner: anytype,
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
-) !void {
+) anyerror!void {
     if (!upgradesAll(invocation)) {
-        try runner.call(
-            runner.data,
+        try runner.run(
             context,
             operation_context,
             backendForPath(invocation.command.path) orelse unreachable,
@@ -548,7 +537,7 @@ fn runSelected(
     var failed = false;
     for (all_backends) |backend| {
         if (!backendEnabled(invocation, backend)) continue;
-        runner.call(runner.data, context, operation_context, backend, invocation) catch |err| {
+        runner.run(context, operation_context, backend, invocation) catch |err| {
             if (backend == .flatpak) {
                 if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
                     reportBackendSkipped(operation_context, message);
@@ -563,21 +552,6 @@ fn runSelected(
 }
 
 const all_backends = [_]Backend{ .standard, .aur, .flatpak, .appimage };
-
-fn runRealUpgrade(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    operation_context: *Zigalpm.OperationContext,
-    backend: Backend,
-    invocation: *const parser.Invocation,
-) !void {
-    return switch (backend) {
-        .standard => runStandard(context, operation_context, invocation),
-        .aur => runAur(context, operation_context, invocation),
-        .flatpak => runFlatpakStep(context, operation_context, invocation),
-        .appimage => runAppImage(context, operation_context),
-    };
-}
 
 fn runStandard(
     context: *runtime.RuntimeContext,
@@ -1018,11 +992,10 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
         calls: std.ArrayList(Backend) = .empty,
 
         fn collect(
-            data: ?*anyopaque,
+            self: *@This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
         ) !list_updates.Result {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             try self.calls.append(std.testing.allocator, backend);
             try std.testing.expectEqual(Backend.aur, backend);
             return .{ .aur = .{ .items = &.{.{
@@ -1042,7 +1015,7 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
     const preview = try prepareAllUpgradePreviewWithCollector(
         &context,
         &outcome.dispatch,
-        .{ .data = &capture, .call = Capture.collect },
+        &capture,
     );
     try std.testing.expect(preview.has_updates);
     try std.testing.expect(preview.proceed);
@@ -1066,7 +1039,7 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
 
     const Capture = struct {
         fn collect(
-            _: ?*anyopaque,
+            _: @This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
         ) !list_updates.Result {
@@ -1079,7 +1052,7 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
             }} } };
         }
     };
-    const collector: PlanCollector = .{ .call = Capture.collect };
+    const collector = Capture{};
 
     const defaulted = try parser.parse(arena.allocator(), &manifest, &.{
         "upgrade",
@@ -1177,32 +1150,30 @@ test "upgrade routes every action-first type through the combined handler" {
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        var observed: ?Backend = null;
-        const runner: Runner = .{
-            .data = &observed,
-            .call = struct {
-                fn run(
-                    data: ?*anyopaque,
-                    _: *runtime.RuntimeContext,
-                    operation_context: *Zigalpm.OperationContext,
-                    backend: Backend,
-                    _: *const parser.Invocation,
-                ) !void {
-                    const capture: *?Backend = @ptrCast(@alignCast(data.?));
-                    capture.* = backend;
-                    var operation = operation_context.begin(.{
-                        .backend = backend.operationBackend(),
-                        .kind = .update,
-                        .subject = backend.displayName(),
-                    });
-                    operation.progress(.{ .completed = 1, .total = 1, .percentage = 100 });
-                    operation.finish(.success);
-                }
-            }.run,
-        };
+        const Observed = struct {
+            backend: ?Backend = null,
 
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
-        try std.testing.expectEqual(expected.backend, observed.?);
+            fn run(
+                self: *@This(),
+                _: *runtime.RuntimeContext,
+                operation_context: *Zigalpm.OperationContext,
+                backend: Backend,
+                _: *const parser.Invocation,
+            ) !void {
+                self.backend = backend;
+                var operation = operation_context.begin(.{
+                    .backend = backend.operationBackend(),
+                    .kind = .update,
+                    .subject = backend.displayName(),
+                });
+                operation.progress(.{ .completed = 1, .total = 1, .percentage = 100 });
+                operation.finish(.success);
+            }
+        };
+        var observed: Observed = .{};
+
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &observed));
+        try std.testing.expectEqual(expected.backend, observed.backend.?);
         try std.testing.expect(std.mem.indexOf(
             u8,
             stdout.writer.buffered(),
@@ -1233,26 +1204,24 @@ test "standard all modifier routes every backend through the combined coordinato
     };
     var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
     defer operation_context.deinit();
-    var calls: std.ArrayList(Backend) = .empty;
-    defer calls.deinit(std.testing.allocator);
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                _: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                const captured: *std.ArrayList(Backend) = @ptrCast(@alignCast(data.?));
-                try captured.append(std.testing.allocator, backend);
-            }
-        }.run,
-    };
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
 
-    try runSelected(runner, &context, &operation_context, &outcome.dispatch);
-    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    try runSelected(&calls, &context, &operation_context, &outcome.dispatch);
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
 }
 
 test "upgrade all honors every exclusion" {
@@ -1279,26 +1248,24 @@ test "upgrade all honors every exclusion" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    var calls: std.ArrayList(Backend) = .empty;
-    defer calls.deinit(std.testing.allocator);
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                _: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                const captured: *std.ArrayList(Backend) = @ptrCast(@alignCast(data.?));
-                try captured.append(std.testing.allocator, backend);
-            }
-        }.run,
-    };
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expectEqualSlices(Backend, &.{.aur}, calls.items);
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &calls));
+    try std.testing.expectEqualSlices(Backend, &.{.aur}, calls.backends.items);
 }
 
 test "upgrade all continues after a failed backend and returns failure" {
@@ -1318,27 +1285,25 @@ test "upgrade all continues after a failed backend and returns failure" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    var calls: std.ArrayList(Backend) = .empty;
-    defer calls.deinit(std.testing.allocator);
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                _: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                const captured: *std.ArrayList(Backend) = @ptrCast(@alignCast(data.?));
-                try captured.append(std.testing.allocator, backend);
-                if (backend == .aur) return error.SyntheticAurFailure;
-            }
-        }.run,
-    };
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
 
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+            if (backend == .aur) return error.SyntheticAurFailure;
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, &calls));
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
     try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AUR upgrade step failed") != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
@@ -1368,32 +1333,29 @@ test "upgrade all treats an unavailable Flatpak backend as a warning" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    var calls: std.ArrayList(Backend) = .empty;
-    defer calls.deinit(std.testing.allocator);
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                _: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                const captured: *std.ArrayList(Backend) =
-                    @ptrCast(@alignCast(data.?));
-                try captured.append(std.testing.allocator, backend);
-                if (backend == .flatpak)
-                    return error.FlatpakBackendUnavailable;
-            }
-        }.run,
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
+
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+            if (backend == .flatpak)
+                return error.FlatpakBackendUnavailable;
+        }
     };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, runner),
+        try executeWithRunner(&context, &outcome.dispatch, &calls),
     );
-    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
     try std.testing.expect(std.mem.indexOf(
         u8,
         stdout.writer.buffered(),
@@ -1428,27 +1390,25 @@ test "upgrade UI mode emits backend percentage frames" {
         .stdout = &stdout.writer,
         .stderr = &stderr.writer,
     };
-    const runner: Runner = .{
-        .call = struct {
-            fn run(
-                _: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                operation_context: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                var operation = operation_context.begin(.{
-                    .backend = backend.operationBackend(),
-                    .kind = .update,
-                    .subject = "org.example.App",
-                });
-                operation.progress(.{ .stage = "Updating", .percentage = 44 });
-                operation.finish(.success);
-            }
-        }.run,
+    const Progress = struct {
+        fn run(
+            _: @This(),
+            _: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            var operation = operation_context.begin(.{
+                .backend = backend.operationBackend(),
+                .kind = .update,
+                .subject = "org.example.App",
+            });
+            operation.progress(.{ .stage = "Updating", .percentage = 44 });
+            operation.finish(.success);
+        }
     };
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Progress{}));
     const rendered = stdout.writer.buffered();
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered, "[JSON]"));
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[/JSON]") != null);

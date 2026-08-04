@@ -16,31 +16,22 @@ const UpdateError = error{
     BackendNotImplemented,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    pub fn run(
+        _: Real,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         invocation: *const parser.Invocation,
-    ) anyerror!void,
-};
-
-const RunnerAdapter = struct {
-    runner: Runner,
-    invocation: *const parser.Invocation,
-
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
     ) !void {
-        const self: *RunnerAdapter = @ptrCast(@alignCast(data.?));
-        try self.runner.call(self.runner.data, context, operation_context, self.invocation);
+        if (std.mem.eql(u8, invocation.command.path, standard_command_path))
+            return runStandard(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, aur_command_path))
+            return runAur(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+            return runFlatpak(context, operation_context, invocation);
+        return UpdateError.BackendNotImplemented;
     }
 };
-
-const real_runner: Runner = .{ .call = runRealUpdate };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -75,7 +66,7 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 fn confirmStandardUpdate(
@@ -174,8 +165,8 @@ fn argumentsWithNoConfirm(
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     const opening = try openingMessage(context.allocator, invocation);
     defer context.allocator.free(opening);
     return if (invocation.globals.ui_mode)
@@ -187,15 +178,17 @@ fn executeWithRunner(
 fn executeStandard(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
-    var adapter: RunnerAdapter = .{ .runner = runner, .invocation = invocation };
+) anyerror!u8 {
     const succeeded = try standard_single_pane.output(
         context,
         opening,
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        runner,
+        invocation,
+        null,
+        null,
     );
     return if (succeeded) 0 else 1;
 }
@@ -203,9 +196,9 @@ fn executeStandard(
 fn executeUi(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
+) anyerror!u8 {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -226,7 +219,7 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionStart", opening);
     try ui_operation.flush(context);
 
-    runner.call(runner.data, context, &operation_context, invocation) catch |err| {
+    runner.run(context, &operation_context, invocation) catch |err| {
         const message = try std.fmt.allocPrint(context.allocator, "Update failed: {t}", .{err});
         defer context.allocator.free(message);
         try output.writeErrorFrame(context, message);
@@ -238,21 +231,6 @@ fn executeUi(
     try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
     try ui_operation.flush(context);
     return if (reporter.failed()) 1 else 0;
-}
-
-fn runRealUpdate(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    operation_context: *Zigalpm.OperationContext,
-    invocation: *const parser.Invocation,
-) !void {
-    if (std.mem.eql(u8, invocation.command.path, standard_command_path))
-        return runStandard(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, aur_command_path))
-        return runAur(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
-        return runFlatpak(context, operation_context, invocation);
-    return UpdateError.BackendNotImplemented;
 }
 
 fn runStandard(
@@ -450,13 +428,12 @@ test "routes every update backend through shared output lifecycles" {
         calls: usize = 0,
         paths: [3][]const u8 = undefined,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             invocation: *const parser.Invocation,
         ) !void {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.paths[self.calls] = invocation.command.path;
             self.calls += 1;
             if (std.mem.eql(u8, invocation.command.path, aur_command_path))
@@ -464,7 +441,6 @@ test "routes every update backend through shared output lifecycles" {
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
 
     for ([_][]const []const u8{
         &.{ "update", "standard", "--no-confirm", "linux", "mesa" },
@@ -472,7 +448,7 @@ test "routes every update backend through shared output lifecycles" {
         &.{ "update", "flatpak", "--ui-mode", "org.example.App" },
     }) |arguments| {
         const outcome = try parser.parse(arena.allocator(), &manifest, arguments);
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
     }
     try std.testing.expectEqual(@as(usize, 3), capture.calls);
     try std.testing.expectEqualStrings(standard_command_path, capture.paths[0]);
@@ -600,8 +576,8 @@ test "update backend failures return a nonzero status" {
         .stderr = &stderr.writer,
     };
     const Failure = struct {
-        fn run(
-            _: ?*anyopaque,
+        pub fn run(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: *const parser.Invocation,
@@ -612,7 +588,7 @@ test "update backend failures return a nonzero status" {
 
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, .{ .call = Failure.run }),
+        try executeWithRunner(&context, &outcome.dispatch, Failure{}),
     );
 }
 

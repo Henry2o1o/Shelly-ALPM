@@ -19,16 +19,15 @@ pub const NewsItem = struct {
     pub_date: []const u8,
 };
 
-const Fetcher = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn call(
+        _: @This(),
         context: *runtime.RuntimeContext,
         url: []const u8,
-    ) anyerror![]u8,
+    ) ![]u8 {
+        return fetchFeed(context, url);
+    }
 };
-
-const real_fetcher: Fetcher = .{ .call = fetchFeed };
 
 const ExecutionOptions = struct {
     show_all: bool = false,
@@ -41,18 +40,18 @@ pub fn dispatch(
     invocation: *const parser.Invocation,
 ) !?u8 {
     if (!std.mem.eql(u8, invocation.command.path, command_path)) return null;
-    return try executeWithFetcher(context, invocation, real_fetcher);
+    return try executeWithFetcher(context, invocation, Real{});
 }
 
 pub fn showUnread(context: *runtime.RuntimeContext) !u8 {
-    return execute(context, .{}, real_fetcher);
+    return execute(context, .{}, Real{});
 }
 
 fn executeWithFetcher(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    fetcher: Fetcher,
-) !u8 {
+    fetcher: anytype,
+) anyerror!u8 {
     return execute(context, .{
         .show_all = optionEnabled(invocation, "--all"),
         .ui_mode = invocation.globals.ui_mode,
@@ -63,9 +62,9 @@ fn executeWithFetcher(
 fn execute(
     context: *runtime.RuntimeContext,
     options: ExecutionOptions,
-    fetcher: Fetcher,
-) !u8 {
-    const raw_feed = fetcher.call(fetcher.data, context, arch_linux_feed) catch |err| {
+    fetcher: anytype,
+) anyerror!u8 {
+    const raw_feed = fetcher.call(context, arch_linux_feed) catch |err| {
         try writeFailure(context, options, err);
         return 1;
     };
@@ -112,7 +111,6 @@ fn execute(
 }
 
 fn fetchFeed(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     url: []const u8,
 ) ![]u8 {
@@ -597,16 +595,15 @@ const test_feed =
     \\</channel></rss>
 ;
 
-fn testFetcher(
-    data: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    url: []const u8,
-) ![]u8 {
-    const calls: *usize = @ptrCast(@alignCast(data.?));
-    calls.* += 1;
-    try std.testing.expectEqualStrings(arch_linux_feed, url);
-    return context.allocator.dupe(u8, test_feed);
-}
+const TestFetcher = struct {
+    calls: usize = 0,
+
+    fn call(self: *@This(), context: *runtime.RuntimeContext, url: []const u8) ![]u8 {
+        self.calls += 1;
+        try std.testing.expectEqualStrings(arch_linux_feed, url);
+        return context.allocator.dupe(u8, test_feed);
+    }
+};
 
 test "news is a standalone -N command with all and help modifiers" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -679,12 +676,11 @@ test "news caches the full feed and subsequently displays only unseen entries" {
         .stderr = &stderr.writer,
         .environment = &environment,
     };
-    var calls: usize = 0;
-    const fetcher: Fetcher = .{ .data = &calls, .call = testFetcher };
+    var fetcher: TestFetcher = .{};
 
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithFetcher(&context, &json_outcome.dispatch, fetcher),
+        try executeWithFetcher(&context, &json_outcome.dispatch, &fetcher),
     );
     const first_output = stdout.writer.buffered();
     const older_position = std.mem.indexOf(u8, first_output, "Older").?;
@@ -704,10 +700,10 @@ test "news caches the full feed and subsequently displays only unseen entries" {
     stdout.writer.end = 0;
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithFetcher(&context, &plain_outcome.dispatch, fetcher),
+        try executeWithFetcher(&context, &plain_outcome.dispatch, &fetcher),
     );
     try std.testing.expectEqualStrings("No new news found\n", stdout.writer.buffered());
-    try std.testing.expectEqual(@as(usize, 2), calls);
+    try std.testing.expectEqual(@as(usize, 2), fetcher.calls);
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
 }
 
@@ -737,17 +733,17 @@ test "news all emits the full feed as a UI frame even when entries were viewed" 
         .stderr = &stderr.writer,
         .environment = &environment,
     };
-    var calls: usize = 0;
+    var fetcher: TestFetcher = .{};
     try std.testing.expectEqual(
         @as(u8, 0),
         try executeWithFetcher(
             &context,
             &outcome.dispatch,
-            .{ .data = &calls, .call = testFetcher },
+            &fetcher,
         ),
     );
     try std.testing.expect(std.mem.startsWith(u8, stdout.writer.buffered(), "[JSON]"));
     try std.testing.expect(std.mem.endsWith(u8, stdout.writer.buffered(), "[/JSON]\n"));
-    try std.testing.expectEqual(@as(usize, 1), calls);
+    try std.testing.expectEqual(@as(usize, 1), fetcher.calls);
     try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
 }

@@ -31,26 +31,25 @@ const DiscoveryResult = struct {
 };
 
 const Discoverer = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+    fn call(
+        _: @This(),
         context: *runtime.RuntimeContext,
         query: []const u8,
-    ) anyerror!DiscoveryResult,
+    ) !DiscoveryResult {
+        return discoverReal(context, query);
+    }
 };
 
 const Installer = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+    fn call(
+        _: @This(),
         context: *runtime.RuntimeContext,
         candidate: Candidate,
         no_confirm: bool,
-    ) anyerror!u8,
+    ) !u8 {
+        return installReal(context, candidate, no_confirm);
+    }
 };
-
-const real_discoverer: Discoverer = .{ .call = discoverReal };
-const real_installer: Installer = .{ .call = installReal };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -58,15 +57,15 @@ pub fn dispatch(
 ) !?u8 {
     if (!std.mem.eql(u8, invocation.command.path, command_path) or invocation.positionals.len == 0)
         return null;
-    return try executeWith(context, invocation, real_discoverer, real_installer);
+    return try executeWith(context, invocation, Discoverer{}, Installer{});
 }
 
 fn executeWith(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    discoverer: Discoverer,
-    installer: Installer,
-) !u8 {
+    discoverer: anytype,
+    installer: anytype,
+) anyerror!u8 {
     if (invocation.globals.ui_mode or invocation.globals.json) {
         try context.stderr.writeAll(
             "Interactive package selection does not support --ui-mode or --json; use an explicit search command.\n",
@@ -81,7 +80,7 @@ fn executeWith(
         return 1;
     }
 
-    const discovery = discoverer.call(discoverer.data, context, query) catch |err| {
+    const discovery = discoverer.call(context, query) catch |err| {
         try context.stderr.print("Package search failed: {t}\n", .{err});
         return 1;
     };
@@ -111,14 +110,13 @@ fn executeWith(
         try context.stdout.writeAll("Installation cancelled.\n");
         return 0;
     };
-    return installer.call(installer.data, context, candidates[index], invocation.globals.no_confirm) catch |err| {
+    return installer.call(context, candidates[index], invocation.globals.no_confirm) catch |err| {
         try context.stderr.print("Unable to start installation: {t}\n", .{err});
         return 1;
     };
 }
 
 fn discoverReal(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     query: []const u8,
 ) !DiscoveryResult {
@@ -364,7 +362,6 @@ fn promptSelection(
 }
 
 fn installReal(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     candidate: Candidate,
     no_confirm: bool,
@@ -496,11 +493,23 @@ test "no-confirm installs the final closest candidate and preserves partial resu
         installed_name: ?[]const u8 = null,
         source: ?Source = null,
         no_confirm: bool = false,
+
+        fn call(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            candidate: Candidate,
+            no_confirm: bool,
+        ) !u8 {
+            self.installed_name = candidate.name;
+            self.source = candidate.source;
+            self.no_confirm = no_confirm;
+            return 23;
+        }
     };
     var capture: Capture = .{};
-    const discoverer: Discoverer = .{ .call = struct {
-        fn discover(
-            _: ?*anyopaque,
+    const FakeDiscoverer = struct {
+        fn call(
+            _: @This(),
             _: *runtime.RuntimeContext,
             query: []const u8,
         ) !DiscoveryResult {
@@ -513,21 +522,7 @@ test "no-confirm installs the final closest candidate and preserves partial resu
                 .aur_error = error.Timeout,
             };
         }
-    }.discover };
-    const installer: Installer = .{ .data = &capture, .call = struct {
-        fn run(
-            data: ?*anyopaque,
-            _: *runtime.RuntimeContext,
-            candidate: Candidate,
-            no_confirm: bool,
-        ) !u8 {
-            const observed: *Capture = @ptrCast(@alignCast(data.?));
-            observed.installed_name = candidate.name;
-            observed.source = candidate.source;
-            observed.no_confirm = no_confirm;
-            return 23;
-        }
-    }.run };
+    };
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
     var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -541,7 +536,7 @@ test "no-confirm installs the final closest candidate and preserves partial resu
 
     try std.testing.expectEqual(
         @as(u8, 23),
-        try executeWith(&context, &outcome.dispatch, discoverer, installer),
+        try executeWith(&context, &outcome.dispatch, FakeDiscoverer{}, &capture),
     );
     try std.testing.expectEqualStrings("demo", capture.installed_name.?);
     try std.testing.expectEqual(Source.standard, capture.source.?);
