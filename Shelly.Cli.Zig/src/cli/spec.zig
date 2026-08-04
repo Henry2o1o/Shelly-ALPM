@@ -18,6 +18,7 @@ pub const Command = struct {
     implementation: ?[]const u8 = null,
     actionCode: ?u8 = null,
     typeCode: ?u8 = null,
+    bareActionCode: bool = false,
     defaultForAction: bool = false,
 
     pub fn matches(self: Command, token: []const u8) bool {
@@ -93,6 +94,7 @@ pub const Manifest = struct {
                     .implementation = candidate.implementation,
                     .actionCode = candidate.action.code(),
                     .typeCode = candidate.type_code,
+                    .bareActionCode = candidate.bare_action_code,
                     .defaultForAction = candidate.default_for_action,
                 });
             }

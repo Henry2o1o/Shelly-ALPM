@@ -26,42 +26,8 @@ pub fn translate(
     const token = args[0];
     if (try translateTopLevelHelp(allocator, manifest, args, token)) |translation|
         return translation;
-    if (std.mem.eql(u8, token, "-U")) {
-        var result: std.ArrayList([]const u8) = .empty;
-        try result.appendSlice(allocator, &.{ "upgrade", "all" });
-        try result.appendSlice(allocator, args[1..]);
-        return .{ .translated = try result.toOwnedSlice(allocator) };
-    }
-    if (std.mem.eql(u8, token, "-Uh")) {
-        var result: std.ArrayList([]const u8) = .empty;
-        try result.appendSlice(allocator, &.{ "upgrade", "--help" });
-        try result.appendSlice(allocator, args[1..]);
-        return .{ .translated = try result.toOwnedSlice(allocator) };
-    }
-    if (std.mem.eql(u8, token, "-P")) {
-        var result: std.ArrayList([]const u8) = .empty;
-        try result.appendSlice(allocator, &.{ "list-updates", "all" });
-        try result.appendSlice(allocator, args[1..]);
-        return .{ .translated = try result.toOwnedSlice(allocator) };
-    }
-    if (std.mem.eql(u8, token, "-Ih")) {
-        var result: std.ArrayList([]const u8) = .empty;
-        try result.appendSlice(allocator, &.{ "install", "--help" });
-        try result.appendSlice(allocator, args[1..]);
-        return .{ .translated = try result.toOwnedSlice(allocator) };
-    }
-    if (std.mem.eql(u8, token, "-Mh")) {
-        var result: std.ArrayList([]const u8) = .empty;
-        try result.appendSlice(allocator, &.{ "mark", "--help" });
-        try result.appendSlice(allocator, args[1..]);
-        return .{ .translated = try result.toOwnedSlice(allocator) };
-    }
-    if (std.mem.eql(u8, token, "-K") or std.mem.eql(u8, token, "-Kh")) {
-        var result: std.ArrayList([]const u8) = .empty;
-        try result.appendSlice(allocator, &.{ "keyring", "--help" });
-        try result.appendSlice(allocator, args[1..]);
-        return .{ .translated = try result.toOwnedSlice(allocator) };
-    }
+    if (try translateBareCodeVariant(allocator, args, token)) |translation|
+        return translation;
     if (std.mem.startsWith(u8, token, "-CI")) {
         var result: std.ArrayList([]const u8) = .empty;
         try result.appendSlice(allocator, &.{ "sync", "appimage", "--configure-updates" });
@@ -80,6 +46,8 @@ pub fn translate(
     if (try translateAurVersionInstall(allocator, manifest, args, token)) |translation|
         return translation;
     if (try translateStandaloneAction(allocator, manifest, args, token)) |translation|
+        return translation;
+    if (try translateActionCodeHelp(allocator, args, token)) |translation|
         return translation;
     if (token.len < 3 or token[0] != '-') return .{ .unchanged = args };
 
@@ -216,21 +184,46 @@ fn translateStandaloneAction(
     return .{ .translated = try result.toOwnedSlice(allocator) };
 }
 
+fn translateBareCodeVariant(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    token: []const u8,
+) !?Translation {
+    if (token.len < 2 or token.len > 3 or token[0] != '-') return null;
+    if (token.len == 3 and token[2] != 'h') return null;
+    const variant = catalog.findBareCodeVariant(token[1]) orelse return null;
+
+    var result: std.ArrayList([]const u8) = .empty;
+    if (token.len == 3)
+        try result.appendSlice(allocator, &.{ variant.action.name(), "--help" })
+    else
+        try result.appendSlice(allocator, &.{ variant.action.name(), variant.name });
+    try result.appendSlice(allocator, args[1..]);
+    return .{ .translated = try result.toOwnedSlice(allocator) };
+}
+
+fn translateActionCodeHelp(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    token: []const u8,
+) !?Translation {
+    if (token.len < 2 or token.len > 3 or token[0] != '-') return null;
+    const action = catalog.Action.findByCode(token[1]) orelse return null;
+    if (catalog.findStandaloneVariantByActionCode(token[1]) != null) return null;
+    if (token.len == 2 and !action.bareCodeMeansHelp()) return null;
+    if (token.len == 3 and token[2] != 'h') return null;
+
+    var result: std.ArrayList([]const u8) = .empty;
+    try result.appendSlice(allocator, &.{ action.name(), "--help" });
+    try result.appendSlice(allocator, args[1..]);
+    return .{ .translated = try result.toOwnedSlice(allocator) };
+}
+
 fn normalizeTypeCode(action_code: u8, type_code: u8) u8 {
-    if (action_code == 'L') return switch (type_code) {
-        'I' => 'i',
-        'A' => 'a',
-        'F' => 'f',
-        else => type_code,
-    };
-    if (action_code != 'R') return type_code;
-    return switch (type_code) {
-        'S' => 's',
-        'I' => 'i',
-        'A' => 'a',
-        'F' => 'f',
-        else => type_code,
-    };
+    if (catalog.findVariantByCodes(action_code, type_code) != null) return type_code;
+    if (catalog.findVariantByAliasTypeCode(action_code, type_code)) |variant|
+        return variant.type_code orelse type_code;
+    return type_code;
 }
 
 fn translateCombinedSearch(
@@ -239,20 +232,17 @@ fn translateCombinedSearch(
     args: []const []const u8,
     token: []const u8,
 ) !?Translation {
-    if (token[1] != 'S') return null;
+    const action = catalog.Action.findByCode(token[1]) orelse return null;
+    if (!action.supportsCombinedTypes()) return null;
 
     var selected: std.ArrayList(*const catalog.Variant) = .empty;
     var modifiers: std.ArrayList(u8) = .empty;
     var seen = [_]bool{false} ** 256;
     for (token[2..]) |code| {
-        const variant = catalog.findVariantByCodes('S', code) orelse {
+        const variant = catalog.findVariantByCodes(token[1], code) orelse {
             try modifiers.append(allocator, code);
             continue;
         };
-        if (variant.action != .search) {
-            try modifiers.append(allocator, code);
-            continue;
-        }
         if (seen[code]) {
             return .{ .failure = try std.fmt.allocPrint(
                 allocator,
@@ -705,6 +695,19 @@ test "translates uppercase remove aliases and preserves lowercase compatibility"
         const expected_path = try std.fmt.allocPrint(allocator, "shelly remove {s}", .{command_type});
         try std.testing.expectEqualStrings(expected_path, parsed.dispatch.command.path);
     }
+}
+
+test "bare action codes and alias type codes resolve from catalog data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const manifest = try spec.Manifest.load(allocator);
+
+    try expectTranslation(allocator, &manifest, &.{"-Ph"}, &.{ "list-updates", "--help" });
+    try expectTranslation(allocator, &manifest, &.{"-Mh"}, &.{ "mark", "--help" });
+    try expectTranslation(allocator, &manifest, &.{"-Eh"}, &.{ "update", "--help" });
+    try expectTranslation(allocator, &manifest, &.{"-LA"}, &.{ "list", "aur" });
+    try expectTranslation(allocator, &manifest, &.{ "-LF", "flathub" }, &.{ "list", "flatpak", "flathub" });
 }
 
 test "passes ordinary long form and unrelated options through unchanged" {

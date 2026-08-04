@@ -7,6 +7,7 @@ pub const variants = [_]types.Variant{
         .action = .list_updates,
         .name = "all",
         .type_code = 'x',
+        .bare_action_code = true,
         .description = "Query available updates from every supported package backend, continuing through independent backend failures.",
         .implementation = "Combined Zig coordinator over AlpmManager, appimage.UpdateManager, AurManager, and FlatpakManager",
         .options = &.{flag("--show-hidden", &.{}, "Include hidden packages")},

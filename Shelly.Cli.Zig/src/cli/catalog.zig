@@ -193,6 +193,23 @@ pub fn findStandaloneVariantByActionCode(action_code: u8) ?*const Variant {
     return null;
 }
 
+pub fn findBareCodeVariant(action_code: u8) ?*const Variant {
+    for (&variants) |*variant| {
+        if (variant.action.code() == action_code and variant.bare_action_code) return variant;
+    }
+    return null;
+}
+
+pub fn findVariantByAliasTypeCode(action_code: u8, alias_code: u8) ?*const Variant {
+    for (&variants) |*variant| {
+        if (variant.action.code() != action_code) continue;
+        for (variant.alias_type_codes) |candidate| {
+            if (candidate == alias_code) return variant;
+        }
+    }
+    return null;
+}
+
 pub fn findTypeByCode(code: u8) ?Type {
     for (types) |command_type| {
         if (command_type.code == code) return command_type;
@@ -236,6 +253,13 @@ fn validate() void {
         if (variant.description.len == 0)
             @compileError(std.fmt.comptimePrint("variant '{s}' needs a description", .{where}));
 
+        for (variant.alias_type_codes) |alias_code| {
+            if (!std.ascii.isUpper(alias_code))
+                @compileError(std.fmt.comptimePrint("alias type code '{c}' of '{s}' must be uppercase", .{ alias_code, where }));
+            if (variant.type_code != null and variant.type_code.? == alias_code)
+                @compileError(std.fmt.comptimePrint("alias type code '{c}' of '{s}' duplicates its own type code", .{ alias_code, where }));
+        }
+
         for (variants[index + 1 ..]) |other| {
             if (variant.action == other.action and std.mem.eql(u8, variant.name, other.name))
                 @compileError(std.fmt.comptimePrint("duplicate variant '{s}'", .{where}));
@@ -246,6 +270,18 @@ fn validate() void {
                 @compileError(std.fmt.comptimePrint("duplicate shortcode type code '{c}' for action '{s}'", .{ variant.type_code.?, variant.action.name() }));
             if (variant.action == other.action and variant.default_for_action and other.default_for_action)
                 @compileError(std.fmt.comptimePrint("action '{s}' has more than one default type", .{variant.action.name()}));
+            if (variant.action == other.action and variant.bare_action_code and other.bare_action_code)
+                @compileError(std.fmt.comptimePrint("action '{s}' has more than one bare action-code variant", .{variant.action.name()}));
+            if (variant.action == other.action) {
+                for (variant.alias_type_codes) |alias_code| {
+                    if (other.type_code != null and other.type_code.? == alias_code)
+                        @compileError(std.fmt.comptimePrint("alias type code '{c}' of '{s}' collides with a type code of '{s} {s}'", .{ alias_code, where, other.action.name(), other.name }));
+                    for (other.alias_type_codes) |other_alias| {
+                        if (alias_code == other_alias)
+                            @compileError(std.fmt.comptimePrint("alias type code '{c}' of '{s}' collides with '{s} {s}'", .{ alias_code, where, other.action.name(), other.name }));
+                    }
+                }
+            }
         }
 
         for (variant.arguments) |argument| {

@@ -76,6 +76,14 @@ pub const Action = enum {
         }
         return null;
     }
+
+    pub fn supportsCombinedTypes(self: Action) bool {
+        return self == .search;
+    }
+
+    pub fn bareCodeMeansHelp(self: Action) bool {
+        return self == .keyring;
+    }
 };
 
 pub const Argument = struct {
@@ -115,6 +123,8 @@ pub const Variant = struct {
     action: Action,
     name: []const u8,
     type_code: ?u8 = null,
+    alias_type_codes: []const u8 = &.{},
+    bare_action_code: bool = false,
     default_for_action: bool = false,
     description: []const u8,
     implementation: ?[]const u8 = null,

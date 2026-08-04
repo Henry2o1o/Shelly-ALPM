@@ -509,10 +509,7 @@ fn shortcodePrefix(
     allow_bare_alias: bool,
 ) !?[]const u8 {
     const action_code = command.actionCode orelse return null;
-    if (allow_bare_alias and
-        ((std.mem.eql(u8, command.path, "shelly upgrade all") and action_code == 'U') or
-            (std.mem.eql(u8, command.path, "shelly list-updates all") and action_code == 'P')))
-    {
+    if (allow_bare_alias and command.bareActionCode) {
         const prefix: []const u8 = try std.fmt.allocPrint(allocator, "-{c}", .{action_code});
         return prefix;
     }
@@ -526,9 +523,9 @@ fn shortcodePrefix(
 
 fn modifierMustBeSeparate(command: *const spec.Command, modifier: u8) bool {
     const action_code = command.actionCode orelse return false;
-    if (action_code != 'S') return false;
-    const variant = catalog.findVariantByCodes(action_code, modifier) orelse return false;
-    return variant.action == .search;
+    const action = catalog.Action.findByCode(action_code) orelse return false;
+    if (!action.supportsCombinedTypes()) return false;
+    return catalog.findVariantByCodes(action_code, modifier) != null;
 }
 
 fn displayTypeCode(command: *const spec.Command) ?u8 {

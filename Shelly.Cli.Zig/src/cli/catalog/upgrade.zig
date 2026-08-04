@@ -19,6 +19,7 @@ pub const variants = [_]types.Variant{
         .action = .upgrade,
         .name = "all",
         .type_code = 'x',
+        .bare_action_code = true,
         .description = "Build and confirm an invoking-user upgrade plan, then upgrade every enabled package backend in one coordinated action, continuing through independent backend failures and returning failure if any selected backend fails.",
         .implementation = "Combined Zig coordinator over AlpmManager, AurManager, FlatpakManager, and appimage.UpdateManager",
         .options = &.{
