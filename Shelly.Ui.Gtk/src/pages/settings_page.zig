@@ -106,6 +106,8 @@ pub const ShellySettingsPage = extern struct {
         support_install_pending: ?SupportFeature,
         support_install_stage: SupportInstallStage,
 
+        page_filter: PageFilter,
+
         var offset: c_int = 0;
     };
 
@@ -137,6 +139,7 @@ pub const ShellySettingsPage = extern struct {
         p.save_source = 0;
         p.support_install_pending = null;
         p.support_install_stage = .dependencies;
+        p.page_filter = .{};
 
         populateDropdowns(p);
 
@@ -296,9 +299,10 @@ pub const ShellySettingsPage = extern struct {
         };
 
         p.save_guard = true;
-        applyConfig(p, cfg);
+        defer p.save_guard = false;
+
         populatePageDropdown(p, cfg);
-        p.save_guard = false;
+        applyConfig(p, cfg);
 
         applyScheduleVisibility(p);
         applyTrayVisibility(p);
@@ -363,6 +367,15 @@ pub const ShellySettingsPage = extern struct {
 
         var updated = cfg.*;
         collectIntoConfig(p, arena.allocator(), &updated);
+
+        const page_drop_stale =
+            updated.RecommendedEnabled != cfg.RecommendedEnabled or
+            updated.AurEnabled != cfg.AurEnabled or
+            updated.FlatPackEnabled != cfg.FlatPackEnabled or
+            updated.AppImageEnabled != cfg.AppImageEnabled or
+            updated.ShellySearchEnabled != cfg.ShellySearchEnabled or
+            !std.mem.eql(u8, updated.Culture, cfg.Culture);
+
         svc.set(updated) catch {
             p.toast.show(.@"error", translations._("Failed to save settings"));
             return;
@@ -376,8 +389,11 @@ pub const ShellySettingsPage = extern struct {
         _ = translations.initWithLocale(lang_value);
 
         p.save_guard = true;
-        populatePageDropdown(p, cfg);
-        p.save_guard = false;
+        defer p.save_guard = false;
+
+        if (page_drop_stale) {
+            populatePageDropdown(p, &updated);
+        }
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.applyConfig();
@@ -538,17 +554,26 @@ pub const ShellySettingsPage = extern struct {
             return;
         };
 
+        const svc = obtainConfigService() catch return;
+        const cfg = svc.get() catch return;
+
+        p.save_guard = true;
+        defer p.save_guard = false;
+
+        populatePageDropdown(p, cfg);
+
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.applyConfig();
         }
+
         p.toast.show(.success, supportSuccessMessage(feature));
     }
 
     fn restoreSupportSwitch(self: *Self, feature: SupportFeature, enabled: bool) void {
         const p = self.priv();
         p.save_guard = true;
+        defer p.save_guard = false;
         setSwitch(supportSwitch(p, feature), enabled);
-        p.save_guard = false;
     }
 
     fn supportSwitch(p: *Private, feature: SupportFeature) *gtk.Switch {
@@ -1069,6 +1094,24 @@ const DefaultPageEntry = struct {
     value: ShellyTabs,
 };
 
+const PageFilter = struct {
+    recommended: bool = false,
+    aur: bool = false,
+    flatpak: bool = false,
+    app_image: bool = false,
+    shelly_search: bool = false,
+
+    fn fromConfig(cfg: *const ShellyConfig) PageFilter {
+        return .{
+            .recommended = cfg.RecommendedEnabled,
+            .aur = cfg.AurEnabled,
+            .flatpak = cfg.FlatPackEnabled,
+            .app_image = cfg.AppImageEnabled,
+            .shelly_search = cfg.ShellySearchEnabled,
+        };
+    }
+};
+
 const default_page_entries = [_]DefaultPageEntry{
     .{ .label = "Recommended", .value = .recommend },
     .{ .label = "Packages", .value = .packages },
@@ -1142,34 +1185,44 @@ fn populateDropdowns(p: *ShellySettingsPage.Private) void {
     gtk.DropDown.setModel(p.language_drop, lang_strings.as(gio.ListModel));
 }
 
-fn populatePageDropdown(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
+fn isPageEntryEnabled(entry: DefaultPageEntry, filter: PageFilter) bool {
+    return switch (entry.value) {
+        .recommend => filter.recommended,
+        .packages => true,
+        .aur => filter.aur,
+        .flatpak => filter.flatpak,
+        .app_image => filter.app_image,
+        .shelly_search => filter.shelly_search,
+        .update => true,
+    };
+}
+
+fn pageEntryLabel(entry: DefaultPageEntry) [:0]const u8 {
+    return switch (entry.value) {
+        .recommend => translations._("Recommended"),
+        .packages => translations._("Packages"),
+        .aur => translations._("AUR"),
+        .flatpak => translations._("Flatpak"),
+        .app_image => translations._("AppImage"),
+        .shelly_search => translations._("Shelly Search"),
+        .update => translations._("Update"),
+    };
+}
+
+fn populatePageDropdown(p: *ShellySettingsPage.Private, cfg: *const ShellyConfig) void {
+    p.page_filter = PageFilter.fromConfig(cfg);
     const page_strings = gtk.StringList.new(null);
     for (default_page_entries) |entry| {
-        const is_enabled = switch (entry.value) {
-            .recommend => cfg.RecommendedEnabled,
-            .packages => true,
-            .aur => cfg.AurEnabled,
-            .flatpak => cfg.FlatPackEnabled,
-            .app_image => cfg.AppImageEnabled,
-            .shelly_search => cfg.ShellySearchEnabled,
-            .update => true,
-        };
-
-        if (!is_enabled) continue;
-
-        const label = switch (entry.value) {
-            .recommend => translations._("Recommended"),
-            .packages => translations._("Packages"),
-            .aur => translations._("AUR"),
-            .flatpak => translations._("Flatpak"),
-            .app_image => translations._("AppImage"),
-            .shelly_search => translations._("Shelly Search"),
-            .update => translations._("Update"),
-        };
-
-        gtk.StringList.append(page_strings, label);
+        if (!isPageEntryEnabled(entry, p.page_filter)) continue;
+        gtk.StringList.append(page_strings, pageEntryLabel(entry));
     }
     gtk.DropDown.setModel(p.default_page_drop, page_strings.as(gio.ListModel));
+    // Replacing the model resets the selection, so restore it.
+    // Callers must hold save_guard: this emits notify::selected.
+    gtk.DropDown.setSelected(
+        p.default_page_drop,
+        defaultPageIndex(cfg.DefaultPageDropDown, p.page_filter),
+    );
 }
 
 fn obtainConfigService() !*ConfigResolver {
@@ -1232,7 +1285,6 @@ fn applyConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
     setSwitch(p.shelly_icons_switch, cfg.ShellyIconsEnabled);
     setSwitch(p.symbolic_tray_switch, cfg.UseSymbolicTray);
 
-    gtk.DropDown.setSelected(p.default_page_drop, defaultPageIndex(cfg.DefaultPageDropDown));
     gtk.DropDown.setSelected(p.nav_mode_drop, navModeIndex(cfg.NavMode));
     gtk.DropDown.setSelected(p.language_drop, languageIndex(cfg.Culture));
 
@@ -1289,8 +1341,10 @@ fn collectIntoConfig(p: *ShellySettingsPage.Private, allocator: std.mem.Allocato
     cfg.UseSymbolicTray = getSwitch(p.symbolic_tray_switch);
 
     const idx = gtk.DropDown.getSelected(p.default_page_drop);
-    if (idx != std.math.maxInt(u32) and idx < default_page_entries.len) {
-        cfg.DefaultPageDropDown = default_page_entries[idx].value;
+    if (idx != std.math.maxInt(u32)) {
+        if (pageEntryValue(idx, p.page_filter)) |page| {
+            cfg.DefaultPageDropDown = page;
+        }
     }
 
     const nav_idx = gtk.DropDown.getSelected(p.nav_mode_drop);
@@ -1428,11 +1482,24 @@ fn languageIndex(culture: ?[]const u8) c_uint {
     return 0;
 }
 
-fn defaultPageIndex(page: ShellyTabs) c_uint {
-    inline for (default_page_entries, 0..) |entry, i| {
-        if (entry.value == page) return @intCast(i);
+fn defaultPageIndex(page: ShellyTabs, filter: PageFilter) c_uint {
+    var filtered_idx: c_uint = 0;
+    for (default_page_entries) |entry| {
+        if (!isPageEntryEnabled(entry, filter)) continue;
+        if (entry.value == page) return filtered_idx;
+        filtered_idx += 1;
     }
     return 0;
+}
+
+fn pageEntryValue(index: c_uint, filter: PageFilter) ?ShellyTabs {
+    var filtered_idx: c_uint = 0;
+    for (default_page_entries) |entry| {
+        if (!isPageEntryEnabled(entry, filter)) continue;
+        if (filtered_idx == index) return entry.value;
+        filtered_idx += 1;
+    }
+    return null;
 }
 
 fn navModeIndex(mode: NavMode) c_uint {
