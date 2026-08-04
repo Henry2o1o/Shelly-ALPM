@@ -181,6 +181,13 @@
                                                                 <property name="resizable">true</property>
                                                             </object>
                                                         </child>
+                                                        <child>
+                                                            <object class="GtkColumnViewColumn" id="install_date_column">
+                                                                <property name="expand">true</property>
+                                                                <property name="title" translatable="yes">Install Date</property>
+                                                                <property name="resizable">true</property>
+                                                            </object>
+                                                        </child>
                                                     </object>
                                                 </child>
                                             </object>
