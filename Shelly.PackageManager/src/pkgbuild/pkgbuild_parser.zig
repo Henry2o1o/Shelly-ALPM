@@ -1,4 +1,5 @@
 const std = @import("std");
+const file_inspector = @import("../local/file_inspector.zig");
 const listDictionary = @import("../shared/list_dictionary.zig").ListDictionary;
 
 pub const pkgbuild_info = struct {
@@ -175,6 +176,12 @@ pub const kvp = struct {
 pub const PkgbuildParser = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
+    selected_package_name: ?[]const u8 = null,
+
+    const InstallAssignment = struct {
+        value: []u8,
+        package_scoped: bool,
+    };
 
     pub fn parser(self: PkgbuildParser, path: []const u8) !pkgbuild_info {
         const content = try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .unlimited);
@@ -186,10 +193,21 @@ pub const PkgbuildParser = struct {
 
     pub fn parser_content(self: PkgbuildParser, content: []const u8, base_dir: ?[]const u8) !pkgbuild_info {
         var vars = try self.build_var_hashmap(content);
+        errdefer {
+            var iterator = vars.iterator();
+            while (iterator.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            vars.deinit();
+        }
 
-        const raw_install = try resolve_or_parse(self, content, "install", &vars);
-        defer if (raw_install) |v| self.allocator.free(v);
-        const install_file = if (raw_install) |val| try self.resolve_string(val, &vars) else null;
+        const install_assignment = try self.resolve_install_assignment(content, &vars);
+        defer if (install_assignment) |assignment| self.allocator.free(assignment.value);
+        const install_file = if (install_assignment) |assignment|
+            try self.resolve_install_string(assignment, &vars)
+        else
+            null;
 
         const source = try self.resolve_array_field(content, &vars, "source");
         const local_source_files = try self.extract_local_source_files(source);
@@ -201,7 +219,7 @@ pub const PkgbuildParser = struct {
             else
                 null;
 
-        const depends = try self.resolve_array_field(content, &vars, "depends");
+        const depends = try self.resolve_package_depends(content, &vars);
         const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
         const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
 
@@ -236,6 +254,72 @@ pub const PkgbuildParser = struct {
         };
     }
 
+    fn selected_package_body(self: PkgbuildParser, content: []const u8) !?[]const u8 {
+        const package_name = self.selected_package_name orelse return null;
+        const function_name = try std.fmt.allocPrint(
+            self.allocator,
+            "package_{s}",
+            .{package_name},
+        );
+        defer self.allocator.free(function_name);
+
+        return (try extract_function_body(content, function_name)) orelse
+            try extract_function_body(content, "package");
+    }
+
+    fn resolve_install_assignment(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *const std.StringHashMap([]const u8),
+    ) !?InstallAssignment {
+        var assignment: ?InstallAssignment = if (vars.get("install")) |value|
+            .{
+                .value = try self.allocator.dupe(u8, value),
+                .package_scoped = false,
+            }
+        else
+            null;
+        errdefer if (assignment) |current| self.allocator.free(current.value);
+
+        if (try self.selected_package_body(content)) |body| {
+            if (try parse_variable(body, "install")) |value| {
+                const owned_value = try self.allocator.dupe(u8, value);
+                if (assignment) |current| self.allocator.free(current.value);
+                assignment = .{
+                    .value = owned_value,
+                    .package_scoped = true,
+                };
+            }
+        }
+
+        return assignment;
+    }
+
+    fn resolve_install_string(
+        self: PkgbuildParser,
+        assignment: InstallAssignment,
+        vars: *std.StringHashMap([]const u8),
+    ) ![]const u8 {
+        const resolved = if (assignment.package_scoped) blk: {
+            const package_name = self.selected_package_name orelse
+                return error.MissingSelectedPackageName;
+            var scoped_vars = std.StringHashMap([]const u8).init(self.allocator);
+            defer scoped_vars.deinit();
+
+            var iterator = vars.iterator();
+            while (iterator.next()) |entry|
+                try scoped_vars.put(entry.key_ptr.*, entry.value_ptr.*);
+            try scoped_vars.put("pkgname", package_name);
+
+            break :blk try self.resolve_string(assignment.value, &scoped_vars);
+        } else try self.resolve_string(assignment.value, vars);
+        errdefer self.allocator.free(resolved);
+
+        if (std.mem.indexOfScalar(u8, resolved, '$') != null)
+            return error.UnresolvedPkgbuildVariable;
+        return resolved;
+    }
+
     fn resolve_array_field(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8), var_name: []const u8) ![][]const u8 {
         const raw = try self.parse_array(content, var_name);
         defer {
@@ -243,6 +327,35 @@ pub const PkgbuildParser = struct {
             self.allocator.free(raw);
         }
         return self.resolve_variable_references(content, vars, raw);
+    }
+
+    fn resolve_package_depends(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8)) ![][]const u8 {
+        const global = try self.resolve_array_field(content, vars, "depends");
+        errdefer {
+            for (global) |item| self.allocator.free(item);
+            self.allocator.free(global);
+        }
+
+        const package_body = try self.selected_package_body(content) orelse return global;
+        const raw_scoped = try self.parse_array(package_body, "depends");
+        defer {
+            for (raw_scoped) |item| self.allocator.free(item);
+            self.allocator.free(raw_scoped);
+        }
+        if (raw_scoped.len == 0) return global;
+
+        const scoped = try self.resolve_variable_references(content, vars, raw_scoped);
+        errdefer {
+            for (scoped) |item| self.allocator.free(item);
+            self.allocator.free(scoped);
+        }
+
+        const combined = try self.allocator.alloc([]const u8, global.len + scoped.len);
+        @memcpy(combined[0..global.len], global);
+        @memcpy(combined[global.len..], scoped);
+        self.allocator.free(global);
+        self.allocator.free(scoped);
+        return combined;
     }
 
     fn tokenize(self: PkgbuildParser, expr: []const u8) ![][]const u8 {
@@ -362,29 +475,12 @@ pub const PkgbuildParser = struct {
         var files: std.ArrayList([]const u8) = .empty;
         errdefer files.deinit(self.allocator);
 
-        const local_source_exts = [_][]const u8{
-            ".sh",   ".bash", ".install", ".patch",   ".diff", ".desktop",
-            ".py",   ".pl",   ".rb",      ".service", ".conf", ".cfg",
-            ".hook",
-        };
-
         for (source) |line| {
             const entry = split_source_entry(line);
             if (try is_remote_source(entry.location)) continue;
 
             const name = if (entry.file_name.len == 0) entry.location else entry.file_name;
             if (name.len == 0) continue;
-
-            const ext = std.fs.path.extension(name);
-
-            var matched = false;
-            for (local_source_exts) |known_ext| {
-                if (std.ascii.eqlIgnoreCase(known_ext, ext)) {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) continue;
 
             var already_have = false;
             for (files.items) |existing| {
@@ -897,17 +993,31 @@ pub const PkgbuildParser = struct {
         if (std.ascii.indexOfIgnoreCase(location, "://") != null) return true else return false;
     }
 
+    const max_local_source_size = 32 * 1024 * 1024;
+
     fn resolve_local_source_contents(self: PkgbuildParser, local_source_files: [][]const u8, base_dir: ?[]const u8) !std.StringHashMap([]const u8) {
         var contents: std.StringHashMap([]const u8) = .init(self.allocator);
 
         for (local_source_files) |file| {
             const resolved = try resolve_local_file(self, file, base_dir);
             if (resolved) |content| {
+                defer self.allocator.free(content);
                 const key_owned = try self.allocator.dupe(u8, file);
-                try contents.put(key_owned, content);
+                const display = try self.allocator.dupe(u8, reviewable_local_source_content(content));
+                try contents.put(key_owned, display);
             }
         }
         return contents;
+    }
+
+    fn reviewable_local_source_content(content: []const u8) []const u8 {
+        if (file_inspector.isElfBytes(content)) {
+            return "ELF executable binary (content is not displayed). Review the file's source and checksum before proceeding.";
+        }
+        if (!std.unicode.utf8ValidateSlice(content)) {
+            return "Binary file (content is not displayed). Review the file's source and checksum before proceeding.";
+        }
+        return content;
     }
 
     fn eval_expression(tokens: [][]const u8, pos: usize, new_pos: *usize) std.fmt.ParseIntError!i64 {
@@ -1074,7 +1184,7 @@ pub const PkgbuildParser = struct {
         return value[start_u..end_u];
     }
 
-    fn extract_function_body(content: []const u8, function_name: []const u8) !?[]const u8 {
+    pub fn extract_function_body(content: []const u8, function_name: []const u8) !?[]const u8 {
         const header_match = try match_at_line_start(content, 0, function_name);
         const start = header_match orelse return null;
 
@@ -1182,10 +1292,7 @@ pub const PkgbuildParser = struct {
         };
         if (!exists) return null;
 
-        const install_content = try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .unlimited);
-        defer self.allocator.free(install_content);
-
-        return try self.allocator.dupe(u8, install_content);
+        return try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .limited(max_local_source_size));
     }
 
     fn skip_ws(content: []const u8, start: usize) usize {
@@ -2591,12 +2698,13 @@ test "split_source_entry: case insensitive separator" {
     try std.testing.expectEqualStrings("pkg", result.file_name);
     try std.testing.expectEqualStrings("url", result.location);
 }
-test "extract_local_source_files: keeps local files with known extensions" {
+test "extract_local_source_files: keeps every local source, including extensionless binaries" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var source = [_][]const u8{
         "install.sh",
         "fix.patch",
-        "readme.md", // unknown extension, should be excluded
+        "readme.md",
+        "updater",
     };
     const result = try parser.extract_local_source_files(source[0..]);
     defer {
@@ -2604,9 +2712,11 @@ test "extract_local_source_files: keeps local files with known extensions" {
         std.testing.allocator.free(result);
     }
 
-    try std.testing.expectEqual(@as(usize, 2), result.len);
+    try std.testing.expectEqual(@as(usize, 4), result.len);
     try std.testing.expectEqualStrings("install.sh", result[0]);
     try std.testing.expectEqualStrings("fix.patch", result[1]);
+    try std.testing.expectEqualStrings("readme.md", result[2]);
+    try std.testing.expectEqualStrings("updater", result[3]);
 }
 
 test "extract_local_source_files: excludes remote sources" {
@@ -2658,7 +2768,7 @@ test "extract_local_source_files: empty source returns empty slice" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "extract_local_source_files: uppercase extension matches case-insensitively" {
+test "extract_local_source_files: keeps source names regardless of filename casing" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var source = [_][]const u8{
         "SETUP.SH",
@@ -2671,6 +2781,18 @@ test "extract_local_source_files: uppercase extension matches case-insensitively
 
     try std.testing.expectEqual(@as(usize, 1), result.len);
     try std.testing.expectEqualStrings("SETUP.SH", result[0]);
+}
+
+test "reviewable local source content marks ELF and non-text binaries without changing text" {
+    try std.testing.expectEqualStrings(
+        "ELF executable binary (content is not displayed). Review the file's source and checksum before proceeding.",
+        PkgbuildParser.reviewable_local_source_content("\x7fELFpayload"),
+    );
+    try std.testing.expectEqualStrings(
+        "Binary file (content is not displayed). Review the file's source and checksum before proceeding.",
+        PkgbuildParser.reviewable_local_source_content(&.{ 0, 159, 146, 150 }),
+    );
+    try std.testing.expectEqualStrings("#!/bin/sh\nexit 0", PkgbuildParser.reviewable_local_source_content("#!/bin/sh\nexit 0"));
 }
 
 test "replace_arithmetic: simple expression" {
@@ -4268,6 +4390,138 @@ test "parser_content: post_install resolved from install file" {
 
     try std.testing.expect(info.post_install != null);
     try std.testing.expectEqualStrings("echo \"from install file\"", info.post_install.?);
+}
+
+test "parser_content: flutter-3382-bin resolves dependencies declared in package" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "flutter-3382-bin",
+    };
+    const content =
+        \\_pkgname="flutter"
+        \\pkgname="$_pkgname-3382-bin"
+        \\pkgver=3.38.2
+        \\
+        \\package() {
+        \\  depends+=(
+        \\    clang
+        \\    cmake
+        \\    git
+        \\    lld
+        \\    llvm
+        \\    ninja
+        \\    unionfs-fuse
+        \\  )
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("flutter-3382-bin", info.pkg_name.?);
+    try std.testing.expectEqual(@as(usize, 7), info.depends.?.len);
+    try std.testing.expectEqualStrings("unionfs-fuse", info.depends.?[6]);
+    try std.testing.expectEqualStrings("unionfs-fuse", info.parsed_depends.?[6].name);
+}
+
+test "parser_content: selected split package isolates package-scoped dependencies" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-two",
+    };
+    const content =
+        \\pkgname=('demo-one' 'demo-two')
+        \\depends=('glibc')
+        \\
+        \\package_demo-one() {
+        \\  depends+=('gtk4')
+        \\}
+        \\
+        \\package_demo-two() {
+        \\  depends+=('readline')
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), info.depends.?.len);
+    try std.testing.expectEqualStrings("glibc", info.depends.?[0]);
+    try std.testing.expectEqualStrings("readline", info.depends.?[1]);
+}
+
+test "parser_content: selected split package resolves package-scoped install file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "dms-shell-git.install",
+        .data = "post_install() {\n  echo \"installed\"\n}",
+    });
+    const base_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(base_dir);
+
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "dms-shell-git",
+    };
+    const content =
+        \\pkgbase=dms-shell-git
+        \\_pkgbase=${pkgbase%-git}
+        \\pkgname=($_pkgbase-git)
+        \\
+        \\package_dms-shell-git() {
+        \\  install="$pkgname.install"
+        \\}
+    ;
+    var info = try parser.parser_content(content, base_dir);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("dms-shell-git.install", info.install_file.?);
+    try std.testing.expectEqualStrings("echo \"installed\"", info.post_install.?);
+}
+
+test "parser_content: selected split package install overrides global and sibling values" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-two",
+    };
+    const content =
+        \\pkgname=('demo-one' 'demo-two')
+        \\install=common.install
+        \\
+        \\package_demo-one() {
+        \\  install=demo-one.install
+        \\}
+        \\
+        \\package_demo-two() {
+        \\  install="$pkgname.install"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("demo-two.install", info.install_file.?);
+}
+
+test "parser_content: unresolved install variable fails before filesystem validation" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo",
+    };
+    const content =
+        \\pkgname=('demo')
+        \\package_demo() {
+        \\  install="$missing.install"
+        \\}
+    ;
+
+    try std.testing.expectError(
+        error.UnresolvedPkgbuildVariable,
+        parser.parser_content(content, null),
+    );
 }
 
 test "parser_content: empty content produces empty arrays and null scalars" {

@@ -92,7 +92,7 @@ pub const Question = union(enum) {
         new_pkgbuild: []const u8,
         warnings: []const Warning = &.{},
         diff_lines: []const []const u8 = &.{},
-        source_files: ?[]const []const u8 = null,
+        source_files: []const SourceFile = &.{},
     },
     transaction: TransactionQuestion,
 };
@@ -135,6 +135,11 @@ const SelectionRequest = struct {
     Options: []OptionWire = &.{},
 };
 
+pub const SourceFile = struct {
+    name: []const u8,
+    content: []const u8,
+};
+
 pub const PkgbuildDiff = struct {
     @"$kind": []const u8 = "",
     QuestionId: []const u8,
@@ -143,7 +148,7 @@ pub const PkgbuildDiff = struct {
     NewPkgbuild: []const u8,
     Warnings: []const Warning = &.{},
     DiffLines: []const []const u8 = &.{},
-    SourceFiles: ?[]const []const u8 = null,
+    SourceFiles: ?std.json.ArrayHashMap([]const u8) = null,
 };
 
 pub const Warning = struct {
@@ -248,12 +253,21 @@ pub const ShellyCommands = struct {
         return argv.toOwnedSlice(alloc);
     }
 
-    pub fn install_flatpak(alloc: std.mem.Allocator, names: []const u8, remote: Scope) ![]const []const u8 {
+    pub fn install_flatpak(alloc: std.mem.Allocator, names: []const u8, remote: Scope, remote_name: []const u8) ![]const []const u8 {
+        return install_flatpak_ex(alloc, names, remote, remote_name, false);
+    }
+
+    pub fn install_flatpak_ex(alloc: std.mem.Allocator, names: []const u8, remote: Scope, remote_name: []const u8, is_runtime: bool) ![]const []const u8 {
         var argv: std.ArrayListUnmanaged([]const u8) = .empty;
         try argv.append(alloc, "install");
         try argv.append(alloc, "flatpak");
         if (names.len > 0) try argv.append(alloc, names);
         if (remote == .user) try argv.append(alloc, "--user");
+        if (remote_name.len > 0) {
+            try argv.append(alloc, "--remote");
+            try argv.append(alloc, remote_name);
+        }
+        if (is_runtime) try argv.append(alloc, "--runtime");
         return argv.toOwnedSlice(alloc);
     }
 
@@ -288,7 +302,8 @@ pub const ShellyCommands = struct {
         if (name.len > 0) try argv.append(alloc, name);
         try argv.append(alloc, "--remote-url");
         try argv.append(alloc, url);
-        if (std.mem.eql(u8, scope, "system")) try argv.append(alloc, "--system");
+        if (!std.mem.eql(u8, scope, "system")) try argv.append(alloc, "--system");
+        if (!std.mem.eql(u8, scope, "system")) try argv.append(alloc, "false");
         return argv.toOwnedSlice(alloc);
     }
 
@@ -327,6 +342,15 @@ pub const ShellyCommands = struct {
         return argv.toOwnedSlice(alloc);
     }
 
+    pub fn clean_cache(alloc: std.mem.Allocator, keep_str: []const u8) ![]const []const u8 {
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        try argv.append(alloc, "purify");
+        try argv.append(alloc, "standard");
+        try argv.append(alloc, "--cache");
+        try argv.append(alloc, keep_str);
+        return argv.toOwnedSlice(alloc);
+    }
+
     pub fn install_aur(alloc: std.mem.Allocator, names: []const []const u8) ![]const []const u8 {
         var argv: std.ArrayListUnmanaged([]const u8) = .empty;
         try argv.append(alloc, "install");
@@ -335,10 +359,18 @@ pub const ShellyCommands = struct {
         return argv.toOwnedSlice(alloc);
     }
 
-    pub fn install_appimage(alloc: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    pub fn install_appimage(
+        alloc: std.mem.Allocator,
+        path: []const u8,
+        install_path: []const u8,
+    ) ![]const []const u8 {
         var argv: std.ArrayListUnmanaged([]const u8) = .empty;
         try argv.append(alloc, "install");
         try argv.append(alloc, "appimage");
+        if (install_path.len > 0) {
+            try argv.append(alloc, "--install-path");
+            try argv.append(alloc, install_path);
+        }
         if (path.len > 0) try argv.append(alloc, path);
         return argv.toOwnedSlice(alloc);
     }
@@ -493,6 +525,7 @@ pub const ShellyOperation = struct {
             .exited => |c| @intCast(c),
             else => 255,
         };
+
         post_done(self, code);
     }
 
@@ -620,6 +653,10 @@ fn onEventIdle(data: ?*anyopaque) callconv(.c) c_int {
         if (parseTransaction(op, msg.json) catch null) |p| op.on_question(op.ctx, p);
     } else if (std.mem.eql(u8, kind, "q.optdeps") or std.mem.eql(u8, kind, "q.provider")) {
         if (parseSelection(op, msg.json, kind) catch null) |p| op.on_question(op.ctx, p);
+    } else if (std.mem.eql(u8, kind, "q.pkgbuilddiff")) {
+        if (parsePkgbuildDiff(op, msg.json) catch null) |p| {
+            op.on_question(op.ctx, p);
+        }
     } else {
         dispatchEvent(op, alloc, msg.json, kind);
     }
@@ -635,6 +672,60 @@ fn newPending(op: *ShellyOperation) !*PendingQuestion {
         .request = undefined,
     };
     return p;
+}
+
+fn parsePkgbuildDiff(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {
+    const parsed = try std.json.parseFromSlice(PkgbuildDiff, op.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const pending = try newPending(op);
+    errdefer pending.destroy();
+    const qa = pending.arena.allocator();
+
+    const warnings = try qa.alloc(Warning, parsed.value.Warnings.len);
+    for (parsed.value.Warnings, warnings) |warning, *target| {
+        target.* = .{
+            .Tool = try qa.dupe(u8, warning.Tool),
+            .Severity = try qa.dupe(u8, warning.Severity),
+            .Hook = try qa.dupe(u8, warning.Hook),
+            .MatchedLine = try qa.dupe(u8, warning.MatchedLine),
+            .Message = try qa.dupe(u8, warning.Message),
+        };
+    }
+    const diff_lines = try qa.alloc([]const u8, parsed.value.DiffLines.len);
+    for (parsed.value.DiffLines, diff_lines) |line, *target| {
+        target.* = try qa.dupe(u8, line);
+    }
+
+    const source_count = if (parsed.value.SourceFiles) |files|
+        files.map.count()
+    else
+        0;
+
+    const source_files = try qa.alloc(SourceFile, source_count);
+    if (parsed.value.SourceFiles) |files_values| {
+        var files = files_values;
+        var file_iterator = files.map.iterator();
+        var index: usize = 0;
+        while (file_iterator.next()) |entry| : (index += 1) {
+            source_files[index] = SourceFile{
+                .name = try qa.dupe(u8, entry.key_ptr.*),
+                .content = try qa.dupe(u8, entry.value_ptr.*),
+            };
+        }
+    }
+
+    pending.request = .{ .pkgbuild = .{
+        .question_id = try qa.dupe(u8, parsed.value.QuestionId),
+        .package_name = try qa.dupe(u8, parsed.value.PackageName),
+        .old_pkgbuild = try qa.dupe(u8, parsed.value.OldPkgbuild),
+        .new_pkgbuild = try qa.dupe(u8, parsed.value.NewPkgbuild),
+        .warnings = warnings,
+        .diff_lines = diff_lines,
+        .source_files = source_files,
+    } };
+
+    return pending;
 }
 
 fn parseYesNo(op: *ShellyOperation, json: []const u8) !?*PendingQuestion {
@@ -709,6 +800,12 @@ fn parseSelection(op: *ShellyOperation, json: []const u8, kind: []const u8) !?*P
 
     if (std.mem.eql(u8, kind, "q.optdeps")) {
         pending.request = .{ .select_many = .{
+            .question_id = qid,
+            .prompt = qa.dupe(u8, e.value.QuestionText) catch "",
+            .options = opts,
+        } };
+    } else if (std.mem.eql(u8, kind, "q.provider")) {
+        pending.request = .{ .select_one = .{
             .question_id = qid,
             .prompt = qa.dupe(u8, e.value.QuestionText) catch "",
             .options = opts,
@@ -796,4 +893,30 @@ test "progress percentages are clamped to the GTK protocol range" {
     try std.testing.expectEqual(@as(i64, 37), clampPercent(37));
     try std.testing.expectEqual(@as(i64, 100), clampPercent(100));
     try std.testing.expectEqual(@as(i64, 100), clampPercent(101));
+}
+
+test "flatpak install argv adds --user only for user scope" {
+    const system_argv = try ShellyCommands.install_flatpak(std.testing.allocator, "org.example.App", .system, "");
+    defer std.testing.allocator.free(system_argv);
+    try std.testing.expectEqualSlices([]const u8, &.{ "install", "flatpak", "org.example.App" }, system_argv);
+
+    const user_argv = try ShellyCommands.install_flatpak(std.testing.allocator, "org.example.App", .user, "");
+    defer std.testing.allocator.free(user_argv);
+    try std.testing.expectEqualSlices([]const u8, &.{ "install", "flatpak", "org.example.App", "--user" }, user_argv);
+}
+
+test "flatpak install argv passes --remote when a remote name is supplied" {
+    const argv = try ShellyCommands.install_flatpak(std.testing.allocator, "org.example.App", .system, "flathub");
+    defer std.testing.allocator.free(argv);
+    try std.testing.expectEqualSlices([]const u8, &.{ "install", "flatpak", "org.example.App", "--remote", "flathub" }, argv);
+
+    const with_user = try ShellyCommands.install_flatpak_ex(std.testing.allocator, "org.example.App", .user, "flathub-beta", false);
+    defer std.testing.allocator.free(with_user);
+    try std.testing.expectEqualSlices([]const u8, &.{ "install", "flatpak", "org.example.App", "--user", "--remote", "flathub-beta" }, with_user);
+}
+
+test "flatpak addon install argv marks addon refs as runtimes" {
+    const argv = try ShellyCommands.install_flatpak_ex(std.testing.allocator, "org.example.App.Plugin", .user, "", true);
+    defer std.testing.allocator.free(argv);
+    try std.testing.expectEqualSlices([]const u8, &.{ "install", "flatpak", "org.example.App.Plugin", "--user", "--runtime" }, argv);
 }

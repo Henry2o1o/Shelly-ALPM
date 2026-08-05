@@ -14,6 +14,7 @@ const runtime = @import("../services/runtime.zig");
 const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const AurPackageDetail = @import("aur_package_detail.zig").PackageDetail;
 const translations = @import("../helpers/translations.zig");
+const sorters = @import("../helpers/sorters.zig");
 
 pub const AurPage = extern struct {
     parent_instance: Parent,
@@ -29,7 +30,7 @@ pub const AurPage = extern struct {
         list_store: *gio.ListStore,
         selection: *gtk.SingleSelection,
         search_entry: *gtk.SearchEntry,
-        installed_toggle: *gtk.ToggleButton,
+        installed_toggle: *gtk.CheckButton,
         install_button: *gtk.Button,
         grid_overlay: *gtk.Overlay,
         loading_box: *gtk.Box,
@@ -44,7 +45,6 @@ pub const AurPage = extern struct {
         votes_column: *gtk.ColumnViewColumn,
         popularity_column: *gtk.ColumnViewColumn,
         version_column: *gtk.ColumnViewColumn,
-        chroot_check: *gtk.CheckButton,
         run_checks_check: *gtk.CheckButton,
         views_and_detail_hbox: *gtk.Box,
         detail_revealer: *gtk.Revealer,
@@ -106,9 +106,16 @@ pub const AurPage = extern struct {
         p.show_detail_pane = false;
 
         p.list_store = gio.ListStore.new(AurPackageObject.getGObjectType());
-        p.selection = gtk.SingleSelection.new(p.list_store.as(gio.ListModel));
+
+        const sort_model = gtk.SortListModel.new(p.list_store.as(gio.ListModel), null);
+
+        p.selection = gtk.SingleSelection.new(sort_model.as(gio.ListModel));
+        gtk.SingleSelection.setAutoselect(p.selection, 0);
+        gtk.SingleSelection.setCanUnselect(p.selection, 1);
 
         gtk.ColumnView.setModel(p.package_grid, p.selection.as(gtk.SelectionModel));
+
+        gtk.SortListModel.setSorter(sort_model, gtk.ColumnView.getSorter(p.package_grid));
 
         setup_name_column(p.name_column);
         setup_text_column(p.version_column, &AurPackageObject.getVersion, .start);
@@ -123,16 +130,29 @@ pub const AurPage = extern struct {
 
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
-
-        _ = gtk.CheckButton.signals.toggled.connect(p.chroot_check, *Self, &on_chroot_toggled, self, .{});
         _ = gtk.CheckButton.signals.toggled.connect(p.run_checks_check, *Self, &on_run_checks_toggled, self, .{});
 
         const detail = AurPackageDetail.new();
         p.aur_detail = detail;
         gtk.Revealer.setChild(p.detail_revealer, detail.as(gtk.Widget));
 
+        attachSorter(p.name_column, sorters.stringSorter(AurPackageObject, &AurPackageObject.getName));
+        attachSorter(p.version_column, sorters.stringSorter(AurPackageObject, &AurPackageObject.getVersion));
+        attachSorter(p.votes_column, sorters.numericSorter(AurPackageObject, &AurPackageObject.getNumVotes));
+        attachSorter(p.popularity_column, sorters.numericSorter(AurPackageObject, &AurPackageObject.getPopularity));
+
+        const group = gio.SimpleActionGroup.new();
+        const action = gio.SimpleAction.new("focus", null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, &onFocusSearch, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "search", group.as(gio.ActionGroup));
+
         self.update_selection_ui();
         support.connectLifecycle(Self, self);
+    }
+
+    fn onFocusSearch(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = gtk.Widget.grabFocus(self.priv().search_entry.as(gtk.Widget));
     }
 
     fn dispose(self: *Self) callconv(.c) void {
@@ -145,6 +165,11 @@ pub const AurPage = extern struct {
         }
         gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
         Class.parent.as(gobject.Object.Class).f_dispose.?(self.as(gobject.Object));
+    }
+
+    fn attachSorter(column: *gtk.ColumnViewColumn, sorter: *gtk.Sorter) void {
+        gtk.ColumnViewColumn.setSorter(column, sorter);
+        sorter.as(gobject.Object).unref();
     }
 
     const State = enum {
@@ -249,7 +274,7 @@ pub const AurPage = extern struct {
             fn setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
                 const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
                 const label = gtk.Label.new("");
-                gtk.Widget.setHalign(label.as(gtk.Widget), .end);
+                gtk.Widget.setHalign(label.as(gtk.Widget), .start);
                 gtk.ColumnViewCell.setChild(cell, label.as(gtk.Widget));
             }
             fn bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
@@ -392,17 +417,19 @@ pub const AurPage = extern struct {
 
     fn on_row_activated(_: *gtk.ColumnView, position: c_uint, self: *Self) callconv(.c) void {
         const p = self.priv();
+        const obj = gio.ListModel.getObject(p.selection.as(gio.ListModel), position) orelse return;
+        defer obj.unref();
+        const pkg = gobject.ext.cast(AurPackageObject, obj) orelse return;
 
-        _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), position, @intCast(position + 1));
+        const new_state = !pkg.isSelected();
+        pkg.setSelected(new_state);
+        if (p.check_map.get(pkg)) |check| set_sync_active(check, new_state);
 
-        const obj = gtk.SingleSelection.getSelectedItem(p.selection) orelse return;
-        const pkg_obj = gobject.ext.cast(AurPackageObject, obj) orelse return;
-        pkg_obj.setSelected(true);
-
-        p.aur_detail.showPackage(pkg_obj.getPackage());
+        p.aur_detail.showPackage(pkg.getPackage());
         gtk.Revealer.setRevealChild(p.detail_revealer, 1);
-    }
 
+        self.update_selection_ui();
+    }
     fn selection_count(self: *Self) u32 {
         const p = self.priv();
         const model = p.list_store.as(gio.ListModel);
@@ -494,17 +521,10 @@ pub const AurPage = extern struct {
         const p = self.priv();
         p.applying_config = true;
         defer p.applying_config = false;
-        gtk.CheckButton.setActive(p.chroot_check, @intFromBool(cfg.AurInstallUseChroot));
         gtk.CheckButton.setActive(p.run_checks_check, @intFromBool(cfg.AurInstallRunChecks));
         p.show_detail_pane = cfg.AurInstallShowDetailPane;
         gtk.CheckButton.setActive(p.show_detail_pane_check, @intFromBool(cfg.AurInstallShowDetailPane));
         gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (cfg.AurInstallShowDetailPane) 0 else 1);
-    }
-
-    fn on_chroot_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
-        const p = self.priv();
-        if (p.applying_config) return;
-        updateConfigField(.AurInstallUseChroot, gtk.CheckButton.getActive(check) != 0);
     }
 
     fn on_run_checks_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
@@ -688,7 +708,7 @@ pub const AurPage = extern struct {
         const p = self.priv();
 
         if (p.installed_mode) {
-            gtk.ToggleButton.setActive(p.installed_toggle, 0);
+            gtk.CheckButton.setActive(p.installed_toggle, 0);
         }
 
         const text = self.search_text();
@@ -709,7 +729,7 @@ pub const AurPage = extern struct {
 
     fn on_installed_toggled(self: *Self) callconv(.c) void {
         const p = self.priv();
-        p.installed_mode = gtk.ToggleButton.getActive(p.installed_toggle) != 0;
+        p.installed_mode = gtk.CheckButton.getActive(p.installed_toggle) != 0;
 
         if (p.installed_mode) {
             self.start_load(.installed);
@@ -773,9 +793,6 @@ pub const AurPage = extern struct {
         argv.append(std.heap.c_allocator, "install") catch return;
         argv.append(std.heap.c_allocator, "aur") catch return;
         for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
-        if (gtk.CheckButton.getActive(p.chroot_check) != 0) {
-            argv.append(std.heap.c_allocator, "--chroot") catch return;
-        }
         if (gtk.CheckButton.getActive(p.run_checks_check) != 0) {
             argv.append(std.heap.c_allocator, "--check") catch return;
         }
@@ -807,6 +824,14 @@ pub const AurPage = extern struct {
         argv.append(std.heap.c_allocator, "remove") catch return;
         argv.append(std.heap.c_allocator, "aur") catch return;
         for (names.items) |name| argv.append(std.heap.c_allocator, name) catch return;
+
+        if (runtime.config) |cfg_service| {
+            if (cfg_service.get()) |cfg| {
+                if (!cfg.AurRemoveCascadeDelete) {
+                    argv.append(std.heap.c_allocator, "--no-cascade") catch return;
+                }
+            } else |_| {}
+        }
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.startTransaction(.{
@@ -851,7 +876,6 @@ pub const AurPage = extern struct {
         .{ "votes_column", @offsetOf(Private, "votes_column") },
         .{ "popularity_column", @offsetOf(Private, "popularity_column") },
         .{ "version_column", @offsetOf(Private, "version_column") },
-        .{ "chroot_check", @offsetOf(Private, "chroot_check") },
         .{ "run_checks_check", @offsetOf(Private, "run_checks_check") },
         .{ "views_and_detail_hbox", @offsetOf(Private, "views_and_detail_hbox") },
         .{ "detail_revealer", @offsetOf(Private, "detail_revealer") },

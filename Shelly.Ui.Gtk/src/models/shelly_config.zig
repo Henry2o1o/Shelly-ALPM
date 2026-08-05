@@ -15,6 +15,7 @@ pub const ShellyTabs = enum(u8) {
     app_image = 3,
     shelly_search = 4,
     recommend = 5,
+    update = 6,
 };
 
 pub const DayOfWeek = enum(u8) {
@@ -31,7 +32,6 @@ pub const ShellyConfig = struct {
     // General
     Culture: []const u8 = "",
     NewInstall: bool = true,
-    NewInstallInitSettings: bool = false,
     NoConfirm: bool = false,
 
     // Feature Toggles
@@ -49,33 +49,36 @@ pub const ShellyConfig = struct {
     // Window & View
     DefaultPageDropDown: ShellyTabs = .packages,
     NavMode: NavMode = .sidebar,
+    // Internal: persisted window geometry, not exposed in settings UI
+    WindowLastWidth: i32 = 0,
+    WindowLastHeight: i32 = 0,
 
     // Package Page
-    PackageInstallView: ViewType = .list,
+    PackageInstallView: ViewType = .grid,
 
     PackageManagementCascadeDelete: bool = true,
     PackageManagementRemoveConfigs: bool = false,
     PackageManagementRemoveOptionalDeps: bool = true,
-    PackageManagementShowHidden: bool = false,
 
     PackageInstallUpgrade: bool = false,
     PackageInstallShowHidden: bool = false,
     PackageInstallShowExplicitOnly: bool = false,
+    PackageInstallShowDependsOnly: bool = false,
     PackageInstallShowDetailPane: bool = false,
 
     // AUR Page
     AurInstallUseChroot: bool = false,
     AurInstallRunChecks: bool = false,
     AurInstallShowDetailPane: bool = false,
+    AurInstallDisableDevel: bool = false,
 
     AurRemoveCascadeDelete: bool = true,
-    AurRemoveShowHidden: bool = false,
 
     AurUpdateRunChecks: bool = false,
     AurUpdateShowHidden: bool = false,
 
     // Tray
-    TrayEnabled: bool = true,
+    TrayEnabled: bool = false,
     TrayAutoStart: bool = false,
     TrayCheckIntervalHours: i32 = 72,
     UseSymbolicTray: bool = true,

@@ -53,6 +53,7 @@ pub const TransactionError = error{
 };
 
 pub const QueryError = error{ DbNotFound, PkgNotFound, NoHandle, OutOfMemory, Cancelled };
+pub const ReverseDependencyOptions = libalpm.ReverseDependencyOptions;
 
 pub const IgnorePackageError = configuration.IgnorePackageError;
 pub const HoldPackageError = configuration.HoldPackageError;
@@ -153,6 +154,13 @@ const RestartCheckOptions = struct {
     restart_services: bool = true,
 };
 
+pub const InitOptions = struct {
+    config_path: ?[]const u8 = null,
+    use_root: bool = false,
+    temp_root_path: ?[]const u8 = null,
+    operation_context: ?*operation_api.OperationContext = null,
+};
+
 pub const Manager = struct {
     handle: libalpm.Handle = null,
     is_initialized: bool = false,
@@ -188,13 +196,20 @@ pub const Manager = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         environ: std.process.Environ,
-        configPath: ?[]const u8,
-        use_root: bool,
-        temp_root_path: ?[]const u8,
+        options: InitOptions,
     ) InitError!*Manager {
-        const config_path = configPath orelse "/etc/pacman.conf";
+        const config_path = options.config_path orelse "/etc/pacman.conf";
         const self = allocator.create(Manager) catch return InitError.InitFailed;
         errdefer allocator.destroy(self);
+
+        var init_operation: ?operation_api.Operation = if (options.operation_context) |context|
+            context.begin(.{ .backend = .alpm, .kind = .configure, .subject = "libalpm" })
+        else
+            null;
+
+        var completion: operation_api.CompletionStatus = .failed;
+        defer if (init_operation) |*operation| operation.finish(completion);
+
         const owned_config_path = allocator.dupe(u8, config_path) catch return InitError.InitFailed;
         errdefer allocator.free(owned_config_path);
         self.* = Manager{
@@ -206,10 +221,17 @@ pub const Manager = struct {
             .dispatcher = events.Dispatcher.init(allocator),
             .threaded = .init(allocator, .{ .environ = environ }),
             .config = undefined,
-            .is_root = use_root,
-            .temp_root_path = temp_root_path orelse "",
+            .is_root = options.use_root,
+            .temp_root_path = options.temp_root_path orelse "",
             .download_address_family_policy = defaultDownloadAddressFamilyPolicy(),
+            .operation_context = options.operation_context,
         };
+
+        if (init_operation) |*operation| {
+            self.dispatcher.setOperation(operation);
+        }
+        defer self.dispatcher.setOperation(null);
+
         errdefer self.threaded.deinit();
         errdefer self.dispatcher.deinit();
         self.config = configuration.Configuration.parse(allocator, self.io(), config_path) catch {
@@ -226,6 +248,19 @@ pub const Manager = struct {
         // for update checking. Symlink the real local database into the temp
         // path so ALPM can see installed packages when checking for updates.
         if (self.temp_root_path.len != 0) {
+            const configured_db_path = std.fs.path.resolve(
+                self.allocator,
+                &.{self.config.database_path},
+            ) catch return InitError.InitFailed;
+            defer self.allocator.free(configured_db_path);
+            const resolved_temp_root = std.fs.path.resolve(
+                self.allocator,
+                &.{self.temp_root_path},
+            ) catch return InitError.InitFailed;
+            defer self.allocator.free(resolved_temp_root);
+            if (std.mem.eql(u8, configured_db_path, resolved_temp_root))
+                return InitError.InitFailed;
+
             // "{DBPath}/local" for the *real* database, captured before we repoint DBPath.
             const real_local_db = blk: {
                 const s = std.fmt.allocPrint(self.allocator, "{s}/local", .{self.config.database_path}) catch {
@@ -264,15 +299,24 @@ pub const Manager = struct {
 
         var err: rawLibalpm.alpm_errno_t = 0;
 
-        const handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err) orelse {
-            std.log.err("alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))});
+        self.handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err) orelse {
+            const code: c_int = @intCast(err);
+            const message = std.fmt.allocPrint(self.allocator, "alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))}) catch "Unknown Failure";
+            defer self.allocator.free(message);
+
+            if (init_operation) |*operation| {
+                operation.reportError(error.InitFailed, message, "alpm", code, false);
+            } else {
+                std.log.err("alpm_initialize failed: {s}", .{std.mem.span(rawLibalpm.alpm_strerror(err))});
+            }
             return error.InitFailed;
         };
-        self.handle = handle;
+
         self.is_initialized = true;
 
         self.applyConfig(self.config);
         self.setupCallbacks();
+        completion = .success;
         return self;
     }
 
@@ -326,6 +370,7 @@ pub const Manager = struct {
         while (databases != null) : (databases = databases.?.next) {
             const db = databases.?.data orelse continue;
             var db_struct: libalpm.Database = .{ .ptr = @ptrCast(@alignCast(db)) };
+            if (!db_struct.allowUsage(.sync)) continue;
             const db_name: []const u8 = db_struct.name() orelse continue;
             required_signatures.put(db_name, databaseSignatureRequired(db_struct.sigLevel())) catch {
                 return TransactionError.SyncDbFailed;
@@ -403,6 +448,7 @@ pub const Manager = struct {
             var failed_dbs: std.ArrayList([]const u8) = .empty;
             defer failed_dbs.deinit(self.allocator);
             for (self.sync_dbs.items) |db| {
+                if (!db.allowUsage(.sync)) continue;
                 if (db.verify()) continue;
                 const name = db.name() orelse continue;
                 failed_dbs.append(self.allocator, name) catch return TransactionError.OutOfMemory;
@@ -427,6 +473,13 @@ pub const Manager = struct {
     }
 
     pub fn get_installed_packages(self: *Manager) TransactionError![]libalpm.OwnedPackage {
+        return self.get_installed_packages_with_reverse_dependencies(.{});
+    }
+
+    pub fn get_installed_packages_with_reverse_dependencies(
+        self: *Manager,
+        reverse_dependencies: ReverseDependencyOptions,
+    ) TransactionError![]libalpm.OwnedPackage {
         if (self.handle == null) return TransactionError.NoHandle;
         var operation_scope = OperationScope.init(self, .search, null);
         operation_scope.attach();
@@ -444,7 +497,11 @@ pub const Manager = struct {
         while (pkg_ptr != null) : (pkg_ptr = pkg_ptr.?.*.next) {
             const package_ptr = pkg_ptr.?.data orelse continue;
             const package = libalpm.Package.from(package_ptr) orelse continue;
-            var owned_package = libalpm.OwnedPackage.init(self.allocator, package) catch return TransactionError.OutOfMemory;
+            var owned_package = libalpm.OwnedPackage.initWithReverseDependencies(
+                self.allocator,
+                package,
+                reverse_dependencies,
+            ) catch return TransactionError.OutOfMemory;
             package_list.append(self.allocator, owned_package) catch {
                 owned_package.deinit(self.allocator);
                 return TransactionError.OutOfMemory;
@@ -542,6 +599,7 @@ pub const Manager = struct {
         while (sync_database != null) : (sync_database = sync_database.?.*.next) {
             const db_data = sync_database.?.*.data orelse continue;
             const database = libalpm.Database.from(db_data) orelse continue;
+            if (!database.allowUsage(.search)) continue;
             var tempPackages = database.packages();
             while (tempPackages.next()) |pkg| {
                 var owned_package = libalpm.OwnedPackage.init(self.allocator, pkg) catch return TransactionError.OutOfMemory;
@@ -571,6 +629,7 @@ pub const Manager = struct {
         while (sync_database != null) : (sync_database = sync_database.?.*.next) {
             const db = sync_database.?.*.data orelse continue;
             const database = libalpm.Database.from(db) orelse continue;
+            if (!database.allowUsage(.search)) continue;
             const group = database.getGroup(groupName) orelse continue;
             var package_list = group.packages();
             while (package_list.next()) |pkg| {
@@ -594,13 +653,31 @@ pub const Manager = struct {
             for (package_updates.items) |*update| update.deinit(self.allocator);
             package_updates.deinit(self.allocator);
         }
-        const sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var usable_sync_databases: [*c]rawLibalpm.alpm_list_t = null;
+        defer rawLibalpm.alpm_list_free(usable_sync_databases);
+
+        while (sync_databases != null) : (sync_databases = sync_databases.*.next) {
+            const db_data = sync_databases.*.data orelse continue;
+            const database = libalpm.Database.from(db_data) orelse continue;
+
+            if (!database.allowUsage(.upgrade)) continue;
+
+            const updated = rawLibalpm.alpm_list_add(
+                usable_sync_databases,
+                @ptrCast(database.ptr),
+            );
+            if (updated == null) return TransactionError.OutOfMemory;
+
+            usable_sync_databases = updated;
+        }
+
         const local_database = rawLibalpm.alpm_get_localdb(self.handle);
         var local_packages = rawLibalpm.alpm_db_get_pkgcache(local_database);
         while (local_packages != null) : (local_packages = local_packages.*.next) {
             const package_data = local_packages.*.data orelse continue;
             const local_pkg = libalpm.Package.from(package_data) orelse continue;
-            const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg.ptr, sync_databases) orelse continue;
+            const new_version = rawLibalpm.alpm_sync_get_new_version(local_pkg.ptr, usable_sync_databases) orelse continue;
             var owned_update = libalpm.OwnedPackageWithUpdate.init(
                 self.allocator,
                 local_pkg,
@@ -672,33 +749,37 @@ pub const Manager = struct {
                 }
                 try packages.append(self.allocator, found orelse return TransactionError.PackageFetchFailed);
             } else {
+                var current_packages: std.ArrayList(*rawLibalpm.alpm_pkg_t) = .empty;
+                defer current_packages.deinit(self.allocator);
                 var node = sync_databases;
-                var found_any = false;
                 while (node != null) : (node = node.*.next) {
                     const db_data: ?*anyopaque = node.*.data;
                     const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
+                    const database = libalpm.Database.from(db_ptr) orelse continue;
+                    if (!database.allowUsage(.install)) continue;
                     if (rawLibalpm.alpm_db_get_pkg(db_ptr, target.ptr)) |pkg| {
-                        try packages.append(self.allocator, pkg);
-                        found_any = true;
+                        if (current_packages.items.len > 0) current_packages.clearRetainingCapacity();
+                        current_packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
                         break;
                     }
+                    if (current_packages.items.len != 0) continue;
                     if (rawLibalpm.alpm_db_get_group(db_ptr, target.ptr)) |group| {
                         var pkg_node = group.*.packages;
                         while (pkg_node != null) : (pkg_node = pkg_node.*.next) {
                             const pkg_data: ?*anyopaque = pkg_node.*.data;
                             const pkg: *rawLibalpm.alpm_pkg_t = @ptrCast(@alignCast(pkg_data orelse continue));
-                            try packages.append(self.allocator, pkg);
+                            current_packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
                         }
-                        found_any = true;
-                        break;
                     }
+
+                    if (current_packages.items.len != 0) continue;
                     if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db_ptr), target.ptr)) |pkg| {
-                        try packages.append(self.allocator, pkg);
-                        found_any = true;
-                        break;
+                        current_packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
                     }
                 }
-                if (!found_any) return TransactionError.PackageFetchFailed;
+                for (current_packages.items) |pkg| {
+                    packages.append(self.allocator, pkg) catch return TransactionError.OutOfMemory;
+                }
             }
         }
         if (packages.items.len == 0) return TransactionError.PackageFetchFailed;
@@ -742,6 +823,8 @@ pub const Manager = struct {
             while (node != null) : (node = node.*.next) {
                 const db_data: ?*anyopaque = node.*.data;
                 const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
+                const database = libalpm.Database.from(db_ptr) orelse continue;
+                if (!database.allowUsage(.install)) continue;
                 const selected_pkg = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db_ptr), selected_z.ptr) orelse continue;
                 try packages.append(self.allocator, selected_pkg);
                 if (libalpm.str(rawLibalpm.alpm_pkg_get_name(selected_pkg))) |resolved_name|
@@ -753,7 +836,10 @@ pub const Manager = struct {
         // Starts transaction impleentation
         var trans_flags = trans_flags_arg;
         if (trans_flags.dbonly) trans_flags.nodeps = true;
-        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
+            return TransactionError.TransInitFailed;
+        }
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
         for (packages.items) |pkg| {
@@ -904,7 +990,10 @@ pub const Manager = struct {
         var trans_flags = flags;
         if (trans_flags.dbonly) trans_flags.nodeps = true;
 
-        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
+            return TransactionError.TransInitFailed;
+        }
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
         for (package_pointers.items) |pkg_ptr| {
@@ -966,6 +1055,7 @@ pub const Manager = struct {
         if (trans_flags.dbonly) trans_flags.nodeps = true;
 
         if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
             return TransactionError.TransInitFailed;
         }
         var transaction_active = true;
@@ -1424,6 +1514,7 @@ pub const Manager = struct {
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_ptr = sync_dbs.*.data orelse continue;
             const db: libalpm.Database = libalpm.Database.from(db_ptr) orelse continue;
+            if (!db.allowUsage(.install)) continue;
             const pkg_cache = db.package_cache();
             const satisfier = rawLibalpm.alpm_find_satisfier(pkg_cache, provides.ptr) orelse continue;
             const pkg = libalpm.Package.from(satisfier) orelse continue;
@@ -1472,6 +1563,7 @@ pub const Manager = struct {
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_ptr = sync_dbs.*.data orelse continue;
             const db = libalpm.Database.from(db_ptr) orelse continue;
+            if (!db.allowUsage(.install)) continue;
             const pkg_cache = db.package_cache();
             const satisfier = rawLibalpm.alpm_find_satisfier(pkg_cache, dependency) orelse continue;
             const pkg = libalpm.Package.from(satisfier) orelse continue;
@@ -1498,6 +1590,7 @@ pub const Manager = struct {
             var sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
             while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
                 const db = libalpm.Database.from(sync_dbs.*.data.?) orelse continue;
+                if (!db.allowUsage(.install)) continue;
                 const sync_pkg = rawLibalpm.alpm_db_get_pkg(db.ptr, package_name) orelse continue;
                 break :find_pkg sync_pkg;
             }
@@ -1541,18 +1634,38 @@ pub const Manager = struct {
         errdefer operation_scope.fail();
         try self.checkOperationCancelled();
         self.sync(false) catch |err| return err;
-        const sync_dbs = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var sync_databases = rawLibalpm.alpm_get_syncdbs(self.handle);
+        var usable_sync_databases: [*c]rawLibalpm.alpm_list_t = null;
+        defer rawLibalpm.alpm_list_free(usable_sync_databases);
+
+        while (sync_databases != null) : (sync_databases = sync_databases.*.next) {
+            const db_data = sync_databases.*.data orelse continue;
+            const database = libalpm.Database.from(db_data) orelse continue;
+
+            if (!database.allowUsage(.upgrade)) continue;
+
+            const updated = rawLibalpm.alpm_list_add(
+                usable_sync_databases,
+                @ptrCast(database.ptr),
+            );
+            if (updated == null) return TransactionError.OutOfMemory;
+
+            usable_sync_databases = updated;
+        }
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
 
         var trans_flags = flags;
         if (trans_flags.dbonly) trans_flags.nodeps = true;
 
-        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) return TransactionError.TransInitFailed;
+        if (rawLibalpm.alpm_trans_init(self.handle, @bitCast(trans_flags.to_trans_flag())) != 0) {
+            self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), null) catch {};
+            return TransactionError.TransInitFailed;
+        }
         defer _ = rawLibalpm.alpm_trans_release(self.handle);
 
         for (package_list) |pkg_name| {
             const pkg_ptr = rawLibalpm.alpm_db_get_pkg(local_db, pkg_name) orelse continue;
-            const new_pkg_ptr = rawLibalpm.alpm_sync_get_new_version(pkg_ptr, sync_dbs) orelse continue;
+            const new_pkg_ptr = rawLibalpm.alpm_sync_get_new_version(pkg_ptr, usable_sync_databases) orelse continue;
             if (rawLibalpm.alpm_add_pkg(self.handle, new_pkg_ptr) != 0) {
                 return TransactionError.PackageAddFailed;
             }
@@ -1592,7 +1705,7 @@ pub const Manager = struct {
             target_names.deinit(self.allocator);
         }
         if (shoot_orphans) {
-            const orphans = self.get_orphans() catch return TransactionError.OrphanShootFailed;
+            const orphans = self.get_orphans(false) catch return TransactionError.OrphanShootFailed;
             defer libalpm.OwnedPackage.deinitSlice(self.allocator, orphans);
 
             for (orphans) |orphan| {
@@ -1603,7 +1716,11 @@ pub const Manager = struct {
                 };
             }
             if (!dry_run) {
-                self.remove_packages(target_names.items, .{ .nosave = true, .recurse = true, .cascade = true }, true) catch |err| {
+                self.remove_packages(target_names.items, TransFlag{
+                    .nosave = true,
+                    .recurse = true,
+                    .unneeded = true,
+                }, true) catch |err| {
                     return err;
                 };
             }
@@ -1890,7 +2007,8 @@ pub const Manager = struct {
         return arch_list.toOwnedSlice(self.allocator);
     }
 
-    fn get_orphans(self: *Manager) TransactionError![]libalpm.OwnedPackage {
+    fn get_orphans(self: *Manager, remove_optional_for: bool) TransactionError![]libalpm.OwnedPackage {
+        // TODO: implement A <-> B circular dependency removal
         if (self.handle == null) return TransactionError.NoHandle;
         const local_db = rawLibalpm.alpm_get_localdb(self.handle);
         var pkgs_list = rawLibalpm.alpm_db_get_pkgcache(local_db) orelse return TransactionError.DatabaseReadFailed;
@@ -1906,6 +2024,14 @@ pub const Manager = struct {
             var bool_required_by = false;
             while (required_by.next()) |_| {
                 bool_required_by = true;
+                break;
+            }
+            if (!remove_optional_for) {
+                var optional_for = pkg.optional_for();
+                while (optional_for.next()) |_| {
+                    bool_required_by = true;
+                    break;
+                }
             }
             if (bool_required_by) continue;
             var owned_package = libalpm.OwnedPackage.init(self.allocator, pkg) catch return TransactionError.OutOfMemory;
@@ -1927,6 +2053,8 @@ pub const Manager = struct {
         while (sync_dbs != null) : (sync_dbs = sync_dbs.*.next) {
             const db_data: ?*anyopaque = sync_dbs.*.data;
             const db: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
+            const database = libalpm.Database.from(db) orelse continue;
+            if (!database.allowUsage(.install)) continue;
             if (rawLibalpm.alpm_db_get_pkg(db, pkg_name.ptr) != null) return true;
             if (rawLibalpm.alpm_db_get_group(db, pkg_name.ptr) != null) return true;
             if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db), pkg_name.ptr) != null) return true;
@@ -3074,9 +3202,14 @@ const OperationScope = struct {
     previous: ?*operation_api.Operation = null,
     cancellation_subscription: ?operation_api.SubscriptionId = null,
     attached: bool = false,
+    initial_error_generation: usize,
 
     fn init(manager: *Manager, kind: operation_api.OperationKind, subject: ?[]const u8) OperationScope {
-        var scope: OperationScope = .{ .manager = manager, .previous = manager.dispatcher.operation };
+        var scope: OperationScope = .{
+            .manager = manager,
+            .previous = manager.dispatcher.operation,
+            .initial_error_generation = manager.dispatcher.errorGeneration(),
+        };
         if (scope.previous) |parent| {
             scope.operation = parent.child(.{ .backend = .alpm, .kind = kind, .subject = subject });
         } else if (manager.operation_context) |context| {
@@ -3098,13 +3231,11 @@ const OperationScope = struct {
 
     fn fail(self: *OperationScope) void {
         if (self.operation) |*operation| {
-            if (!operation.isCancelled()) operation.reportError(
-                error.AlpmOperationFailed,
-                "ALPM operation failed",
-                "alpm",
-                null,
-                false,
-            );
+            if (!operation.isCancelled() and
+                self.manager.dispatcher.errorGeneration() == self.initial_error_generation)
+            {
+                self.manager.dispatcher.raiseError(.{ .message = "ALPM operation failed" });
+            }
         }
         const status: operation_api.CompletionStatus = if (self.operation) |*operation|
             if (operation.isCancelled()) .cancelled else .failed
@@ -3132,6 +3263,128 @@ const OperationScope = struct {
         if (manager.handle) |handle| _ = rawLibalpm.alpm_trans_interrupt(handle);
     }
 };
+
+test "OperationScope does not duplicate a detailed ALPM error" {
+    const Capture = struct {
+        failures: usize = 0,
+        last_message: []const u8 = "",
+
+        fn event(data: ?*anyopaque, value: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (value) {
+                .failure => |failure| {
+                    self.failures += 1;
+                    self.last_message = failure.message;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribe(.{ .function = Capture.event, .data = &capture });
+    defer _ = context.unsubscribe(subscription);
+
+    var manager: Manager = undefined;
+    manager.handle = null;
+    manager.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer manager.dispatcher.deinit();
+    manager.operation_context = &context;
+
+    var scope = OperationScope.init(&manager, .install, "example");
+    scope.attach();
+    manager.dispatcher.raiseError(.{ .message = "detailed ALPM failure" });
+    scope.fail();
+
+    try testing.expectEqual(@as(usize, 1), capture.failures);
+    try testing.expectEqualStrings("detailed ALPM failure", capture.last_message);
+}
+
+test "OperationScope emits one generic ALPM error when no detail was reported" {
+    const Capture = struct {
+        failures: usize = 0,
+        last_message: []const u8 = "",
+
+        fn event(data: ?*anyopaque, value: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (value) {
+                .failure => |failure| {
+                    self.failures += 1;
+                    self.last_message = failure.message;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribe(.{ .function = Capture.event, .data = &capture });
+    defer _ = context.unsubscribe(subscription);
+
+    var manager: Manager = undefined;
+    manager.handle = null;
+    manager.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer manager.dispatcher.deinit();
+    manager.operation_context = &context;
+
+    var scope = OperationScope.init(&manager, .install, "example");
+    scope.attach();
+    scope.fail();
+
+    try testing.expectEqual(@as(usize, 1), capture.failures);
+    try testing.expectEqualStrings("ALPM operation failed", capture.last_message);
+}
+
+test "nested OperationScopes do not duplicate a detailed ALPM error" {
+    const Capture = struct {
+        failures: usize = 0,
+        last_message: []const u8 = "",
+
+        fn event(data: ?*anyopaque, value: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (value) {
+                .failure => |failure| {
+                    self.failures += 1;
+                    self.last_message = failure.message;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribe(.{ .function = Capture.event, .data = &capture });
+    defer _ = context.unsubscribe(subscription);
+
+    var manager: Manager = undefined;
+    manager.handle = null;
+    manager.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer manager.dispatcher.deinit();
+    manager.operation_context = &context;
+
+    var parent = OperationScope.init(&manager, .update, null);
+    parent.attach();
+    var child = OperationScope.init(&manager, .sync, null);
+    child.attach();
+    manager.dispatcher.raiseError(.{ .message = "nested detailed ALPM failure" });
+    child.fail();
+    parent.fail();
+
+    try testing.expectEqual(@as(usize, 1), capture.failures);
+    try testing.expectEqualStrings("nested detailed ALPM failure", capture.last_message);
+}
 
 fn hasDeletedSharedLibrary(maps: []const u8) bool {
     var lines = std.mem.splitScalar(u8, maps, '\n');
@@ -4289,6 +4542,25 @@ test "handleErrorMessage emits a known error description" {
     try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.Memory), null);
 
     try testing.expect(std.mem.indexOf(u8, cap.text(), "Memory allocation failed.") != null);
+}
+
+test "handleErrorMessage emits the expected database lock error" {
+    var mgr = newErrorManager();
+    defer mgr.dispatcher.deinit();
+
+    var cap = ErrorCapture{};
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&cap),
+    });
+
+    try mgr.handleErrorMessage(@intFromEnum(libalpm.Error.HandleLock), null);
+
+    try testing.expectEqualStrings(
+        "unable to lock database\n" ++
+            "You have a db.lck. It's at /var/lib/pacman/db.lck. You should probably delete that.\n",
+        cap.text(),
+    );
 }
 
 test "handleErrorMessage handles the Ok error without details" {

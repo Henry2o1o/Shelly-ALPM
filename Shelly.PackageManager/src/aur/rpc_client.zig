@@ -1,11 +1,12 @@
 const std = @import("std");
 const models = @import("models.zig");
 const operation_api = @import("operation_context");
-const HttpClient = @import("../shared/http_client.zig");
+const HttpClient = @import("ShellyHttp");
 
 pub const default_rpc_url = "https://aur.archlinux.org/rpc/";
 pub const default_cgit_url = "https://aur.archlinux.org/cgit/aur.git/plain";
 const max_response_size = 32 * 1024 * 1024;
+const connect_timeout_seconds = 15;
 
 pub const Client = struct {
     allocator: std.mem.Allocator,
@@ -20,7 +21,14 @@ pub const Client = struct {
         return .{
             .allocator = allocator,
             .io = io,
-            .http = .{ .allocator = allocator, .io = io },
+            .http = .{
+                .allocator = allocator,
+                .io = io,
+                .connect_timeout = .{ .duration = .{
+                    .raw = std.Io.Duration.fromSeconds(connect_timeout_seconds),
+                    .clock = .awake,
+                } },
+            },
         };
     }
 

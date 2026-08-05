@@ -3,24 +3,14 @@ const Zigalpm = @import("Zigalpm");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output_config = @import("config.zig");
+const colors = @import("colors.zig");
+const Color = colors.Color;
+const fmt = @import("format.zig");
 const review_output = @import("review.zig");
 const runtime = @import("../runtime/context.zig");
+const parser = @import("../cli/parser.zig");
 
-const Color = enum {
-    white,
-    green,
-    yellow,
-    red,
-    cyan,
-    dark_magenta,
-    gray,
-};
-
-const SizeDisplay = enum {
-    bytes,
-    megabytes,
-    gigabytes,
-};
+const SizeDisplay = fmt.SizeDisplay;
 
 const ProgressStyle = enum {
     blocks,
@@ -34,6 +24,7 @@ const Settings = struct {
 };
 
 const Bar = struct {
+    operation_id: u64,
     name: []const u8,
     action: []const u8,
     current: f64,
@@ -42,29 +33,26 @@ const Bar = struct {
 };
 
 const FinalizedBar = struct {
+    operation_id: u64,
     name: []const u8,
     action: []const u8,
 };
 
-pub const CommandOperation = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
-    ) anyerror!void,
-};
-
 /// Runs a backend operation through the common non-UI lifecycle. Package
-/// commands only supply their opening message and operation callback; event
-/// rendering, prompts, errors, flushing, and the final transaction result stay
-/// identical across ALPM, AUR, Flatpak, AppImage, local, and download commands.
+/// commands only supply their opening message and runner; event rendering,
+/// prompts, errors, flushing, and the final transaction result stay identical
+/// across ALPM, AUR, Flatpak, AppImage, local, and download commands.
+/// The runner must expose
+/// `run(context: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, invocation: *const parser.Invocation) anyerror!void`.
 pub fn output(
     context: *runtime.RuntimeContext,
     opening_message: []const u8,
     no_confirm: bool,
-    command_operation: CommandOperation,
-) !bool {
+    runner: anytype,
+    invocation: *const parser.Invocation,
+    success_message: ?[]const u8,
+    failure_message: ?[]const u8,
+) anyerror!bool {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -73,19 +61,24 @@ pub fn output(
     try renderer.attach(&operation_context);
 
     try renderer.begin(opening_message);
-    command_operation.call(command_operation.data, context, &operation_context) catch |err| {
+    runner.run(context, &operation_context, invocation) catch |err| {
         if (err == error.Cancelled) {
             try renderer.finishCancelled();
             return true;
         }
+        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+            try renderer.reportError(message);
+            try renderer.finishWithMessage(false, failure_message);
+            return false;
+        }
         const message = try std.fmt.allocPrint(context.allocator, "{t}", .{err});
         defer context.allocator.free(message);
         try renderer.reportError(message);
-        try renderer.finish(false);
+        try renderer.finishWithMessage(false, failure_message);
         return false;
     };
 
-    try renderer.finish(true);
+    try renderer.finishWithMessage(true, success_message);
     return !renderer.failed();
 }
 
@@ -158,14 +151,28 @@ pub const Renderer = struct {
     }
 
     pub fn finish(self: *Renderer, success: bool) !void {
+        return self.finishWithMessage(success, null);
+    }
+
+    pub fn finishWithMessage(
+        self: *Renderer,
+        success: bool,
+        message: ?[]const u8,
+    ) !void {
         self.mutex.lockUncancelable(self.context.io);
         defer self.mutex.unlock(self.context.io);
         try self.clearBars();
         self.bars.clearRetainingCapacity();
         if (success) {
-            try self.writeColoredLine(.green, ":: Transaction complete.", .{});
+            if (message) |value|
+                try self.writeColoredLine(.green, ":: {s}", .{value})
+            else
+                try self.writeColoredLine(.green, ":: Transaction complete.", .{});
         } else {
-            try self.writeColoredLine(.red, ":: Transaction failed.", .{});
+            if (message) |value|
+                try self.writeColoredLine(.red, ":: {s}", .{value})
+            else
+                try self.writeColoredLine(.red, ":: Transaction failed.", .{});
         }
         try self.flush();
     }
@@ -204,7 +211,8 @@ pub const Renderer = struct {
             .failure => |failure| {
                 try self.writeColoredLine(.red, "error: {s}", .{failure.message});
             },
-            .started, .completed => {},
+            .completed => |completed| try self.completeOperation(completed.envelope.operation_id),
+            .started => {},
         }
         try self.flush();
     }
@@ -214,9 +222,9 @@ pub const Renderer = struct {
         if (std.mem.eql(u8, code, "alpm.scriptlet")) {
             const line = std.mem.trimEnd(u8, status.message, " \t\r\n");
             if (line.len == 0) {
-                try self.writeColoredLine(.dark_magenta, "Running scriptlet...", .{});
+                try self.writeColoredLine(.magenta, "Running scriptlet...", .{});
             } else {
-                try self.writeColoredLine(.dark_magenta, "Scriptlet: {s}", .{line});
+                try self.writeColoredLine(.magenta, "Scriptlet: {s}", .{line});
             }
         } else if (std.mem.eql(u8, code, "alpm.pacnew")) {
             try self.writeColoredLine(.yellow, ":: pacnew stored @ {s}{s}", .{
@@ -252,12 +260,17 @@ pub const Renderer = struct {
     fn writeProgress(self: *Renderer, progress: anytype) !void {
         const update = progress.update;
         if (update.stage) |stage| {
+            // AUR RPC and cgit responses are metadata requests, not package
+            // downloads. They are commonly chunked without a Content-Length,
+            // so exposing them as download bars produces a misleading 0/0
+            // PackageDownload entry.
+            if (std.mem.eql(u8, stage, "aur-http")) return;
             if (std.mem.eql(u8, stage, "hook")) {
                 const line = update.message orelse "";
                 if (line.len == 0) {
-                    try self.writeColoredLine(.dark_magenta, "Running hook...", .{});
+                    try self.writeColoredLine(.magenta, "Running hook...", .{});
                 } else {
-                    try self.writeColoredLine(.dark_magenta, "Hook: {s}", .{line});
+                    try self.writeColoredLine(.magenta, "Hook: {s}", .{line});
                 }
                 return;
             }
@@ -277,7 +290,7 @@ pub const Renderer = struct {
         }
 
         const subject = update.message orelse progress.envelope.subject orelse "unknown";
-        const name = std.fs.path.basename(subject);
+        const name = try self.progressDisplayName(progress.envelope.backend, subject);
         const percentage_count: u64 = if (update.percentage) |percentage|
             @intFromFloat(std.math.clamp(percentage, 0, 100))
         else
@@ -289,6 +302,7 @@ pub const Renderer = struct {
         const total = if (has_byte_counts) convertSize(self.settings.size_display, raw_total) else @as(f64, @floatFromInt(raw_total));
         const percentage = progressPercentage(update, raw_current, raw_total);
         try self.updateBar(.{
+            .operation_id = progress.envelope.operation_id,
             .name = name,
             .action = action,
             .current = current,
@@ -299,8 +313,8 @@ pub const Renderer = struct {
 
     fn updateBar(self: *Renderer, bar: Bar) !void {
         if (!self.animate) {
-            if (bar.percentage < 100 or self.wasFinalized(bar.name, bar.action)) return;
-            try self.appendFinalized(bar.name, bar.action);
+            if (bar.percentage < 100 or self.wasFinalized(bar.operation_id, bar.name, bar.action)) return;
+            try self.appendFinalized(bar.operation_id, bar.name, bar.action);
             try self.writeBarLine(bar);
             return;
         }
@@ -308,15 +322,17 @@ pub const Renderer = struct {
         try self.clearBars();
         var found: ?usize = null;
         for (self.bars.items, 0..) |candidate, index| {
-            if (std.mem.eql(u8, candidate.name, bar.name)) {
+            if (candidate.operation_id == bar.operation_id and
+                std.mem.eql(u8, candidate.name, bar.name))
+            {
                 found = index;
                 break;
             }
         }
         if (bar.percentage >= 100) {
-            if (!self.wasFinalized(bar.name, bar.action)) {
+            if (!self.wasFinalized(bar.operation_id, bar.name, bar.action)) {
                 try self.writeBarLine(bar);
-                try self.appendFinalized(bar.name, bar.action);
+                try self.appendFinalized(bar.operation_id, bar.name, bar.action);
             }
             if (found) |index| _ = self.bars.orderedRemove(index);
         } else if (found) |index| {
@@ -336,6 +352,7 @@ pub const Renderer = struct {
     fn ownedBar(self: *Renderer, bar: Bar) !Bar {
         const allocator = self.owned_data.allocator();
         return .{
+            .operation_id = bar.operation_id,
             .name = try allocator.dupe(u8, bar.name),
             .action = try allocator.dupe(u8, bar.action),
             .current = bar.current,
@@ -344,19 +361,54 @@ pub const Renderer = struct {
         };
     }
 
-    fn appendFinalized(self: *Renderer, name: []const u8, action: []const u8) !void {
+    fn progressDisplayName(
+        self: *Renderer,
+        backend: Zigalpm.OperationBackend,
+        subject: []const u8,
+    ) ![]const u8 {
+        if (backend != .flatpak) return std.fs.path.basename(subject);
+        return formatFlatpakRef(self.owned_data.allocator(), subject);
+    }
+
+    fn appendFinalized(self: *Renderer, operation_id: u64, name: []const u8, action: []const u8) !void {
         const allocator = self.owned_data.allocator();
         try self.finalized.append(self.context.allocator, .{
+            .operation_id = operation_id,
             .name = try allocator.dupe(u8, name),
             .action = try allocator.dupe(u8, action),
         });
     }
 
-    fn wasFinalized(self: *const Renderer, name: []const u8, action: []const u8) bool {
+    fn wasFinalized(self: *const Renderer, operation_id: u64, name: []const u8, action: []const u8) bool {
         for (self.finalized.items) |item| {
-            if (std.mem.eql(u8, item.name, name) and std.mem.eql(u8, item.action, action)) return true;
+            if (item.operation_id == operation_id and
+                std.mem.eql(u8, item.name, name) and
+                std.mem.eql(u8, item.action, action)) return true;
         }
         return false;
+    }
+
+    fn completeOperation(self: *Renderer, operation_id: u64) !void {
+        if (!self.animate) return;
+        var has_bars = false;
+        for (self.bars.items) |bar| {
+            if (bar.operation_id == operation_id) {
+                has_bars = true;
+                break;
+            }
+        }
+        if (!has_bars) return;
+
+        try self.clearBars();
+        var index: usize = 0;
+        while (index < self.bars.items.len) {
+            if (self.bars.items[index].operation_id == operation_id) {
+                _ = self.bars.orderedRemove(index);
+            } else {
+                index += 1;
+            }
+        }
+        try self.drawBars();
     }
 
     fn clearBars(self: *Renderer) !void {
@@ -397,9 +449,9 @@ pub const Renderer = struct {
 
     fn writeColoredLine(self: *Renderer, color: Color, comptime format: []const u8, args: anytype) !void {
         if (self.animate) try self.clearBars();
-        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll(colorCode(color));
+        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll(colors.colorCode(color));
         try self.context.stdout.print(format, args);
-        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll("\x1b[0m");
+        if (output_config.supportsAnsi(self.context)) try self.context.stdout.writeAll(colors.reset);
         try self.context.stdout.writeByte('\n');
         if (self.animate) try self.drawBars();
     }
@@ -421,6 +473,12 @@ pub const Renderer = struct {
                 return .accepted;
             }
             if (question.kind == .review_changes) {
+                if (hasSecurityFindings(question)) {
+                    return self.askQuestion(question) catch {
+                        self.write_failed.store(true, .release);
+                        return defaultResponse(question);
+                    };
+                }
                 self.clearBars() catch self.write_failed.store(true, .release);
                 self.renderReview(question, false) catch self.write_failed.store(true, .release);
                 self.drawBars() catch self.write_failed.store(true, .release);
@@ -588,7 +646,8 @@ pub const Renderer = struct {
         if (question.options.len == 0 or self.context.stdin == null) return &.{};
         try self.context.stdout.print("{s}\n", .{question.prompt});
         for (question.options, 0..) |option, index| {
-            try self.context.stdout.print("  {d}) {s}\n", .{ index + 1, option.label });
+            const installed = if (option.is_installed) "Installed" else "Not Installed";
+            try self.context.stdout.print("  {d}) {s} : {s} : {s}\n", .{ index + 1, option.label, option.description, installed });
         }
         try self.context.stdout.writeAll("Select numbers separated by commas (none): ");
         try self.context.stdout.flush();
@@ -610,7 +669,7 @@ fn loadSettings(context: *runtime.RuntimeContext) !Settings {
     const manager = config_manager.Manager.init(context);
     const config = manager.read() catch try config_model.Config.defaults(context.allocator);
     return .{
-        .size_display = parseSizeDisplay(stringValue(&config, "FileSizeDisplay") orelse "Megabytes"),
+        .size_display = fmt.parseSizeDisplay(stringValue(&config, "FileSizeDisplay") orelse "Megabytes"),
         .progress_style = parseProgressStyle(stringValue(&config, "ProgressBarStyle") orelse "Blocks"),
         .bar_width = integerValue(&config, "ProgressBarWidth") orelse 20,
     };
@@ -627,12 +686,6 @@ fn integerValue(config: *const config_model.Config, key: []const u8) ?usize {
         .integer => |integer| if (integer > 0) @intCast(integer) else null,
         else => null,
     };
-}
-
-fn parseSizeDisplay(value: []const u8) SizeDisplay {
-    if (std.ascii.eqlIgnoreCase(value, "Bytes")) return .bytes;
-    if (std.ascii.eqlIgnoreCase(value, "Gigabytes")) return .gigabytes;
-    return .megabytes;
 }
 
 fn parseProgressStyle(value: []const u8) ProgressStyle {
@@ -731,6 +784,25 @@ fn progressAction(progress: anytype) []const u8 {
     return operationAction(progress.envelope.kind);
 }
 
+fn formatFlatpakRef(
+    allocator: std.mem.Allocator,
+    reference: []const u8,
+) ![]const u8 {
+    var parts = std.mem.splitScalar(u8, reference, '/');
+    const kind = parts.next() orelse return reference;
+    const id = parts.next() orelse return reference;
+    const architecture = parts.next() orelse return reference;
+    const branch = parts.next() orelse return reference;
+    if (kind.len == 0 or id.len == 0 or architecture.len == 0 or
+        branch.len == 0 or parts.next() != null)
+        return reference;
+    return std.fmt.allocPrint(
+        allocator,
+        "{s} ({s}, {s}, {s})",
+        .{ id, branch, architecture, kind },
+    );
+}
+
 fn operationAction(kind: Zigalpm.OperationKind) []const u8 {
     return switch (kind) {
         .install => "Install",
@@ -749,6 +821,23 @@ fn operationAction(kind: Zigalpm.OperationKind) []const u8 {
 
 fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
     return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
+}
+
+test "Flatpak progress references retain application identity and context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    try std.testing.expectEqualStrings(
+        "org.freedesktop.Platform (25.08, x86_64, runtime)",
+        try formatFlatpakRef(
+            arena.allocator(),
+            "runtime/org.freedesktop.Platform/x86_64/25.08",
+        ),
+    );
+    try std.testing.expectEqualStrings(
+        "org.example.App",
+        try formatFlatpakRef(arena.allocator(), "org.example.App"),
+    );
 }
 
 fn terminalWidth(context: *const runtime.RuntimeContext) usize {
@@ -792,18 +881,6 @@ fn renderBar(
     }
 }
 
-fn colorCode(color: Color) []const u8 {
-    return switch (color) {
-        .white => "\x1b[37m",
-        .green => "\x1b[32m",
-        .yellow => "\x1b[33m",
-        .red => "\x1b[31m",
-        .cyan => "\x1b[36m",
-        .dark_magenta => "\x1b[35m",
-        .gray => "\x1b[90m",
-    };
-}
-
 fn automaticResponse(kind: Zigalpm.OperationQuestionKind) Zigalpm.OperationQuestionResponse {
     return switch (kind) {
         .confirmation, .confirm_transaction, .review_changes => .accepted,
@@ -817,6 +894,11 @@ fn safeReviewDefault(question: Zigalpm.OperationQuestion) Zigalpm.OperationQuest
         .accepted => .accepted,
         else => .declined,
     };
+}
+
+fn hasSecurityFindings(question: Zigalpm.OperationQuestion) bool {
+    const review = question.review orelse return false;
+    return review.findings.len != 0;
 }
 
 fn defaultResponse(question: Zigalpm.OperationQuestion) Zigalpm.OperationQuestionResponse {
@@ -913,6 +995,83 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
     try std.testing.expect(std.mem.indexOf(u8, rendered, " 50%") == null);
 }
 
+test "single-pane clears unknown-length bars on completion and suppresses AUR metadata" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const absolute_length = try temporary.dir.realPath(std.testing.io, &absolute_buffer);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var environment = std.process.Environ.Map.init(arena.allocator());
+    try environment.put("XDG_CONFIG_HOME", absolute_buffer[0..absolute_length]);
+    try environment.put("COLUMNS", "80");
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .environment = &environment,
+        .stdin_is_tty = true,
+        .stdout_is_tty = true,
+    };
+    var renderer = try Renderer.init(&context, true);
+    var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
+    defer {
+        renderer.detach();
+        operation_context.deinit();
+        renderer.deinit();
+    }
+    try renderer.attach(&operation_context);
+
+    var first = operation_context.begin(.{
+        .backend = .download,
+        .kind = .download,
+        .subject = "same-name.pkg.tar.zst",
+    });
+    first.progress(.{
+        .stage = "download",
+        .bytes_completed = 4096,
+    });
+    try std.testing.expectEqual(@as(usize, 1), renderer.bars.items.len);
+    try std.testing.expectEqual(first.envelope.operation_id, renderer.bars.items[0].operation_id);
+
+    var second = operation_context.begin(.{
+        .backend = .download,
+        .kind = .download,
+        .subject = "same-name.pkg.tar.zst",
+    });
+    second.progress(.{
+        .stage = "download",
+        .bytes_completed = 8192,
+    });
+    try std.testing.expectEqual(@as(usize, 2), renderer.bars.items.len);
+
+    first.finish(.success);
+    try std.testing.expectEqual(@as(usize, 1), renderer.bars.items.len);
+    try std.testing.expectEqual(second.envelope.operation_id, renderer.bars.items[0].operation_id);
+
+    var rpc = operation_context.begin(.{
+        .backend = .download,
+        .kind = .download,
+        .subject = "https://aur.archlinux.org/rpc/",
+    });
+    rpc.progress(.{
+        .stage = "aur-http",
+        .bytes_completed = 512,
+    });
+    rpc.finish(.success);
+    try std.testing.expectEqual(@as(usize, 1), renderer.bars.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "PackageDownload rpc") == null);
+
+    second.finish(.success);
+    try std.testing.expectEqual(@as(usize, 0), renderer.bars.items.len);
+}
+
 test "single-pane no-confirm uses the shared automatic question policy" {
     try std.testing.expect(automaticResponse(.confirmation) == .accepted);
     try std.testing.expectEqual(@as(usize, 0), automaticResponse(.select_provider).choice);
@@ -978,14 +1137,14 @@ test "single-pane renders complete transaction plans and build-time unknowns" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "1024 B") != null);
 }
 
-test "single-pane no-confirm renders risky PKGBUILD review and declines it" {
+test "single-pane risky PKGBUILD review bypasses no-confirm and requires approval" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stdout.deinit();
     var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer stderr.deinit();
-    var stdin = std.Io.Reader.fixed("\n");
+    var stdin = std.Io.Reader.fixed("yes\n");
     var context: runtime.RuntimeContext = .{
         .allocator = arena.allocator(),
         .io = std.testing.io,
@@ -1027,15 +1186,16 @@ test "single-pane no-confirm renders risky PKGBUILD review and declines it" {
         .default_response = .declined,
     });
     defer answer.deinit(arena.allocator());
-    operation.finish(.cancelled);
+    operation.finish(.success);
 
-    try std.testing.expect(answer.response == .declined);
+    try std.testing.expect(answer.response == .accepted);
     const rendered = stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "PKGBUILD security warnings") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "curl used in post_install") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Source file: demo.install") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=1") == null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgver=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "(y/N)") != null);
 }
 
 test "interactive PKGBUILD review renders unified diff and honors risky default" {

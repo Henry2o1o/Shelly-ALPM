@@ -1,7 +1,9 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
+const fmt = @import("../output/format.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const table = @import("../output/table.zig");
@@ -50,32 +52,22 @@ const Backend = enum {
     }
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn run(
+        _: Real,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         backend: Backend,
         invocation: *const parser.Invocation,
-    ) anyerror!void,
-};
-
-const RunnerAdapter = struct {
-    runner: Runner,
-    invocation: *const parser.Invocation,
-
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
     ) !void {
-        const self: *RunnerAdapter = @ptrCast(@alignCast(data.?));
-        try runSelected(self.runner, context, operation_context, self.invocation);
+        return switch (backend) {
+            .standard => runStandard(context, operation_context, invocation),
+            .aur => runAur(context, operation_context, invocation),
+            .flatpak => runFlatpakStep(context, operation_context, invocation),
+            .appimage => runAppImage(context, operation_context),
+        };
     }
 };
-
-const real_runner: Runner = .{ .call = runRealUpgrade };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -107,7 +99,7 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 const PreviewResult = struct {
@@ -115,13 +107,14 @@ const PreviewResult = struct {
     proceed: bool,
 };
 
-const PlanCollector = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const RealPlanCollector = struct {
+    fn collect(
+        _: RealPlanCollector,
         context: *runtime.RuntimeContext,
         backend: Backend,
-    ) anyerror!list_updates.Result,
+    ) !list_updates.Result {
+        return list_updates.collectUpdates(context, listUpdatesBackend(backend), false);
+    }
 };
 
 const UpgradePlan = struct {
@@ -148,28 +141,18 @@ const UpgradePlan = struct {
     }
 };
 
-const real_plan_collector: PlanCollector = .{ .call = collectPlanUpdates };
-
-fn collectPlanUpdates(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    backend: Backend,
-) !list_updates.Result {
-    return list_updates.collectUpdates(context, listUpdatesBackend(backend), false);
-}
-
 fn prepareAllUpgradePreview(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !PreviewResult {
-    return prepareAllUpgradePreviewWithCollector(context, invocation, real_plan_collector);
+    return prepareAllUpgradePreviewWithCollector(context, invocation, RealPlanCollector{});
 }
 
 fn prepareAllUpgradePreviewWithCollector(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    collector: PlanCollector,
-) !PreviewResult {
+    collector: anytype,
+) anyerror!PreviewResult {
     var plan = try buildAllUpgradePlan(context, invocation, collector);
     defer plan.deinit(context.allocator);
 
@@ -194,8 +177,8 @@ fn prepareAllUpgradePreviewWithCollector(
 fn buildAllUpgradePlan(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    collector: PlanCollector,
-) !UpgradePlan {
+    collector: anytype,
+) anyerror!UpgradePlan {
     var plan: UpgradePlan = .{};
     errdefer plan.deinit(context.allocator);
 
@@ -206,7 +189,13 @@ fn buildAllUpgradePlan(
         try context.stdout.print("{s}\n", .{collectingMessage(backend)});
         try context.stdout.flush();
 
-        var result = collector.call(collector.data, context, backend) catch |err| {
+        var result = collector.collect(context, backend) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    try output.writeWarning(context, message);
+                    continue;
+                }
+            }
             try context.stdout.print("Error collecting {s} upgrades: {t}\n", .{
                 backend.displayName(),
                 err,
@@ -295,8 +284,8 @@ fn renderPlannedStandardUpdates(
         cells[1] = update.name;
         cells[2] = update.current_version;
         cells[3] = update.new_version;
-        cells[4] = try formatUpgradeSize(allocator, size_display, update.size_difference);
-        cells[5] = try formatUpgradeSize(allocator, size_display, update.download_size);
+        cells[4] = try fmt.formatSignedSize(allocator, size_display, update.size_difference);
+        cells[5] = try fmt.formatSignedSize(allocator, size_display, update.download_size);
         row.* = cells;
     }
 
@@ -308,8 +297,8 @@ fn renderPlannedStandardUpdates(
         rows,
         output.supportsAnsi(context),
     );
-    const formatted_download = try formatUpgradeSize(allocator, size_display, total_download);
-    const formatted_change = try formatUpgradeSize(allocator, size_display, net_change);
+    const formatted_download = try fmt.formatSignedSize(allocator, size_display, total_download);
+    const formatted_change = try fmt.formatSignedSize(allocator, size_display, net_change);
     try context.stdout.print(
         "\nTotal Download Size: {s}\nNet Upgrade Size: {s}\n\n",
         .{ formatted_download, formatted_change },
@@ -343,11 +332,8 @@ fn noUpdatesMessage(backend: Backend) []const u8 {
     };
 }
 
-const SizeDisplay = enum {
-    bytes,
-    megabytes,
-    gigabytes,
-};
+const SizeDisplay = fmt.SizeDisplay;
+const loadSizeDisplay = fmt.loadSizeDisplay;
 
 fn prepareStandardUpgradePreview(
     context: *runtime.RuntimeContext,
@@ -363,9 +349,7 @@ fn prepareStandardUpgradePreview(
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
         context.environ,
-        null,
-        false,
-        database_path,
+        .{ .use_root = false, .temp_root_path = database_path },
     );
     defer manager.deinit();
     try manager.sync_for_update_check(false);
@@ -413,8 +397,8 @@ fn renderStandardUpgradePreview(
         cells[1] = update.new_package.name() orelse "unknown";
         cells[2] = update.old_package.version() orelse "unknown";
         cells[3] = update.new_package.version() orelse "unknown";
-        cells[4] = try formatUpgradeSize(allocator, size_display, size_change);
-        cells[5] = try formatUpgradeSize(allocator, size_display, download_size);
+        cells[4] = try fmt.formatSignedSize(allocator, size_display, size_change);
+        cells[5] = try fmt.formatSignedSize(allocator, size_display, download_size);
         row.* = cells;
     }
 
@@ -426,8 +410,8 @@ fn renderStandardUpgradePreview(
         rows,
         output.supportsAnsi(context),
     );
-    const formatted_download = try formatUpgradeSize(allocator, size_display, total_download);
-    const formatted_change = try formatUpgradeSize(allocator, size_display, net_change);
+    const formatted_download = try fmt.formatSignedSize(allocator, size_display, total_download);
+    const formatted_change = try fmt.formatSignedSize(allocator, size_display, net_change);
     try context.stdout.print(
         "\nTotal Download Size: {s}\nNet Upgrade Size: {s}\n\n",
         .{ formatted_download, formatted_change },
@@ -450,58 +434,43 @@ fn confirmPreparedUpgrade(context: *runtime.RuntimeContext, prompt: []const u8) 
     }
 }
 
-fn loadSizeDisplay(context: *runtime.RuntimeContext) !SizeDisplay {
-    const manager = config_manager.Manager.init(context);
-    const configuration = manager.read() catch return .megabytes;
-    const value = configuration.values.get("FileSizeDisplay") orelse return .megabytes;
-    if (value != .string) return .megabytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Bytes")) return .bytes;
-    if (std.ascii.eqlIgnoreCase(value.string, "Gigabytes")) return .gigabytes;
-    return .megabytes;
-}
-
-fn formatUpgradeSize(
-    allocator: std.mem.Allocator,
-    display: SizeDisplay,
-    bytes: i128,
-) ![]const u8 {
-    return switch (display) {
-        .bytes => std.fmt.allocPrint(allocator, "{d} B", .{bytes}),
-        .megabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} MiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1048576.0},
-        ),
-        .gigabytes => std.fmt.allocPrint(
-            allocator,
-            "{d:.2} GiB",
-            .{@as(f64, @floatFromInt(bytes)) / 1073741824.0},
-        ),
-    };
-}
-
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
+    const Selected = struct {
+        inner: @TypeOf(runner),
+
+        pub fn run(
+            self: @This(),
+            run_context: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            run_invocation: *const parser.Invocation,
+        ) anyerror!void {
+            try runSelected(self.inner, run_context, operation_context, run_invocation);
+        }
+    };
+    const selected = Selected{ .inner = runner };
     return if (invocation.globals.ui_mode)
-        executeUi(context, invocation, runner)
+        executeUi(context, invocation, selected)
     else
-        executeStandard(context, invocation, runner);
+        executeStandard(context, invocation, selected);
 }
 
 fn executeStandard(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
-    var adapter: RunnerAdapter = .{ .runner = runner, .invocation = invocation };
+    runner: anytype,
+) anyerror!u8 {
     const succeeded = try standard_single_pane.output(
         context,
         openingMessage(invocation),
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        runner,
+        invocation,
+        successMessage(invocation),
+        failureMessage(invocation),
     );
     return if (succeeded) 0 else 1;
 }
@@ -509,51 +478,25 @@ fn executeStandard(
 fn executeUi(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
-    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
-    context.attachTransactionLog(&operation_context);
-    defer operation_context.deinit();
-    var question_responder: ui_operation.QuestionResponder = .{
-        .context = context,
-        .operation_context = &operation_context,
-        .no_confirm = invocation.globals.no_confirm,
-    };
-    question_responder.attach();
-    defer question_responder.detach();
-    var reporter: ui_operation.Reporter = .{ .context = context };
-    const event_subscription = try operation_context.subscribe(.{
-        .function = ui_operation.Reporter.handle,
-        .data = &reporter,
-    });
-    defer _ = operation_context.unsubscribe(event_subscription);
-
-    try output.writeAlpmInfoFrame(context, "TransactionStart", openingMessage(invocation));
-    try ui_operation.flush(context);
-
-    runSelected(runner, context, &operation_context, invocation) catch |err| {
-        const message = try std.fmt.allocPrint(context.allocator, "Upgrade failed: {t}", .{err});
-        defer context.allocator.free(message);
-        try output.writeErrorFrame(context, message);
-        try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-        try ui_operation.flush(context);
-        return 1;
-    };
-
-    try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
-    try ui_operation.flush(context);
-    return if (reporter.failed()) 1 else 0;
+    runner: anytype,
+) anyerror!u8 {
+    return ui_operation.runTransaction(context, invocation, .{
+        .opening = openingMessage(invocation),
+        .success_message = successMessage(invocation),
+        .failure_message = failureMessage(invocation),
+        .failure_label = "Upgrade failed",
+        .report_flatpak_unavailable = true,
+    }, runner);
 }
 
 fn runSelected(
-    runner: Runner,
+    runner: anytype,
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
-) !void {
+) anyerror!void {
     if (!upgradesAll(invocation)) {
-        try runner.call(
-            runner.data,
+        try runner.run(
             context,
             operation_context,
             backendForPath(invocation.command.path) orelse unreachable,
@@ -565,7 +508,13 @@ fn runSelected(
     var failed = false;
     for (all_backends) |backend| {
         if (!backendEnabled(invocation, backend)) continue;
-        runner.call(runner.data, context, operation_context, backend, invocation) catch |err| {
+        runner.run(context, operation_context, backend, invocation) catch |err| {
+            if (backend == .flatpak) {
+                if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
+                    reportBackendSkipped(operation_context, message);
+                    continue;
+                }
+            }
             failed = true;
             try reportBackendFailure(context, operation_context, backend, err);
         };
@@ -574,21 +523,6 @@ fn runSelected(
 }
 
 const all_backends = [_]Backend{ .standard, .aur, .flatpak, .appimage };
-
-fn runRealUpgrade(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    operation_context: *Zigalpm.OperationContext,
-    backend: Backend,
-    invocation: *const parser.Invocation,
-) !void {
-    return switch (backend) {
-        .standard => runStandard(context, operation_context, invocation),
-        .aur => runAur(context, operation_context, invocation),
-        .flatpak => runFlatpakStep(context, operation_context, invocation),
-        .appimage => runAppImage(context, operation_context),
-    };
-}
 
 fn runStandard(
     context: *runtime.RuntimeContext,
@@ -605,18 +539,12 @@ fn runStandard(
             _ = news.showUnread(context) catch {};
         }
     }
-    const manager = try Zigalpm.AlpmManager.init(
-        context.allocator,
-        context.environ,
-        null,
-        true,
-        null,
-    );
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
 
-    try manager.sync(false);
+    try manager.sync(true);
     const updates = try manager.get_updates_available();
     defer Zigalpm.alpm.OwnedPackageWithUpdate.deinitSlice(context.allocator, updates);
     if (updates.len == 0) {
@@ -682,7 +610,7 @@ fn runAur(
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
 
-    const updates = try manager.getPackagesNeedingUpdate(true);
+    const updates = try manager.getPackagesNeedingUpdate(!optionEnabled(invocation, "--no-devel"));
     defer Zigalpm.aur.models.Update.deinitSlice(context.allocator, updates);
     if (updates.len == 0) {
         emitStatus(operation_context, .aur, .success, "All AUR packages are up to date.");
@@ -732,6 +660,12 @@ fn runFlatpakStep(
     if (upgradesAll(invocation) and
         !invocation.globals.ui_mode)
     {
+        switch (Zigalpm.flatpak.backendStatus()) {
+            .available => {},
+            .unavailable => return Zigalpm.flatpak.errors.Error.FlatpakBackendUnavailable,
+            .incompatible => return Zigalpm.flatpak.errors.Error.FlatpakBackendIncompatible,
+        }
+
         var arguments: std.ArrayList([]const u8) = .empty;
         defer arguments.deinit(context.allocator);
         try arguments.appendSlice(context.allocator, &.{ "upgrade", "flatpak" });
@@ -811,6 +745,19 @@ fn reportBackendFailure(
     });
     operation.reportError(err, message, "upgrade", null, true);
     operation.finish(.failed);
+}
+
+fn reportBackendSkipped(
+    operation_context: *Zigalpm.OperationContext,
+    reason: []const u8,
+) void {
+    var operation = operation_context.begin(.{
+        .backend = .flatpak,
+        .kind = .update,
+        .subject = "Flatpak",
+    });
+    operation.status(.warning, reason, "flatpak.backend_unavailable", null);
+    operation.finish(.success);
 }
 
 fn emitStatus(
@@ -988,10 +935,11 @@ test "standard upgrade preview runs only before non-root elevation" {
 }
 
 test "combined upgrade plan renders enabled user updates and confirms once" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -1001,26 +949,15 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
     try std.testing.expect(outcome == .dispatch);
 
     var stdin = std.Io.Reader.fixed("maybe\nyes\n");
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &stdin;
     const Capture = struct {
         calls: std.ArrayList(Backend) = .empty,
 
         fn collect(
-            data: ?*anyopaque,
+            self: *@This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
         ) !list_updates.Result {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             try self.calls.append(std.testing.allocator, backend);
             try std.testing.expectEqual(Backend.aur, backend);
             return .{ .aur = .{ .items = &.{.{
@@ -1038,15 +975,15 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
     defer capture.calls.deinit(std.testing.allocator);
 
     const preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &outcome.dispatch,
-        .{ .data = &capture, .call = Capture.collect },
+        &capture,
     );
     try std.testing.expect(preview.has_updates);
     try std.testing.expect(preview.proceed);
     try std.testing.expectEqualSlices(Backend, &.{.aur}, capture.calls.items);
 
-    const rendered = stdout.writer.buffered();
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Building upgrade plan...") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AUR (1):") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "demo-git: 1.0 -> 1.1") != null);
@@ -1058,13 +995,14 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
 }
 
 test "combined upgrade plan defaults to approval, supports decline, and no-confirm bypasses the prompt" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
     const Capture = struct {
         fn collect(
-            _: ?*anyopaque,
+            _: @This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
         ) !list_updates.Result {
@@ -1077,9 +1015,9 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
             }} } };
         }
     };
-    const collector: PlanCollector = .{ .call = Capture.collect };
+    const collector = Capture{};
 
-    const defaulted = try parser.parse(arena.allocator(), &manifest, &.{
+    const defaulted = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -1090,42 +1028,32 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
     try std.testing.expect(!requiresElevation(&defaulted.dispatch));
     try std.testing.expect(shouldPrepareAllPreview(&defaulted.dispatch, false));
     var default_stdin = std.Io.Reader.fixed("\n");
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &default_stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &default_stdin;
     const defaulted_preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &defaulted.dispatch,
         collector,
     );
     try std.testing.expect(defaulted_preview.has_updates);
     try std.testing.expect(defaulted_preview.proceed);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Proceed with all upgrades? (Y/n)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Upgrade cancelled.") == null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Proceed with all upgrades? (Y/n)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Upgrade cancelled.") == null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     var decline_stdin = std.Io.Reader.fixed("n\n");
-    context.stdin = &decline_stdin;
+    tc.context.stdin = &decline_stdin;
     const declined_preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &defaulted.dispatch,
         collector,
     );
     try std.testing.expect(declined_preview.has_updates);
     try std.testing.expect(!declined_preview.proceed);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Upgrade cancelled.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Upgrade cancelled.") != null);
 
-    stdout.writer.end = 0;
-    context.stdin = null;
-    const automatic = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    tc.context.stdin = null;
+    const automatic = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -1135,17 +1063,17 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
     });
     try std.testing.expect(automatic == .dispatch);
     const automatic_preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &automatic.dispatch,
         collector,
     );
     try std.testing.expect(automatic_preview.has_updates);
     try std.testing.expect(automatic_preview.proceed);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Proceed with all upgrades?") == null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Proceed with all upgrades?") == null);
 }
 
 test "upgrade preview size formatting preserves negative net changes" {
-    const formatted = try formatUpgradeSize(std.testing.allocator, .megabytes, -1048576);
+    const formatted = try fmt.formatSignedSize(std.testing.allocator, .megabytes, -1048576);
     defer std.testing.allocator.free(formatted);
     try std.testing.expectEqualStrings("-1.00 MiB", formatted);
 }
@@ -1175,33 +1103,35 @@ test "upgrade routes every action-first type through the combined handler" {
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        var observed: ?Backend = null;
-        const runner: Runner = .{
-            .data = &observed,
-            .call = struct {
-                fn run(
-                    data: ?*anyopaque,
-                    _: *runtime.RuntimeContext,
-                    operation_context: *Zigalpm.OperationContext,
-                    backend: Backend,
-                    _: *const parser.Invocation,
-                ) !void {
-                    const capture: *?Backend = @ptrCast(@alignCast(data.?));
-                    capture.* = backend;
-                    var operation = operation_context.begin(.{
-                        .backend = backend.operationBackend(),
-                        .kind = .update,
-                        .subject = backend.displayName(),
-                    });
-                    operation.progress(.{ .completed = 1, .total = 1, .percentage = 100 });
-                    operation.finish(.success);
-                }
-            }.run,
-        };
+        const Observed = struct {
+            backend: ?Backend = null,
 
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
-        try std.testing.expectEqual(expected.backend, observed.?);
-        try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
+            fn run(
+                self: *@This(),
+                _: *runtime.RuntimeContext,
+                operation_context: *Zigalpm.OperationContext,
+                backend: Backend,
+                _: *const parser.Invocation,
+            ) !void {
+                self.backend = backend;
+                var operation = operation_context.begin(.{
+                    .backend = backend.operationBackend(),
+                    .kind = .update,
+                    .subject = backend.displayName(),
+                });
+                operation.progress(.{ .completed = 1, .total = 1, .percentage = 100 });
+                operation.finish(.success);
+            }
+        };
+        var observed: Observed = .{};
+
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &observed));
+        try std.testing.expectEqual(expected.backend, observed.backend.?);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            stdout.writer.buffered(),
+            successMessage(&outcome.dispatch),
+        ) != null);
     }
 }
 
@@ -1227,33 +1157,32 @@ test "standard all modifier routes every backend through the combined coordinato
     };
     var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
     defer operation_context.deinit();
-    var calls: std.ArrayList(Backend) = .empty;
-    defer calls.deinit(std.testing.allocator);
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                _: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                const captured: *std.ArrayList(Backend) = @ptrCast(@alignCast(data.?));
-                try captured.append(std.testing.allocator, backend);
-            }
-        }.run,
-    };
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
 
-    try runSelected(runner, &context, &operation_context, &outcome.dispatch);
-    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    try runSelected(&calls, &context, &operation_context, &outcome.dispatch);
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
 }
 
 test "upgrade all honors every exclusion" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -1263,85 +1192,114 @@ test "upgrade all honors every exclusion" {
     });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    var calls: std.ArrayList(Backend) = .empty;
-    defer calls.deinit(std.testing.allocator);
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                _: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                const captured: *std.ArrayList(Backend) = @ptrCast(@alignCast(data.?));
-                try captured.append(std.testing.allocator, backend);
-            }
-        }.run,
-    };
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expectEqualSlices(Backend, &.{.aur}, calls.items);
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &calls));
+    try std.testing.expectEqualSlices(Backend, &.{.aur}, calls.backends.items);
 }
 
 test "upgrade all continues after a failed backend and returns failure" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "upgrade", "all", "--no-confirm" });
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "upgrade", "all", "--no-confirm" });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    var calls: std.ArrayList(Backend) = .empty;
-    defer calls.deinit(std.testing.allocator);
-    const runner: Runner = .{
-        .data = &calls,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                _: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                const captured: *std.ArrayList(Backend) = @ptrCast(@alignCast(data.?));
-                try captured.append(std.testing.allocator, backend);
-                if (backend == .aur) return error.SyntheticAurFailure;
-            }
-        }.run,
-    };
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
 
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, runner));
-    try std.testing.expectEqualSlices(Backend, &all_backends, calls.items);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AUR upgrade step failed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+            if (backend == .aur) return error.SyntheticAurFailure;
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &outcome.dispatch, &calls));
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "AUR upgrade step failed") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        ":: One or more upgrade steps failed.",
+    ) != null);
+}
+
+test "upgrade all treats an unavailable Flatpak backend as a warning" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
+
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+            if (backend == .flatpak)
+                return error.FlatpakBackendUnavailable;
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        try executeWithRunner(&tc.context, &outcome.dispatch, &calls),
+    );
+    try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "Install shelly-flatpak-backend and Flatpak",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        ":: All upgrades complete.",
+    ) != null);
 }
 
 test "upgrade UI mode emits backend percentage frames" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "flatpak",
         "--ui-mode",
@@ -1349,39 +1307,87 @@ test "upgrade UI mode emits backend percentage frames" {
     });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    const runner: Runner = .{
-        .call = struct {
-            fn run(
-                _: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                operation_context: *Zigalpm.OperationContext,
-                backend: Backend,
-                _: *const parser.Invocation,
-            ) !void {
-                var operation = operation_context.begin(.{
-                    .backend = backend.operationBackend(),
-                    .kind = .update,
-                    .subject = "org.example.App",
-                });
-                operation.progress(.{ .stage = "Updating", .percentage = 44 });
-                operation.finish(.success);
-            }
-        }.run,
+    const Progress = struct {
+        fn run(
+            _: @This(),
+            _: *runtime.RuntimeContext,
+            operation_context: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            var operation = operation_context.begin(.{
+                .backend = backend.operationBackend(),
+                .kind = .update,
+                .subject = "org.example.App",
+            });
+            operation.progress(.{ .stage = "Updating", .percentage = 44 });
+            operation.finish(.success);
+        }
     };
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
-    const rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, Progress{}));
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered, "[JSON]"));
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[/JSON]") != null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
+}
+
+test "no-devel modifier reaches the AUR backend selection on aur and all upgrades" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+
+    const Capture = struct {
+        backends: std.ArrayList(Backend) = .empty,
+        flag_missing: bool = false,
+
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            invocation: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+            if (!optionEnabled(invocation, "--no-devel")) self.flag_missing = true;
+        }
+    };
+    var capture: Capture = .{};
+    defer capture.backends.deinit(std.testing.allocator);
+
+    const aur_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "aur", "--no-confirm", "--no-devel" },
+    );
+    try std.testing.expect(aur_outcome == .dispatch);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &aur_outcome.dispatch, &capture));
+    try std.testing.expectEqualSlices(Backend, &.{.aur}, capture.backends.items);
+    try std.testing.expect(!capture.flag_missing);
+
+    const all_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm", "--no-devel" },
+    );
+    try std.testing.expect(all_outcome == .dispatch);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &all_outcome.dispatch, &capture));
+    try std.testing.expectEqualSlices(Backend, &all_backends, capture.backends.items[1..]);
+    try std.testing.expect(!capture.flag_missing);
+
+    const default_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "aur", "--no-confirm" },
+    );
+    try std.testing.expect(default_outcome == .dispatch);
+    try std.testing.expect(!optionEnabled(&default_outcome.dispatch, "--no-devel"));
+
+    const scoped_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "standard", "--no-devel" },
+    );
+    try std.testing.expect(scoped_outcome == .failure);
 }

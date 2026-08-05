@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const ui_operation = @import("../output/ui_operation.zig");
@@ -16,31 +17,22 @@ const UpdateError = error{
     BackendNotImplemented,
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    pub fn run(
+        _: Real,
         context: *runtime.RuntimeContext,
         operation_context: *Zigalpm.OperationContext,
         invocation: *const parser.Invocation,
-    ) anyerror!void,
-};
-
-const RunnerAdapter = struct {
-    runner: Runner,
-    invocation: *const parser.Invocation,
-
-    fn call(
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
     ) !void {
-        const self: *RunnerAdapter = @ptrCast(@alignCast(data.?));
-        try self.runner.call(self.runner.data, context, operation_context, self.invocation);
+        if (std.mem.eql(u8, invocation.command.path, standard_command_path))
+            return runStandard(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, aur_command_path))
+            return runAur(context, operation_context, invocation);
+        if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
+            return runFlatpak(context, operation_context, invocation);
+        return UpdateError.BackendNotImplemented;
     }
 };
-
-const real_runner: Runner = .{ .call = runRealUpdate };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
@@ -75,7 +67,7 @@ pub fn dispatch(
         if (elevated_exit) |exit_code| return exit_code;
     }
 
-    return try executeWithRunner(context, invocation, real_runner);
+    return try executeWithRunner(context, invocation, Real{});
 }
 
 fn confirmStandardUpdate(
@@ -174,8 +166,8 @@ fn argumentsWithNoConfirm(
 fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     const opening = try openingMessage(context.allocator, invocation);
     defer context.allocator.free(opening);
     return if (invocation.globals.ui_mode)
@@ -187,15 +179,17 @@ fn executeWithRunner(
 fn executeStandard(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
-    var adapter: RunnerAdapter = .{ .runner = runner, .invocation = invocation };
+) anyerror!u8 {
     const succeeded = try standard_single_pane.output(
         context,
         opening,
         invocation.globals.no_confirm,
-        .{ .data = &adapter, .call = RunnerAdapter.call },
+        runner,
+        invocation,
+        null,
+        null,
     );
     return if (succeeded) 0 else 1;
 }
@@ -203,56 +197,15 @@ fn executeStandard(
 fn executeUi(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
+    runner: anytype,
     opening: []const u8,
-) !u8 {
-    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
-    context.attachTransactionLog(&operation_context);
-    defer operation_context.deinit();
-    var question_responder: ui_operation.QuestionResponder = .{
-        .context = context,
-        .operation_context = &operation_context,
-        .no_confirm = invocation.globals.no_confirm,
-    };
-    question_responder.attach();
-    defer question_responder.detach();
-    var reporter: ui_operation.Reporter = .{ .context = context };
-    const event_subscription = try operation_context.subscribe(.{
-        .function = ui_operation.Reporter.handle,
-        .data = &reporter,
-    });
-    defer _ = operation_context.unsubscribe(event_subscription);
-
-    try output.writeAlpmInfoFrame(context, "TransactionStart", opening);
-    try ui_operation.flush(context);
-
-    runner.call(runner.data, context, &operation_context, invocation) catch |err| {
-        const message = try std.fmt.allocPrint(context.allocator, "Update failed: {t}", .{err});
-        defer context.allocator.free(message);
-        try output.writeErrorFrame(context, message);
-        try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-        try ui_operation.flush(context);
-        return 1;
-    };
-
-    try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
-    try ui_operation.flush(context);
-    return if (reporter.failed()) 1 else 0;
-}
-
-fn runRealUpdate(
-    _: ?*anyopaque,
-    context: *runtime.RuntimeContext,
-    operation_context: *Zigalpm.OperationContext,
-    invocation: *const parser.Invocation,
-) !void {
-    if (std.mem.eql(u8, invocation.command.path, standard_command_path))
-        return runStandard(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, aur_command_path))
-        return runAur(context, operation_context, invocation);
-    if (std.mem.eql(u8, invocation.command.path, flatpak_command_path))
-        return runFlatpak(context, operation_context, invocation);
-    return UpdateError.BackendNotImplemented;
+) anyerror!u8 {
+    return ui_operation.runTransaction(context, invocation, .{
+        .opening = opening,
+        .success_message = successMessage(invocation),
+        .failure_message = failureMessage(invocation),
+        .failure_label = "Update failed",
+    }, runner);
 }
 
 fn runStandard(
@@ -260,13 +213,7 @@ fn runStandard(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    const manager = try Zigalpm.AlpmManager.init(
-        context.allocator,
-        context.environ,
-        null,
-        true,
-        null,
-    );
+    const manager = try Zigalpm.AlpmManager.init(context.allocator, context.environ, .{ .use_root = true, .operation_context = operation_context });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
@@ -284,6 +231,7 @@ fn runAur(
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
         .root = true,
         .no_check = !optionEnabled(invocation, "--check"),
+        .operation_context = operation_context,
     });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
@@ -438,30 +386,20 @@ test "routes update long forms and canonical shortcodes" {
 
 test "routes every update backend through shared output lifecycles" {
     const spec = @import("../cli/spec.zig");
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const Capture = struct {
         calls: usize = 0,
         paths: [3][]const u8 = undefined,
 
-        fn run(
-            data: ?*anyopaque,
+        pub fn run(
+            self: *@This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             invocation: *const parser.Invocation,
         ) !void {
-            const self: *@This() = @ptrCast(@alignCast(data.?));
             self.paths[self.calls] = invocation.command.path;
             self.calls += 1;
             if (std.mem.eql(u8, invocation.command.path, aur_command_path))
@@ -469,80 +407,61 @@ test "routes every update backend through shared output lifecycles" {
         }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{ .data = &capture, .call = Capture.run };
 
     for ([_][]const []const u8{
         &.{ "update", "standard", "--no-confirm", "linux", "mesa" },
         &.{ "update", "aur", "--check", "demo-git" },
         &.{ "update", "flatpak", "--ui-mode", "org.example.App" },
     }) |arguments| {
-        const outcome = try parser.parse(arena.allocator(), &manifest, arguments);
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, runner));
+        const outcome = try parser.parse(tc.arena.allocator(), &manifest, arguments);
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     }
     try std.testing.expectEqual(@as(usize, 3), capture.calls);
     try std.testing.expectEqualStrings(standard_command_path, capture.paths[0]);
     try std.testing.expectEqualStrings(aur_command_path, capture.paths[1]);
     try std.testing.expectEqualStrings(flatpak_command_path, capture.paths[2]);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "linux, mesa") != null);
-    try std.testing.expect(std.mem.count(u8, stdout.writer.buffered(), "[JSON]") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "linux, mesa") != null);
+    try std.testing.expect(std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]") >= 2);
 }
 
 test "standard update confirmation is explicit default deny" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
     var stdin = std.Io.Reader.fixed("maybe\nyes\n");
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &stdin;
 
-    try std.testing.expect(try confirmStandardUpdate(&context, &.{ "linux", "mesa" }));
-    const accepted_output = stdout.writer.buffered();
+    try std.testing.expect(try confirmStandardUpdate(&tc.context, &.{ "linux", "mesa" }));
+    const accepted_output = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, accepted_output, "Packages to update: linux, mesa") != null);
     try std.testing.expect(std.mem.indexOf(u8, accepted_output, "partial upgrade") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, accepted_output, "(y/N)"));
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     var decline_stdin = std.Io.Reader.fixed("\n");
-    context.stdin = &decline_stdin;
-    try std.testing.expect(!try confirmStandardUpdate(&context, &.{"linux"}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Operation cancelled.") != null);
+    tc.context.stdin = &decline_stdin;
+    try std.testing.expect(!try confirmStandardUpdate(&tc.context, &.{"linux"}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Operation cancelled.") != null);
 }
 
 test "standard UI confirmation uses C sharp compatible yes-no frames" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
     const response_json = "{\"$kind\":\"a.yesno\",\"QuestionId\":\"1\",\"Accept\":true}";
     const encoded_size = std.base64.standard.Encoder.calcSize(response_json.len);
-    const encoded = try arena.allocator().alloc(u8, encoded_size);
+    const encoded = try tc.arena.allocator().alloc(u8, encoded_size);
     const encoded_response = std.base64.standard.Encoder.encode(encoded, response_json);
     const response_frame = try std.fmt.allocPrint(
-        arena.allocator(),
+        tc.arena.allocator(),
         "[JSON]{s}[/JSON]\n",
         .{encoded_response},
     );
     var stdin = std.Io.Reader.fixed(response_frame);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &stdin;
 
-    try std.testing.expect(try confirmStandardUpdateUi(&context, &.{"linux"}));
-    const rendered = stdout.writer.buffered();
+    try std.testing.expect(try confirmStandardUpdateUi(&tc.context, &.{"linux"}));
+    const rendered = tc.stdout.writer.buffered();
     var frame_iterator = std.mem.splitSequence(u8, rendered, "[JSON]");
     _ = frame_iterator.next();
     var found_confirmation = false;
@@ -550,7 +469,7 @@ test "standard UI confirmation uses C sharp compatible yes-no frames" {
         const encoded_end = std.mem.indexOf(u8, framed, "[/JSON]") orelse continue;
         const payload = framed[0..encoded_end];
         const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(payload);
-        const decoded = try arena.allocator().alloc(u8, decoded_size);
+        const decoded = try tc.arena.allocator().alloc(u8, decoded_size);
         try std.base64.standard.Decoder.decode(decoded, payload);
         if (std.mem.indexOf(u8, decoded, "\"$kind\":\"q.yesno\"") == null) continue;
         found_confirmation = true;
@@ -562,51 +481,33 @@ test "standard UI confirmation uses C sharp compatible yes-no frames" {
 
 test "update validation rejects empty standard and AUR target lists" {
     const spec = @import("../cli/spec.zig");
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
     for ([_][]const []const u8{
         &.{ "update", "standard", "--ui-mode" },
         &.{ "update", "aur", "--ui-mode" },
     }) |arguments| {
-        const outcome = try parser.parse(arena.allocator(), &manifest, arguments);
-        try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+        const outcome = try parser.parse(tc.arena.allocator(), &manifest, arguments);
+        try std.testing.expectEqual(@as(?u8, 1), try dispatch(&tc.context, &outcome.dispatch));
     }
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 }
 
 test "update backend failures return a nonzero status" {
     const spec = @import("../cli/spec.zig");
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "update", "flatpak", "org.example.App",
     });
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Failure = struct {
-        fn run(
-            _: ?*anyopaque,
+        pub fn run(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: *Zigalpm.OperationContext,
             _: *const parser.Invocation,
@@ -617,7 +518,7 @@ test "update backend failures return a nonzero status" {
 
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, .{ .call = Failure.run }),
+        try executeWithRunner(&tc.context, &outcome.dispatch, Failure{}),
     );
 }
 

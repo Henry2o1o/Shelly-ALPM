@@ -8,7 +8,7 @@ project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$project_dir"
 
 source_dir="src"
-po_dir="no_po_git"
+po_dir="po"
 pot_file="$po_dir/shelly-ui.pot"
 
 for tool in find xgettext msgcat msguniq; do

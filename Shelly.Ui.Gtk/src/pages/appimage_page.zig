@@ -9,6 +9,7 @@ const support = @import("support.zig");
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
+const runtime = @import("../services/runtime.zig");
 const AppImage = @import("../models/appimage.zig").AppImage;
 const AppImageUpdate = @import("../models/appimage.zig").AppImageUpdate;
 const UpdateType = @import("../models/appimage.zig").UpdateType;
@@ -18,6 +19,49 @@ const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const appimage_icon = @import("../helpers/appimage_icon.zig");
 const c_string = @import("../helpers/c_string.zig");
 const translations = @import("../helpers/translations.zig");
+
+fn uriComponentText(component: std.Uri.Component) []const u8 {
+    return switch (component) {
+        .raw => |value| value,
+        .percent_encoded => |value| value,
+    };
+}
+
+fn isValidHttpUrl(value: []const u8) bool {
+    const uri = std.Uri.parse(value) catch return false;
+    return (std.ascii.eqlIgnoreCase(uri.scheme, "http") or
+        std.ascii.eqlIgnoreCase(uri.scheme, "https")) and uri.host != null;
+}
+
+fn isValidForgejoRepositoryUrl(value: []const u8) bool {
+    const uri = std.Uri.parse(value) catch return false;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "http") and
+        !std.ascii.eqlIgnoreCase(uri.scheme, "https"))
+    {
+        return false;
+    }
+    if (uri.host == null or uri.user != null or uri.password != null or
+        uri.query != null or uri.fragment != null)
+    {
+        return false;
+    }
+
+    const host = uriComponentText(uri.host.?);
+    var path = uriComponentText(uri.path);
+    if (host.len == 0 or path.len == 0 or path[0] != '/') return false;
+    if (path.len > 1 and path[path.len - 1] == '/') path = path[0 .. path.len - 1];
+    if (std.mem.count(u8, path, "/") == 3 and std.mem.endsWith(u8, path, "/releases"))
+        path = path[0 .. path.len - "/releases".len];
+    if (std.mem.count(u8, path, "/") != 2) return false;
+
+    const owner_and_repo = path[1..];
+    const separator = std.mem.indexOfScalar(u8, owner_and_repo, '/') orelse return false;
+    const owner = owner_and_repo[0..separator];
+    const repo = owner_and_repo[separator + 1 ..];
+    return owner.len > 0 and repo.len > 0 and
+        !std.mem.eql(u8, owner, ".") and !std.mem.eql(u8, owner, "..") and
+        !std.mem.eql(u8, repo, ".") and !std.mem.eql(u8, repo, "..");
+}
 
 pub const AppImagePage = extern struct {
     parent_instance: Parent,
@@ -126,8 +170,18 @@ pub const AppImagePage = extern struct {
         _ = gtk.DropTarget.signals.leave.connect(drop_target, *Self, &on_drag_leave, self, .{});
         gtk.Widget.addController(p.scrolled_list.as(gtk.Widget), drop_target.as(gtk.EventController));
 
+        const group = gio.SimpleActionGroup.new();
+        const action = gio.SimpleAction.new("focus", null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, &onFocusSearch, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "search", group.as(gio.ActionGroup));
+
         support.connectLifecycle(Self, self);
         _ = gtk.ListBox.signals.row_activated.connect(p.app_list, *Self, &onRowActivated, self, .{});
+    }
+
+    fn onFocusSearch(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = gtk.Widget.grabFocus(self.priv().search_entry.as(gtk.Widget));
     }
 
     pub fn onMap(self: *Self) void {
@@ -403,11 +457,18 @@ pub const AppImagePage = extern struct {
 
         gtk.DropDown.setSelected(p.update_type_drop, @intFromEnum(app.UpdateType));
 
-        if (app.RepoOwner != null and app.RepoName != null) {
-            const text = std.fmt.bufPrintSentinel(&buf, "{s}/{s}", .{ app.RepoOwner.?, app.RepoName.? }, 0) catch "";
-            gtk.Editable.setText(p.update_url_entry.as(gtk.Editable), text);
-        } else {
-            gtk.Editable.setText(p.update_url_entry.as(gtk.Editable), c_string.cstr(&buf, app.UpdateURl));
+        switch (app.UpdateType) {
+            .GitHub, .GitLab, .Codeberg => {
+                const text = if (app.RepoOwner != null and app.RepoName != null)
+                    std.fmt.bufPrintSentinel(&buf, "{s}/{s}", .{ app.RepoOwner.?, app.RepoName.? }, 0) catch ""
+                else
+                    "";
+                gtk.Editable.setText(p.update_url_entry.as(gtk.Editable), text);
+            },
+            .StaticUrl, .Forgejo => {
+                gtk.Editable.setText(p.update_url_entry.as(gtk.Editable), c_string.cstr(&buf, app.UpdateURl));
+            },
+            .None => gtk.Editable.setText(p.update_url_entry.as(gtk.Editable), ""),
         }
 
         gtk.Widget.setVisible(p.update_url_error.as(gtk.Widget), 0);
@@ -450,9 +511,14 @@ pub const AppImagePage = extern struct {
                     error_text = translations._("Invalid format. Use owner/repo (e.g. seafoam-labs/shelly-alpm)");
                 }
             },
-            .Forgejo, .StaticUrl => {
-                if (!std.ascii.startsWithIgnoreCase(trimmed, "http")) {
+            .StaticUrl => {
+                if (!isValidHttpUrl(trimmed)) {
                     error_text = translations._("Invalid URL. Must start with http:// or https://");
+                }
+            },
+            .Forgejo => {
+                if (!isValidForgejoRepositoryUrl(trimmed)) {
+                    error_text = translations._("Invalid Forgejo URL. Use http(s)://host/owner/repo or http(s)://host/owner/repo/releases");
                 }
             },
         }
@@ -511,7 +577,14 @@ pub const AppImagePage = extern struct {
             return;
         }
 
-        const argv = ShellyCommands.install_appimage(std.heap.c_allocator, path) catch return;
+        var install_path: []const u8 = "";
+        if (runtime.config) |cfg_service| {
+            if (cfg_service.get()) |cfg| {
+                install_path = cfg.AppImageInstallPath;
+            } else |_| {}
+        }
+
+        const argv = ShellyCommands.install_appimage(std.heap.c_allocator, path, install_path) catch return;
         defer std.heap.c_allocator.free(argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -619,7 +692,11 @@ pub const AppImagePage = extern struct {
 
         if (!validateUpdateConfig(self)) return;
 
-        const text = std.mem.span(gtk.Editable.getText(p.update_url_entry.as(gtk.Editable)));
+        const text = std.mem.trim(
+            u8,
+            std.mem.span(gtk.Editable.getText(p.update_url_entry.as(gtk.Editable))),
+            &std.ascii.whitespace,
+        );
         const selected = gtk.DropDown.getSelected(p.update_type_drop);
         const update_type: UpdateType = if (selected <= @intFromEnum(UpdateType.Forgejo))
             @enumFromInt(@as(u8, @intCast(selected)))
@@ -673,7 +750,14 @@ pub const AppImagePage = extern struct {
         const index = p.selected_index orelse return;
         const app = p.apps[index];
 
-        const argv = ShellyCommands.remove_appimage(std.heap.c_allocator, app.Name, false) catch return;
+        var remove_config = false;
+        if (runtime.config) |cfg_service| {
+            if (cfg_service.get()) |cfg| {
+                remove_config = cfg.PackageManagementRemoveConfigs;
+            } else |_| {}
+        }
+
+        const argv = ShellyCommands.remove_appimage(std.heap.c_allocator, app.Name, remove_config) catch return;
         defer std.heap.c_allocator.free(argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -768,4 +852,31 @@ test "AppImagePage.contains_ignore_case matches substrings case-insensitively" {
     try std.testing.expect(AppImagePage.contains_ignore_case("OBS Studio", "studio"));
     try std.testing.expect(!AppImagePage.contains_ignore_case("Krita", "obs"));
     try std.testing.expect(!AppImagePage.contains_ignore_case("Krita", "krita-longer"));
+}
+
+test "Forgejo update validation accepts repository and release-page URLs" {
+    try std.testing.expect(isValidForgejoRepositoryUrl(
+        "https://git.eden-emu.dev/eden-ci/nightly",
+    ));
+    try std.testing.expect(isValidForgejoRepositoryUrl(
+        "https://git.eden-emu.dev/eden-ci/nightly/",
+    ));
+    try std.testing.expect(isValidForgejoRepositoryUrl(
+        "https://git.eden-emu.dev/eden-ci/nightly/releases",
+    ));
+    try std.testing.expect(isValidForgejoRepositoryUrl(
+        "https://git.eden-emu.dev/eden-ci/nightly/releases/",
+    ));
+}
+
+test "Forgejo update validation rejects unrelated and incomplete paths" {
+    try std.testing.expect(!isValidForgejoRepositoryUrl(
+        "https://git.eden-emu.dev/eden-ci/nightly/actions",
+    ));
+    try std.testing.expect(!isValidForgejoRepositoryUrl(
+        "https://git.eden-emu.dev/eden-ci",
+    ));
+    try std.testing.expect(!isValidForgejoRepositoryUrl(
+        "git.eden-emu.dev/eden-ci/nightly",
+    ));
 }

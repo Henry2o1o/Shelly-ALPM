@@ -12,9 +12,11 @@ const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const PendingQuestion = @import("../services/shelly_operation.zig").PendingQuestion;
 const TransactionQuestion = @import("../services/shelly_operation.zig").TransactionQuestion;
 const TransactionPackage = @import("../services/shelly_operation.zig").TransactionPackage;
+const runtime = @import("../services/runtime.zig");
 const MultiSelectDialog = @import("../dialog/page/multiselect.zig").MultiSelectDialog;
 const PkgbuildReviewDialog = @import("../dialog/page/pkg_build.zig").PkgbuildReviewDialog;
 const PlanDialog = @import("../dialog/page/plan.zig").PlanDialog;
+const ProviderDialog = @import("../dialog/page/provider.zig").ProviderDialog;
 const translations = @import("../helpers/translations.zig");
 
 pub const TransactionRequest = struct {
@@ -32,6 +34,12 @@ const PackageRow = struct {
     status_label: *gtk.Label,
     progress: *gtk.ProgressBar,
     stage: ?[]const u8 = null,
+    pulse_source: c_uint = 0,
+};
+
+const ProgressLine = struct {
+    start: *gtk.TextMark,
+    end: *gtk.TextMark,
 };
 
 pub const TransactionPage = extern struct {
@@ -57,9 +65,11 @@ pub const TransactionPage = extern struct {
         on_complete: ?*const fn (ctx: *anyopaque, success: bool) void,
         on_complete_ctx: ?*anyopaque,
         operation: ?*ShellyOperation,
+        progress_lines: std.StringHashMapUnmanaged(ProgressLine),
         finished: bool,
         cancelled: bool,
         terminal_visible: bool,
+        scratch: [1024]u8 = undefined,
         var offset: c_int = 0;
     };
 
@@ -92,6 +102,7 @@ pub const TransactionPage = extern struct {
         p.operation = null;
         p.cancelled = false;
         p.terminal_visible = true;
+        p.progress_lines = .empty;
     }
 
     pub fn new() *Self {
@@ -99,8 +110,6 @@ pub const TransactionPage = extern struct {
     }
 
     pub fn run(self: *Self, request: TransactionRequest) void {
-        std.debug.print("request: {s}\n", .{request.title});
-
         const p = self.priv();
         self.reset();
 
@@ -118,9 +127,14 @@ pub const TransactionPage = extern struct {
             p.rows.put(alloc, owned, row) catch {};
         }
 
-        const argv = alloc.alloc([]const u8, request.argv.len) catch return;
+        const add_no_confirm = shouldAddNoConfirm(request.argv);
+        const argv_len = request.argv.len + @as(usize, if (add_no_confirm) 1 else 0);
+        const argv = alloc.alloc([]const u8, argv_len) catch return;
         for (request.argv, 0..) |a, i| {
             argv[i] = alloc.dupe(u8, a) catch return;
+        }
+        if (add_no_confirm) {
+            argv[request.argv.len] = alloc.dupe(u8, "--no-confirm") catch return;
         }
 
         const op = std.heap.c_allocator.create(ShellyOperation) catch return;
@@ -144,7 +158,24 @@ pub const TransactionPage = extern struct {
             op.threaded.deinit();
             std.heap.c_allocator.destroy(op);
             p.operation = null;
+            p.finished = true;
+            gtk.Widget.setVisible(p.close_button.as(gtk.Widget), 1);
+            if (p.on_complete) |cb| {
+                if (p.on_complete_ctx) |ctx| cb(ctx, false);
+            }
         };
+    }
+
+    fn shouldAddNoConfirm(argv: []const []const u8) bool {
+        for (argv) |arg| {
+            if (std.mem.eql(u8, arg, "--no-confirm") or std.mem.eql(u8, arg, "-n")) {
+                return false;
+            }
+        }
+
+        const svc = runtime.config orelse return false;
+        const cfg = svc.get() catch return false;
+        return cfg.NoConfirm;
     }
 
     fn rowStageChanged(self: *Self, row: *PackageRow, stage: []const u8) bool {
@@ -158,13 +189,18 @@ pub const TransactionPage = extern struct {
     fn reset(self: *Self) void {
         const p = self.priv();
         p.cancelled = false;
+        var rows = p.rows.valueIterator();
+        while (rows.next()) |row| stopRowPulse(row.*);
         while (gtk.Widget.getFirstChild(p.rows_box.as(gtk.Widget))) |c| {
             gtk.Box.remove(p.rows_box, c);
         }
         p.rows.clearRetainingCapacity();
         p.terminal_lines = .empty;
+
         const buffer = gtk.TextView.getBuffer(p.terminal_view);
         gtk.TextBuffer.setText(buffer, "", 0);
+        p.progress_lines = .empty;
+
         if (p.arena) |a| {
             a.deinit();
             std.heap.c_allocator.destroy(a);
@@ -213,14 +249,12 @@ pub const TransactionPage = extern struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         self.handle_event(event);
     }
-
     fn on_op_done(ctx: *anyopaque, exit_code: u8) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
         self.handle_done(exit_code);
     }
 
     fn handle_event(self: *Self, event: Event) void {
-        //  std.debug.print("EVENT: {any}\n", .{event});
         switch (event) {
             .info => |i| {
                 append_terminal(self, i.message);
@@ -263,11 +297,31 @@ pub const TransactionPage = extern struct {
                 if (ensure_row_named(self, pr.package_name, display_name)) |row| {
                     const stage = nonEmpty(pr.stage) orelse pr.progress_type;
                     if (rowStageChanged(self, row, stage)) {
+                        stopRowPulse(row);
                         gtk.ProgressBar.setFraction(row.progress, 0.0);
                     }
+                    if (isAurPackageFailed(pr.stage)) {
+                        var key_buf: [256]u8 = undefined;
+                        finalizeProgressKey(self, progressKey(&key_buf, pr));
+                        mark_row_failed(row);
+                        return;
+                    }
+                    if (isAurPackageCompleted(pr.stage)) {
+                        var key_buf: [256]u8 = undefined;
+                        finalizeProgressKey(self, progressKey(&key_buf, pr));
+                        mark_row_done(row);
+                        return;
+                    }
+                    if (isAurBuildStart(pr.progress_type, pr.stage)) {
+                        setLabel(row.status_label, translations._("Building"));
+                        startRowPulse(row);
+                        return;
+                    }
 
+                    stopRowPulse(row);
                     gtk.ProgressBar.setFraction(row.progress, progressFraction(
                         pr.progress_type,
+                        pr.stage,
                         pr.percent,
                         pr.current_download,
                         pr.total_download,
@@ -283,6 +337,10 @@ pub const TransactionPage = extern struct {
             },
             .unknown => {},
         }
+    }
+
+    fn progressKey(buf: []u8, pr: anytype) []const u8 {
+        return std.fmt.bufPrint(buf, "{s}:{s}", .{ pr.progress_type, pr.package_name }) catch pr.package_name;
     }
 
     fn is_transaction_phase(progress_type: []const u8) bool {
@@ -336,11 +394,15 @@ pub const TransactionPage = extern struct {
 
     fn progressFraction(
         progress_type: []const u8,
+        stage: ?[]const u8,
         percent: i64,
         current: i64,
         total: i64,
     ) f64 {
-        if (isDownloadProgress(progress_type) and total > 0) {
+        if (isDownloadProgress(progress_type) and
+            !isAurLifecycleStage(stage) and
+            total > 0)
+        {
             const safe_current = @max(current, 0);
             const fraction = @as(f64, @floatFromInt(safe_current)) /
                 @as(f64, @floatFromInt(total));
@@ -369,13 +431,52 @@ pub const TransactionPage = extern struct {
         return self.priv().rows.get(name);
     }
 
+    fn isAurLifecycleStage(stage: ?[]const u8) bool {
+        const value = stage orelse return false;
+        return std.mem.startsWith(u8, value, "aur_");
+    }
+
+    fn isAurBuildStart(progress_type: []const u8, stage: ?[]const u8) bool {
+        return std.mem.eql(u8, progress_type, "MakepkgBuild") and
+            if (stage) |value| std.mem.eql(u8, value, "aur_build_start") else false;
+    }
+
+    fn isAurPackageFailed(stage: ?[]const u8) bool {
+        return if (stage) |value| std.mem.eql(u8, value, "aur_package_failed") else false;
+    }
+
+    fn isAurPackageCompleted(stage: ?[]const u8) bool {
+        return if (stage) |value| std.mem.eql(u8, value, "aur_package_completed") else false;
+    }
+
+    fn startRowPulse(row: *PackageRow) void {
+        if (row.pulse_source != 0) return;
+        gtk.ProgressBar.pulse(row.progress);
+        row.pulse_source = glib.timeoutAdd(100, &onRowPulse, row);
+    }
+
+    fn stopRowPulse(row: *PackageRow) void {
+        if (row.pulse_source == 0) return;
+        _ = glib.Source.remove(row.pulse_source);
+        row.pulse_source = 0;
+    }
+
+    fn onRowPulse(data: ?*anyopaque) callconv(.c) c_int {
+        const row: *PackageRow = @ptrCast(@alignCast(data.?));
+        if (row.pulse_source == 0) return 0;
+        gtk.ProgressBar.pulse(row.progress);
+        return 1;
+    }
+
     fn mark_row_done(row: *PackageRow) void {
+        stopRowPulse(row);
         gtk.Label.setLabel(row.status_label, translations._("Done"));
         gtk.ProgressBar.setFraction(row.progress, 1.0);
         gtk.Widget.addCssClass(row.status_label.as(gtk.Widget), "status-done");
     }
 
     fn mark_row_failed(row: *PackageRow) void {
+        stopRowPulse(row);
         gtk.Label.setLabel(row.status_label, translations._("Failed"));
         gtk.ProgressBar.setFraction(row.progress, 1.0);
         gtk.Widget.addCssClass(row.status_label.as(gtk.Widget), "status-failed");
@@ -386,6 +487,8 @@ pub const TransactionPage = extern struct {
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "{s} ({s} {d})", .{ translations._("Finished"), translations._("exit"), exit_code }) catch translations._("Finished");
         append_terminal(self, msg);
+
+        setLabel(p.title_label, "Done");
 
         gtk.Widget.setVisible(p.close_button.as(gtk.Widget), 1);
         p.finished = true;
@@ -402,8 +505,10 @@ pub const TransactionPage = extern struct {
             }
         } else {
             var it = p.rows.valueIterator();
-            while (it.next()) |row_ptr|
+            while (it.next()) |row_ptr| {
+                stopRowPulse(row_ptr.*);
                 gtk.Label.setLabel(row_ptr.*.status_label, translations._("Cancelled"));
+            }
         }
 
         if (p.on_complete) |cb| {
@@ -425,7 +530,9 @@ pub const TransactionPage = extern struct {
         const line = formatAlpmProgress(std.heap.c_allocator, pr) catch return;
         defer std.heap.c_allocator.free(line);
 
-        append_terminal(self, line);
+        var key_buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ pr.progress_type, pr.package_name }) catch line;
+        updateProgressLine(self, key, line);
     }
 
     fn formatAlpmProgress(allocator: std.mem.Allocator, pr: anytype) ![]u8 {
@@ -452,7 +559,7 @@ pub const TransactionPage = extern struct {
         const message = nonEmpty(status) orelse translations._("Working");
         if (formatSimpleProgress(std.heap.c_allocator, backend, status, percentage)) |line| {
             defer std.heap.c_allocator.free(line);
-            append_terminal(self, line);
+            updateProgressLine(self, backend, line);
         } else |_| {}
 
         if (ensure_row_named(self, backend, backend)) |row| {
@@ -496,9 +603,68 @@ pub const TransactionPage = extern struct {
         gtk.TextBuffer.insert(buffer, &end, normalized_z, @intCast(normalized.len));
         gtk.TextBuffer.insert(buffer, &end, "\n", 1);
 
+        self.scrollTerminalToBottom();
+    }
+
+    fn scratchZ(self: *Self, s: []const u8) [:0]const u8 {
+        const p = self.priv();
+        const n = @min(s.len, p.scratch.len - 1);
+        @memcpy(p.scratch[0..n], s[0..n]);
+        p.scratch[n] = 0;
+        return p.scratch[0..n :0];
+    }
+
+    fn updateProgressLine(self: *Self, key: []const u8, text: []const u8) void {
+        const p = self.priv();
+        const normalized = normalizeTerminalText(text);
+        const buffer = gtk.TextView.getBuffer(p.terminal_view);
+
+        const text_z = self.scratchZ(normalized);
+
+        if (p.progress_lines.get(key)) |line| {
+            var start: gtk.TextIter = undefined;
+            gtk.TextBuffer.getIterAtMark(buffer, &start, line.start);
+
+            var end = start;
+            if (gtk.TextIter.getCharsInLine(&end) > 0) {
+                _ = gtk.TextIter.forwardToLineEnd(&end);
+            }
+            gtk.TextBuffer.delete(buffer, &start, &end);
+            gtk.TextBuffer.getIterAtMark(buffer, &start, line.start);
+            gtk.TextBuffer.insert(buffer, &start, text_z, @intCast(normalized.len));
+        } else {
+            const arena = p.arena orelse return;
+            var end: gtk.TextIter = undefined;
+            gtk.TextBuffer.getEndIter(buffer, &end);
+            const start_mark = gtk.TextBuffer.createMark(buffer, null, &end, 1);
+            gtk.TextBuffer.insert(buffer, &end, text_z, @intCast(normalized.len));
+            const end_mark = gtk.TextBuffer.createMark(buffer, null, &end, 0);
+            gtk.TextBuffer.insert(buffer, &end, "\n", 1);
+
+            const owned_key = arena.allocator().dupe(u8, key) catch return;
+            p.progress_lines.put(arena.allocator(), owned_key, .{ .start = start_mark, .end = end_mark }) catch return;
+        }
+
+        self.scrollTerminalToBottom();
+    }
+
+    fn finalizeProgressKey(self: *Self, key: []const u8) void {
+        const p = self.priv();
+        if (p.progress_lines.fetchRemove(key)) |kv| {
+            const buffer = gtk.TextView.getBuffer(p.terminal_view);
+            gtk.TextBuffer.deleteMark(buffer, kv.value.start);
+            gtk.TextBuffer.deleteMark(buffer, kv.value.end);
+        }
+    }
+
+    fn scrollTerminalToBottom(self: *Self) void {
+        const p = self.priv();
+        const buffer = gtk.TextView.getBuffer(p.terminal_view);
+        var end: gtk.TextIter = undefined;
         gtk.TextBuffer.getEndIter(buffer, &end);
         const mark = gtk.TextBuffer.createMark(buffer, null, &end, 0);
         gtk.TextView.scrollToMark(p.terminal_view, mark, 0, 1, 0, 1);
+        gtk.TextBuffer.deleteMark(buffer, mark);
     }
 
     fn rememberTerminalLine(
@@ -595,7 +761,20 @@ pub const TransactionPage = extern struct {
                 gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
             },
             .select_one => |q| {
-                _ = q;
+                std.debug.print("select_one: {s}\n", .{q.prompt});
+                pending.on_dismiss = &dismiss_question;
+                pending.dismiss_ctx = self;
+
+                const dialog = ProviderDialog.new(
+                    pending.arena.allocator(),
+                    "Select Provider",
+                    q.options,
+                    &on_single_select_response,
+                    pending,
+                );
+
+                gtk.Box.append(p.question_layer, dialog.as(gtk.Widget));
+                gtk.Widget.setVisible(p.question_layer.as(gtk.Widget), 1);
             },
             .pkgbuild => |q| {
                 var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -623,11 +802,23 @@ pub const TransactionPage = extern struct {
                 pending.on_dismiss = &dismiss_question;
                 pending.dismiss_ctx = self;
 
+                const sources = a.alloc(
+                    PkgbuildReviewDialog.SourceFile,
+                    q.source_files.len,
+                ) catch return;
+
+                for (q.source_files, sources) |source, *target| {
+                    target.* = .{
+                        .name = a.dupeZ(u8, source.name) catch return,
+                        .content = a.dupeZ(u8, source.content) catch return,
+                    };
+                }
+
                 const dialog = PkgbuildReviewDialog.new(
                     name,
                     lines,
                     warns,
-                    &.{},
+                    sources,
                     &on_pkgbuild_response,
                     pending,
                 );
@@ -674,6 +865,27 @@ pub const TransactionPage = extern struct {
             };
         } else {
             pending.operation.answerOptDeps(pending.questionId(), &.{}) catch {
+                pending.operation.cancel();
+            };
+        }
+
+        if (pending.on_dismiss) |cb| {
+            if (pending.dismiss_ctx) |c| cb(c);
+        }
+        pending.destroy();
+    }
+
+    fn on_single_select_response(ctx: ?*anyopaque, confirmed: bool, selected: usize) void {
+        const pending: *PendingQuestion = @ptrCast(@alignCast(ctx.?));
+        if (pending.completed) return;
+        pending.completed = true;
+
+        if (confirmed) {
+            pending.operation.answerProvider(pending.questionId(), selected) catch {
+                pending.operation.cancel();
+            };
+        } else {
+            pending.operation.answerProvider(pending.questionId(), 0) catch {
                 pending.operation.cancel();
             };
         }
@@ -764,6 +976,8 @@ pub const TransactionPage = extern struct {
 
     fn finalize(self: *Self) callconv(.c) void {
         const p = self.priv();
+        var rows = p.rows.valueIterator();
+        while (rows.next()) |row| stopRowPulse(row.*);
         if (p.operation) |op| {
             op.cancel();
             if (op.reader) |t| t.join();
@@ -791,19 +1005,23 @@ test "transaction progress helpers preserve determinate percentages" {
 
     try std.testing.expectEqual(
         @as(f64, 0.5),
-        TransactionPage.progressFraction("PackageDownload", 10, 50, 100),
+        TransactionPage.progressFraction("PackageDownload", null, 10, 50, 100),
     );
     try std.testing.expectEqual(
         @as(f64, 1.0),
-        TransactionPage.progressFraction("DatabaseDownload", 10, 150, 100),
+        TransactionPage.progressFraction("DatabaseDownload", null, 10, 150, 100),
     );
     try std.testing.expectEqual(
         @as(f64, 0.0),
-        TransactionPage.progressFraction("AurDownload", 10, -1, 100),
+        TransactionPage.progressFraction("AurDownload", null, 10, -1, 100),
     );
     try std.testing.expectEqual(
         @as(f64, 0.37),
-        TransactionPage.progressFraction("AddStart", 37, 0, 0),
+        TransactionPage.progressFraction("AddStart", null, 37, 0, 0),
+    );
+    try std.testing.expectEqual(
+        @as(f64, 0.0),
+        TransactionPage.progressFraction("AurDownload", "aur_download_start", 0, 1, 1),
     );
 }
 
@@ -816,6 +1034,15 @@ test "transaction rows detect progress stage changes" {
     try std.testing.expect(TransactionPage.stageChanged(null, "download"));
     try std.testing.expect(!TransactionPage.stageChanged("download", "download"));
     try std.testing.expect(TransactionPage.stageChanged("download", "transaction"));
+}
+
+test "AUR build lifecycle selects indeterminate and terminal row states" {
+    try std.testing.expect(TransactionPage.isAurLifecycleStage("aur_build_start"));
+    try std.testing.expect(!TransactionPage.isAurLifecycleStage("makepkg_build"));
+    try std.testing.expect(TransactionPage.isAurBuildStart("MakepkgBuild", "aur_build_start"));
+    try std.testing.expect(!TransactionPage.isAurBuildStart("MakepkgBuild", "makepkg_build"));
+    try std.testing.expect(TransactionPage.isAurPackageFailed("aur_package_failed"));
+    try std.testing.expect(TransactionPage.isAurPackageCompleted("aur_package_completed"));
 }
 
 test "progress console lines include backend stage and percentage" {

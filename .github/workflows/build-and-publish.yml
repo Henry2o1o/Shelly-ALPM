@@ -1,5 +1,4 @@
 name: Build and Test
-
 on:
   push:
     branches: [ master ]
@@ -8,41 +7,247 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      http: ${{ steps.filter.outputs.http }}
+      packagemanager: ${{ steps.filter.outputs.packagemanager }}
+      cli: ${{ steps.filter.outputs.cli }}
+      gtk: ${{ steps.filter.outputs.gtk }}
+      tui: ${{ steps.filter.outputs.tui }}
+      key: ${{ steps.filter.outputs.key }}
+      notifications: ${{ steps.filter.outputs.notifications }}
+      pkgbuild: ${{ steps.filter.outputs.pkgbuild }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'Shelly.Flatpak.Backend/**'
+            http:
+              - 'Shelly.Http/**'
+            packagemanager:
+              - 'Shelly.PackageManager/**'
+            cli:
+              - 'Shelly.Cli.Zig/**'
+              - 'Shelly.Flatpak.Backend/**'
+              - 'scripts/**'
+            gtk:
+              - 'Shelly.Ui.Gtk/**'
+            tui:
+              - 'Shelly.Tui/**'
+            key:
+              - 'Shelly.Key/**'
+            notifications:
+              - 'Shelly.Notifications/**'
+            pkgbuild:
+              - 'PKGBUILD*'
+
+  backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     container:
       image: archlinux:latest
-
     steps:
-      - name: Install dependencies
-        run: |
+      - run: |
           pacman -Syu --noconfirm
-          pacman -S --needed --noconfirm zig flatpak base-devel gtk4 clang glibc git libarchive vala meson ninja json-glib
-
-      # Checkout only after git is installed
+          pacman -S --needed --noconfirm zig base-devel glibc git libarchive
       - uses: actions/checkout@v6
+      - name: Build and test Flatpak backend
+        run: |
+          cd Shelly.Flatpak.Backend
+          zig build
+          zig build test
+          zig build abi-test
+          zig build integration-test
 
-      - name: Build cli & test
+  http:
+    needs: changes
+    if: ${{ needs.changes.outputs.http == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:latest
+    steps:
+      - run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm zig base-devel glibc git
+      - uses: actions/checkout@v6
+      - name: Build and test HTTP client
+        run: |
+          cd Shelly.Http
+          zig build
+          zig build test
+
+  packagemanager:
+    needs: changes
+    if: ${{ needs.changes.outputs.packagemanager == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:latest
+    steps:
+      - run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm zig flatpak base-devel glibc git libarchive
+      - uses: actions/checkout@v6
+      - name: Build and test PackageManager
+        run: |
+          cd Shelly.PackageManager
+          zig build
+          zig build test
+          zig build flatpak-test
+
+  cli:
+    needs: changes
+    if: ${{ needs.changes.outputs.cli == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:latest
+    steps:
+      - run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm zig flatpak base-devel glibc git libarchive ripgrep
+      - uses: actions/checkout@v6
+      - name: Build CLI and test
         run: |
           cd Shelly.Cli.Zig
           zig build
           zig build test
+      - name: Build backend for boundary check
+        run: |
+          cd Shelly.Flatpak.Backend
+          zig build
+      - name: Verify optional Flatpak boundary
+        run: |
+          scripts/check-flatpak-separation.sh \
+            Shelly.Cli.Zig/zig-out/bin/shelly \
+            Shelly.Flatpak.Backend/zig-out/lib/libshelly-flatpak-backend.so.1
+          Shelly.Cli.Zig/zig-out/bin/shelly --help >/dev/null
+          Shelly.Cli.Zig/zig-out/bin/shelly --version >/dev/null
+          Shelly.Cli.Zig/zig-out/bin/shelly utility --completions bash >/dev/null
 
-      - name: Build gtk gui & test
+  gtk:
+    needs: changes
+    if: ${{ needs.changes.outputs.gtk == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:latest
+    steps:
+      - run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm zig base-devel gtk4 glibc git vala
+      - uses: actions/checkout@v6
+      - name: Build GTK GUI and test
         run: |
           cd Shelly.Ui.Gtk
           zig build
           zig build test
 
+  tui:
+    needs: changes
+    if: ${{ needs.changes.outputs.tui == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:latest
+    steps:
+      - run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm zig base-devel glibc git
+      - uses: actions/checkout@v6
+      - name: Build TUI and test
+        run: |
+          cd Shelly.Tui
+          zig build
+          zig build test
+
+  key:
+    needs: changes
+    if: ${{ needs.changes.outputs.key == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:latest
+    steps:
+      - run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm zig base-devel glibc git
+      - uses: actions/checkout@v6
       - name: Build keys & test
         run: |
           cd Shelly.Key
           zig build
           zig build test
 
+  notifications:
+    needs: changes
+    if: ${{ needs.changes.outputs.notifications == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:latest
+    steps:
+      - run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm base-devel glibc git meson ninja gtk4 json-glib
+      - uses: actions/checkout@v6
       - name: Build Shelly.Notifications
         run: |
           meson setup build-notify Shelly.Notifications
           meson compile -C build-notify
+
+  pkgbuild:
+    needs: changes
+    if: ${{ needs.changes.outputs.pkgbuild == 'true' }}
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate Arch package recipes
+        run: bash -n PKGBUILD PKGBUILD-git PKGBUILD-bin PKGBUILD-cli
+
+  all-pass:
+    if: ${{ always() }}
+    needs:
+      - backend
+      - http
+      - packagemanager
+      - cli
+      - gtk
+      - tui
+      - key
+      - notifications
+      - pkgbuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify no job failed
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "Job results: $results"
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "A required job failed or was cancelled."
+              exit 1
+            fi
+          done
+          echo "All triggered jobs passed (skipped jobs are OK)."

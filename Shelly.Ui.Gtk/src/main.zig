@@ -8,6 +8,8 @@ const gobject = bindings.gobject;
 const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
 const runtime = @import("services/runtime.zig");
 const translations = @import("helpers/translations.zig");
+const tray_service = @import("services/tray_service.zig");
+const IconDownloadService = @import("services/icon_fetcher.zig").downloadIconsInBackground;
 
 pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
@@ -16,19 +18,72 @@ pub fn main(init: std.process.Init) void {
     if (!translations.init()) {
         std.log.warn("translations: failed to initialize gettext", .{});
     }
+    IconDownloadService(std.heap.c_allocator, runtime.io);
 
     const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();
+    const gapp = gobject.ext.as(gio.Application, app);
 
-    _ = gio.Application.signals.activate.connect(app, ?*anyopaque, &activate, null, .{});
+    _ = gio.Application.signals.startup.connect(
+        app,
+        ?*anyopaque,
+        &startup,
+        null,
+        .{},
+    );
+    _ = gio.Application.signals.activate.connect(
+        app,
+        ?*anyopaque,
+        &activate,
+        null,
+        .{},
+    );
 
-    const status = gio.Application.run(gobject.ext.as(gio.Application, app), 0, null);
+    const status = gio.Application.run(gapp, 0, null);
+
+    const is_remote = gio.Application.getIsRemote(gapp);
+    std.debug.print("[shelly-ui] run returned, is_remote={d}, status={d}\n", .{ is_remote, status });
+    if (is_remote == 0) {
+        std.debug.print("[shelly-ui] PRIMARY exiting, calling tryStopTray\n", .{});
+        tryStopTray(runtime.io, std.heap.c_allocator);
+    }
     runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
 }
 
+fn tryStopTray(io: std.Io, alloc: std.mem.Allocator) void {
+    var should_stop = true;
+    if (runtime.config) |svc| {
+        if (svc.get() catch null) |cfg| should_stop = !cfg.TrayEnabled;
+    }
+    if (should_stop) _ = tray_service.end(io, alloc);
+}
+
+fn quitActivated(_: *gio.SimpleAction, _: ?*glib.Variant, app: *gtk.Application) callconv(.c) void {
+    app.as(gio.Application).quit();
+}
+
+fn startup(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
+    const quit_action = gio.SimpleAction.new("quit", null);
+    defer quit_action.unref();
+    _ = gio.SimpleAction.signals.activate.connect(
+        quit_action,
+        *gtk.Application,
+        &quitActivated,
+        app,
+        .{},
+    );
+    app.as(gio.ActionMap).addAction(quit_action.as(gio.Action));
+    const accels = [_:null]?[*:0]const u8{ "<Control>q", "<Control>w", null };
+    gtk.Application.setAccelsForAction(app, "app.quit", &accels);
+}
+
 fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
-    //load custom css
+    if (gtk.Application.getActiveWindow(app)) |window| {
+        gtk.Window.present(window);
+        return;
+    }
+
     const provider = gtk.CssProvider.new();
     gtk.CssProvider.loadFromResource(provider, "/com/shellyorg/shelly/style.css");
     gtk.StyleContext.addProviderForDisplay(
@@ -46,14 +101,81 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
         std.log.warn("settings: failed to load config service: {t}", .{err});
     };
 
+    if (runtime.config) |svc| {
+        const cfg = svc.get() catch |err| {
+            std.log.warn("settings: failed to get config: {t}", .{err});
+            return;
+        };
+
+        if (cfg.Culture.len > 0) {
+            var cul_buf: [256:0]u8 = undefined;
+            @memcpy(cul_buf[0..cfg.Culture.len], cfg.Culture);
+            cul_buf[cfg.Culture.len] = 0;
+            const cul = cul_buf[0..cfg.Culture.len :0];
+            std.debug.print("culture = {s}\n", .{cul});
+            const ok = translations.initWithLocale(cul);
+            std.debug.print("[i18n] init ok={}, culture=pt_BR\n", .{ok});
+        }
+    }
+
+    tryStartTray(runtime.io, std.heap.c_allocator);
+
+    setupGnomeThemePreference();
+
     const window = ShellyWindow.new(app);
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }
 
+fn tryStartTray(io: std.Io, alloc: std.mem.Allocator) void {
+    if (runtime.config) |svc| {
+        const cfg = svc.get() catch return;
+        if (!cfg.TrayEnabled) return;
+    }
+    tray_service.start(io, alloc);
+}
+
+fn setupGnomeThemePreference() void {
+    const desktop = runtime.environ_map.get("XDG_CURRENT_DESKTOP") orelse return;
+
+    std.debug.print("desktop = {s}\n", .{desktop});
+
+    if (!std.mem.containsAtLeast(u8, desktop, 1, "GNOME")) {
+        return;
+    }
+
+    const settings = gio.Settings.new("org.gnome.desktop.interface");
+
+    const scheme = settings.getString("color-scheme");
+
+    const prefer_dark = std.mem.eql(u8, std.mem.span(scheme), "prefer-dark");
+
+    std.debug.print("prefer_dark = {}\n", .{prefer_dark});
+
+    if (prefer_dark) {
+        const gtk_settings = gtk.Settings.getDefault() orelse {
+            std.debug.print("Failed to fetch GtkSettings layout.\n", .{});
+            return;
+        };
+        const base_object = @as(*gobject.Object, @ptrCast(@alignCast(gtk_settings)));
+        var value = std.mem.zeroes(gobject.Value);
+        const bool_type = gobject.typeFromName("gboolean");
+        _ = value.init(bool_type);
+        value.setBoolean(1);
+        base_object.setProperty("gtk-application-prefer-dark-theme", &value);
+    }
+
+    _ = glib.setenv(
+        "GTK_APPLICATION_PREFER_DARK_THEME",
+        if (prefer_dark) "1" else "0",
+        1,
+    );
+}
+
 test {
-    // _ = @import("services/icon_resolver.zig");
+    _ = @import("services/icon_resolver.zig");
     _ = @import("services/config_resolver.zig");
     _ = @import("services/shelly_cli.zig");
+    _ = @import("services/tray_service.zig");
     _ = @import("g_objects/appstream_app_object.zig");
     _ = @import("helpers/custom_ui_comps/carousel.zig");
     _ = @import("helpers/custom_ui_comps/carousel_indicator_dots.zig");
