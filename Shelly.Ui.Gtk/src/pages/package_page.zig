@@ -40,6 +40,7 @@ pub const PackagePage = extern struct {
         version_column: *gtk.ColumnViewColumn,
         size_column: *gtk.ColumnViewColumn,
         repository_column: *gtk.ColumnViewColumn,
+        install_date_column: *gtk.ColumnViewColumn,
         check_column: *gtk.ColumnViewColumn,
         selection: *gtk.SingleSelection,
         list_store: *gio.ListStore,
@@ -182,18 +183,52 @@ pub const PackagePage = extern struct {
         _ = gtk.CheckButton.signals.toggled.connect(p.upgrade_check, *Self, &on_upgrade_toggled, self, .{});
         _ = gtk.CheckButton.signals.toggled.connect(p.show_hidden_check, *Self, &on_show_hidden_toggled, self, .{});
 
+        const install_date_factory = gtk.SignalListItemFactory.new();
+        _ = gtk.SignalListItemFactory.signals.setup.connect(install_date_factory, ?*anyopaque, &install_date_setup, null, .{});
+        _ = gtk.SignalListItemFactory.signals.bind.connect(install_date_factory, ?*anyopaque, &install_date_bind, null, .{});
+        gtk.ColumnViewColumn.setFactory(p.install_date_column, install_date_factory.as(gtk.ListItemFactory));
+
+        gtk.ColumnViewColumn.setVisible(p.install_date_column, 0);
+
+        attachSorter(p.install_date_column, sorters.stringSorter(PackageObject, &PackageObject.getInstallDate));
         attachSorter(p.name_column, sorters.stringSorter(PackageObject, &PackageObject.getName));
         attachSorter(p.size_column, sorters.numericSorter(PackageObject, &PackageObject.getInstalledSize));
         attachSorter(p.repository_column, sorters.stringSorter(PackageObject, &PackageObject.getRepository));
         attachSorter(p.version_column, sorters.stringSorter(PackageObject, &PackageObject.getVersion));
 
+        const group = gio.SimpleActionGroup.new();
+        const action = gio.SimpleAction.new("focus", null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, &onFocusSearch, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "search", group.as(gio.ActionGroup));
+
         applyOptionsFromConfig(self);
         support.connectLifecycle(Self, self);
+    }
+
+    fn onFocusSearch(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = gtk.Widget.grabFocus(self.priv().search_entry.as(gtk.Widget));
     }
 
     fn attachSorter(column: *gtk.ColumnViewColumn, sorter: *gtk.Sorter) void {
         gtk.ColumnViewColumn.setSorter(column, sorter);
         sorter.as(gobject.Object).unref();
+    }
+
+    fn install_date_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+        const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+        const label = gtk.Label.new("");
+        gtk.Widget.setHalign(label.as(gtk.Widget), gtk.Align.start);
+        gtk.ColumnViewCell.setChild(cell, label.as(gtk.Widget));
+    }
+
+    fn install_date_bind(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: ?*anyopaque) callconv(.c) void {
+        const cell = gobject.ext.cast(gtk.ColumnViewCell, item) orelse return;
+        const obj = gtk.ColumnViewCell.getItem(cell) orelse return;
+        const pkg = gobject.ext.cast(PackageObject, obj) orelse return;
+        const child = gtk.ColumnViewCell.getChild(cell) orelse return;
+        const label = gobject.ext.cast(gtk.Label, child) orelse return;
+        gtk.Label.setLabel(label, if (pkg.isInstalled()) pkg.getInstallDate() else "");
     }
 
     fn setup_signal_text_label_column(column: *gtk.ColumnViewColumn, comptime getter: *const fn (*PackageObject) [:0]const u8, comptime halign: gtk.Align) void {
@@ -733,6 +768,7 @@ pub const PackagePage = extern struct {
             for (parsed.value) |*pkg| {
                 if (map.get(pkg.Name)) |ipkg| {
                     pkg.Installed = true;
+                    pkg.InstallDate = if (ipkg.InstallDate) |id| alloc.dupe(u8, id) catch null else null;
                     pkg.Explicit = std.mem.eql(u8, ipkg.InstallReason, "Explicit");
                 } else {
                     pkg.Installed = false;
@@ -841,6 +877,7 @@ pub const PackagePage = extern struct {
         .{ "version_column", @offsetOf(Private, "version_column") },
         .{ "size_column", @offsetOf(Private, "size_column") },
         .{ "repository_column", @offsetOf(Private, "repository_column") },
+        .{ "install_date_column", @offsetOf(Private, "install_date_column") },
         .{ "check_column", @offsetOf(Private, "check_column") },
         .{ "loading_spinner", @offsetOf(Private, "loading_spinner") },
         .{ "loading_overlay", @offsetOf(Private, "loading_overlay") },
@@ -1050,6 +1087,7 @@ pub const PackagePage = extern struct {
     fn on_installed_only_toggled(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
         const p = self.priv();
         p.show_installed_only = gtk.CheckButton.getActive(check) != 0;
+        gtk.ColumnViewColumn.setVisible(p.install_date_column, @intFromBool(p.show_installed_only));
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
     }
 
