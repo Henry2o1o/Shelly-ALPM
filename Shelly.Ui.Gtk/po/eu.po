@@ -117,7 +117,9 @@ msgid "Run checks"
 msgstr "Exekutatu egiaztapenak"
 
 msgid "Run the --check function during package build (installs checkdepends)"
-msgstr "Exekutatu --check funtzioa paketea eraikitzean (checkdepends instalatzen ditu)"
+msgstr ""
+"Exekutatu --check funtzioa paketea eraikitzean (checkdepends instalatzen "
+"ditu)"
 
 msgid "refresh"
 msgstr "berritu"
@@ -144,14 +146,17 @@ msgid ""
 "Run the --check function during package build (installs checkdepends)\n"
 "                        "
 msgstr ""
-"Exekutatu --check funtzioa paketea eraikitzean (checkdepends instalatzen ditu)\n"
+"Exekutatu --check funtzioa paketea eraikitzean (checkdepends instalatzen "
+"ditu)\n"
 "                        "
 
 msgid "Search..."
 msgstr "Bilatu..."
 
 msgid "Sync metadata for all AppImages. Useful if AppImage self updated."
-msgstr "Sinkronizatu AppImage guztien metadatuak. Erabilgarria AppImage bere burua eguneratu bada."
+msgstr ""
+"Sinkronizatu AppImage guztien metadatuak. Erabilgarria AppImage bere burua "
+"eguneratu bada."
 
 msgid "Sync All"
 msgstr "Sinkronizatu denak"
@@ -200,13 +205,15 @@ msgid "Update URL / Repository Info"
 msgstr "Eguneratzeko URLa / Biltegiaren informazioa"
 
 msgid "Get more information about Update URL / Repository Info"
-msgstr "Lortu informazio gehiago eguneratze-URLari / biltegiaren informazioari buruz"
+msgstr ""
+"Lortu informazio gehiago eguneratze-URLari / biltegiaren informazioari buruz"
 
 msgid "e.g. owner/repo or https://..."
 msgstr "adib. jabea/biltegia edo https://..."
 
 msgid "Invalid format. Use owner/repo (e.g. seafoam-labs/shelly-alpm)"
-msgstr "Formatu baliogabea. Erabili jabea/biltegia (adib. seafoam-labs/shelly-alpm)"
+msgstr ""
+"Formatu baliogabea. Erabili jabea/biltegia (adib. seafoam-labs/shelly-alpm)"
 
 msgid "Allow Prerelease"
 msgstr "Onartu aurre-bertsioak"
@@ -379,8 +386,14 @@ msgstr "Paketeak"
 msgid "Show AUR"
 msgstr "Erakutsi AUR"
 
+msgid "AUR"
+msgstr "AUR"
+
 msgid "Show Flat"
 msgstr "Erakutsi Flatpak"
+
+msgid "Flatpak"
+msgstr "Flatpak"
 
 msgid "Show AppImage"
 msgstr "Erakutsi AppImage"
@@ -434,7 +447,9 @@ msgid "Size"
 msgstr "Tamaina"
 
 msgid "Had an issue loading your packages. Check if you have a db lock."
-msgstr "Arazo bat egon da paketeak kargatzean. Egiaztatu datu-basea blokeatuta dagoen (db lock)."
+msgstr ""
+"Arazo bat egon da paketeak kargatzean. Egiaztatu datu-basea blokeatuta "
+"dagoen (db lock)."
 
 msgid "Remove Configs"
 msgstr "Kendu konfigurazioak"
@@ -541,7 +556,8 @@ msgid ""
 "If enabled, Shelly will use appstream icons in the package list and details "
 "pages."
 msgstr ""
-"Gaituz gero, Shelly-k appstream ikonoak erabiliko ditu paketeen zerrendan eta xehetasun orrietan."
+"Gaituz gero, Shelly-k appstream ikonoak erabiliko ditu paketeen zerrendan "
+"eta xehetasun orrietan."
 
 msgid "Use Sidebar Navigation"
 msgstr "Erabili alboko barra nabigaziorako"
@@ -550,7 +566,8 @@ msgid ""
 "If enabled, Shelly will use a sidebar vertical navigation instead of the top "
 "bar one."
 msgstr ""
-"Gaituz gero, Shelly-k alboko bertikaleko nabigazioa erabiliko du goiko barraren ordez."
+"Gaituz gero, Shelly-k alboko bertikaleko nabigazioa erabiliko du goiko "
+"barraren ordez."
 
 msgid "Use Symbolic Tray Icon"
 msgstr "Erabili erretiluko ikono sinbolikoa"
@@ -559,7 +576,8 @@ msgid ""
 "If enabled, Shelly will use a symbolic svg icon instead of the default image "
 "one."
 msgstr ""
-"Gaituz gero, Shelly-k svg ikono sinboliko bat erabiliko du lehenetsitako irudiaren ordez."
+"Gaituz gero, Shelly-k svg ikono sinboliko bat erabiliko du lehenetsitako "
+"irudiaren ordez."
 
 msgid "Tray Icon"
 msgstr "Erretiluko ikonoa"
@@ -614,8 +632,7 @@ msgstr "Kendu db.lck"
 
 msgid ""
 "Removes the db.lck file if it was left behind by an interrupted alpm process."
-msgstr ""
-"db.lck fitxategia ezabatzen du eten den alpm prozesu batek utzi badu."
+msgstr "db.lck fitxategia ezabatzen du eten den alpm prozesu batek utzi badu."
 
 msgid "View Pacfiles"
 msgstr "Ikusizkoztatu Pacfile fitxategiak"
@@ -673,7 +690,9 @@ msgid "Enable Flatpak Support"
 msgstr "Gaitu Flatpak babesa"
 
 msgid "Enable support for Flatpak applications from Flathub and other remotes."
-msgstr "Gaitu Flathub eta urruneko beste jatorri batzuetako Flatpak aplikazioen babesa."
+msgstr ""
+"Gaitu Flathub eta urruneko beste jatorri batzuetako Flatpak aplikazioen "
+"babesa."
 
 msgid "Enable AppImage Support"
 msgstr "Gaitu AppImage babesa"
@@ -684,7 +703,8 @@ msgstr "Kudeatu eta konfiguratu AppImage aplikazioen eguneraketak erraz."
 msgid ""
 "Show a status icon in your system tray for quick access and notifications."
 msgstr ""
-"Erakutsi egoera-ikono bat sistemako erretiluan sarbide azkarra eta jakinarazpenak izateko."
+"Erakutsi egoera-ikono bat sistemako erretiluan sarbide azkarra eta "
+"jakinarazpenak izateko."
 
 msgid "Tray Icon Autostart"
 msgstr "Erretiluko ikonoaren hasiera automatikoa"
@@ -708,7 +728,8 @@ msgstr ""
 "Beharrezko instalazio guztiak Amaitu botoia sakatu ondoruan exekutatuko dira."
 
 msgid "These options and others can be configured later in settings."
-msgstr "Aukera hauek eta beste batzuk beranduago konfigura daitezke ezarpenetan."
+msgstr ""
+"Aukera hauek eta beste batzuk beranduago konfigura daitezke ezarpenetan."
 
 msgid "Remove Package(s)"
 msgstr "Kendu paketea(k)"
@@ -839,6 +860,11 @@ msgstr "Eguneraketa eskuragarri: {0}"
 
 msgid "Invalid URL. Must start with http:// or https://"
 msgstr "URL baliogabea. http:// edo https:// erabiliz hasi behar da"
+
+msgid ""
+"Invalid Forgejo URL. Use http(s)://host/owner/repo or http(s)://host/owner/"
+"repo/releases"
+msgstr "Forgejo URL baliogabea. Erabili http(s)://host/owner/repo edo http(s)://host/owner/repo/releases"
 
 msgid "Select AppImage to Install"
 msgstr "Hautatu instalatzeko AppImage-a"
@@ -1347,8 +1373,8 @@ msgid ""
 "It is unadvised to not update all packages at once. Are you sure you want to "
 "continue?"
 msgstr ""
-"Ez da gomendatzen pakete guztiak batera ez eguneratzea. Ziur zaude "
-"jarraitu nahi duzula?"
+"Ez da gomendatzen pakete guztiak batera ez eguneratzea. Ziur zaude jarraitu "
+"nahi duzula?"
 
 msgid "Reboot Required"
 msgstr "Berrabiaraztea beharrezkoa da"
@@ -1427,8 +1453,8 @@ msgid ""
 "are user-produced and may contain risks. Do you want to enable it?"
 msgstr ""
 "Arch Erabiltzaileen Biltegia (AUR) komunitateak kudeatutako biltegi bat da. "
-"Paketeak erabiltzaileek sortuak dira eta arriskuak izan ditzakete. "
-"Gaitu nahi duzu?"
+"Paketeak erabiltzaileek sortuak dira eta arriskuak izan ditzakete. Gaitu "
+"nahi duzu?"
 
 msgid "Missing Flatpak"
 msgstr "Flatpak falta da"
@@ -1631,7 +1657,8 @@ msgid "Toggle output"
 msgstr "Txandakatu irteera"
 
 msgid "Invalid format. Use owner/repo (e.g., seafoam-labs/shelly-alpm)"
-msgstr "Formatu baliogabea. Erabili jabea/biltegia (adib. seafoam-labs/shelly-alpm)"
+msgstr ""
+"Formatu baliogabea. Erabili jabea/biltegia (adib. seafoam-labs/shelly-alpm)"
 
 msgid "Enable Recommended"
 msgstr "Gaitu gomendatutakoak"
@@ -1652,7 +1679,9 @@ msgid "Search the AUR"
 msgstr "Bilatu AURen"
 
 msgid "The AUR has no browsable index type a package name to begin."
-msgstr "AURek ez du arakatu daitekeen indexaziorik, idatzi pakete baten izena hasteko."
+msgstr ""
+"AURek ez du arakatu daitekeen indexaziorik, idatzi pakete baten izena "
+"hasteko."
 
 msgid "Run the --check function during package build"
 msgstr "Exekutatu --check funtzioa paketea eraikitzean"
@@ -1688,7 +1717,9 @@ msgid "Flatpak files"
 msgstr "Flatpak fitxategiak"
 
 msgid "Unsupported file type. Choose a .flatpak or .flatpakref file."
-msgstr "Euskarri gabeko fitxategi mota. Hautatu .flatpak edo .flatpakref fitxategi bat."
+msgstr ""
+"Euskarri gabeko fitxategi mota. Hautatu .flatpak edo .flatpakref fitxategi "
+"bat."
 
 msgid "Installing local flatpak"
 msgstr "Tokiko Flatpak instalatzen"
@@ -1928,7 +1959,9 @@ msgid "AUR package update"
 msgstr "AUR paketeen eguneraketa"
 
 msgid "Could not run shelly check-updates. Check the CLI output and try again."
-msgstr "Ezin izan da shelly check-updates exekutatu. Egiaztatu CLI irteera eta saiatu berriro."
+msgstr ""
+"Ezin izan da shelly check-updates exekutatu. Egiaztatu CLI irteera eta "
+"saiatu berriro."
 
 msgid "Update check failed"
 msgstr "Eguneraketen egiaztapenak huts egin du"
@@ -2069,7 +2102,9 @@ msgid "中文（简体）"
 msgstr "中文（简体）"
 
 msgid "The AUR has no browsable index — type a package name to begin."
-msgstr "AURek ez du arakatu daitekeen indexaziorik — idatzi pakete baten izena hasteko."
+msgstr ""
+"AURek ez du arakatu daitekeen indexaziorik — idatzi pakete baten izena "
+"hasteko."
 
 msgid "No packages found"
 msgstr "Ez da paketerik aurkitu"
@@ -2099,7 +2134,9 @@ msgid "Build from AUR"
 msgstr "Eraiki AURtik"
 
 msgid "Build and install the selected packages? This may take a while."
-msgstr "Eraiki eta instalatu hautatutako paketeak? Honek denbora pixka bat har dezake."
+msgstr ""
+"Eraiki eta instalatu hautatutako paketeak? Honek denbora pixka bat har "
+"dezake."
 
 msgid "Build"
 msgstr "Eraiki"
@@ -2175,3 +2212,144 @@ msgstr "Eguneratu"
 
 msgid "Utilities"
 msgstr "Utilitateak"
+
+msgid "Recommended Packages"
+msgstr "Gomendatutako paketeak"
+
+msgid "Curated suggestions from Seafoam Labs"
+msgstr "Seafoam Labs-ek hautatutako iradokizunak"
+
+msgid "Refresh the recommended packages list from the network"
+msgstr "Freskatu gomendatutako paketeen zerrenda saretik"
+
+msgid "Preview Pkgbuild"
+msgstr "Aurreikusi Pkgbuild"
+
+msgid "Show Dependency Only"
+msgstr "Erakutsi menpekotasunak soilik"
+
+msgid "Show dependency packages on;y"
+msgstr "Erakutsi menpekotasun-paketeak soilik"
+
+msgid "Welcome to Shelly v3"
+msgstr "Ongi etorri Shelly v3-ra"
+
+msgid ""
+"Shelly is a modern package manager for Arch Linux. Configure your sources "
+"and preferences to get started. We have recently rewritte both the GUI and "
+"CLI in zig with a new modified UI off our previous designs."
+msgstr "Shelly Arch Linux-erako pakete-kudeatzaile modernoa da. Konfiguratu zure iturriak eta hobespenak hasteko. Orain dela gutxi berridatzi ditugu GUI eta CLI zig-n, aurreko diseinuetan oinarritutako UI berri batekin."
+
+msgid "Select Your Sources"
+msgstr "Hautatu zure iturriak"
+
+msgid ""
+"Choose which package sources you want to browse. You can always change this "
+"later in settings."
+msgstr "Aukeratu zein pakete-iturri arakatu nahi dituzun. Hau geroago alda dezakezu ezarpenetan."
+
+msgid "Arch User Repository community packages"
+msgstr "Arch User Repository-ko komunitate-paketeak"
+
+msgid "Sandboxed universal Linux applications"
+msgstr "Isolatutako Linux aplikazio unibertsalak"
+
+msgid "Portable self-contained application bundles"
+msgstr "Eramangarriak diren aplikazio-pakete autonomoak"
+
+msgid "Curated picks based on your installed software"
+msgstr "Zure instalatutako softwarean oinarritutako hautapenak"
+
+msgid "Look and Feel"
+msgstr "Itxura eta portaera"
+
+msgid ""
+"Customize how Shelly looks and behaves. All of these can be changed later in "
+"preferences."
+msgstr "Pertsonalizatu Shellyren itxura eta portaera. Hori guztia geroago alda dezakezu hobespenetan."
+
+msgid "Navigation Style"
+msgstr "Nabigazio-estiloa"
+
+msgid "Sidebar"
+msgstr "Alboko barra"
+
+msgid "Vertical icon rail on the left"
+msgstr "Ikono-errail bertikala ezkerrean"
+
+msgid "Top Bar"
+msgstr "Goiko barra"
+
+msgid "Horizontal tab switcher at the top"
+msgstr "Fitxa-aldagailu horizontala goialdean"
+
+msgid "System Tray"
+msgstr "Sistema-erretilua"
+
+msgid "Run in system tray when minimized"
+msgstr "Exekutatu sistema-erretiluan txikitzen denean"
+
+msgid "Next"
+msgstr "Hurrengoa"
+
+msgid "Start Shelly"
+msgstr "Abiarazi Shelly"
+
+msgid "Navigation style"
+msgstr "Nabigazio-estiloa"
+
+msgid "Maintenance and repair tools for your Shelly installation."
+msgstr "Zure Shelly instalazioaren mantentze eta konponketa tresnak."
+
+msgid "Run"
+msgstr "Exekutatu"
+
+msgid "Clean Package Cache"
+msgstr "Garbitu pakete-cachea"
+
+msgid ""
+"Removes old cached package versions, keeping the selected number per package."
+msgstr "Pakete-bertsio zaharrak cachetik kentzen ditu, pakete bakoitzeko hautatutako kopurua mantenduta."
+
+msgid "Keep"
+msgstr "Mantendu"
+
+msgid "Number of cached versions to keep per package"
+msgstr "Pakete bakoitzeko cachean mantentzeko bertsio-kopurua"
+
+msgid "Review PKGBUILD"
+msgstr "Berrikusi PKGBUILD"
+
+msgid "Tray enabled"
+msgstr "Erretilua gaituta"
+
+msgid "Tray disabled, but autostart service remains"
+msgstr "Erretilua desgaituta, baina abiarazte automatikoko zerbitzua mantentzen da"
+
+msgid "Tray disabled"
+msgstr "Erretilua desgaituta"
+
+msgid "Failed to add systemd startup service"
+msgstr "Huts egin du systemd abiarazte-zerbitzua gehitzean"
+
+msgid "Failed to remove systemd startup service"
+msgstr "Huts egin du systemd abiarazte-zerbitzua kentzean"
+
+msgid "Cleaning package cache"
+msgstr "Pakete-cachea garbitzen"
+
+msgid "Welcome"
+msgstr "Ongi etorri"
+
+msgid ""
+"The Arch User Repository is community-maintained. Packages are not "
+"officially vetted — only enable if you trust what you install."
+msgstr "Arch User Repository komunitateak mantentzen du. Paketeak ez dira ofizialki egiaztatzen — soilik gaitu instalatzen duzunaz fidatzen bazara."
+
+msgid "Enable Recommended?"
+msgstr "Gaitu gomendatutakoak?"
+
+msgid ""
+"Recommended shows curated package suggestions based on your installed "
+"software. Package data is fetched from external sources."
+msgstr "Gomendatuek zure instalatutako softwarean oinarritutako pakete-iradokizunak erakusten dituzte. Pakete-datuak kanpoko iturrietatik eskuratzen dira."
