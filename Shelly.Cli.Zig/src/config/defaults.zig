@@ -9,7 +9,6 @@ pub const json =
     \\  "ProgressBarWidth": 24,
     \\  "OutputMode": "singlepane",
     \\  "AppImageInstallPath": null,
-    \\  "DisableDevelCheck": false
     \\}
 ;
 
