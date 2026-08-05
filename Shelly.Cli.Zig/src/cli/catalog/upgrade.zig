@@ -22,12 +22,7 @@ pub const variants = [_]types.Variant{
         .bare_action_code = true,
         .description = "Build and confirm an invoking-user upgrade plan, then upgrade every enabled package backend in one coordinated action, continuing through independent backend failures and returning failure if any selected backend fails.",
         .implementation = "Combined Zig coordinator over AlpmManager, AurManager, FlatpakManager, and appimage.UpdateManager",
-        .options = &.{
-            flag("--no-repo", &.{}, "Skip the standard ALPM backend"),
-            flag("--no-aur", &.{}, "Skip the AUR backend"),
-            flag("--no-flatpak", &.{}, "Skip the Flatpak backend"),
-            flag("--no-appimage", &.{}, "Skip the AppImage backend"),
-        },
+        .options = &.{ flag("--no-repo", &.{}, "Skip the standard ALPM backend"), flag("--no-aur", &.{}, "Skip the AUR backend"), flag("--no-flatpak", &.{}, "Skip the Flatpak backend"), flag("--no-appimage", &.{}, "Skip the AppImage backend"), flag("--no-devel", &.{}, "Skip -git aur") },
     },
     .{
         .action = .upgrade,
@@ -42,10 +37,7 @@ pub const variants = [_]types.Variant{
         .type_code = 'a',
         .description = "Find installed foreign packages with newer AUR or VCS revisions, then build and install all available upgrades.",
         .implementation = "Zigalpm.AurManager.getPackagesNeedingUpdate / updatePackages",
-        .options = &.{
-            flag("--check", &.{}, "Run each PKGBUILD check() function during AUR upgrade builds"),
-            flag("--singlepane", &.{}, "Use the shared pacman-style linear output (already the native Zig non-UI output mode)"),
-        },
+        .options = &.{ flag("--check", &.{}, "Run each PKGBUILD check() function during AUR upgrade builds"), flag("--singlepane", &.{}, "Use the shared pacman-style linear output (already the native Zig non-UI output mode)"), flag("--no-devel", &.{}, "Skip checking -git packages") },
     },
     .{
         .action = .upgrade,

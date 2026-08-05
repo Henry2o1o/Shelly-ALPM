@@ -610,7 +610,7 @@ fn runAur(
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
 
-    const updates = try manager.getPackagesNeedingUpdate(true);
+    const updates = try manager.getPackagesNeedingUpdate(!optionEnabled(invocation, "--no-devel"));
     defer Zigalpm.aur.models.Update.deinitSlice(context.allocator, updates);
     if (updates.len == 0) {
         emitStatus(operation_context, .aur, .success, "All AUR packages are up to date.");
@@ -1330,4 +1330,64 @@ test "upgrade UI mode emits backend percentage frames" {
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered, "[JSON]"));
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[/JSON]") != null);
     try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
+}
+
+test "no-devel modifier reaches the AUR backend selection on aur and all upgrades" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+
+    const Capture = struct {
+        backends: std.ArrayList(Backend) = .empty,
+        flag_missing: bool = false,
+
+        fn run(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            invocation: *const parser.Invocation,
+        ) !void {
+            try self.backends.append(std.testing.allocator, backend);
+            if (!optionEnabled(invocation, "--no-devel")) self.flag_missing = true;
+        }
+    };
+    var capture: Capture = .{};
+    defer capture.backends.deinit(std.testing.allocator);
+
+    const aur_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "aur", "--no-confirm", "--no-devel" },
+    );
+    try std.testing.expect(aur_outcome == .dispatch);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &aur_outcome.dispatch, &capture));
+    try std.testing.expectEqualSlices(Backend, &.{.aur}, capture.backends.items);
+    try std.testing.expect(!capture.flag_missing);
+
+    const all_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm", "--no-devel" },
+    );
+    try std.testing.expect(all_outcome == .dispatch);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &all_outcome.dispatch, &capture));
+    try std.testing.expectEqualSlices(Backend, &all_backends, capture.backends.items[1..]);
+    try std.testing.expect(!capture.flag_missing);
+
+    const default_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "aur", "--no-confirm" },
+    );
+    try std.testing.expect(default_outcome == .dispatch);
+    try std.testing.expect(!optionEnabled(&default_outcome.dispatch, "--no-devel"));
+
+    const scoped_outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "standard", "--no-devel" },
+    );
+    try std.testing.expect(scoped_outcome == .failure);
 }
