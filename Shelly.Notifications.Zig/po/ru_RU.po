@@ -9,7 +9,7 @@ msgstr ""
 "PO-Revision-Date: 2026-06-30 10:06+0400\n"
 "Last-Translator: Andrei Stepanov <adem4ik@gmail.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
-"Language: ru\n"
+"Language: ru_RU\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -17,7 +17,7 @@ msgstr ""
 
 #: src/main.zig:459
 msgid "Check for updates"
-msgstr ""
+msgstr "Проверить обновления"
 
 #: src/main.zig:518
 msgid "Exit"
@@ -25,19 +25,19 @@ msgstr "Выход"
 
 #: src/main.zig:611
 msgid "Last Check:"
-msgstr ""
+msgstr "Последняя проверка:"
 
 #: src/main.zig:463
 msgid "Last Check: Never"
-msgstr ""
+msgstr "Последняя проверка: никогда"
 
 #: src/main.zig:600
 msgid "Last Check: never"
-msgstr ""
+msgstr "Последняя проверка: никогда"
 
 #: src/main.zig:472
 msgid "No updates"
-msgstr ""
+msgstr "Нет обновлений"
 
 #: src/main.zig:455
 msgid "Open Shelly"
@@ -49,11 +49,11 @@ msgstr "Обновить пакеты"
 
 #: src/main.zig:276
 msgid "Updates available"
-msgstr ""
+msgstr "Доступны обновления"
 
 #: src/main.zig:275
 msgid "updates available"
-msgstr ""
+msgstr "доступны обновления"
 
 #~ msgid "AUR"
 #~ msgstr "AUR"

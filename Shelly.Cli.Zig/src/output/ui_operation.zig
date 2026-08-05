@@ -2,6 +2,91 @@ const std = @import("std");
 const Zigalpm = @import("Zigalpm");
 const output = @import("config.zig");
 const runtime = @import("../runtime/context.zig");
+const parser = @import("../cli/parser.zig");
+
+pub const QuestionMode = enum {
+    responder,
+    accept_defaults,
+};
+
+pub const Transaction = struct {
+    opening: []const u8,
+    success_message: []const u8,
+    failure_message: []const u8,
+    failure_label: []const u8,
+    question_mode: QuestionMode = .responder,
+    cancelled_message: ?[]const u8 = null,
+    report_flatpak_unavailable: bool = false,
+};
+
+/// Runs a backend operation through the common UI transaction lifecycle:
+/// operation context setup, question handling, event reporting, and the
+/// TransactionStart/TransactionDone/TransactionFailed frame sequence.
+/// The runner must expose
+/// `run(context: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, invocation: *const parser.Invocation) anyerror!void`.
+pub fn runTransaction(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    config: Transaction,
+    runner: anytype,
+) anyerror!u8 {
+    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
+    context.attachTransactionLog(&operation_context);
+    defer operation_context.deinit();
+
+    var question_responder: QuestionResponder = .{
+        .context = context,
+        .operation_context = &operation_context,
+        .no_confirm = invocation.globals.no_confirm,
+    };
+    const use_responder = config.question_mode == .responder;
+    if (use_responder) question_responder.attach();
+    defer if (use_responder) question_responder.detach();
+
+    const use_defaults = config.question_mode == .accept_defaults and invocation.globals.no_confirm;
+    if (use_defaults) operation_context.setQuestionHandler(.{ .function = acceptQuestionDefaults });
+    defer if (use_defaults) operation_context.setQuestionHandler(null);
+
+    var reporter: Reporter = .{ .context = context };
+    const event_subscription = try operation_context.subscribe(.{
+        .function = Reporter.handle,
+        .data = &reporter,
+    });
+    defer _ = operation_context.unsubscribe(event_subscription);
+
+    try output.writeAlpmInfoFrame(context, "TransactionStart", config.opening);
+    try flush(context);
+
+    runner.run(context, &operation_context, invocation) catch |err| {
+        const failure: anyerror = err;
+        if (config.cancelled_message) |cancelled_message| {
+            if (failure == error.Cancelled) {
+                try output.writeInfoFrame(context, "Operation cancelled.");
+                try output.writeAlpmInfoFrame(context, "TransactionCancelled", cancelled_message);
+                try flush(context);
+                return 0;
+            }
+        }
+        if (config.report_flatpak_unavailable) {
+            if (Zigalpm.flatpak.errors.unavailableMessage(failure)) |message| {
+                try output.writeErrorFrame(context, message);
+                try output.writeAlpmInfoFrame(context, "TransactionFailed", config.failure_message);
+                try flush(context);
+                return 1;
+            }
+        }
+        const message = try std.fmt.allocPrint(context.allocator, "{s}: {t}", .{ config.failure_label, failure });
+        defer context.allocator.free(message);
+        try output.writeErrorFrame(context, message);
+        try output.writeAlpmInfoFrame(context, "TransactionFailed", config.failure_message);
+        try flush(context);
+        return 1;
+    };
+
+    try output.writeAlpmInfoFrame(context, "TransactionDone", config.success_message);
+    try flush(context);
+    return if (reporter.failed()) 1 else 0;
+}
 
 pub const Reporter = struct {
     context: *runtime.RuntimeContext,
