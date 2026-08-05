@@ -141,8 +141,18 @@ pub const AurPage = extern struct {
         attachSorter(p.votes_column, sorters.numericSorter(AurPackageObject, &AurPackageObject.getNumVotes));
         attachSorter(p.popularity_column, sorters.numericSorter(AurPackageObject, &AurPackageObject.getPopularity));
 
+        const group = gio.SimpleActionGroup.new();
+        const action = gio.SimpleAction.new("focus", null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, &onFocusSearch, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "search", group.as(gio.ActionGroup));
+
         self.update_selection_ui();
         support.connectLifecycle(Self, self);
+    }
+
+    fn onFocusSearch(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = gtk.Widget.grabFocus(self.priv().search_entry.as(gtk.Widget));
     }
 
     fn dispose(self: *Self) callconv(.c) void {

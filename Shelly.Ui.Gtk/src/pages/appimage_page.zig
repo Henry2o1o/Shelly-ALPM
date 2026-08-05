@@ -170,8 +170,18 @@ pub const AppImagePage = extern struct {
         _ = gtk.DropTarget.signals.leave.connect(drop_target, *Self, &on_drag_leave, self, .{});
         gtk.Widget.addController(p.scrolled_list.as(gtk.Widget), drop_target.as(gtk.EventController));
 
+        const group = gio.SimpleActionGroup.new();
+        const action = gio.SimpleAction.new("focus", null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, &onFocusSearch, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "search", group.as(gio.ActionGroup));
+
         support.connectLifecycle(Self, self);
         _ = gtk.ListBox.signals.row_activated.connect(p.app_list, *Self, &onRowActivated, self, .{});
+    }
+
+    fn onFocusSearch(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = gtk.Widget.grabFocus(self.priv().search_entry.as(gtk.Widget));
     }
 
     pub fn onMap(self: *Self) void {
