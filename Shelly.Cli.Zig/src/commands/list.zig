@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const format = @import("../output/format.zig");
@@ -141,35 +142,33 @@ pub const Result = union(Backend) {
     }
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
+const Real = struct {
+    fn list(
+        _: Real,
         context: *runtime.RuntimeContext,
         backend: Backend,
         options: ListOptions,
-    ) anyerror!Result,
+    ) !Result {
+        return runReal(context, backend, options);
+    }
 };
-
-const real_runner: Runner = .{ .call = runReal };
 
 pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !?u8 {
-    return dispatchWithRunner(context, invocation, real_runner);
+    return dispatchWithRunner(context, invocation, Real{});
 }
 
 fn dispatchWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !?u8 {
+    runner: anytype,
+) anyerror!?u8 {
     const backend = backendForPath(invocation.command.path) orelse return null;
     if (isFlatpakRemoteList(invocation))
         return try dispatchFlatpakRemote(context, invocation);
-    var result = runner.call(
-        runner.data,
+    var result = runner.list(
         context,
         backend,
         .{
@@ -952,7 +951,6 @@ fn truncate(value: []const u8, maximum: usize) []const u8 {
 }
 
 fn runReal(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     backend: Backend,
     options: ListOptions,
@@ -1241,24 +1239,22 @@ test "list routes long and requested uppercase short forms to package backends o
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        var observed: ?Backend = null;
-        const runner: Runner = .{
-            .data = &observed,
-            .call = struct {
-                fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, backend: Backend, _: ListOptions) !Result {
-                    const capture: *?Backend = @ptrCast(@alignCast(data.?));
-                    capture.* = backend;
-                    return switch (backend) {
-                        .standard => .{ .standard = .{ .items = &.{} } },
-                        .appimage => .{ .appimage = .{ .items = &.{} } },
-                        .aur => .{ .aur = .{ .items = &.{} } },
-                        .flatpak => .{ .flatpak = .{ .items = &.{} } },
-                    };
-                }
-            }.run,
+        const Observed = struct {
+            backend: ?Backend = null,
+
+            fn list(self: *@This(), _: *runtime.RuntimeContext, backend: Backend, _: ListOptions) !Result {
+                self.backend = backend;
+                return switch (backend) {
+                    .standard => .{ .standard = .{ .items = &.{} } },
+                    .appimage => .{ .appimage = .{ .items = &.{} } },
+                    .aur => .{ .aur = .{ .items = &.{} } },
+                    .flatpak => .{ .flatpak = .{ .items = &.{} } },
+                };
+            }
         };
-        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, runner));
-        try std.testing.expectEqual(case.backend, observed.?);
+        var observed: Observed = .{};
+        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &observed));
+        try std.testing.expectEqual(case.backend, observed.backend.?);
     }
 
     const uppercase_standard = try shortcodes.translate(arena.allocator(), &manifest, &.{"-LS"});
@@ -1302,15 +1298,12 @@ test "list reverse dependency modifiers are selective and backend scoped" {
         const Capture = struct {
             expected: Case,
             called: bool = false,
-        };
-        var capture = Capture{ .expected = case };
-        const runner: Runner = .{ .data = &capture, .call = struct {
-            fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, backend: Backend, options: ListOptions) !Result {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                try std.testing.expectEqual(observed.expected.backend, backend);
-                try std.testing.expectEqual(observed.expected.required_by, options.required_by);
-                try std.testing.expectEqual(observed.expected.optional_for, options.optional_for);
-                observed.called = true;
+
+            fn list(self: *@This(), _: *runtime.RuntimeContext, backend: Backend, options: ListOptions) !Result {
+                try std.testing.expectEqual(self.expected.backend, backend);
+                try std.testing.expectEqual(self.expected.required_by, options.required_by);
+                try std.testing.expectEqual(self.expected.optional_for, options.optional_for);
+                self.called = true;
                 return switch (backend) {
                     .standard => .{ .standard = .{ .items = &.{} } },
                     .appimage => .{ .appimage = .{ .items = &.{} } },
@@ -1318,7 +1311,8 @@ test "list reverse dependency modifiers are selective and backend scoped" {
                     .flatpak => .{ .flatpak = .{ .items = &.{} } },
                 };
             }
-        }.run };
+        };
+        var capture = Capture{ .expected = case };
         const outcome = try parseTestArguments(arena.allocator(), &manifest, case.arguments);
         try std.testing.expect(outcome == .dispatch);
         var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -1331,7 +1325,7 @@ test "list reverse dependency modifiers are selective and backend scoped" {
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, runner));
+        try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &capture));
         try std.testing.expect(capture.called);
     }
 
@@ -1350,9 +1344,10 @@ test "list reverse dependency modifiers are selective and backend scoped" {
 }
 
 test "standard install-reason filters apply to structured output" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const items = [_]StandardItem{
         .{ .name = "dependency-package", .version = "1", .install_reason = "Dependency" },
         .{
@@ -1363,43 +1358,35 @@ test "standard install-reason filters apply to structured output" {
             .optional_for = &.{"shell-extras"},
         },
     };
-    const runner: Runner = .{ .data = @constCast(&items), .call = struct {
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, options: ListOptions) !Result {
+    const Fixture = struct {
+        values: *const [2]StandardItem,
+
+        fn list(self: @This(), _: *runtime.RuntimeContext, _: Backend, options: ListOptions) !Result {
             try std.testing.expect(options.show_hidden);
-            const values: *const [2]StandardItem = @ptrCast(@alignCast(data.?));
-            return .{ .standard = .{ .items = values } };
+            return .{ .standard = .{ .items = self.values } };
         }
-    }.run };
+    };
+    const fixture = Fixture{ .values = &items };
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-Lswe", "--json" },
     );
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, runner));
-    const rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &outcome.dispatch, fixture));
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "explicit-package") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "dependency-package") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PackageFile\":null") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"InstallReason\":\"Explicit\"") != null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     const plain_outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list", "standard", "--show-hidden", "--required-by", "--optional-for" },
     );
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, runner));
-    const plain = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &plain_outcome.dispatch, fixture));
+    const plain = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, plain, "Required By") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Optional For") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "desktop-meta") != null);
@@ -1407,9 +1394,10 @@ test "standard install-reason filters apply to structured output" {
 }
 
 test "AUR filters apply to JSON and UI structured output" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const items = [_]AurItem{
         .{ .name = "dependency-package", .version = "1", .explicit = false },
         .{
@@ -1420,53 +1408,45 @@ test "AUR filters apply to JSON and UI structured output" {
             .explicit = true,
         },
     };
-    const runner: Runner = .{ .data = @constCast(&items), .call = struct {
-        fn run(data: ?*anyopaque, _: *runtime.RuntimeContext, _: Backend, _: ListOptions) !Result {
-            const values: *const [2]AurItem = @ptrCast(@alignCast(data.?));
-            return .{ .aur = .{ .items = values } };
+    const Fixture = struct {
+        values: *const [2]AurItem,
+
+        fn list(self: @This(), _: *runtime.RuntimeContext, _: Backend, _: ListOptions) !Result {
+            return .{ .aur = .{ .items = self.values } };
         }
-    }.run };
+    };
+    const fixture = Fixture{ .values = &items };
 
     const json_outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list", "aur", "--explicitOnly", "--required-by", "--optional-for", "--json" },
     );
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &json_outcome.dispatch, runner));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "explicit-package") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "dependency-package") == null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"RequiredBy\":[\"desktop-meta\"]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"OptionalFor\":[\"shell-extras\"]") != null);
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &json_outcome.dispatch, fixture));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "explicit-package") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "dependency-package") == null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "\"RequiredBy\":[\"desktop-meta\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "\"OptionalFor\":[\"shell-extras\"]") != null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     const ui_outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list", "aur", "--dependencyOnly", "--ui-mode" },
     );
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &ui_outcome.dispatch, runner));
-    const payload = try decodeFirstTestFrame(arena.allocator(), stdout.writer.buffered());
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &ui_outcome.dispatch, fixture));
+    const payload = try decodeFirstTestFrame(tc.arena.allocator(), tc.stdout.writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, payload, "dependency-package") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "explicit-package") == null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     const plain_outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list", "aur", "--required-by", "--optional-for" },
     );
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain_outcome.dispatch, runner));
-    const plain = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &plain_outcome.dispatch, fixture));
+    const plain = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, plain, "Required By") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Optional For") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "desktop-meta") != null);
@@ -1639,29 +1619,20 @@ test "Flatpak named-remote AppStream JSON uses UI framing" {
         .path = "",
         .apps = &apps,
     }};
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list", "flatpak", "remote", "flathub", "--ui-mode" },
     );
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     try std.testing.expectEqual(
         @as(u8, 0),
-        try writeRemoteResult(&context, &outcome.dispatch, &catalogs, false),
+        try writeRemoteResult(&tc.context, &outcome.dispatch, &catalogs, false),
     );
-    const payload = try decodeFirstTestFrame(arena.allocator(), stdout.writer.buffered());
+    const payload = try decodeFirstTestFrame(tc.arena.allocator(), tc.stdout.writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"Id\":\"org.example.App\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"Remotes\":[]") != null);
 }
