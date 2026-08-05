@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const install = @import("install.zig");
 const parser = @import("../cli/parser.zig");
 const output = @import("../output/config.zig");
@@ -479,11 +480,12 @@ test "fuzzy score handles insertion and transposition typos" {
 }
 
 test "no-confirm installs the final closest candidate and preserves partial results" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try @import("../cli/spec.zig").Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try @import("../cli/spec.zig").Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "demo", "--no-confirm" },
     );
@@ -523,23 +525,13 @@ test "no-confirm installs the final closest candidate and preserves partial resu
             };
         }
     };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
     try std.testing.expectEqual(
         @as(u8, 23),
-        try executeWith(&context, &outcome.dispatch, FakeDiscoverer{}, &capture),
+        try executeWith(&tc.context, &outcome.dispatch, FakeDiscoverer{}, &capture),
     );
     try std.testing.expectEqualStrings("demo", capture.installed_name.?);
     try std.testing.expectEqual(Source.standard, capture.source.?);
     try std.testing.expect(capture.no_confirm);
-    try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "warning: AUR package search failed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stderr.writer.buffered(), "warning: AUR package search failed") != null);
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output = @import("../output/config.zig");
@@ -693,20 +694,11 @@ test "run Flatpak list renders running instances in plain and JSON output" {
 }
 
 test "run Flatpak list rejects kill mode" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "run", "flatpak", "list", "--kill" });
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "run", "flatpak", "list", "--kill" });
     const Unused = struct {
         fn list(_: @This(), _: *runtime.RuntimeContext) !RunningResult {
             return error.ShouldNotRun;
@@ -714,25 +706,16 @@ test "run Flatpak list rejects kill mode" {
     };
     try std.testing.expectEqual(
         @as(u8, 1),
-        try listRunningWith(&context, &outcome.dispatch, Unused{}),
+        try listRunningWith(&tc.context, &outcome.dispatch, Unused{}),
     );
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "--list and --kill cannot be used together") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "--list and --kill cannot be used together") != null);
 }
 
 test "run routes all four backend modes and renders completion" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const Capture = struct {
         calls: usize = 0,
 
@@ -761,33 +744,24 @@ test "run routes all four backend modes and renders completion" {
             &.{ "run", sample.backend, "--kill", sample.target }
         else
             &.{ "run", sample.backend, sample.target };
-        const outcome = try parser.parse(arena.allocator(), &manifest, arguments);
+        const outcome = try parser.parse(tc.arena.allocator(), &manifest, arguments);
         const backend = backendForPath(outcome.dispatch.command.path).?;
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, backend, &capture));
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, backend, &capture));
     }
 
     try std.testing.expectEqual(@as(usize, 4), capture.calls);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Flatpak application launched.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AppImage stopped.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Flatpak application launched.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "AppImage stopped.") != null);
 }
 
 test "run backend failures are nonzero and UI mode stays framed" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "run", "appimage", "--ui-mode", "--kill", "Editor",
     });
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Failure = struct {
         fn call(_: @This(), _: *runtime.RuntimeContext, _: Backend, _: bool, _: []const u8) !bool {
             return false;
@@ -796,9 +770,9 @@ test "run backend failures are nonzero and UI mode stays framed" {
 
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, .appimage, Failure{}),
+        try executeWithRunner(&tc.context, &outcome.dispatch, .appimage, Failure{}),
     );
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 }
 
 test "AppImage resolution prefers exact names and rejects ambiguous partials" {

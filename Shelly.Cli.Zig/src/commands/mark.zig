@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const output = @import("../output/config.zig");
 const ui_operation = @import("../output/ui_operation.zig");
 const parser = @import("../cli/parser.zig");
@@ -555,97 +556,70 @@ test "mark parses native subcommands and shortcodes" {
 }
 
 test "mark validates list operations before running a backend" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
-    const missing_action = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "ignore", "linux" });
-    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&context, &missing_action.dispatch, TestRunner{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Choose exactly one") != null);
+    const missing_action = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "ignore", "linux" });
+    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&tc.context, &missing_action.dispatch, TestRunner{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Choose exactly one") != null);
 
-    stdout.writer.end = 0;
-    const missing_packages = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "hold", "--add" });
-    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&context, &missing_packages.dispatch, TestRunner{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "No packages specified") != null);
+    tc.stdout.writer.end = 0;
+    const missing_packages = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "hold", "--add" });
+    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&tc.context, &missing_packages.dispatch, TestRunner{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "No packages specified") != null);
 
-    stdout.writer.end = 0;
-    const protected = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "hold", "--remove", "shelly" });
-    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&context, &protected.dispatch, TestRunner{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "is protected") != null);
+    tc.stdout.writer.end = 0;
+    const protected = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "hold", "--remove", "shelly" });
+    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&tc.context, &protected.dispatch, TestRunner{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "is protected") != null);
 }
 
 test "mark lists IgnorePkg in plain JSON and UI output" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
-    const plain = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "ignore", "--list" });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &plain.dispatch, TestRunner{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Total: 2 ignored packages: linux, mesa") != null);
+    const plain = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "ignore", "--list" });
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &plain.dispatch, TestRunner{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Total: 2 ignored packages: linux, mesa") != null);
 
-    stdout.writer.end = 0;
-    const json = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "ignore", "--list", "--json" });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &json.dispatch, TestRunner{}));
-    try std.testing.expectEqualStrings("[\"linux\",\"mesa\"]\n", stdout.writer.buffered());
+    tc.stdout.writer.end = 0;
+    const json = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "ignore", "--list", "--json" });
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &json.dispatch, TestRunner{}));
+    try std.testing.expectEqualStrings("[\"linux\",\"mesa\"]\n", tc.stdout.writer.buffered());
 
-    stdout.writer.end = 0;
-    const ui = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "ignore", "--list", "--ui-mode" });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &ui.dispatch, TestRunner{}));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    tc.stdout.writer.end = 0;
+    const ui = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "ignore", "--list", "--ui-mode" });
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &ui.dispatch, TestRunner{}));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 }
 
 test "mark applies list mutations and confirms install reason changes" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     var stdin = std.Io.Reader.fixed("n\n");
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &stdin;
     var capture: TestCapture = .{};
 
-    const add = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "hold", "--add", "linux" });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &add.dispatch, &capture));
+    const add = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "hold", "--add", "linux" });
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &add.dispatch, &capture));
     try std.testing.expectEqual(MarkKind.hold, capture.kind.?);
     try std.testing.expectEqual(ListAction.add, capture.action.?);
 
-    const declined = try parser.parse(arena.allocator(), &manifest, &.{ "mark", "explicit", "linux" });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &declined.dispatch, &capture));
+    const declined = try parser.parse(tc.arena.allocator(), &manifest, &.{ "mark", "explicit", "linux" });
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &declined.dispatch, &capture));
     try std.testing.expectEqual(@as(usize, 0), capture.reason_calls);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Operation Cancelled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Operation Cancelled") != null);
 
-    const dependency = try parser.parse(arena.allocator(), &manifest, &.{
+    const dependency = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "mark", "dependency", "linux", "--no-confirm",
     });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &dependency.dispatch, &capture));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &dependency.dispatch, &capture));
     try std.testing.expectEqual(@as(usize, 1), capture.reason_calls);
     try std.testing.expectEqual(MarkKind.dependency, capture.kind.?);
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output = @import("../output/config.zig");
@@ -433,50 +434,14 @@ fn executeUi(
     runner: anytype,
     opening: []const u8,
 ) anyerror!u8 {
-    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
-    context.attachTransactionLog(&operation_context);
-    defer operation_context.deinit();
-    var question_responder: ui_operation.QuestionResponder = .{
-        .context = context,
-        .operation_context = &operation_context,
-        .no_confirm = invocation.globals.no_confirm,
-    };
-    question_responder.attach();
-    defer question_responder.detach();
-    var reporter: ui_operation.Reporter = .{ .context = context };
-    const event_subscription = try operation_context.subscribe(.{
-        .function = ui_operation.Reporter.handle,
-        .data = &reporter,
-    });
-    defer _ = operation_context.unsubscribe(event_subscription);
-
-    try output.writeAlpmInfoFrame(context, "TransactionStart", opening);
-    try ui_operation.flush(context);
-
-    runner.run(context, &operation_context, invocation) catch |err| {
-        if (err == error.Cancelled) {
-            try output.writeInfoFrame(context, "Operation cancelled.");
-            try output.writeAlpmInfoFrame(context, "TransactionCancelled", "Installation cancelled.");
-            try ui_operation.flush(context);
-            return 0;
-        }
-        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
-            try output.writeErrorFrame(context, message);
-            try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-            try ui_operation.flush(context);
-            return 1;
-        }
-        const message = try std.fmt.allocPrint(context.allocator, "Installation failed: {t}", .{err});
-        defer context.allocator.free(message);
-        try output.writeErrorFrame(context, message);
-        try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-        try ui_operation.flush(context);
-        return 1;
-    };
-
-    try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
-    try ui_operation.flush(context);
-    return if (reporter.failed()) 1 else 0;
+    return ui_operation.runTransaction(context, invocation, .{
+        .opening = opening,
+        .success_message = successMessage(invocation),
+        .failure_message = failureMessage(invocation),
+        .failure_label = "Installation failed",
+        .cancelled_message = "Installation cancelled.",
+        .report_flatpak_unavailable = true,
+    }, runner);
 }
 
 const PackageSource = union(enum) {
@@ -1116,28 +1081,19 @@ test "Flatpak repair is an install modifier with f shortcode" {
 }
 
 test "Flatpak repair rejects install source modifiers" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "flatpak", "--repair", "--remote", "flathub", "org.example.App" },
     );
-    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&tc.context, &outcome.dispatch));
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "Cannot combine --repair with",
     ) != null);
 }
@@ -1147,24 +1103,15 @@ test "Flatpak repair lifecycle and elevation follow the installed scope" {
     try std.testing.expect(!repairScopeRequiresElevation(.user, false));
     try std.testing.expect(!repairScopeRequiresElevation(.system, true));
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "flatpak", "--repair", "org.example.App" },
     );
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         called: bool = false,
 
@@ -1179,11 +1126,11 @@ test "Flatpak repair lifecycle and elevation follow the installed scope" {
         }
     };
     var capture: Capture = .{};
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "Repairing Flatpak: org.example.App",
     ) != null);
 }
@@ -1239,60 +1186,42 @@ test "Flatpak file install modifiers use the shared command and scope" {
 }
 
 test "Flatpak file install modifiers reject conflicting modes and repository options" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "flatpak", "--ref-file", "--bundle", "demo.flatpak" },
     );
-    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&tc.context, &outcome.dispatch));
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "Choose exactly one of --ref-file or --bundle.",
     ) != null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "flatpak", "--ref-file", "--remote", "flathub", "demo.flatpakref" },
     );
-    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&tc.context, &outcome.dispatch));
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "Cannot combine --ref-file or --bundle with --remote, --branch, or --runtime.",
     ) != null);
 }
 
 test "install routes every action-first backend and forwards type-specific options" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const Capture = struct {
         calls: usize = 0,
         paths: [6][]const u8 = undefined,
@@ -1332,9 +1261,9 @@ test "install routes every action-first backend and forwards type-specific optio
         &.{ "install", "flatpak", "--bundle", "demo.flatpak" },
     };
     for (arguments) |argv| {
-        const outcome = try parser.parse(arena.allocator(), &manifest, argv);
+        const outcome = try parser.parse(tc.arena.allocator(), &manifest, argv);
         const invocation = outcome.dispatch;
-        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &invocation, &capture));
+        try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &invocation, &capture));
     }
     try std.testing.expectEqual(@as(usize, 6), capture.calls);
     try std.testing.expectEqualStrings(standard_command_path, capture.paths[0]);
@@ -1346,10 +1275,11 @@ test "install routes every action-first backend and forwards type-specific optio
 }
 
 test "AUR version install uses exact package and commit through the shared lifecycle" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "install",
         "aur",
         "--version",
@@ -1360,16 +1290,6 @@ test "AUR version install uses exact package and commit through the shared lifec
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expect(isAurVersionInstall(&outcome.dispatch));
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         pub fn run(
             _: @This(),
@@ -1385,9 +1305,9 @@ test "AUR version install uses exact package and commit through the shared lifec
     };
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, Capture{}),
+        try executeWithRunner(&tc.context, &outcome.dispatch, Capture{}),
     );
-    const rendered = stdout.writer.buffered();
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(
         u8,
         rendered,
@@ -1397,30 +1317,21 @@ test "AUR version install uses exact package and commit through the shared lifec
 }
 
 test "AUR version install validates package commit and incompatible dependency mode" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "aur", "--version", "demo-git" },
     );
-    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "No commit specified.") != null);
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&tc.context, &outcome.dispatch));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "No commit specified.") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "install",
         "aur",
         "--version",
@@ -1428,28 +1339,19 @@ test "AUR version install validates package commit and incompatible dependency m
         "demo-git",
         "deadbeef",
     });
-    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&tc.context, &outcome.dispatch));
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "Cannot combine --version with dependency-only installation options.",
     ) != null);
 }
 
 test "install uses the shared non-UI and UI transaction lifecycles" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const Success = struct {
         pub fn run(_: @This(), _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, invocation: *const parser.Invocation) !void {
             if (!invocation.globals.ui_mode) return;
@@ -1463,33 +1365,24 @@ test "install uses the shared non-UI and UI transaction lifecycles" {
         }
     };
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "install", "standard", "demo" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Success{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Installing packages: demo") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "install", "standard", "demo" });
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, Success{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Installing packages: demo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Transaction complete.") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "install", "aur", "--ui-mode", "demo" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Success{}));
-    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "install", "aur", "--ui-mode", "demo" });
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, Success{}));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 }
 
 test "standard install upgrade requires confirmation unless disabled" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     var declined_input = std.Io.Reader.fixed("n\n");
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &declined_input,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &declined_input;
     const Capture = struct {
         called: bool = false,
 
@@ -1522,41 +1415,41 @@ test "standard install upgrade requires confirmation unless disabled" {
     }};
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "standard", "--upgrade", "demo" },
     );
     try std.testing.expect(requestsStandardUpgrade(&outcome.dispatch));
-    try std.testing.expect(!try confirmStandardUpgradeWithUpdates(&context, &updates));
+    try std.testing.expect(!try confirmStandardUpgradeWithUpdates(&tc.context, &updates));
     try std.testing.expect(!capture.called);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "core/linux: 6.12.1-1 -> 6.12.2-1",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "Proceed with the standard system upgrade? (Y/n)",
     ) != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Operation cancelled.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Operation cancelled.") != null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     var accepted_input = std.Io.Reader.fixed("\n");
-    context.stdin = &accepted_input;
-    try std.testing.expect(try confirmStandardUpgradeWithUpdates(&context, &updates));
+    tc.context.stdin = &accepted_input;
+    try std.testing.expect(try confirmStandardUpgradeWithUpdates(&tc.context, &updates));
 
-    context.stdin = null;
+    tc.context.stdin = null;
     outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "standard", "--upgrade", "--no-confirm", "demo" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
 
     outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "install", "standard", "--upgrade", "demo.pkg.tar.zst" },
     );
@@ -1592,29 +1485,20 @@ test "standard install upgrade CLI skips confirmation when packages are current"
 }
 
 test "standard install upgrade UI previews available updates before confirmation" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
     const response_json = "{\"$kind\":\"a.yesno\",\"QuestionId\":\"1\",\"Accept\":true}";
     const encoded_size = std.base64.standard.Encoder.calcSize(response_json.len);
-    const encoded = try arena.allocator().alloc(u8, encoded_size);
+    const encoded = try tc.arena.allocator().alloc(u8, encoded_size);
     const encoded_response = std.base64.standard.Encoder.encode(encoded, response_json);
     const response_frame = try std.fmt.allocPrint(
-        arena.allocator(),
+        tc.arena.allocator(),
         "[JSON]{s}[/JSON]\n",
         .{encoded_response},
     );
     var stdin = std.Io.Reader.fixed(response_frame);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &stdin;
 
     const updates = [_]list_updates.StandardUpdate{
         .{
@@ -1653,8 +1537,8 @@ test "standard install upgrade UI previews available updates before confirmation
         },
     };
 
-    try std.testing.expect(try confirmStandardUpgradeUiWithUpdates(&context, &updates));
-    const rendered = stdout.writer.buffered();
+    try std.testing.expect(try confirmStandardUpgradeUiWithUpdates(&tc.context, &updates));
+    const rendered = tc.stdout.writer.buffered();
     var frame_iterator = std.mem.splitSequence(u8, rendered, "[JSON]");
     _ = frame_iterator.next();
     var found_preview = false;
@@ -1663,7 +1547,7 @@ test "standard install upgrade UI previews available updates before confirmation
         const encoded_end = std.mem.indexOf(u8, framed, "[/JSON]") orelse continue;
         const payload = framed[0..encoded_end];
         const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(payload);
-        const decoded = try arena.allocator().alloc(u8, decoded_size);
+        const decoded = try tc.arena.allocator().alloc(u8, decoded_size);
         try std.base64.standard.Decoder.decode(decoded, payload);
         if (std.mem.indexOf(u8, decoded, "core/linux: 6.12.1-1 -> 6.12.2-1") != null and
             std.mem.indexOf(u8, decoded, "extra/firefox: 127.0-1 -> 128.0-1") != null)
@@ -1677,19 +1561,19 @@ test "standard install upgrade UI previews available updates before confirmation
     try std.testing.expect(found_preview);
     try std.testing.expect(found_confirmation);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     const decline_json = "{\"$kind\":\"a.yesno\",\"QuestionId\":\"1\",\"Accept\":false}";
     const decline_encoded_size = std.base64.standard.Encoder.calcSize(decline_json.len);
-    const decline_encoded = try arena.allocator().alloc(u8, decline_encoded_size);
+    const decline_encoded = try tc.arena.allocator().alloc(u8, decline_encoded_size);
     const decline_response = std.base64.standard.Encoder.encode(decline_encoded, decline_json);
     const decline_frame = try std.fmt.allocPrint(
-        arena.allocator(),
+        tc.arena.allocator(),
         "[JSON]{s}[/JSON]\n",
         .{decline_response},
     );
     var decline_input = std.Io.Reader.fixed(decline_frame);
-    context.stdin = &decline_input;
-    try std.testing.expect(!try confirmStandardUpgradeUiWithUpdates(&context, &updates));
+    tc.context.stdin = &decline_input;
+    try std.testing.expect(!try confirmStandardUpgradeUiWithUpdates(&tc.context, &updates));
 }
 
 test "standard install upgrade UI skips confirmation when packages are current" {
@@ -1729,20 +1613,11 @@ test "standard install upgrade UI skips confirmation when packages are current" 
 }
 
 test "install backend failures return a failing exit code and transaction result" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "install", "standard", "demo" });
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "install", "standard", "demo" });
     const Failure = struct {
         pub fn run(_: @This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             return error.TestInstallFailure;
@@ -1750,10 +1625,10 @@ test "install backend failures return a failing exit code and transaction result
     };
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, Failure{}),
+        try executeWithRunner(&tc.context, &outcome.dispatch, Failure{}),
     );
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "error: TestInstallFailure") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "error: TestInstallFailure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Transaction failed.") != null);
 }
 
 test "standard source classification preserves dotted repository names files and URLs" {

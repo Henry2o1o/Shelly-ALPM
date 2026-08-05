@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const ui_operation = @import("../output/ui_operation.zig");
@@ -115,38 +116,12 @@ fn executeUi(
     runner: anytype,
     opening: []const u8,
 ) anyerror!u8 {
-    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
-    context.attachTransactionLog(&operation_context);
-    defer operation_context.deinit();
-    var question_responder: ui_operation.QuestionResponder = .{
-        .context = context,
-        .operation_context = &operation_context,
-        .no_confirm = invocation.globals.no_confirm,
-    };
-    question_responder.attach();
-    defer question_responder.detach();
-    var reporter: ui_operation.Reporter = .{ .context = context };
-    const event_subscription = try operation_context.subscribe(.{
-        .function = ui_operation.Reporter.handle,
-        .data = &reporter,
-    });
-    defer _ = operation_context.unsubscribe(event_subscription);
-
-    try output.writeAlpmInfoFrame(context, "TransactionStart", opening);
-    try ui_operation.flush(context);
-
-    runner.run(context, &operation_context, invocation) catch |err| {
-        const message = try std.fmt.allocPrint(context.allocator, "Removal failed: {t}", .{err});
-        defer context.allocator.free(message);
-        try output.writeErrorFrame(context, message);
-        try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-        try ui_operation.flush(context);
-        return 1;
-    };
-
-    try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
-    try ui_operation.flush(context);
-    return if (reporter.failed()) 1 else 0;
+    return ui_operation.runTransaction(context, invocation, .{
+        .opening = opening,
+        .success_message = successMessage(invocation),
+        .failure_message = failureMessage(invocation),
+        .failure_label = "Removal failed",
+    }, runner);
 }
 
 fn runStandard(
@@ -612,19 +587,10 @@ test "partitions standard targets case-insensitively and honors local override" 
 
 test "routes every removal backend through shared output lifecycles" {
     const spec = @import("../cli/spec.zig");
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const Capture = struct {
         calls: usize = 0,
 
@@ -658,53 +624,44 @@ test "routes every removal backend through shared output lifecycles" {
     };
     var capture: Capture = .{};
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "remove", "standard", "--no-confirm", "-c", "-o", "--remove-config", "demo",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "demo") != null);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "demo") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "remove", "aur", "--ui-mode", "-i", "demo-git",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "remove", "appimage", "--no-confirm", "--remove-config", "Editor",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Editor") != null);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Editor") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "remove", "flatpak", "--ui-mode", "-r", "--remove-config", "Example",
     });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
     try std.testing.expectEqual(@as(usize, 4), capture.calls);
 }
 
 test "remove backend failures return a nonzero status" {
     const spec = @import("../cli/spec.zig");
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "remove", "standard", "--no-confirm", "demo",
     });
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Failure = struct {
         pub fn run(_: @This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             return error.TestBackendFailure;
@@ -713,31 +670,22 @@ test "remove backend failures return a nonzero status" {
 
     try std.testing.expectEqual(
         @as(u8, 1),
-        try executeWithRunner(&context, &outcome.dispatch, Failure{}),
+        try executeWithRunner(&tc.context, &outcome.dispatch, Failure{}),
     );
 }
 
 test "rejects empty remove targets before backend execution" {
     const spec = @import("../cli/spec.zig");
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "remove", "aur", "--ui-mode",
     });
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
-    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&context, &outcome.dispatch));
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(?u8, 1), try dispatch(&tc.context, &outcome.dispatch));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 }
 
 test "standard config cleanup removes existing targets and ignores missing ones" {

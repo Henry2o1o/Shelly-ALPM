@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const output = @import("../output/config.zig");
 const colors = @import("../output/colors.zig");
 const detail_output = @import("../output/detail.zig");
@@ -1215,9 +1216,10 @@ fn row(allocator: std.mem.Allocator, values: []const []const u8) ![]const []cons
 }
 
 test "search routes all action-first types through one handler" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
     const Capture = struct {
         calls: usize = 0,
@@ -1240,44 +1242,24 @@ test "search routes all action-first types through one handler" {
     };
     var capture: Capture = .{};
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-
-    const standard = try parser.parse(arena.allocator(), &manifest, &.{ "search", "standard", "--available", "vim" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &standard.dispatch, &capture));
-    stdout.writer.end = 0;
-    const aur = try parser.parse(arena.allocator(), &manifest, &.{ "search", "aur", "yay" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &aur.dispatch, &capture));
-    stdout.writer.end = 0;
-    const flatpak = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak.dispatch, &capture));
+    const standard = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "standard", "--available", "vim" });
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &standard.dispatch, &capture));
+    tc.stdout.writer.end = 0;
+    const aur = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "aur", "yay" });
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &aur.dispatch, &capture));
+    tc.stdout.writer.end = 0;
+    const flatpak = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "flatpak", "editor" });
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &flatpak.dispatch, &capture));
     try std.testing.expectEqual(@as(usize, 3), capture.calls);
 }
 
 test "standard output preserves C# table columns and ranked result order" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "search", "standard", "--available", "discord" });
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "standard", "--available", "discord" });
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const StandardFixture = struct {
         fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return .{ .standard = .{
@@ -1289,8 +1271,8 @@ test "standard output preserves C# table columns and ranked result order" {
             } };
         }
     };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, StandardFixture{}));
-    const rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, StandardFixture{}));
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "│ Name") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Repository") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "discord").? < std.mem.indexOf(u8, rendered, "webcord").?);
@@ -1298,21 +1280,12 @@ test "standard output preserves C# table columns and ranked result order" {
 }
 
 test "AUR standard merge and Flatpak paging are serialized without subprocesses" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
-    const aur = try parser.parse(arena.allocator(), &manifest, &.{ "search", "aur", "--standard", "yay" });
+    const aur = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "aur", "--standard", "yay" });
     const AurFixture = struct {
         fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return .{ .aur = .{
@@ -1321,11 +1294,11 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
             } };
         }
     };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &aur.dispatch, AurFixture{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Total results: 2") != null);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &aur.dispatch, AurFixture{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Total results: 2") != null);
 
-    stdout.writer.end = 0;
-    const flatpak = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "--page", "2", "--limit", "1", "editor", "--json" });
+    tc.stdout.writer.end = 0;
+    const flatpak = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "flatpak", "--page", "2", "--limit", "1", "editor", "--json" });
     const FlatpakFixture = struct {
         fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return .{ .flatpak = .{
@@ -1346,36 +1319,27 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
             } };
         }
     };
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak.dispatch, FlatpakFixture{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"page\":2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "org.example.Editor") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"download_size\":1048576") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"installed_size\":2097152") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "\"permissions\":[\"shared=network\",\"sockets=wayland\"]") != null);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &flatpak.dispatch, FlatpakFixture{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "\"page\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "org.example.Editor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "\"download_size\":1048576") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "\"installed_size\":2097152") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "\"permissions\":[\"shared=network\",\"sockets=wayland\"]") != null);
 
-    stdout.writer.end = 0;
-    const flatpak_plain = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor" });
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &flatpak_plain.dispatch, FlatpakFixture{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Download Size") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Installed Size") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "shared=network") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "sockets=wayland") != null);
+    tc.stdout.writer.end = 0;
+    const flatpak_plain = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "flatpak", "editor" });
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &flatpak_plain.dispatch, FlatpakFixture{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Download Size") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Installed Size") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "shared=network") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "sockets=wayland") != null);
 }
 
 test "AUR pkgbuild search displays fetched content and structured output" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const PkgbuildFixture = struct {
         fn search(_: @This(), _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
             try std.testing.expect(optionEnabled(invocation, "--pkgbuild"));
@@ -1388,44 +1352,35 @@ test "AUR pkgbuild search displays fetched content and structured output" {
     };
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "aur", "--pkgbuild", "yay", "missing" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, PkgbuildFixture{}));
-    var rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, PkgbuildFixture{}));
+    var rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Package build for: yay") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "pkgname=yay\npkgver=12") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Failed to get PKGBUILD for: missing") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Total results") == null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "aur", "-p", "yay", "missing", "--json" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, PkgbuildFixture{}));
-    rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, PkgbuildFixture{}));
+    rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"Name\":\"yay\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PkgBuild\":\"pkgname=yay\\npkgver=12\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PkgBuild\":null") != null);
 }
 
 test "AUR detail search renders package metadata and structured output" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const DetailFixture = struct {
         fn search(_: @This(), _: *runtime.RuntimeContext, invocation: *const parser.Invocation) !Result {
             try std.testing.expect(optionEnabled(invocation, "--detail"));
@@ -1443,26 +1398,26 @@ test "AUR detail search renders package metadata and structured output" {
     };
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "aur", "--detail", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, DetailFixture{}));
-    var rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, DetailFixture{}));
+    var rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Total results") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Required By") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "aur-helper-ui") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Optional For") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "shell-extras") != null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "aur", "-d", "yay", "--json" },
     );
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, DetailFixture{}));
-    rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, DetailFixture{}));
+    rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"Name\":\"yay\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"PackageBase\":\"yay\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"RequiredBy\":[\"aur-helper-ui\",\"desktop-meta\"]") != null);
@@ -1470,56 +1425,47 @@ test "AUR detail search renders package metadata and structured output" {
 }
 
 test "search validates AUR query length and positive pagination before backend execution" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const ShouldNotRun = struct {
         fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
             return error.ShouldNotRun;
         }
     };
 
-    const short_aur = try parser.parse(arena.allocator(), &manifest, &.{ "search", "aur", "x" });
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &short_aur.dispatch, ShouldNotRun{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "at least 2 characters") != null);
-    stdout.writer.end = 0;
+    const short_aur = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "aur", "x" });
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &short_aur.dispatch, ShouldNotRun{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "at least 2 characters") != null);
+    tc.stdout.writer.end = 0;
     const conflicting_aur = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "aur", "--pkgbuild", "--standard", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &conflicting_aur.dispatch, ShouldNotRun{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --pkgbuild with --standard") != null);
-    stdout.writer.end = 0;
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &conflicting_aur.dispatch, ShouldNotRun{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Cannot combine --pkgbuild with --standard") != null);
+    tc.stdout.writer.end = 0;
     const detail_pkgbuild = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "aur", "--detail", "--pkgbuild", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &detail_pkgbuild.dispatch, ShouldNotRun{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --detail with --pkgbuild") != null);
-    stdout.writer.end = 0;
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &detail_pkgbuild.dispatch, ShouldNotRun{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Cannot combine --detail with --pkgbuild") != null);
+    tc.stdout.writer.end = 0;
     const detail_standard = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "aur", "--detail", "--standard", "yay" },
     );
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &detail_standard.dispatch, ShouldNotRun{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --detail with --standard") != null);
-    stdout.writer.end = 0;
-    const bad_page = try parser.parse(arena.allocator(), &manifest, &.{ "search", "flatpak", "editor", "--page", "0" });
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &bad_page.dispatch, ShouldNotRun{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "greater than zero") != null);
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &detail_standard.dispatch, ShouldNotRun{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Cannot combine --detail with --standard") != null);
+    tc.stdout.writer.end = 0;
+    const bad_page = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "flatpak", "editor", "--page", "0" });
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &bad_page.dispatch, ShouldNotRun{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "greater than zero") != null);
 }
 
 test "package scoring matches the C# ranking tiers" {

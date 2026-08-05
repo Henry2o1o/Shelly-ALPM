@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const format = @import("../output/format.zig");
@@ -948,25 +949,16 @@ test "list-updates routes long and short forms to each backend" {
 }
 
 test "bare list-updates shortcode queries every backend in order and emits grouped JSON" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-P", "--json", "--show-hidden" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         backends: [4]Backend = undefined,
         show_hidden: [4]bool = undefined,
@@ -996,7 +988,7 @@ test "bare list-updates shortcode queries every backend in order and emits group
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqual(@as(usize, 4), capture.count);
     try std.testing.expectEqualSlices(
@@ -1009,9 +1001,9 @@ test "bare list-updates shortcode queries every backend in order and emits group
     }
     try std.testing.expectEqualStrings(
         "{\"Packages\":[],\"Aur\":[],\"AppImage\":[{\"Name\":\"Widget\",\"Version\":\"2.0\",\"DownloadUrl\":\"https://example.test/widget\",\"IsUpdateAvailable\":true}],\"Flatpak\":[]}\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
-    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+    try std.testing.expectEqualStrings("", tc.stderr.writer.buffered());
 }
 
 test "bare list-updates shortcode renders empty plain and UI output" {
@@ -1084,25 +1076,16 @@ test "bare list-updates shortcode renders empty plain and UI output" {
 }
 
 test "bare list-updates shortcode continues after a backend failure" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-P", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         calls: usize = 0,
 
@@ -1121,36 +1104,27 @@ test "bare list-updates shortcode continues after a backend failure" {
 
     try std.testing.expectEqual(
         @as(?u8, 1),
-        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqual(@as(usize, 4), capture.calls);
     try std.testing.expectEqualStrings(
         "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
-    try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "Unable to query appimage updates") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stderr.writer.buffered(), "Unable to query appimage updates") != null);
 }
 
 test "aggregate list-updates skips an unavailable Flatpak backend without failing" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-P", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Unavailable = struct {
         fn collect(
             _: @This(),
@@ -1166,44 +1140,35 @@ test "aggregate list-updates skips an unavailable Flatpak backend without failin
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, Unavailable{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, Unavailable{}),
     );
     try std.testing.expectEqualStrings(
         "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stderr.writer.buffered(),
+        tc.stderr.writer.buffered(),
         "Skipping Flatpak updates",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stderr.writer.buffered(),
+        tc.stderr.writer.buffered(),
         "Install shelly-flatpak-backend and Flatpak",
     ) != null);
 }
 
 test "list-updates forwards AUR show-hidden and ignores unsupported paths" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const aur_outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "aur", "--show-hidden" },
     );
     try std.testing.expect(aur_outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         show_hidden: bool = false,
 
@@ -1222,42 +1187,33 @@ test "list-updates forwards AUR show-hidden and ignores unsupported paths" {
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &aur_outcome.dispatch, &capture),
+        try dispatchWithRunner(&tc.context, &aur_outcome.dispatch, &capture),
     );
     try std.testing.expect(capture.show_hidden);
 
     const unsupported_outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "standard", "linux" },
     );
     try std.testing.expect(unsupported_outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, null),
-        try dispatchWithRunner(&context, &unsupported_outcome.dispatch, &capture),
+        try dispatchWithRunner(&tc.context, &unsupported_outcome.dispatch, &capture),
     );
 }
 
 test "standard list-updates sorts and emits compatibility JSON" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "standard", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const StandardFixture = struct {
         fn collect(
             _: @This(),
@@ -1306,9 +1262,9 @@ test "standard list-updates sorts and emits compatibility JSON" {
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, StandardFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, StandardFixture{}),
     );
-    const rendered = stdout.writer.buffered();
+    const rendered = tc.stdout.writer.buffered();
     const alpha_index = std.mem.indexOf(u8, rendered, "\"Name\":\"alpha\"") orelse return error.MissingAlpha;
     const zlib_index = std.mem.indexOf(u8, rendered, "\"Name\":\"zlib\"") orelse return error.MissingZlib;
     try std.testing.expect(alpha_index < zlib_index);
@@ -1316,23 +1272,14 @@ test "standard list-updates sorts and emits compatibility JSON" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"SizeDifference\":-64") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"OptDepends\":[\"docs: documentation\"]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "current_version") == null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }
 
 test "standard and AUR plain output mirrors legacy tables and empty states" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const AurFixture = struct {
         fn collect(
             _: @This(),
@@ -1362,13 +1309,13 @@ test "standard and AUR plain output mirrors legacy tables and empty states" {
             } } };
         }
     };
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "aur" });
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "aur" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, AurFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, AurFixture{}),
     );
-    const aur_rendered = stdout.writer.buffered();
+    const aur_rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Name") != null);
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Installed") != null);
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Available") != null);
@@ -1380,7 +1327,7 @@ test "standard and AUR plain output mirrors legacy tables and empty states" {
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "characters total") == null);
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Total: 2 packages need updates") != null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     const EmptyStandardFixture = struct {
         fn collect(
             _: @This(),
@@ -1391,35 +1338,26 @@ test "standard and AUR plain output mirrors legacy tables and empty states" {
             return .{ .standard = .{ .items = &.{} } };
         }
     };
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "standard" });
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "standard" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, EmptyStandardFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, EmptyStandardFixture{}),
     );
-    try std.testing.expectEqualStrings("All packages are up to date!\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("All packages are up to date!\n", tc.stdout.writer.buffered());
 }
 
 test "standard UI output contains update and informational frames" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "standard", "--ui-mode" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const EmptyStandardFixture = struct {
         fn collect(
             _: @This(),
@@ -1433,20 +1371,21 @@ test "standard UI output contains update and informational frames" {
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, EmptyStandardFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, EmptyStandardFixture{}),
     );
     try std.testing.expectEqual(
         @as(usize, 2),
-        std.mem.count(u8, stdout.writer.buffered(), "[JSON]"),
+        std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"),
     );
-    const decoded = try decodeFirstTestFrame(arena.allocator(), stdout.writer.buffered());
+    const decoded = try decodeFirstTestFrame(tc.arena.allocator(), tc.stdout.writer.buffered());
     try std.testing.expectEqualStrings("[]", decoded);
 }
 
 test "list-updates reports runner failures by output mode" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const Failure = struct {
         fn collect(
             _: @This(),
@@ -1457,40 +1396,31 @@ test "list-updates reports runner failures by output mode" {
             return error.TestUpdateFailure;
         }
     };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "aur", "--json" });
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "aur", "--json" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 1),
-        try dispatchWithRunner(&context, &outcome.dispatch, Failure{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, Failure{}),
     );
-    try std.testing.expectEqualStrings("", stdout.writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "TestUpdateFailure") != null);
+    try std.testing.expectEqualStrings("", tc.stdout.writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, tc.stderr.writer.buffered(), "TestUpdateFailure") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "aur", "--ui-mode" });
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "aur", "--ui-mode" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 1),
-        try dispatchWithRunner(&context, &outcome.dispatch, Failure{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, Failure{}),
     );
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 }
 
 test "AppImage list-updates preserves order and renders legacy output" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const PopulatedFixture = struct {
         fn collect(
             _: @This(),
@@ -1514,47 +1444,37 @@ test "AppImage list-updates preserves order and renders legacy output" {
             } } };
         }
     };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "appimage", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, PopulatedFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, PopulatedFixture{}),
     );
-    const json = stdout.writer.buffered();
+    const json = tc.stdout.writer.buffered();
     const zeta_index = std.mem.indexOf(u8, json, "\"Name\":\"Zeta\"") orelse return error.MissingZeta;
     const alpha_index = std.mem.indexOf(u8, json, "\"Name\":\"Alpha\"") orelse return error.MissingAlpha;
     try std.testing.expect(zeta_index < alpha_index);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"DownloadUrl\":\"https://example.test/zeta.AppImage\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"IsUpdateAvailable\":true") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "appimage" });
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "appimage" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, PopulatedFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, PopulatedFixture{}),
     );
     try std.testing.expectEqualStrings(
         "Zeta 2.0 is available\nAlpha 1.5 is available\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     const EmptyAppImageFixture = struct {
         fn collect(
             _: @This(),
@@ -1567,15 +1487,16 @@ test "AppImage list-updates preserves order and renders legacy output" {
     };
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, EmptyAppImageFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, EmptyAppImageFixture{}),
     );
-    try std.testing.expectEqualStrings("No appimage updates available\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("No appimage updates available\n", tc.stdout.writer.buffered());
 }
 
 test "Flatpak list-updates sorts compatibility JSON and renders table" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const FlatpakFixture = struct {
         fn collect(
             _: @This(),
@@ -1619,29 +1540,19 @@ test "Flatpak list-updates sorts compatibility JSON and renders table" {
             } } };
         }
     };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "flatpak", "--ui-mode" },
     );
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, FlatpakFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, FlatpakFixture{}),
     );
-    const framed = stdout.writer.buffered();
-    const decoded = try decodeFirstTestFrame(arena.allocator(), framed);
+    const framed = tc.stdout.writer.buffered();
+    const decoded = try decodeFirstTestFrame(tc.arena.allocator(), framed);
     const alpha_index = std.mem.indexOf(u8, decoded, "\"Id\":\"org.alpha.App\"") orelse return error.MissingAlpha;
     const zeta_index = std.mem.indexOf(u8, decoded, "\"Id\":\"org.zeta.App\"") orelse return error.MissingZeta;
     try std.testing.expect(alpha_index < zeta_index);
@@ -1649,14 +1560,14 @@ test "Flatpak list-updates sorts compatibility JSON and renders table" {
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"FullRef\":\"flathub:app/org.zeta.App/x86_64/stable\"") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, framed, "[JSON]"));
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "flatpak" });
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "flatpak" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, FlatpakFixture{}),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, FlatpakFixture{}),
     );
-    const plain = stdout.writer.buffered();
+    const plain = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, plain, "Name") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Id") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Version") != null);

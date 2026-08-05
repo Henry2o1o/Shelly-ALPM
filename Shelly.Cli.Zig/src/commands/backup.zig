@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const output = @import("../output/config.zig");
 const colors = @import("../output/colors.zig");
 const format = @import("../output/format.zig");
@@ -892,22 +893,13 @@ test "backup is a standalone -B command with export and local modifiers" {
 }
 
 test "backup requires an operation before collecting package state" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{"backup"});
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{"backup"});
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         called: bool = false,
 
@@ -917,11 +909,11 @@ test "backup requires an operation before collecting package state" {
         }
     };
     var capture: Capture = .{};
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expect(!capture.called);
     try std.testing.expectEqualStrings(
         "No backup operation selected. Use --export or --import.\n",
-        stderr.writer.buffered(),
+        tc.stderr.writer.buffered(),
     );
 }
 
@@ -958,10 +950,11 @@ test "backup export writes named TOML files to the requested directory" {
     var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const absolute_length = try temporary.dir.realPath(std.testing.io, &absolute_buffer);
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "backup",
         "--export",
         "--name",
@@ -971,19 +964,9 @@ test "backup export writes named TOML files to the requested directory" {
     });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, SampleRunner{}),
+        try executeWithRunner(&tc.context, &outcome.dispatch, SampleRunner{}),
     );
 
     const saved = try temporary.dir.readFileAlloc(
@@ -994,9 +977,9 @@ test "backup export writes named TOML files to the requested directory" {
     );
     defer std.testing.allocator.free(saved);
     try std.testing.expect(std.mem.startsWith(u8, saved, "standard = [\n"));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), saved) != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "machine.toml") != null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), saved) != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "machine.toml") != null);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }
 
 test "TOML package names are escaped" {

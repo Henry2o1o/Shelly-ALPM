@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const output = @import("../output/config.zig");
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const table = @import("../output/table.zig");
@@ -607,19 +608,10 @@ test "downgrade is a root-default command and retains its explicit standard path
 }
 
 test "downgrade validation rejects missing packages and incompatible target modes" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const Unused = struct {
         fn discover(_: @This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: []const u8) !CandidateSet {
             return error.ShouldNotRun;
@@ -634,50 +626,41 @@ test "downgrade validation rejects missing packages and incompatible target mode
         }
     };
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{"downgrade"});
-    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&context, &outcome.dispatch, Unused{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "No package specified") != null);
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{"downgrade"});
+    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&tc.context, &outcome.dispatch, Unused{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "No package specified") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "downgrade", "--target", "1.0-1", "--oldest", "demo",
     });
-    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&context, &outcome.dispatch, Unused{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --target with --oldest") != null);
+    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&tc.context, &outcome.dispatch, Unused{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Cannot combine --target with --oldest") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "downgrade", "--target", "1.0-1", "--list-options", "demo",
     });
-    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&context, &outcome.dispatch, Unused{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Cannot combine --target with --list-options") != null);
+    try std.testing.expectEqual(@as(?u8, 1), try dispatchWithRunner(&tc.context, &outcome.dispatch, Unused{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Cannot combine --target with --list-options") != null);
 }
 
 test "downgrade lists candidates as C sharp compatible JSON and UI records" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     var candidates = [_]Zigalpm.alpm.DowngradeCandidate{
         testCandidate("demo", "2.0", "1", "2.0-1", "x86_64", "demo-2.0-1-x86_64.pkg.tar.zst", "https://archive.example/demo-2.0-1-x86_64.pkg.tar.zst", .arch_linux, true),
         testCandidate("demo", "1.0", "2", "1.0-2", "x86_64", "demo-1.0-2-x86_64.pkg.tar.zst", "/var/cache/pacman/pkg/demo-1.0-2-x86_64.pkg.tar.zst", .local_cache, false),
     };
     var capture: TestRunner = .{ .candidates = &candidates };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "downgrade", "--list-options", "--json", "demo",
     });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &capture));
-    const json_output = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture));
+    const json_output = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, json_output, "\"Location\":0") != null);
     try std.testing.expect(std.mem.indexOf(u8, json_output, "\"Location\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, json_output, "\"Uri\":null") != null);
@@ -686,13 +669,13 @@ test "downgrade lists candidates as C sharp compatible JSON and UI records" {
             std.mem.indexOf(u8, json_output, "demo-2.0-1-x86_64.pkg.tar.zst").?,
     );
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "downgrade", "--list-options", "--ui-mode", "demo",
     });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &capture));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "[JSON]") != null);
-    const decoded = try decodeFirstFrame(arena.allocator(), stdout.writer.buffered());
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "[JSON]") != null);
+    const decoded = try decodeFirstFrame(tc.arena.allocator(), tc.stdout.writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"Location\":\"Remote\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"Location\":\"Local\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"Uri\"") == null);
@@ -701,12 +684,12 @@ test "downgrade lists candidates as C sharp compatible JSON and UI records" {
             std.mem.indexOf(u8, decoded, "demo-2.0-1-x86_64.pkg.tar.zst").?,
     );
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "downgrade", "--list-options", "demo",
     });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &capture));
-    const plain_output = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture));
+    const plain_output = tc.stdout.writer.buffered();
     try std.testing.expect(
         std.mem.indexOf(u8, plain_output, "demo-1.0-2-x86_64.pkg.tar.zst").? <
             std.mem.indexOf(u8, plain_output, "demo-2.0-1-x86_64.pkg.tar.zst").?,
@@ -714,73 +697,55 @@ test "downgrade lists candidates as C sharp compatible JSON and UI records" {
 }
 
 test "downgrade selects oldest and exact targets and updates IgnorePkg only when requested" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     var candidates = [_]Zigalpm.alpm.DowngradeCandidate{
         testCandidate("demo", "3.0", "1", "3.0-1", "x86_64", "demo-3.0-1-x86_64.pkg.tar.zst", "https://archive.example/demo-3.0-1-x86_64.pkg.tar.zst", .arch_linux, true),
         testCandidate("demo", "2.0", "4", "2.0-4", "x86_64", "demo-2.0-4-x86_64.pkg.tar.zst", "/cache/demo-2.0-4-x86_64.pkg.tar.zst", .local_cache, false),
         testCandidate("demo", "1.0", "2", "1.0-2", "x86_64", "demo-1.0-2-x86_64.pkg.tar.zst", "https://archive.example/demo-1.0-2-x86_64.pkg.tar.zst", .arch_linux, false),
     };
     var capture: TestRunner = .{ .candidates = &candidates };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "downgrade", "--oldest", "--ignore", "--no-confirm", "demo",
     });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expectEqualStrings("demo-1.0-2-x86_64.pkg.tar.zst", capture.installed_filename.?);
     try std.testing.expectEqual(@as(usize, 1), capture.ignore_calls);
 
     capture.installed_filename = null;
     capture.ignore_calls = 0;
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "downgrade", "--target", "2.0-4", "--no-confirm", "demo",
     });
-    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(?u8, 0), try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expectEqualStrings("demo-2.0-4-x86_64.pkg.tar.zst", capture.installed_filename.?);
     try std.testing.expectEqual(@as(usize, 0), capture.ignore_calls);
 }
 
 test "interactive downgrade selection and confirmations are honored" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     var candidates = [_]Zigalpm.alpm.DowngradeCandidate{
         testCandidate("demo", "2.0", "1", "2.0-1", "x86_64", "demo-2.0-1-x86_64.pkg.tar.zst", "https://archive.example/demo-2.0-1-x86_64.pkg.tar.zst", .arch_linux, true),
         testCandidate("demo", "1.0", "1", "1.0-1", "x86_64", "demo-1.0-1-x86_64.pkg.tar.zst", "/cache/demo-1.0-1-x86_64.pkg.tar.zst", .local_cache, false),
     };
     var capture: TestRunner = .{ .candidates = &candidates };
     var stdin = std.Io.Reader.fixed("1\ny\nn\n");
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "downgrade", "demo" });
+    tc.context.stdin = &stdin;
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "downgrade", "demo" });
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, &capture),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqualStrings("demo-1.0-1-x86_64.pkg.tar.zst", capture.installed_filename.?);
     try std.testing.expectEqual(@as(usize, 0), capture.ignore_calls);
-    const rendered = stdout.writer.buffered();
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Select Package") != null);
     try std.testing.expect(
         std.mem.indexOf(u8, rendered, "demo-1.0-1-x86_64.pkg.tar.zst").? <

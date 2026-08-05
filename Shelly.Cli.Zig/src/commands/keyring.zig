@@ -1,4 +1,5 @@
 const std = @import("std");
+const test_support = @import("test_support.zig");
 const output = @import("../output/config.zig");
 const colors = @import("../output/colors.zig");
 const parser = @import("../cli/parser.zig");
@@ -357,11 +358,12 @@ test "keyring maps every action to structured pacman-key arguments" {
 }
 
 test "keyring local signing stops at the first failed key" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "keyring", "lsign", "AAAA", "BBBB", "CCCC" },
     );
@@ -376,28 +378,19 @@ test "keyring local signing stops at the first failed key" {
         }
     };
     var counter: Counter = .{};
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
-    try std.testing.expectEqual(@as(u8, 9), try executeWithRunner(&context, &outcome.dispatch, &counter));
+    try std.testing.expectEqual(@as(u8, 9), try executeWithRunner(&tc.context, &outcome.dispatch, &counter));
     try std.testing.expectEqual(@as(usize, 2), counter.calls);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Failed to sign key: BBBB") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Failed to sign key: BBBB") != null);
 }
 
 test "keyring UI mode emits transaction lifecycle frames" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "keyring", "populate", "--ui-mode" },
     );
@@ -408,19 +401,9 @@ test "keyring UI mode emits transaction lifecycle frames" {
             return 0;
         }
     };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Success{}));
-    const rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, Success{}));
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[JSON]") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, rendered, "[/JSON]"));
 }

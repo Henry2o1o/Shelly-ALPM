@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const output = @import("../output/config.zig");
@@ -117,45 +118,14 @@ fn executeUi(
     invocation: *const parser.Invocation,
     runner: anytype,
 ) anyerror!u8 {
-    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
-    context.attachTransactionLog(&operation_context);
-    defer operation_context.deinit();
-    if (invocation.globals.no_confirm) {
-        operation_context.setQuestionHandler(.{ .function = ui_operation.acceptQuestionDefaults });
-        defer operation_context.setQuestionHandler(null);
-    }
-    var reporter: ui_operation.Reporter = .{ .context = context };
-    const event_subscription = try operation_context.subscribe(.{
-        .function = ui_operation.Reporter.handle,
-        .data = &reporter,
-    });
-    defer _ = operation_context.unsubscribe(event_subscription);
-
-    try output.writeAlpmInfoFrame(context, "TransactionStart", openingMessage(invocation));
-    try ui_operation.flush(context);
-
-    runner.run(context, &operation_context, invocation) catch |err| {
-        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
-            try output.writeErrorFrame(context, message);
-            try output.writeAlpmInfoFrame(context, "TransactionFailed", "Sync failed.");
-            try ui_operation.flush(context);
-            return 1;
-        }
-        const message = try std.fmt.allocPrint(context.allocator, "Sync failed: {t}", .{err});
-        defer context.allocator.free(message);
-        try output.writeErrorFrame(context, message);
-        try output.writeAlpmInfoFrame(context, "TransactionFailed", "Sync failed.");
-        try ui_operation.flush(context);
-        return 1;
-    };
-
-    try output.writeAlpmInfoFrame(
-        context,
-        "TransactionDone",
-        successMessage(invocation),
-    );
-    try ui_operation.flush(context);
-    return if (reporter.failed()) 1 else 0;
+    return ui_operation.runTransaction(context, invocation, .{
+        .opening = openingMessage(invocation),
+        .success_message = successMessage(invocation),
+        .failure_message = "Sync failed.",
+        .failure_label = "Sync failed",
+        .question_mode = .accept_defaults,
+        .report_flatpak_unavailable = true,
+    }, runner);
 }
 
 fn runRealStandardSync(
@@ -510,26 +480,17 @@ fn emitAppImageInfo(operation_context: *Zigalpm.OperationContext, message: []con
 }
 
 test "sync forwards force and applies no-confirm through the shared operation context" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "sync",
         "--force",
         "--no-confirm",
     });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         force: bool = false,
         no_confirm: bool = false,
@@ -550,31 +511,22 @@ test "sync forwards force and applies no-confirm through the shared operation co
     };
     var capture: Capture = .{};
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.force);
     try std.testing.expect(capture.no_confirm);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Synchronizing package databases...") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Synchronizing package databases...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Transaction complete.") != null);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }
 
 test "Flatpak sync uses the AppStream path and standard non-UI lifecycle" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "sync", "flatpak" });
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "sync", "flatpak" });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         called: bool = false,
         force: bool = true,
@@ -594,13 +546,13 @@ test "Flatpak sync uses the AppStream path and standard non-UI lifecycle" {
     };
     var capture: Capture = .{};
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
     try std.testing.expect(!capture.force);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Synchronizing Flatpak AppStream metadata...") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Flatpak AppStream catalog updated") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction complete.") != null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Synchronizing Flatpak AppStream metadata...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Flatpak AppStream catalog updated") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Transaction complete.") != null);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }
 
 test "Flatpak remote sync parses add and remove scopes and defaults" {
@@ -671,10 +623,11 @@ test "Flatpak remote sync validates operation-specific options" {
 }
 
 test "Flatpak remote sync uses the shared transaction lifecycle" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "sync",
         "flatpak",
         "remote",
@@ -685,16 +638,6 @@ test "Flatpak remote sync uses the shared transaction lifecycle" {
         "--system",
         "false",
     });
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         called: bool = false,
 
@@ -716,42 +659,33 @@ test "Flatpak remote sync uses the shared transaction lifecycle" {
         }
     };
     var capture: Capture = .{};
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expect(capture.called);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Adding Flatpak remote") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Flatpak remote added") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Adding Flatpak remote") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Flatpak remote added") != null);
 }
 
 test "AppImage sync routes long and shortcode forms with an optional package" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "sync", "appimage", "Editor" });
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "sync", "appimage", "Editor" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqualStrings(appimage_command_path, outcome.dispatch.command.path);
     try std.testing.expectEqualStrings("Editor", outcome.dispatch.positionals[0]);
 
     const translation = try @import("../cli/shortcodes.zig").translate(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-Yi", "Editor" },
     );
-    outcome = try parser.parse(arena.allocator(), &manifest, translation.arguments().?);
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, translation.arguments().?);
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqualStrings(appimage_command_path, outcome.dispatch.command.path);
     try std.testing.expectEqualStrings("Editor", outcome.dispatch.positionals[0]);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         package: ?[]const u8 = null,
 
@@ -766,10 +700,10 @@ test "AppImage sync routes long and shortcode forms with an optional package" {
         }
     };
     var capture: Capture = .{};
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &capture));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &capture));
     try std.testing.expectEqualStrings("Editor", capture.package.?);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Synchronizing AppImage metadata") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Selected AppImage metadata synchronized") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Synchronizing AppImage metadata") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Selected AppImage metadata synchronized") != null);
 }
 
 test "AppImage sync accepts the update URL overload and compatibility shortcode" {
@@ -1089,51 +1023,33 @@ test "sync flushes its initial status before starting the backend" {
 }
 
 test "sync reports backend failures and returns a failure exit code" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "sync", "standard" });
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "sync", "standard" });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Failure = struct {
         pub fn run(_: @This(), _: *runtime.RuntimeContext, _: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             return error.TestSyncFailure;
         }
     };
 
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, Failure{}));
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "error: TestSyncFailure") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), ":: Transaction failed.") != null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &outcome.dispatch, Failure{}));
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "error: TestSyncFailure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), ":: Transaction failed.") != null);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }
 
 test "sync UI mode emits transaction frames" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "sync", "standard", "--ui-mode" });
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "sync", "standard", "--ui-mode" });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Download = struct {
         pub fn run(_: @This(), _: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, _: *const parser.Invocation) !void {
             var operation = operation_context.begin(.{
@@ -1146,7 +1062,7 @@ test "sync UI mode emits transaction frames" {
         }
     };
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Download{}));
-    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, Download{}));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }

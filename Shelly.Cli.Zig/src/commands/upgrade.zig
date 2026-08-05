@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const fmt = @import("../output/format.zig");
@@ -438,17 +439,6 @@ fn executeWithRunner(
     invocation: *const parser.Invocation,
     runner: anytype,
 ) anyerror!u8 {
-    return if (invocation.globals.ui_mode)
-        executeUi(context, invocation, runner)
-    else
-        executeStandard(context, invocation, runner);
-}
-
-fn executeStandard(
-    context: *runtime.RuntimeContext,
-    invocation: *const parser.Invocation,
-    runner: anytype,
-) anyerror!u8 {
     const Selected = struct {
         inner: @TypeOf(runner),
 
@@ -461,11 +451,23 @@ fn executeStandard(
             try runSelected(self.inner, run_context, operation_context, run_invocation);
         }
     };
+    const selected = Selected{ .inner = runner };
+    return if (invocation.globals.ui_mode)
+        executeUi(context, invocation, selected)
+    else
+        executeStandard(context, invocation, selected);
+}
+
+fn executeStandard(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    runner: anytype,
+) anyerror!u8 {
     const succeeded = try standard_single_pane.output(
         context,
         openingMessage(invocation),
         invocation.globals.no_confirm,
-        Selected{ .inner = runner },
+        runner,
         invocation,
         successMessage(invocation),
         failureMessage(invocation),
@@ -478,44 +480,13 @@ fn executeUi(
     invocation: *const parser.Invocation,
     runner: anytype,
 ) anyerror!u8 {
-    var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
-    context.attachTransactionLog(&operation_context);
-    defer operation_context.deinit();
-    var question_responder: ui_operation.QuestionResponder = .{
-        .context = context,
-        .operation_context = &operation_context,
-        .no_confirm = invocation.globals.no_confirm,
-    };
-    question_responder.attach();
-    defer question_responder.detach();
-    var reporter: ui_operation.Reporter = .{ .context = context };
-    const event_subscription = try operation_context.subscribe(.{
-        .function = ui_operation.Reporter.handle,
-        .data = &reporter,
-    });
-    defer _ = operation_context.unsubscribe(event_subscription);
-
-    try output.writeAlpmInfoFrame(context, "TransactionStart", openingMessage(invocation));
-    try ui_operation.flush(context);
-
-    runSelected(runner, context, &operation_context, invocation) catch |err| {
-        if (Zigalpm.flatpak.errors.unavailableMessage(err)) |unavailable| {
-            try output.writeErrorFrame(context, unavailable);
-            try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-            try ui_operation.flush(context);
-            return 1;
-        }
-        const message = try std.fmt.allocPrint(context.allocator, "Upgrade failed: {t}", .{err});
-        defer context.allocator.free(message);
-        try output.writeErrorFrame(context, message);
-        try output.writeAlpmInfoFrame(context, "TransactionFailed", failureMessage(invocation));
-        try ui_operation.flush(context);
-        return 1;
-    };
-
-    try output.writeAlpmInfoFrame(context, "TransactionDone", successMessage(invocation));
-    try ui_operation.flush(context);
-    return if (reporter.failed()) 1 else 0;
+    return ui_operation.runTransaction(context, invocation, .{
+        .opening = openingMessage(invocation),
+        .success_message = successMessage(invocation),
+        .failure_message = failureMessage(invocation),
+        .failure_label = "Upgrade failed",
+        .report_flatpak_unavailable = true,
+    }, runner);
 }
 
 fn runSelected(
@@ -964,10 +935,11 @@ test "standard upgrade preview runs only before non-root elevation" {
 }
 
 test "combined upgrade plan renders enabled user updates and confirms once" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -977,17 +949,7 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
     try std.testing.expect(outcome == .dispatch);
 
     var stdin = std.Io.Reader.fixed("maybe\nyes\n");
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &stdin;
     const Capture = struct {
         calls: std.ArrayList(Backend) = .empty,
 
@@ -1013,7 +975,7 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
     defer capture.calls.deinit(std.testing.allocator);
 
     const preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &outcome.dispatch,
         &capture,
     );
@@ -1021,7 +983,7 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
     try std.testing.expect(preview.proceed);
     try std.testing.expectEqualSlices(Backend, &.{.aur}, capture.calls.items);
 
-    const rendered = stdout.writer.buffered();
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Building upgrade plan...") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "AUR (1):") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "demo-git: 1.0 -> 1.1") != null);
@@ -1033,9 +995,10 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
 }
 
 test "combined upgrade plan defaults to approval, supports decline, and no-confirm bypasses the prompt" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
 
     const Capture = struct {
         fn collect(
@@ -1054,7 +1017,7 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
     };
     const collector = Capture{};
 
-    const defaulted = try parser.parse(arena.allocator(), &manifest, &.{
+    const defaulted = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -1065,42 +1028,32 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
     try std.testing.expect(!requiresElevation(&defaulted.dispatch));
     try std.testing.expect(shouldPrepareAllPreview(&defaulted.dispatch, false));
     var default_stdin = std.Io.Reader.fixed("\n");
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdin = &default_stdin,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
+    tc.context.stdin = &default_stdin;
     const defaulted_preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &defaulted.dispatch,
         collector,
     );
     try std.testing.expect(defaulted_preview.has_updates);
     try std.testing.expect(defaulted_preview.proceed);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Proceed with all upgrades? (Y/n)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Upgrade cancelled.") == null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Proceed with all upgrades? (Y/n)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Upgrade cancelled.") == null);
 
-    stdout.writer.end = 0;
+    tc.stdout.writer.end = 0;
     var decline_stdin = std.Io.Reader.fixed("n\n");
-    context.stdin = &decline_stdin;
+    tc.context.stdin = &decline_stdin;
     const declined_preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &defaulted.dispatch,
         collector,
     );
     try std.testing.expect(declined_preview.has_updates);
     try std.testing.expect(!declined_preview.proceed);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Upgrade cancelled.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Upgrade cancelled.") != null);
 
-    stdout.writer.end = 0;
-    context.stdin = null;
-    const automatic = try parser.parse(arena.allocator(), &manifest, &.{
+    tc.stdout.writer.end = 0;
+    tc.context.stdin = null;
+    const automatic = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -1110,13 +1063,13 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
     });
     try std.testing.expect(automatic == .dispatch);
     const automatic_preview = try prepareAllUpgradePreviewWithCollector(
-        &context,
+        &tc.context,
         &automatic.dispatch,
         collector,
     );
     try std.testing.expect(automatic_preview.has_updates);
     try std.testing.expect(automatic_preview.proceed);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "Proceed with all upgrades?") == null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Proceed with all upgrades?") == null);
 }
 
 test "upgrade preview size formatting preserves negative net changes" {
@@ -1225,10 +1178,11 @@ test "standard all modifier routes every backend through the combined coordinato
 }
 
 test "upgrade all honors every exclusion" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "all",
         "--no-repo",
@@ -1238,16 +1192,6 @@ test "upgrade all honors every exclusion" {
     });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Calls = struct {
         backends: std.ArrayList(Backend) = .empty,
 
@@ -1264,27 +1208,18 @@ test "upgrade all honors every exclusion" {
     var calls: Calls = .{};
     defer calls.backends.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, &calls));
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, &calls));
     try std.testing.expectEqualSlices(Backend, &.{.aur}, calls.backends.items);
 }
 
 test "upgrade all continues after a failed backend and returns failure" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{ "upgrade", "all", "--no-confirm" });
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "upgrade", "all", "--no-confirm" });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Calls = struct {
         backends: std.ArrayList(Backend) = .empty,
 
@@ -1302,37 +1237,28 @@ test "upgrade all continues after a failed backend and returns failure" {
     var calls: Calls = .{};
     defer calls.backends.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&context, &outcome.dispatch, &calls));
+    try std.testing.expectEqual(@as(u8, 1), try executeWithRunner(&tc.context, &outcome.dispatch, &calls));
     try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.writer.buffered(), "AUR upgrade step failed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "AUR upgrade step failed") != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         ":: One or more upgrade steps failed.",
     ) != null);
 }
 
 test "upgrade all treats an unavailable Flatpak backend as a warning" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "upgrade", "all", "--no-confirm" },
     );
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Calls = struct {
         backends: std.ArrayList(Backend) = .empty,
 
@@ -1353,26 +1279,27 @@ test "upgrade all treats an unavailable Flatpak backend as a warning" {
 
     try std.testing.expectEqual(
         @as(u8, 0),
-        try executeWithRunner(&context, &outcome.dispatch, &calls),
+        try executeWithRunner(&tc.context, &outcome.dispatch, &calls),
     );
     try std.testing.expectEqualSlices(Backend, &all_backends, calls.backends.items);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         "Install shelly-flatpak-backend and Flatpak",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
         ":: All upgrades complete.",
     ) != null);
 }
 
 test "upgrade UI mode emits backend percentage frames" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
         "upgrade",
         "flatpak",
         "--ui-mode",
@@ -1380,16 +1307,6 @@ test "upgrade UI mode emits backend percentage frames" {
     });
     try std.testing.expect(outcome == .dispatch);
 
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Progress = struct {
         fn run(
             _: @This(),
@@ -1408,9 +1325,9 @@ test "upgrade UI mode emits backend percentage frames" {
         }
     };
 
-    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&context, &outcome.dispatch, Progress{}));
-    const rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &outcome.dispatch, Progress{}));
+    const rendered = tc.stdout.writer.buffered();
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered, "[JSON]"));
     try std.testing.expect(std.mem.indexOf(u8, rendered, "[/JSON]") != null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }
