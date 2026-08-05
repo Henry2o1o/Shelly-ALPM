@@ -1120,7 +1120,7 @@ msgid ""
 "Restores correct user ownership of Shelly configuration and cache folders if "
 "they were accidentally created by root."
 msgstr ""
-"Восстанавливает правильного владельца пользователя для папок конфигурации и "
+"Восстанавливает верные права пользователя для папок конфигурации и "
 "кэша Shelly, если они были случайно созданы от имени root."
 
 msgid "Purify Packages"
@@ -1130,13 +1130,13 @@ msgid "Save"
 msgstr "Сохранить"
 
 msgid "View Changelog"
-msgstr "Просмотреть журнал изменений"
+msgstr "Обзор журнала изменений"
 
 msgid "Community fluxer"
-msgstr "Fluxer-сообщество"
+msgstr "Сообщество Fluxer"
 
 msgid "Sponsor"
-msgstr "Спонсируйте"
+msgstr "Поддержать"
 
 msgid "Search..."
 msgstr "Поиск..."
@@ -1376,7 +1376,7 @@ msgid "Upgrade"
 msgstr "Обновить"
 
 msgid "Checking for updates…"
-msgstr "Проверка обновлений…"
+msgstr "Проверяются обновления…"
 
 msgid "Your system is up to date"
 msgstr "Ваша система обновлена"
@@ -1464,7 +1464,7 @@ msgstr ""
 "стандартного растрового."
 
 msgid "Remove Cache on Uninstall"
-msgstr "Удалять кэш при удалении"
+msgstr "Очищать кэш при удалении"
 
 msgid "Enable Package Downgrade"
 msgstr "Включить понижение версии пакетов"
@@ -1493,7 +1493,7 @@ msgid "v0.0.0"
 msgstr "v0.0.0"
 
 msgid "Search the AUR by name or keyword"
-msgstr "Искать в AUR по имени или ключевому слову"
+msgstr "Поиск в AUR по имени или ключевому слову"
 
 msgid "Show only packages already installed on this system"
 msgstr "Показывать только пакеты, уже установленные в этой системе"
@@ -1502,7 +1502,7 @@ msgid "Search the AUR"
 msgstr "Поиск в AUR"
 
 msgid "The AUR has no browsable index type a package name to begin."
-msgstr "В AUR нет индекса для просмотра — введите имя пакета, чтобы начать."
+msgstr "В AUR нет индекса для просмотра — введите имя пакета для начала."
 
 msgid "Run the --check function during package build"
 msgstr "Выполнить функцию --check во время сборки пакета"
@@ -1629,7 +1629,7 @@ msgid "Donation"
 msgstr "Пожертвование"
 
 msgid "FAQ"
-msgstr "FAQ"
+msgstr "ЧАВО"
 
 msgid "Help"
 msgstr "Помощь"
@@ -1656,7 +1656,7 @@ msgid "No Flatpak applications are available."
 msgstr "Нет доступных приложений Flatpak."
 
 msgid "Installed Size"
-msgstr "Установленный размер"
+msgstr "Размер установки"
 
 msgid "Download Size"
 msgstr "Размер скачивания"
@@ -2010,7 +2010,7 @@ msgid "Environment"
 msgstr "Среда"
 
 msgid "Session bus"
-msgstr "Сессионная шина"
+msgstr "Шина сеанса"
 
 msgid "System bus"
 msgstr "Системная шина"
@@ -2064,7 +2064,7 @@ msgid "Update"
 msgstr "Обновить"
 
 msgid "Utilities"
-msgstr "Утилиты"
+msgstr "Инструменты"
 
 msgid "Recommended Packages"
 msgstr "Рекомендуемые пакеты"

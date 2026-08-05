@@ -1,5 +1,6 @@
 const std = @import("std");
 const Zigalpm = @import("Zigalpm");
+const test_support = @import("test_support.zig");
 const config_manager = @import("../config/manager.zig");
 const config_model = @import("../config/model.zig");
 const format = @import("../output/format.zig");
@@ -112,17 +113,21 @@ pub const Result = union(Backend) {
     }
 };
 
-const Runner = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        backend: Backend,
-        show_hidden: bool,
-    ) anyerror!Result,
+pub const CheckOptions = struct {
+    show_hidden: bool,
+    no_devel: bool,
 };
 
-const real_runner: Runner = .{ .call = runReal };
+const Real = struct {
+    fn collect(
+        _: Real,
+        context: *runtime.RuntimeContext,
+        backend: Backend,
+        options: CheckOptions,
+    ) !Result {
+        return runReal(context, backend, options);
+    }
+};
 
 /// Collects update metadata without rendering it. Upgrade planning uses this
 /// entry point before elevation so every backend reads the invoking user's
@@ -132,7 +137,7 @@ pub fn collectUpdates(
     backend: Backend,
     show_hidden: bool,
 ) !Result {
-    return runReal(null, context, backend, show_hidden);
+    return runReal(context, backend, .{ .show_hidden = show_hidden, .no_devel = false });
 }
 
 pub fn resultCount(result: *const Result) usize {
@@ -149,14 +154,14 @@ pub fn dispatch(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !?u8 {
-    return dispatchWithRunner(context, invocation, real_runner);
+    return dispatchWithRunner(context, invocation, Real{});
 }
 
 fn dispatchWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !?u8 {
+    runner: anytype,
+) anyerror!?u8 {
     if (std.mem.eql(u8, invocation.command.path, all_command_path)) {
         return try executeAllWithRunner(context, invocation, runner);
     }
@@ -168,13 +173,12 @@ fn executeWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
     backend: Backend,
-    runner: Runner,
-) !u8 {
-    var result = runner.call(
-        runner.data,
+    runner: anytype,
+) anyerror!u8 {
+    var result = runner.collect(
         context,
         backend,
-        optionEnabled(invocation, "--show-hidden"),
+        checkOptions(invocation),
     ) catch |err| {
         try writeQueryFailure(context, invocation, backend, err);
         return 1;
@@ -201,8 +205,8 @@ fn executeWithRunner(
 fn executeAllWithRunner(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
-    runner: Runner,
-) !u8 {
+    runner: anytype,
+) anyerror!u8 {
     var results: std.ArrayList(Result) = .empty;
     defer {
         for (results.items) |*result| result.deinit(context.allocator);
@@ -211,11 +215,10 @@ fn executeAllWithRunner(
 
     var failed = false;
     for (all_backends) |backend| {
-        var result = runner.call(
-            runner.data,
+        var result = runner.collect(
             context,
             backend,
-            optionEnabled(invocation, "--show-hidden"),
+            checkOptions(invocation),
         ) catch |err| {
             if (backend == .flatpak) {
                 if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
@@ -647,15 +650,21 @@ fn truncate(value: []const u8, maximum: usize) []const u8 {
     return if (value.len <= maximum) value else value[0..maximum];
 }
 
+fn checkOptions(invocation: *const parser.Invocation) CheckOptions {
+    return .{
+        .show_hidden = optionEnabled(invocation, "--show-hidden"),
+        .no_devel = optionEnabled(invocation, "--no-devel"),
+    };
+}
+
 fn runReal(
-    _: ?*anyopaque,
     context: *runtime.RuntimeContext,
     backend: Backend,
-    show_hidden: bool,
+    options: CheckOptions,
 ) !Result {
     return switch (backend) {
         .standard => runStandard(context),
-        .aur => runAur(context, show_hidden),
+        .aur => runAur(context, options.show_hidden, options.no_devel),
         .appimage => runAppImage(context),
         .flatpak => runFlatpak(context),
     };
@@ -714,7 +723,7 @@ fn runStandard(context: *runtime.RuntimeContext) !Result {
     return .{ .standard = .{ .items = updates, .arena = arena } };
 }
 
-fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
+fn runAur(context: *runtime.RuntimeContext, show_hidden: bool, no_devel: bool) !Result {
     const database_path = try xdg.shellyCache(context, &.{"db"});
     defer context.allocator.free(database_path);
     try std.Io.Dir.cwd().createDirPath(context.io, database_path);
@@ -725,7 +734,7 @@ fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
         .show_hidden_packages = show_hidden,
     });
     defer manager.deinit();
-    const native_updates = try manager.getPackagesNeedingUpdate(true);
+    const native_updates = try manager.getPackagesNeedingUpdate(!no_devel);
     defer Zigalpm.aur.models.Update.deinitSlice(context.allocator, native_updates);
 
     const arena = try context.allocator.create(std.heap.ArenaAllocator);
@@ -923,92 +932,75 @@ test "list-updates routes long and short forms to each backend" {
             .stdout = &stdout.writer,
             .stderr = &stderr.writer,
         };
-        const Capture = struct { backend: ?Backend = null };
-        var capture: Capture = .{};
-        const runner: Runner = .{
-            .data = &capture,
-            .call = struct {
-                fn run(
-                    data: ?*anyopaque,
-                    _: *runtime.RuntimeContext,
-                    backend: Backend,
-                    _: bool,
-                ) !Result {
-                    const observed: *Capture = @ptrCast(@alignCast(data.?));
-                    observed.backend = backend;
-                    return switch (backend) {
-                        .standard => .{ .standard = .{ .items = &.{} } },
-                        .appimage => .{ .appimage = .{ .items = &.{} } },
-                        .aur => .{ .aur = .{ .items = &.{} } },
-                        .flatpak => .{ .flatpak = .{ .items = &.{} } },
-                    };
-                }
-            }.run,
+        const Capture = struct {
+            backend: ?Backend = null,
+
+            fn collect(
+                self: *@This(),
+                _: *runtime.RuntimeContext,
+                backend: Backend,
+                _: CheckOptions,
+            ) !Result {
+                self.backend = backend;
+                return switch (backend) {
+                    .standard => .{ .standard = .{ .items = &.{} } },
+                    .appimage => .{ .appimage = .{ .items = &.{} } },
+                    .aur => .{ .aur = .{ .items = &.{} } },
+                    .flatpak => .{ .flatpak = .{ .items = &.{} } },
+                };
+            }
         };
+        var capture: Capture = .{};
 
         try std.testing.expectEqual(
             @as(?u8, 0),
-            try dispatchWithRunner(&context, &outcome.dispatch, runner),
+            try dispatchWithRunner(&context, &outcome.dispatch, &capture),
         );
         try std.testing.expectEqual(case.backend, capture.backend.?);
     }
 }
 
 test "bare list-updates shortcode queries every backend in order and emits grouped JSON" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-P", "--json", "--show-hidden" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
     const Capture = struct {
         backends: [4]Backend = undefined,
         show_hidden: [4]bool = undefined,
         count: usize = 0,
+
+        fn collect(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+            options: CheckOptions,
+        ) !Result {
+            self.backends[self.count] = backend;
+            self.show_hidden[self.count] = options.show_hidden;
+            self.count += 1;
+            if (backend == .appimage) {
+                return .{ .appimage = .{ .items = &.{.{
+                    .name = "Widget",
+                    .version = "2.0",
+                    .download_url = "https://example.test/widget",
+                    .is_update_available = true,
+                }} } };
+            }
+            return emptyTestResult(backend);
+        }
     };
     var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                backend: Backend,
-                show_hidden: bool,
-            ) !Result {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.backends[observed.count] = backend;
-                observed.show_hidden[observed.count] = show_hidden;
-                observed.count += 1;
-                if (backend == .appimage) {
-                    return .{ .appimage = .{ .items = &.{.{
-                        .name = "Widget",
-                        .version = "2.0",
-                        .download_url = "https://example.test/widget",
-                        .is_update_available = true,
-                    }} } };
-                }
-                return emptyTestResult(backend);
-            }
-        }.run,
-    };
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqual(@as(usize, 4), capture.count);
     try std.testing.expectEqualSlices(
@@ -1021,25 +1013,25 @@ test "bare list-updates shortcode queries every backend in order and emits group
     }
     try std.testing.expectEqualStrings(
         "{\"Packages\":[],\"Aur\":[],\"AppImage\":[{\"Name\":\"Widget\",\"Version\":\"2.0\",\"DownloadUrl\":\"https://example.test/widget\",\"IsUpdateAvailable\":true}],\"Flatpak\":[]}\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
-    try std.testing.expectEqualStrings("", stderr.writer.buffered());
+    try std.testing.expectEqualStrings("", tc.stderr.writer.buffered());
 }
 
 test "bare list-updates shortcode renders empty plain and UI output" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const manifest = try spec.Manifest.load(arena.allocator());
-    const runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    const Empty = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return emptyTestResult(backend);
         }
-    }.run };
+    };
 
     const plain_outcome = try parseTestArguments(arena.allocator(), &manifest, &.{"-P"});
     try std.testing.expect(plain_outcome == .dispatch);
@@ -1055,7 +1047,7 @@ test "bare list-updates shortcode renders empty plain and UI output" {
     };
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&plain_context, &plain_outcome.dispatch, runner),
+        try dispatchWithRunner(&plain_context, &plain_outcome.dispatch, Empty{}),
     );
     const rendered_plain = plain_stdout.writer.buffered();
     const standard_index = std.mem.indexOf(u8, rendered_plain, "All packages are up to date!").?;
@@ -1084,7 +1076,7 @@ test "bare list-updates shortcode renders empty plain and UI output" {
     };
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&ui_context, &ui_outcome.dispatch, runner),
+        try dispatchWithRunner(&ui_context, &ui_outcome.dispatch, Empty{}),
     );
     const decoded = try decodeFirstTestFrame(std.testing.allocator, ui_stdout.writer.buffered());
     defer std.testing.allocator.free(decoded);
@@ -1096,194 +1088,153 @@ test "bare list-updates shortcode renders empty plain and UI output" {
 }
 
 test "bare list-updates shortcode continues after a backend failure" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-P", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
+    const Capture = struct {
+        calls: usize = 0,
+
+        fn collect(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+            _: CheckOptions,
+        ) !Result {
+            self.calls += 1;
+            if (backend == .appimage) return error.QueryFailed;
+            return emptyTestResult(backend);
+        }
     };
-    const Capture = struct { calls: usize = 0 };
     var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                backend: Backend,
-                _: bool,
-            ) !Result {
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.calls += 1;
-                if (backend == .appimage) return error.QueryFailed;
-                return emptyTestResult(backend);
-            }
-        }.run,
-    };
 
     try std.testing.expectEqual(
         @as(?u8, 1),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, &capture),
     );
     try std.testing.expectEqual(@as(usize, 4), capture.calls);
     try std.testing.expectEqualStrings(
         "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
-    try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "Unable to query appimage updates") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tc.stderr.writer.buffered(), "Unable to query appimage updates") != null);
 }
 
 test "aggregate list-updates skips an unavailable Flatpak backend without failing" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parseTestArguments(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "-P", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    const runner: Runner = .{
-        .call = struct {
-            fn run(
-                _: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                backend: Backend,
-                _: bool,
-            ) !Result {
-                if (backend == .flatpak)
-                    return error.FlatpakBackendUnavailable;
-                return emptyTestResult(backend);
-            }
-        }.run,
+    const Unavailable = struct {
+        fn collect(
+            _: @This(),
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+            _: CheckOptions,
+        ) !Result {
+            if (backend == .flatpak)
+                return error.FlatpakBackendUnavailable;
+            return emptyTestResult(backend);
+        }
     };
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, Unavailable{}),
     );
     try std.testing.expectEqualStrings(
         "{\"Packages\":[],\"Aur\":[],\"AppImage\":[],\"Flatpak\":[]}\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stderr.writer.buffered(),
+        tc.stderr.writer.buffered(),
         "Skipping Flatpak updates",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
-        stderr.writer.buffered(),
+        tc.stderr.writer.buffered(),
         "Install shelly-flatpak-backend and Flatpak",
     ) != null);
 }
 
 test "list-updates forwards AUR show-hidden and ignores unsupported paths" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const aur_outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
-        &.{ "list-updates", "aur", "--show-hidden" },
+        &.{ "list-updates", "aur", "--show-hidden", "--no-devel" },
     );
     try std.testing.expect(aur_outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
+    const Capture = struct {
+        show_hidden: bool = false,
+        no_devel: bool = false,
+
+        fn collect(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+            options: CheckOptions,
+        ) !Result {
+            try std.testing.expectEqual(Backend.aur, backend);
+            self.show_hidden = options.show_hidden;
+            self.no_devel = options.no_devel;
+            return .{ .aur = .{ .items = &.{} } };
+        }
     };
-    const Capture = struct { show_hidden: bool = false };
     var capture: Capture = .{};
-    const runner: Runner = .{
-        .data = &capture,
-        .call = struct {
-            fn run(
-                data: ?*anyopaque,
-                _: *runtime.RuntimeContext,
-                backend: Backend,
-                show_hidden: bool,
-            ) !Result {
-                try std.testing.expectEqual(Backend.aur, backend);
-                const observed: *Capture = @ptrCast(@alignCast(data.?));
-                observed.show_hidden = show_hidden;
-                return .{ .aur = .{ .items = &.{} } };
-            }
-        }.run,
-    };
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &aur_outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &aur_outcome.dispatch, &capture),
     );
     try std.testing.expect(capture.show_hidden);
+    try std.testing.expect(capture.no_devel);
 
     const unsupported_outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "search", "standard", "linux" },
     );
     try std.testing.expect(unsupported_outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, null),
-        try dispatchWithRunner(&context, &unsupported_outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &unsupported_outcome.dispatch, &capture),
     );
 }
 
 test "standard list-updates sorts and emits compatibility JSON" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "standard", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    const runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    const StandardFixture = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .standard = .{ .items = &.{
                 .{
@@ -1322,13 +1273,13 @@ test "standard list-updates sorts and emits compatibility JSON" {
                 },
             } } };
         }
-    }.run };
+    };
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, StandardFixture{}),
     );
-    const rendered = stdout.writer.buffered();
+    const rendered = tc.stdout.writer.buffered();
     const alpha_index = std.mem.indexOf(u8, rendered, "\"Name\":\"alpha\"") orelse return error.MissingAlpha;
     const zlib_index = std.mem.indexOf(u8, rendered, "\"Name\":\"zlib\"") orelse return error.MissingZlib;
     try std.testing.expect(alpha_index < zlib_index);
@@ -1336,29 +1287,20 @@ test "standard list-updates sorts and emits compatibility JSON" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"SizeDifference\":-64") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"OptDepends\":[\"docs: documentation\"]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "current_version") == null);
-    try std.testing.expectEqual(@as(usize, 0), stderr.writer.buffered().len);
+    try std.testing.expectEqual(@as(usize, 0), tc.stderr.writer.buffered().len);
 }
 
 test "standard and AUR plain output mirrors legacy tables and empty states" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    const aur_runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const AurFixture = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .aur = .{ .items = &.{
                 .{
@@ -1381,14 +1323,14 @@ test "standard and AUR plain output mirrors legacy tables and empty states" {
                 },
             } } };
         }
-    }.run };
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "aur" });
+    };
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "aur" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, aur_runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, AurFixture{}),
     );
-    const aur_rendered = stdout.writer.buffered();
+    const aur_rendered = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Name") != null);
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Installed") != null);
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Available") != null);
@@ -1400,123 +1342,106 @@ test "standard and AUR plain output mirrors legacy tables and empty states" {
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "characters total") == null);
     try std.testing.expect(std.mem.indexOf(u8, aur_rendered, "Total: 2 packages need updates") != null);
 
-    stdout.writer.end = 0;
-    const empty_runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    tc.stdout.writer.end = 0;
+    const EmptyStandardFixture = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .standard = .{ .items = &.{} } };
         }
-    }.run };
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "standard" });
+    };
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "standard" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, empty_runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, EmptyStandardFixture{}),
     );
-    try std.testing.expectEqualStrings("All packages are up to date!\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("All packages are up to date!\n", tc.stdout.writer.buffered());
 }
 
 test "standard UI output contains update and informational frames" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
     const outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "standard", "--ui-mode" },
     );
     try std.testing.expect(outcome == .dispatch);
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
-    };
-    const runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    const EmptyStandardFixture = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .standard = .{ .items = &.{} } };
         }
-    }.run };
+    };
 
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, EmptyStandardFixture{}),
     );
     try std.testing.expectEqual(
         @as(usize, 2),
-        std.mem.count(u8, stdout.writer.buffered(), "[JSON]"),
+        std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"),
     );
-    const decoded = try decodeFirstTestFrame(arena.allocator(), stdout.writer.buffered());
+    const decoded = try decodeFirstTestFrame(tc.arena.allocator(), tc.stdout.writer.buffered());
     try std.testing.expectEqualStrings("[]", decoded);
 }
 
 test "list-updates reports runner failures by output mode" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const Failure = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return error.TestUpdateFailure;
         }
-    }.run };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
     };
 
-    var outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "aur", "--json" });
+    var outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "aur", "--json" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 1),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, Failure{}),
     );
-    try std.testing.expectEqualStrings("", stdout.writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr.writer.buffered(), "TestUpdateFailure") != null);
+    try std.testing.expectEqualStrings("", tc.stdout.writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, tc.stderr.writer.buffered(), "TestUpdateFailure") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "aur", "--ui-mode" });
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "aur", "--ui-mode" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 1),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, Failure{}),
     );
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, stdout.writer.buffered(), "[JSON]"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tc.stdout.writer.buffered(), "[JSON]"));
 }
 
 test "AppImage list-updates preserves order and renders legacy output" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const populated_runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const PopulatedFixture = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .appimage = .{ .items = &.{
                 .{
@@ -1533,75 +1458,66 @@ test "AppImage list-updates preserves order and renders legacy output" {
                 },
             } } };
         }
-    }.run };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
     };
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "appimage", "--json" },
     );
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, populated_runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, PopulatedFixture{}),
     );
-    const json = stdout.writer.buffered();
+    const json = tc.stdout.writer.buffered();
     const zeta_index = std.mem.indexOf(u8, json, "\"Name\":\"Zeta\"") orelse return error.MissingZeta;
     const alpha_index = std.mem.indexOf(u8, json, "\"Name\":\"Alpha\"") orelse return error.MissingAlpha;
     try std.testing.expect(zeta_index < alpha_index);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"DownloadUrl\":\"https://example.test/zeta.AppImage\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"IsUpdateAvailable\":true") != null);
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "appimage" });
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "appimage" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, populated_runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, PopulatedFixture{}),
     );
     try std.testing.expectEqualStrings(
         "Zeta 2.0 is available\nAlpha 1.5 is available\n",
-        stdout.writer.buffered(),
+        tc.stdout.writer.buffered(),
     );
 
-    stdout.writer.end = 0;
-    const empty_runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    tc.stdout.writer.end = 0;
+    const EmptyAppImageFixture = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .appimage = .{ .items = &.{} } };
         }
-    }.run };
+    };
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, empty_runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, EmptyAppImageFixture{}),
     );
-    try std.testing.expectEqualStrings("No appimage updates available\n", stdout.writer.buffered());
+    try std.testing.expectEqualStrings("No appimage updates available\n", tc.stdout.writer.buffered());
 }
 
 test "Flatpak list-updates sorts compatibility JSON and renders table" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest = try spec.Manifest.load(arena.allocator());
-    const runner: Runner = .{ .call = struct {
-        fn run(
-            _: ?*anyopaque,
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const FlatpakFixture = struct {
+        fn collect(
+            _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .flatpak = .{ .items = &.{
                 .{
@@ -1638,30 +1554,20 @@ test "Flatpak list-updates sorts compatibility JSON and renders table" {
                 },
             } } };
         }
-    }.run };
-    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stdout.deinit();
-    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer stderr.deinit();
-    var context: runtime.RuntimeContext = .{
-        .allocator = arena.allocator(),
-        .io = std.testing.io,
-        .stdout = &stdout.writer,
-        .stderr = &stderr.writer,
     };
 
     var outcome = try parser.parse(
-        arena.allocator(),
+        tc.arena.allocator(),
         &manifest,
         &.{ "list-updates", "flatpak", "--ui-mode" },
     );
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, FlatpakFixture{}),
     );
-    const framed = stdout.writer.buffered();
-    const decoded = try decodeFirstTestFrame(arena.allocator(), framed);
+    const framed = tc.stdout.writer.buffered();
+    const decoded = try decodeFirstTestFrame(tc.arena.allocator(), framed);
     const alpha_index = std.mem.indexOf(u8, decoded, "\"Id\":\"org.alpha.App\"") orelse return error.MissingAlpha;
     const zeta_index = std.mem.indexOf(u8, decoded, "\"Id\":\"org.zeta.App\"") orelse return error.MissingZeta;
     try std.testing.expect(alpha_index < zeta_index);
@@ -1669,14 +1575,14 @@ test "Flatpak list-updates sorts compatibility JSON and renders table" {
     try std.testing.expect(std.mem.indexOf(u8, decoded, "\"FullRef\":\"flathub:app/org.zeta.App/x86_64/stable\"") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, framed, "[JSON]"));
 
-    stdout.writer.end = 0;
-    outcome = try parser.parse(arena.allocator(), &manifest, &.{ "list-updates", "flatpak" });
+    tc.stdout.writer.end = 0;
+    outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{ "list-updates", "flatpak" });
     try std.testing.expect(outcome == .dispatch);
     try std.testing.expectEqual(
         @as(?u8, 0),
-        try dispatchWithRunner(&context, &outcome.dispatch, runner),
+        try dispatchWithRunner(&tc.context, &outcome.dispatch, FlatpakFixture{}),
     );
-    const plain = stdout.writer.buffered();
+    const plain = tc.stdout.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, plain, "Name") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Id") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "Version") != null);
