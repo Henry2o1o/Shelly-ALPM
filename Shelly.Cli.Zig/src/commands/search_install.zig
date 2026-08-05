@@ -23,6 +23,7 @@ pub const Candidate = struct {
     repository: []const u8 = "",
     popularity: f64 = 0,
     score: u16 = 0,
+    is_installed: bool = false,
 };
 
 const DiscoveryResult = struct {
@@ -161,6 +162,7 @@ fn discoverStandard(
             .version = try context.allocator.dupe(u8, package.version() orelse ""),
             .description = try context.allocator.dupe(u8, description),
             .repository = try context.allocator.dupe(u8, package.repository() orelse ""),
+            .is_installed = manager.is_package_installed(name),
         });
     }
 }
@@ -176,7 +178,7 @@ fn discoverAur(
 
     const packages = try manager.searchPackages(query);
     defer Zigalpm.aur.models.Package.deinitSlice(context.allocator, packages);
-    try appendAurPackages(context.allocator, candidates, packages, query);
+    try appendAurPackages(context.allocator, candidates, packages, query, manager.alpm);
     if (packages.len != 0) return;
 
     const suggestions = manager.aur_client.suggest(query) catch return;
@@ -187,7 +189,7 @@ fn discoverAur(
     for (suggestions) |suggestion| try names.append(context.allocator, suggestion);
     var response = manager.aur_client.getInfo(names.items) catch return;
     defer response.deinit(context.allocator);
-    try appendAurPackages(context.allocator, candidates, response.results, query);
+    try appendAurPackages(context.allocator, candidates, response.results, query, manager.alpm);
 }
 
 fn appendAurPackages(
@@ -195,16 +197,20 @@ fn appendAurPackages(
     candidates: *std.ArrayList(Candidate),
     packages: []const Zigalpm.aur.models.Package,
     query: []const u8,
+    manager: *Zigalpm.AlpmManager,
 ) !void {
     for (packages) |package| {
         const description = package.description orelse "";
         if (matchScore(package.name, description, query) == 0) continue;
+        const name_z = try allocator.dupeZ(u8, package.name);
+        defer allocator.free(name_z);
         try appendUnique(allocator, candidates, .{
             .source = .aur,
             .name = try allocator.dupe(u8, package.name),
             .version = try allocator.dupe(u8, package.version),
             .description = try allocator.dupe(u8, description),
             .popularity = package.popularity,
+            .is_installed = manager.is_package_installed(name_z),
         });
     }
 }
@@ -342,6 +348,7 @@ fn promptSelection(
         if (candidate.description.len > 0)
             try context.stdout.print(" — {s}", .{truncate(candidate.description, 80)});
         if (most_likely) try context.stdout.writeAll(" [Most likely match]");
+        if (candidate.is_installed) try context.stdout.writeAll(" [Installed]");
         if (most_likely and use_color) try context.stdout.writeAll(colors.reset);
         try context.stdout.writeByte('\n');
     }
