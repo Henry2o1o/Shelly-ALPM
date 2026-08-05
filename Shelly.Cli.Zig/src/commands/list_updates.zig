@@ -113,14 +113,19 @@ pub const Result = union(Backend) {
     }
 };
 
+pub const CheckOptions = struct {
+    show_hidden: bool,
+    no_devel: bool,
+};
+
 const Real = struct {
     fn collect(
         _: Real,
         context: *runtime.RuntimeContext,
         backend: Backend,
-        show_hidden: bool,
+        options: CheckOptions,
     ) !Result {
-        return runReal(context, backend, show_hidden);
+        return runReal(context, backend, options);
     }
 };
 
@@ -132,7 +137,7 @@ pub fn collectUpdates(
     backend: Backend,
     show_hidden: bool,
 ) !Result {
-    return runReal(context, backend, show_hidden);
+    return runReal(context, backend, .{ .show_hidden = show_hidden, .no_devel = false });
 }
 
 pub fn resultCount(result: *const Result) usize {
@@ -173,7 +178,7 @@ fn executeWithRunner(
     var result = runner.collect(
         context,
         backend,
-        optionEnabled(invocation, "--show-hidden"),
+        checkOptions(invocation),
     ) catch |err| {
         try writeQueryFailure(context, invocation, backend, err);
         return 1;
@@ -213,7 +218,7 @@ fn executeAllWithRunner(
         var result = runner.collect(
             context,
             backend,
-            optionEnabled(invocation, "--show-hidden"),
+            checkOptions(invocation),
         ) catch |err| {
             if (backend == .flatpak) {
                 if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
@@ -645,14 +650,21 @@ fn truncate(value: []const u8, maximum: usize) []const u8 {
     return if (value.len <= maximum) value else value[0..maximum];
 }
 
+fn checkOptions(invocation: *const parser.Invocation) CheckOptions {
+    return .{
+        .show_hidden = optionEnabled(invocation, "--show-hidden"),
+        .no_devel = optionEnabled(invocation, "--no-devel"),
+    };
+}
+
 fn runReal(
     context: *runtime.RuntimeContext,
     backend: Backend,
-    show_hidden: bool,
+    options: CheckOptions,
 ) !Result {
     return switch (backend) {
         .standard => runStandard(context),
-        .aur => runAur(context, show_hidden),
+        .aur => runAur(context, options.show_hidden, options.no_devel),
         .appimage => runAppImage(context),
         .flatpak => runFlatpak(context),
     };
@@ -711,7 +723,7 @@ fn runStandard(context: *runtime.RuntimeContext) !Result {
     return .{ .standard = .{ .items = updates, .arena = arena } };
 }
 
-fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
+fn runAur(context: *runtime.RuntimeContext, show_hidden: bool, no_devel: bool) !Result {
     const database_path = try xdg.shellyCache(context, &.{"db"});
     defer context.allocator.free(database_path);
     try std.Io.Dir.cwd().createDirPath(context.io, database_path);
@@ -722,7 +734,7 @@ fn runAur(context: *runtime.RuntimeContext, show_hidden: bool) !Result {
         .show_hidden_packages = show_hidden,
     });
     defer manager.deinit();
-    const native_updates = try manager.getPackagesNeedingUpdate(true);
+    const native_updates = try manager.getPackagesNeedingUpdate(!no_devel);
     defer Zigalpm.aur.models.Update.deinitSlice(context.allocator, native_updates);
 
     const arena = try context.allocator.create(std.heap.ArenaAllocator);
@@ -927,7 +939,7 @@ test "list-updates routes long and short forms to each backend" {
                 self: *@This(),
                 _: *runtime.RuntimeContext,
                 backend: Backend,
-                _: bool,
+                _: CheckOptions,
             ) !Result {
                 self.backend = backend;
                 return switch (backend) {
@@ -968,10 +980,10 @@ test "bare list-updates shortcode queries every backend in order and emits group
             self: *@This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
-            show_hidden_flag: bool,
+            options: CheckOptions,
         ) !Result {
             self.backends[self.count] = backend;
-            self.show_hidden[self.count] = show_hidden_flag;
+            self.show_hidden[self.count] = options.show_hidden;
             self.count += 1;
             if (backend == .appimage) {
                 return .{ .appimage = .{ .items = &.{.{
@@ -1015,7 +1027,7 @@ test "bare list-updates shortcode renders empty plain and UI output" {
             _: @This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return emptyTestResult(backend);
         }
@@ -1093,7 +1105,7 @@ test "bare list-updates shortcode continues after a backend failure" {
             self: *@This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             self.calls += 1;
             if (backend == .appimage) return error.QueryFailed;
@@ -1130,7 +1142,7 @@ test "aggregate list-updates skips an unavailable Flatpak backend without failin
             _: @This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             if (backend == .flatpak)
                 return error.FlatpakBackendUnavailable;
@@ -1166,20 +1178,22 @@ test "list-updates forwards AUR show-hidden and ignores unsupported paths" {
     const aur_outcome = try parser.parse(
         tc.arena.allocator(),
         &manifest,
-        &.{ "list-updates", "aur", "--show-hidden" },
+        &.{ "list-updates", "aur", "--show-hidden", "--no-devel" },
     );
     try std.testing.expect(aur_outcome == .dispatch);
     const Capture = struct {
         show_hidden: bool = false,
+        no_devel: bool = false,
 
         fn collect(
             self: *@This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
-            show_hidden_flag: bool,
+            options: CheckOptions,
         ) !Result {
             try std.testing.expectEqual(Backend.aur, backend);
-            self.show_hidden = show_hidden_flag;
+            self.show_hidden = options.show_hidden;
+            self.no_devel = options.no_devel;
             return .{ .aur = .{ .items = &.{} } };
         }
     };
@@ -1190,6 +1204,7 @@ test "list-updates forwards AUR show-hidden and ignores unsupported paths" {
         try dispatchWithRunner(&tc.context, &aur_outcome.dispatch, &capture),
     );
     try std.testing.expect(capture.show_hidden);
+    try std.testing.expect(capture.no_devel);
 
     const unsupported_outcome = try parser.parse(
         tc.arena.allocator(),
@@ -1219,7 +1234,7 @@ test "standard list-updates sorts and emits compatibility JSON" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .standard = .{ .items = &.{
                 .{
@@ -1285,7 +1300,7 @@ test "standard and AUR plain output mirrors legacy tables and empty states" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .aur = .{ .items = &.{
                 .{
@@ -1333,7 +1348,7 @@ test "standard and AUR plain output mirrors legacy tables and empty states" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .standard = .{ .items = &.{} } };
         }
@@ -1363,7 +1378,7 @@ test "standard UI output contains update and informational frames" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .standard = .{ .items = &.{} } };
         }
@@ -1391,7 +1406,7 @@ test "list-updates reports runner failures by output mode" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return error.TestUpdateFailure;
         }
@@ -1426,7 +1441,7 @@ test "AppImage list-updates preserves order and renders legacy output" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .appimage = .{ .items = &.{
                 .{
@@ -1480,7 +1495,7 @@ test "AppImage list-updates preserves order and renders legacy output" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .appimage = .{ .items = &.{} } };
         }
@@ -1502,7 +1517,7 @@ test "Flatpak list-updates sorts compatibility JSON and renders table" {
             _: @This(),
             _: *runtime.RuntimeContext,
             _: Backend,
-            _: bool,
+            _: CheckOptions,
         ) !Result {
             return .{ .flatpak = .{ .items = &.{
                 .{
