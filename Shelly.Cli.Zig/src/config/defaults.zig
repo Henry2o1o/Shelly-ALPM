@@ -8,7 +8,7 @@ pub const json =
     \\  "ProgressBarStyle": "Blocks",
     \\  "ProgressBarWidth": 24,
     \\  "OutputMode": "singlepane",
-    \\  "AppImageInstallPath": null,
+    \\  "AppImageInstallPath": null
     \\}
 ;
 

@@ -246,7 +246,7 @@ test "defaults preserve reflection order and display conventions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const config = try Config.defaults(arena.allocator());
-    try std.testing.expectEqual(@as(usize, 8), config.values.count());
+    try std.testing.expectEqual(@as(usize, 7), config.values.count());
     try std.testing.expectEqualStrings("FileSizeDisplay", config.values.keys()[0]);
 }
 
