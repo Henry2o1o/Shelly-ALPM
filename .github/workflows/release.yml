@@ -88,7 +88,7 @@ jobs:
       - name: Compile and bundle translations
         run: |
           mkdir -p publish/shelly-ui/locale
-          for po_file in Shelly.Ui.Gtk/no_po_git/*.po; do
+          for po_file in Shelly.Ui.Gtk/po/*.po; do
             if [ -f "$po_file" ]; then
               lang=$(basename "$po_file" .po)
               mkdir -p "publish/shelly-ui/locale/$lang/LC_MESSAGES"
