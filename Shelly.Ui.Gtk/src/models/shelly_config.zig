@@ -70,6 +70,7 @@ pub const ShellyConfig = struct {
     AurInstallUseChroot: bool = false,
     AurInstallRunChecks: bool = false,
     AurInstallShowDetailPane: bool = false,
+    AurInstallDisableDevel: bool = false,
 
     AurRemoveCascadeDelete: bool = true,
 
