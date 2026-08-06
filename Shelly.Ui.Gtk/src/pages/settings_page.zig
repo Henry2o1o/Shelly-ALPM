@@ -1143,7 +1143,6 @@ const language_entries = [_]struct {
     .{ .label = "Deutsch", .value = "de_DE" },
     .{ .label = "Español", .value = "es" },
     .{ .label = "Français", .value = "fr_FR" },
-    .{ .label = "Greek", .value = "el_GR" },
     .{ .label = "Magyar", .value = "hu_HU" },
     .{ .label = "日本語", .value = "ja_JP" },
     .{ .label = "Polski", .value = "pl" },
@@ -1179,7 +1178,7 @@ fn populateDropdowns(p: *ShellySettingsPage.Private) void {
             12 => translations._("Русский"),
             13 => translations._("Türkçe"),
             14 => translations._("中文（简体）"),
-            else => unreachable,
+            else => translations._("System Default"),
         };
         gtk.StringList.append(lang_strings, label);
     }
