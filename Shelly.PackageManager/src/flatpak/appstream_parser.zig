@@ -174,8 +174,6 @@ pub const AppstreamParser = struct {
                     if (std.mem.eql(u8, name, "id")) {
                         if (id_seen) try skipElement(reader) else {
                             app.id = try readElementText(reader, scratch);
-                            if (std.mem.endsWith(u8, app.id, ".desktop"))
-                                app.id = app.id[0 .. app.id.len - ".desktop".len];
                             id_seen = true;
                         }
                     } else if (std.mem.eql(u8, name, "name")) {
