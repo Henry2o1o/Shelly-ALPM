@@ -958,6 +958,7 @@ test "combined upgrade plan renders enabled user updates and confirms once" {
             self: *@This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
+            _: *const parser.Invocation,
         ) !list_updates.Result {
             try self.calls.append(std.testing.allocator, backend);
             try std.testing.expectEqual(Backend.aur, backend);
@@ -1006,6 +1007,7 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
             _: @This(),
             _: *runtime.RuntimeContext,
             backend: Backend,
+            _: *const parser.Invocation,
         ) !list_updates.Result {
             try std.testing.expectEqual(Backend.appimage, backend);
             return .{ .appimage = .{ .items = &.{.{
