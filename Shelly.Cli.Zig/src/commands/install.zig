@@ -267,7 +267,7 @@ fn requestsStandardUpgrade(invocation: *const parser.Invocation) bool {
 }
 
 fn confirmStandardUpgrade(context: *runtime.RuntimeContext) !bool {
-    var result = list_updates.collectUpdates(context, .standard, false) catch |err| {
+    var result = list_updates.collectUpdates(context, .standard, false, false) catch |err| {
         try context.stderr.print("Unable to prepare the standard upgrade plan: {t}\n", .{err});
         try context.stderr.flush();
         return err;
@@ -323,7 +323,7 @@ fn confirmStandardUpgradeWithUpdates(
 }
 
 fn confirmStandardUpgradeUi(context: *runtime.RuntimeContext) !bool {
-    var result = list_updates.collectUpdates(context, .standard, false) catch |err| {
+    var result = list_updates.collectUpdates(context, .standard, false, false) catch |err| {
         const message = try std.fmt.allocPrint(
             context.allocator,
             "Unable to prepare the standard upgrade plan: {t}",
