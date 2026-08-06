@@ -11,6 +11,8 @@ const translations = @import("helpers/translations.zig");
 const tray_service = @import("services/tray_service.zig");
 const IconDownloadService = @import("services/icon_fetcher.zig").downloadIconsInBackground;
 
+var did_activate: bool = false;
+
 pub fn main(init: std.process.Init) void {
     runtime.io = init.io;
     runtime.environ_map = init.environ_map;
@@ -41,10 +43,7 @@ pub fn main(init: std.process.Init) void {
 
     const status = gio.Application.run(gapp, 0, null);
 
-    const is_remote = gio.Application.getIsRemote(gapp);
-    std.debug.print("[shelly-ui] run returned, is_remote={d}, status={d}\n", .{ is_remote, status });
-    if (is_remote == 0) {
-        std.debug.print("[shelly-ui] PRIMARY exiting, calling tryStopTray\n", .{});
+    if (did_activate) {
         tryStopTray(runtime.io, std.heap.c_allocator);
     }
     runtime.teardownConfig(std.heap.c_allocator);
@@ -79,6 +78,8 @@ fn startup(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
 }
 
 fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
+    did_activate = true;
+
     if (gtk.Application.getActiveWindow(app)) |window| {
         gtk.Window.present(window);
         return;
@@ -112,9 +113,8 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
             @memcpy(cul_buf[0..cfg.Culture.len], cfg.Culture);
             cul_buf[cfg.Culture.len] = 0;
             const cul = cul_buf[0..cfg.Culture.len :0];
-            std.debug.print("culture = {s}\n", .{cul});
             const ok = translations.initWithLocale(cul);
-            std.debug.print("[i18n] init ok={}, culture=pt_BR\n", .{ok});
+            std.log.info("[i18n] init ok={}, culture={s}\n", .{ ok, cul });
         }
     }
 
