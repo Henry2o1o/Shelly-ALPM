@@ -136,8 +136,9 @@ pub fn collectUpdates(
     context: *runtime.RuntimeContext,
     backend: Backend,
     show_hidden: bool,
+    no_devel: bool,
 ) !Result {
-    return runReal(context, backend, .{ .show_hidden = show_hidden, .no_devel = false });
+    return runReal(context, backend, .{ .show_hidden = show_hidden, .no_devel = no_devel });
 }
 
 pub fn resultCount(result: *const Result) usize {
