@@ -672,28 +672,43 @@ fn runFlatpakStep(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
-    if (upgradesAll(invocation) and
-        !invocation.globals.ui_mode)
-    {
+    // Relaunch the Flatpak step as the invoking (non-root) user in every
+    // combined upgrade, including --ui-mode runs elevated through pkexec:
+    // only that user's process can see the user-level Flatpak installation.
+    if (upgradesAll(invocation)) {
         switch (Zigalpm.flatpak.backendStatus()) {
             .available => {},
             .unavailable => return Zigalpm.flatpak.errors.Error.FlatpakBackendUnavailable,
             .incompatible => return Zigalpm.flatpak.errors.Error.FlatpakBackendIncompatible,
         }
 
-        var arguments: std.ArrayList([]const u8) = .empty;
-        defer arguments.deinit(context.allocator);
-        try arguments.appendSlice(context.allocator, &.{ "upgrade", "flatpak" });
-        if (invocation.globals.no_confirm)
-            try arguments.append(context.allocator, "--no-confirm");
-        if (invocation.globals.json)
-            try arguments.append(context.allocator, "--json");
-        if (try elevation.runAsInvokingUser(context, arguments.items)) |exit_code| {
+        const arguments = try flatpakRelaunchArguments(context.allocator, invocation.globals);
+        defer context.allocator.free(arguments);
+        if (try elevation.runAsInvokingUser(context, arguments)) |exit_code| {
             if (exit_code != 0) return UpgradeError.BackendFailed;
             return;
         }
     }
     try runFlatpak(context, operation_context);
+}
+
+/// Builds the argument vector for relaunching the Flatpak upgrade step as the
+/// invoking user. Output-modifying globals are forwarded so the nested
+/// invocation speaks the same protocol, including framed UI events.
+fn flatpakRelaunchArguments(
+    allocator: std.mem.Allocator,
+    globals: parser.GlobalOptions,
+) ![]const []const u8 {
+    var arguments: std.ArrayList([]const u8) = .empty;
+    errdefer arguments.deinit(allocator);
+    try arguments.appendSlice(allocator, &.{ "upgrade", "flatpak" });
+    if (globals.no_confirm)
+        try arguments.append(allocator, "--no-confirm");
+    if (globals.json)
+        try arguments.append(allocator, "--json");
+    if (globals.ui_mode)
+        try arguments.append(allocator, "--ui-mode");
+    return arguments.toOwnedSlice(allocator);
 }
 
 fn runAppImage(
@@ -1407,4 +1422,27 @@ test "no-devel modifier reaches the AUR backend selection on aur and all upgrade
         &.{ "upgrade", "standard", "--no-devel" },
     );
     try std.testing.expect(scoped_outcome == .failure);
+}
+
+test "flatpak relaunch forwards output modifiers to the nested invocation" {
+    const ui_arguments = try flatpakRelaunchArguments(
+        std.testing.allocator,
+        parser.GlobalOptions{ .no_confirm = true, .ui_mode = true },
+    );
+    defer std.testing.allocator.free(ui_arguments);
+    const expected_ui = [_][]const u8{ "upgrade", "flatpak", "--no-confirm", "--ui-mode" };
+    try std.testing.expectEqualSlices([]const u8, &expected_ui, ui_arguments);
+
+    const json_arguments = try flatpakRelaunchArguments(
+        std.testing.allocator,
+        parser.GlobalOptions{ .json = true },
+    );
+    defer std.testing.allocator.free(json_arguments);
+    const expected_json = [_][]const u8{ "upgrade", "flatpak", "--json" };
+    try std.testing.expectEqualSlices([]const u8, &expected_json, json_arguments);
+
+    const plain_arguments = try flatpakRelaunchArguments(std.testing.allocator, .{});
+    defer std.testing.allocator.free(plain_arguments);
+    const expected_plain = [_][]const u8{ "upgrade", "flatpak" };
+    try std.testing.expectEqualSlices([]const u8, &expected_plain, plain_arguments);
 }
