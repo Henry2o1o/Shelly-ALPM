@@ -548,7 +548,8 @@ pub const AppImageManager = struct {
         defer self.allocator.free(data_home);
         const desktop_dir = try std.fs.path.join(self.allocator, &.{ data_home, "applications" });
         defer self.allocator.free(desktop_dir);
-        try std.Io.Dir.cwd().createDirPath(self.io, desktop_dir);
+        var desktop_dir_handle = try std.Io.Dir.cwd().createDirPathOpen(self.io, desktop_dir, .{});
+        defer desktop_dir_handle.close(self.io);
 
         const desktop_file_name = try std.fmt.allocPrint(self.allocator, "{s}.desktop", .{clean_name});
         defer self.allocator.free(desktop_file_name);
