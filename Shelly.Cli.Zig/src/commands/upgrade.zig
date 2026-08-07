@@ -591,6 +591,20 @@ fn runStandard(
             .{ failure.service, failure.message },
         );
     }
+    var cache_operation = operation_context.begin(.{ .backend = .alpm, .kind = .cleanup });
+    var answer = try cache_operation.ask(.{
+        .kind = .confirmation,
+        .prompt = "Would you like to remove extra cache entries?",
+        .default_response = .accepted,
+    });
+    defer answer.deinit(context.allocator);
+    const clean_up = answer.response == .accepted;
+    if (clean_up) {
+        var cleaner = Zigalpm.CacheManager.init(context.allocator, context.io, .{ .cache_directory = manager.config.cache_directory, .handle = manager.handle });
+        cleaner.setOperationContext(operation_context);
+        const plan = try cleaner.plan_cache_cleanup(.{ .keep = 3, .dry_run = false });
+        _ = try cleaner.execute_cache_removal_plan(&plan);
+    }
 }
 
 fn runAur(
