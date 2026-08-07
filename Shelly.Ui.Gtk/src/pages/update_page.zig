@@ -380,7 +380,7 @@ pub const UpdatePage = extern struct {
         gtk.Button.setLabel(p.flatpak_toggle.as(gtk.Button), std.fmt.bufPrintZ(&flatpak_buffer, "{s} · {d}", .{ translations._("Flatpak"), flatpak_count }) catch translations._("Flatpak"));
     }
 
-    fn on_row_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, _: *Self) callconv(.c) void {
+    fn on_row_setup(_: *gtk.SignalListItemFactory, item: *gobject.Object, self: *Self) callconv(.c) void {
         const list_item = gobject.ext.cast(gtk.ListItem, item) orelse return;
         const grid = gtk.Grid.new();
         gtk.Widget.setMarginStart(grid.as(gtk.Widget), 12);
@@ -430,6 +430,17 @@ pub const UpdatePage = extern struct {
         gtk.Widget.addCssClass(size.as(gtk.Widget), "dim-label");
         gtk.Grid.attach(grid, size.as(gtk.Widget), 4, 0, 1, 2);
 
+        const update_btn = gtk.Button.newFromIconName("software-update-available-symbolic");
+        gtk.Widget.setValign(update_btn.as(gtk.Widget), .center);
+        gtk.Widget.setHalign(update_btn.as(gtk.Widget), .end);
+        gtk.Widget.setTooltipText(update_btn.as(gtk.Widget), translations._("Update this package"));
+        gtk.Widget.addCssClass(update_btn.as(gtk.Widget), "flat");
+        gtk.Widget.addCssClass(update_btn.as(gtk.Widget), "circular");
+        gobject.Object.setData(update_btn.as(gobject.Object), "page", self);
+        gobject.Object.setData(update_btn.as(gobject.Object), "list_item", list_item);
+        _ = gtk.Button.signals.clicked.connect(update_btn, ?*anyopaque, &on_row_update_clicked, null, .{});
+        gtk.Grid.attach(grid, update_btn.as(gtk.Widget), 5, 0, 1, 2);
+
         gtk.ListItem.setChild(list_item, grid.as(gtk.Widget));
     }
 
@@ -445,6 +456,7 @@ pub const UpdatePage = extern struct {
         const description = gobject.ext.cast(gtk.Label, gtk.Grid.getChildAt(grid, 1, 1) orelse return) orelse return;
         const version = gobject.ext.cast(gtk.Box, gtk.Grid.getChildAt(grid, 3, 0) orelse return) orelse return;
         const size = gobject.ext.cast(gtk.Label, gtk.Grid.getChildAt(grid, 4, 0) orelse return) orelse return;
+        const update_btn = gobject.ext.cast(gtk.Button, gtk.Grid.getChildAt(grid, 5, 0) orelse return) orelse return;
         const old_version = gobject.ext.cast(gtk.Label, gtk.Widget.getFirstChild(version.as(gtk.Widget)) orelse return) orelse return;
         const arrow = gtk.Widget.getNextSibling(old_version.as(gtk.Widget)) orelse return;
         const new_version = gobject.ext.cast(gtk.Label, gtk.Widget.getNextSibling(arrow) orelse return) orelse return;
@@ -455,12 +467,54 @@ pub const UpdatePage = extern struct {
         gtk.Label.setLabel(old_version, update.getOldVersion());
         gtk.Label.setLabel(new_version, update.getNewVersion());
         gtk.Label.setLabel(size, update.getSize());
+
+        const src = update.getSource();
+        gtk.Widget.setVisible(update_btn.as(gtk.Widget), @intFromBool(src == .aur or src == .flatpak));
     }
 
     fn on_source_toggled(_: *gtk.ToggleButton, self: *Self) callconv(.c) void {
         const p = self.priv();
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+
         update_summary(self);
+    }
+
+    fn on_row_update_clicked(btn: *gtk.Button, _: ?*anyopaque) callconv(.c) void {
+        const li_ptr = gobject.Object.getData(btn.as(gobject.Object), "list_item") orelse return;
+        const list_item: *gtk.ListItem = @ptrCast(@alignCast(li_ptr));
+        const object = gtk.ListItem.getItem(list_item) orelse return;
+        const update = gobject.ext.cast(UpdateObject, object) orelse return;
+
+        const page_ptr = gobject.Object.getData(btn.as(gobject.Object), "page") orelse return;
+        const self: *Self = @ptrCast(@alignCast(page_ptr));
+
+        const source = update.getSource();
+
+        const target: []const u8 = switch (source) {
+            .aur => update.getName(),
+            .flatpak => update.getName(),
+            .package => return,
+        };
+
+        const source_token: []const u8 = switch (source) {
+            .aur => "aur",
+            .flatpak => "flatpak",
+            .package => return,
+        };
+
+        var argv = [_][]const u8{ "update", source_token, target };
+        var pkgs = [_][]const u8{target};
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = "Updating selected package",
+                .argv = &argv,
+                .packages = &pkgs,
+                .on_complete = &on_transaction_complete,
+                .privileged = true,
+                .ctx = self,
+            });
+        }
     }
 
     fn forEachActiveUpdate(self: *Self, ctx: anytype, comptime f: fn (@TypeOf(ctx), *UpdateObject) void) void {

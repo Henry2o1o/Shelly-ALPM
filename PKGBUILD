@@ -7,7 +7,7 @@ pkgrel=2
 arch=('x86_64' 'aarch64')
 url="https://github.com/Seafoam-Labs/Shelly-ALPM"
 license=('GPL-3.0-only')
-makedepends=('git' 'pkgconf' 'gtk4' 'zig>=0.16' 'clang' 'gettext' 'vala' 'meson' 'ninja' 'flatpak' 'ripgrep')
+makedepends=('git' 'pkgconf' 'gtk4' 'zig>=0.16' 'clang' 'gettext' 'flatpak' 'ripgrep')
 
 # Source tarball from GitHub release
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Seafoam-Labs/Shelly-ALPM/archive/v${pkgver}.tar.gz")
@@ -48,8 +48,12 @@ build() {
     -Dcpu=baseline \
     -Doptimize=ReleaseSmall)
 
-  meson setup --prefix=/usr build-notify Shelly.Notifications
-  meson compile -C build-notify
+   (cd Shelly.Notifications.Zig && zig build --verbose \
+     --prefix "${srcdir}/${_source_dir}/out-notifications" \
+     --cache-dir "${srcdir}/zig-cache" \
+     --global-cache-dir "${srcdir}/zig-global-cache" \
+     -Dcpu=baseline \
+     -Doptimize=ReleaseSmall)
 
   ./out-cli/bin/shelly utility --completions bash > shelly.bash
   ./out-cli/bin/shelly utility --completions fish > shelly.fish
@@ -61,7 +65,7 @@ build() {
     msgfmt "$po_file" -o "shelly-ui-${lang}.mo"
   done
 
-  for po_file in Shelly.Notifications/po/*.po; do
+  for po_file in Shelly.Notifications.Zig/po/*.po; do
     [ -f "$po_file" ] || continue
     lang=$(basename "$po_file" .po)
     msgfmt "$po_file" -o "shelly-notifications-${lang}.mo"
@@ -115,7 +119,7 @@ package_shelly() {
   )
 
   cd "$srcdir/${_source_dir}"
-  install -Dm755 build-notify/shelly-notifications "$pkgdir/usr/bin/shelly-notifications"
+  install -Dm755 out-notifications/bin/shelly-notifications "$pkgdir/usr/bin/shelly-notifications"
   install -Dm755 out/bin/Shelly_Ui_Gtk "$pkgdir/usr/bin/shelly-ui"
   install -Dm755 out-cli/bin/shelly "$pkgdir/usr/bin/shelly"
   install -Dm755 out-key/bin/shelly-key "$pkgdir/usr/bin/shelly-key"

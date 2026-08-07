@@ -99,7 +99,7 @@ jobs:
       - name: Compile and bundle tray service translations
         run: |
           mkdir -p publish/shelly-ui/locale
-          for po_file in Shelly.Notifications/po/*.po; do
+          for po_file in Shelly.Notifications.Zig/po/*.po; do
             if [ -f "$po_file" ]; then
               lang=$(basename "$po_file" .po)
               mkdir -p "publish/shelly-ui/locale/$lang/LC_MESSAGES"
@@ -107,12 +107,15 @@ jobs:
             fi
           done
 
-      - name: Publish Shelly.Notifications
+      - name: Publish Shelly.Notifications.Zig
         run: |
-          meson setup build-notify Shelly.Notifications
-          meson compile -C build-notify
+          cd Shelly.Notifications.Zig
+          zig build --verbose \
+            --prefix ../../publish/build-notifications \
+            -Dcpu=baseline \
+            -Doptimize=ReleaseSafe
           # Bundle Notifications into the UI directory.
-          install -Dm755 build-notify/shelly-notifications publish/shelly-ui/shelly-notifications
+          install -Dm755 publish/build-notifications/bin/shelly-notifications publish/shelly-ui/shelly-notifications
 
       - name: Publish Shelly.Key
         run: |

@@ -1178,7 +1178,7 @@ fn populateDropdowns(p: *ShellySettingsPage.Private) void {
             12 => translations._("Русский"),
             13 => translations._("Türkçe"),
             14 => translations._("中文（简体）"),
-            else => unreachable,
+            else => translations._("System Default"),
         };
         gtk.StringList.append(lang_strings, label);
     }
