@@ -1,6 +1,8 @@
 const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const gtk = bindings.gtk;
+const gio = bindings.gio;
+const glib = bindings.glib;
 const gobject = bindings.gobject;
 const support = @import("../support.zig");
 
@@ -87,7 +89,17 @@ pub const FlatpakPage = extern struct {
 
         gtk.ListBox.setHeaderFunc(p.category_list, &category_header, null, null);
 
+        const group = gio.SimpleActionGroup.new();
+        const action = gio.SimpleAction.new("focus", null);
+        _ = gio.SimpleAction.signals.activate.connect(action, *Self, &onFocusSearch, self, .{});
+        gio.ActionMap.addAction(group.as(gio.ActionMap), action.as(gio.Action));
+        gtk.Widget.insertActionGroup(self.as(gtk.Widget), "search", group.as(gio.ActionGroup));
+
         support.connectLifecycle(Self, self);
+    }
+
+    fn onFocusSearch(_: *gio.SimpleAction, _: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = gtk.Widget.grabFocus(self.priv().search_entry.as(gtk.Widget));
     }
 
     fn populateStack(self: *Self) void {

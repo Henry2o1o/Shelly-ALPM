@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: shelly-notifications 2.3.0.2\n"
 "Report-Msgid-Bugs-To: https://github.com/Seafoam-Labs/conch/issues\n"
-"POT-Creation-Date: 2026-08-02 10:37-0400\n"
-"PO-Revision-Date: 2026-06-02 15:24+0900\n"
+"POT-Creation-Date: 2026-08-06 20:50+0900\n"
+"PO-Revision-Date: 2026-08-06 21:12+0900\n"
 "Last-Translator: UTUMI Hirosi <utuhiro78@yahoo.co.jp>\n"
 "Language-Team: \n"
 "Language: ja_JP\n"
@@ -12,72 +12,39 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "X-Generator: Poedit 3.9\n"
 
-#: src/main.zig:459
-msgid "Check for updates"
-msgstr ""
+#| msgid "No updates available."
+msgid "updates available"
+msgstr "利用可能なアップデートがあります"
 
-#: src/main.zig:518
-msgid "Exit"
-msgstr "終了"
+#| msgid "Updates available: {0}"
+msgid "Updates available"
+msgstr "利用可能なアップデートがあります"
 
-#: src/main.zig:611
-msgid "Last Check:"
-msgstr ""
-
-#: src/main.zig:463
-msgid "Last Check: Never"
-msgstr ""
-
-#: src/main.zig:600
-msgid "Last Check: never"
-msgstr ""
-
-#: src/main.zig:472
-msgid "No updates"
-msgstr ""
-
-#: src/main.zig:455
 msgid "Open Shelly"
 msgstr "Shelly を開く"
 
-#: src/main.zig:457
 msgid "Update Packages"
 msgstr "パッケージをアップデート"
 
-#: src/main.zig:276
-msgid "Updates available"
-msgstr ""
+#| msgid "Check for Updates"
+msgid "Check for updates"
+msgstr "アップデートを確認"
 
-#: src/main.zig:275
-msgid "updates available"
-msgstr ""
+#| msgid "Last check: Never"
+msgid "Last Check: Never"
+msgstr "最終確認: なし"
 
-#~ msgid "AUR"
-#~ msgstr "AUR"
+#| msgid "No updates available."
+msgid "No updates"
+msgstr "アップデートはありません"
 
-#~ msgid "Flatpak"
-#~ msgstr "Flatpak"
+msgid "Exit"
+msgstr "終了"
 
-#~ msgid "Shelly Notifications"
-#~ msgstr "Shelly 通知アプリ"
+#| msgid "Last check: Never"
+msgid "Last Check: never"
+msgstr "最終確認: なし"
 
-#~ msgid "Shelly Notifications started. Press Ctrl+C to exit."
-#~ msgstr ""
-#~ "Shelly 通知アプリを開始しました。終了するには Ctrl+C を押してください。"
-
-#~ msgid "Standard"
-#~ msgstr "標準"
-
-#~ msgid ""
-#~ "Tip: If you are using GNOME, ensure you have an 'AppIndicator' extension "
-#~ "installed."
-#~ msgstr ""
-#~ "ヒント: GNOME を使用している場合は「AppIndicator」拡張機能がインストールさ"
-#~ "れていることを確認してください。"
-
-#~ msgid ""
-#~ "Warning: No StatusNotifierWatcher found. The tray icon will not be "
-#~ "visible."
-#~ msgstr ""
-#~ "警告: StatusNotifierWatcher が見つかりませんでした。トレイアイコンは表示さ"
-#~ "れません。"
+#| msgid "Last check: {0}"
+msgid "Last Check:"
+msgstr "最終確認:"

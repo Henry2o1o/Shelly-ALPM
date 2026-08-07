@@ -8,6 +8,7 @@ const Color = colors.Color;
 const fmt = @import("format.zig");
 const review_output = @import("review.zig");
 const runtime = @import("../runtime/context.zig");
+const parser = @import("../cli/parser.zig");
 
 const SizeDisplay = fmt.SizeDisplay;
 
@@ -37,27 +38,21 @@ const FinalizedBar = struct {
     action: []const u8,
 };
 
-pub const CommandOperation = struct {
-    data: ?*anyopaque = null,
-    call: *const fn (
-        data: ?*anyopaque,
-        context: *runtime.RuntimeContext,
-        operation_context: *Zigalpm.OperationContext,
-    ) anyerror!void,
-    success_message: ?[]const u8 = null,
-    failure_message: ?[]const u8 = null,
-};
-
 /// Runs a backend operation through the common non-UI lifecycle. Package
-/// commands only supply their opening message and operation callback; event
-/// rendering, prompts, errors, flushing, and the final transaction result stay
-/// identical across ALPM, AUR, Flatpak, AppImage, local, and download commands.
+/// commands only supply their opening message and runner; event rendering,
+/// prompts, errors, flushing, and the final transaction result stay identical
+/// across ALPM, AUR, Flatpak, AppImage, local, and download commands.
+/// The runner must expose
+/// `run(context: *runtime.RuntimeContext, operation_context: *Zigalpm.OperationContext, invocation: *const parser.Invocation) anyerror!void`.
 pub fn output(
     context: *runtime.RuntimeContext,
     opening_message: []const u8,
     no_confirm: bool,
-    command_operation: CommandOperation,
-) !bool {
+    runner: anytype,
+    invocation: *const parser.Invocation,
+    success_message: ?[]const u8,
+    failure_message: ?[]const u8,
+) anyerror!bool {
     var operation_context = Zigalpm.OperationContext.init(context.allocator, context.io);
     context.attachTransactionLog(&operation_context);
     defer operation_context.deinit();
@@ -66,24 +61,24 @@ pub fn output(
     try renderer.attach(&operation_context);
 
     try renderer.begin(opening_message);
-    command_operation.call(command_operation.data, context, &operation_context) catch |err| {
+    runner.run(context, &operation_context, invocation) catch |err| {
         if (err == error.Cancelled) {
             try renderer.finishCancelled();
             return true;
         }
         if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
             try renderer.reportError(message);
-            try renderer.finishWithMessage(false, command_operation.failure_message);
+            try renderer.finishWithMessage(false, failure_message);
             return false;
         }
         const message = try std.fmt.allocPrint(context.allocator, "{t}", .{err});
         defer context.allocator.free(message);
         try renderer.reportError(message);
-        try renderer.finishWithMessage(false, command_operation.failure_message);
+        try renderer.finishWithMessage(false, failure_message);
         return false;
     };
 
-    try renderer.finishWithMessage(true, command_operation.success_message);
+    try renderer.finishWithMessage(true, success_message);
     return !renderer.failed();
 }
 

@@ -45,7 +45,7 @@ jobs:
             key:
               - 'Shelly.Key/**'
             notifications:
-              - 'Shelly.Notifications/**'
+              - 'Shelly.Notifications.Zig/**'
             pkgbuild:
               - 'PKGBUILD*'
 
@@ -208,12 +208,15 @@ jobs:
     steps:
       - run: |
           pacman -Syu --noconfirm
-          pacman -S --needed --noconfirm base-devel glibc git meson ninja gtk4 json-glib
+          pacman -S --needed --noconfirm base-devel glibc git zig clang gettext
       - uses: actions/checkout@v6
-      - name: Build Shelly.Notifications
+      - name: Build Shelly.Notifications.Zig
         run: |
-          meson setup build-notify Shelly.Notifications
-          meson compile -C build-notify
+          cd Shelly.Notifications.Zig
+          zig build --verbose \
+            --prefix ../zig-out-notifications \
+            -Dcpu=baseline \
+            -Doptimize=ReleaseSafe
 
   pkgbuild:
     needs: changes

@@ -39,16 +39,20 @@ pub fn relaunchIfNeeded(
     return @as(?u8, try exitCode(try child.wait(context.io)));
 }
 
-/// Runs the current executable as the user who invoked sudo/doas. This keeps
-/// per-user package stores (notably Flatpak) attached to the calling user when
-/// an aggregate command is already running as root. Returns null when the
-/// process was not elevated by a supported caller-preserving tool.
+/// Runs the current executable as the user who invoked sudo/doas/pkexec. This
+/// keeps per-user package stores (notably Flatpak) attached to the calling
+/// user when an aggregate command is already running as root. The child also
+/// receives the calling user's runtime directory and session bus address so
+/// system-scope Flatpak operations can authenticate through the Flatpak
+/// helper. Returns null when the process was not elevated by a supported
+/// caller-preserving tool.
 pub fn runAsInvokingUser(
     context: *context_module.RuntimeContext,
     arguments: []const []const u8,
 ) !?u8 {
-    const user = invokingUser(context) orelse return null;
-    const home = try invokingUserHome(context, user);
+    const identity = (try invokingUser(context)) orelse return null;
+    defer identity.deinit(context.allocator);
+    const home = try invokingUserHome(context, identity.username);
     defer context.allocator.free(home);
     const executable = try std.process.executablePathAlloc(context.io, context.allocator);
     const safe_executable: []const u8 = std.mem.trimEnd(u8, executable, " (deleted)");
@@ -61,13 +65,27 @@ pub fn runAsInvokingUser(
         .{home},
     );
     defer context.allocator.free(xdg_environment);
+    const runtime_environment = try std.fmt.allocPrint(
+        context.allocator,
+        "XDG_RUNTIME_DIR=/run/user/{s}",
+        .{identity.uid},
+    );
+    defer context.allocator.free(runtime_environment);
+    const bus_environment = try std.fmt.allocPrint(
+        context.allocator,
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{s}/bus",
+        .{identity.uid},
+    );
+    defer context.allocator.free(bus_environment);
     const child_arguments = try buildInvokingUserArguments(
         context.allocator,
         findElevator(context),
-        user,
+        identity.username,
         safe_executable,
         home_environment,
         xdg_environment,
+        runtime_environment,
+        bus_environment,
         arguments,
     );
     defer context.allocator.free(child_arguments);
@@ -132,25 +150,123 @@ fn buildInvokingUserArguments(
     executable: []const u8,
     home_environment: []const u8,
     xdg_environment: []const u8,
+    runtime_environment: []const u8,
+    bus_environment: []const u8,
     arguments: []const []const u8,
 ) ![]const []const u8 {
-    const result = try allocator.alloc([]const u8, arguments.len + 7);
+    const result = try allocator.alloc([]const u8, arguments.len + 9);
     result[0] = elevator;
     result[1] = "-u";
     result[2] = user;
     result[3] = "env";
     result[4] = home_environment;
     result[5] = xdg_environment;
-    result[6] = executable;
-    @memcpy(result[7..], arguments);
+    result[6] = runtime_environment;
+    result[7] = bus_environment;
+    result[8] = executable;
+    @memcpy(result[9..], arguments);
     return result;
 }
 
-fn invokingUser(context: *const context_module.RuntimeContext) ?[]const u8 {
+const InvokingIdentity = struct {
+    username: []const u8,
+    uid: []const u8,
+
+    fn deinit(self: InvokingIdentity, allocator: std.mem.Allocator) void {
+        allocator.free(self.username);
+        allocator.free(self.uid);
+    }
+};
+
+/// Resolves the username and uid of the user who invoked the current elevated
+/// process, recognizing sudo, doas, and pkexec. Returns null when the process
+/// was not elevated by one of these tools or when the invoking user was root.
+/// Both returned strings are owned by the caller.
+fn invokingUser(context: *const context_module.RuntimeContext) !?InvokingIdentity {
     const environment = context.environment orelse return null;
-    const user = environment.get("SUDO_USER") orelse environment.get("DOAS_USER") orelse return null;
-    if (user.len == 0 or std.mem.eql(u8, user, "root")) return null;
-    return user;
+    if (environment.get("SUDO_USER") == null and
+        environment.get("DOAS_USER") == null and
+        environment.get("PKEXEC_UID") == null) return null;
+    const passwd = std.Io.Dir.cwd().readFileAlloc(
+        context.io,
+        "/etc/passwd",
+        context.allocator,
+        .limited(1024 * 1024),
+    ) catch return null;
+    defer context.allocator.free(passwd);
+    return invokingIdentity(context.allocator, environment, passwd);
+}
+
+fn invokingIdentity(
+    allocator: std.mem.Allocator,
+    environment: *const std.process.Environ.Map,
+    passwd: []const u8,
+) !?InvokingIdentity {
+    if (environment.get("SUDO_USER")) |user| {
+        if (validInvokingUser(user)) return try identityForUsername(allocator, passwd, user);
+    }
+    if (environment.get("DOAS_USER")) |user| {
+        if (validInvokingUser(user)) return try identityForUsername(allocator, passwd, user);
+    }
+    const uid = environment.get("PKEXEC_UID") orelse return null;
+    if (uid.len == 0) return null;
+    const username = try usernameForUidInPasswd(allocator, passwd, uid) orelse return null;
+    errdefer allocator.free(username);
+    return InvokingIdentity{
+        .username = username,
+        .uid = try allocator.dupe(u8, uid),
+    };
+}
+
+fn identityForUsername(
+    allocator: std.mem.Allocator,
+    passwd: []const u8,
+    username: []const u8,
+) !?InvokingIdentity {
+    const uid = try uidForUsernameInPasswd(allocator, passwd, username) orelse return null;
+    errdefer allocator.free(uid);
+    return InvokingIdentity{
+        .username = try allocator.dupe(u8, username),
+        .uid = uid,
+    };
+}
+
+fn validInvokingUser(user: []const u8) bool {
+    return user.len > 0 and !std.mem.eql(u8, user, "root");
+}
+
+fn usernameForUidInPasswd(
+    allocator: std.mem.Allocator,
+    passwd: []const u8,
+    wanted_uid: []const u8,
+) !?[]const u8 {
+    var lines = std.mem.splitScalar(u8, passwd, '\n');
+    while (lines.next()) |line| {
+        var fields = std.mem.splitScalar(u8, line, ':');
+        const username = fields.next() orelse continue;
+        _ = fields.next() orelse continue;
+        const uid = fields.next() orelse continue;
+        if (std.mem.eql(u8, uid, wanted_uid) and validInvokingUser(username))
+            return try allocator.dupe(u8, username);
+    }
+    return null;
+}
+
+fn uidForUsernameInPasswd(
+    allocator: std.mem.Allocator,
+    passwd: []const u8,
+    wanted_username: []const u8,
+) !?[]const u8 {
+    var lines = std.mem.splitScalar(u8, passwd, '\n');
+    while (lines.next()) |line| {
+        var fields = std.mem.splitScalar(u8, line, ':');
+        const username = fields.next() orelse continue;
+        _ = fields.next() orelse continue;
+        const uid = fields.next() orelse continue;
+        if (std.mem.eql(u8, username, wanted_username) and uid.len > 0)
+            return try allocator.dupe(u8, uid);
+    }
+    return null;
 }
 
 fn invokingUserHome(
@@ -211,6 +327,8 @@ test "calling-user arguments preserve Flatpak user storage" {
         "/usr/bin/shelly",
         "HOME=/home/tester",
         "XDG_DATA_HOME=/home/tester/.local/share",
+        "XDG_RUNTIME_DIR=/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
         &arguments,
     );
     defer std.testing.allocator.free(actual);
@@ -222,6 +340,8 @@ test "calling-user arguments preserve Flatpak user storage" {
         "env",
         "HOME=/home/tester",
         "XDG_DATA_HOME=/home/tester/.local/share",
+        "XDG_RUNTIME_DIR=/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
         "/usr/bin/shelly",
         "upgrade",
         "flatpak",
@@ -229,4 +349,61 @@ test "calling-user arguments preserve Flatpak user storage" {
     };
     try std.testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |wanted, value| try std.testing.expectEqualStrings(wanted, value);
+}
+
+const sample_passwd =
+    "root:x:0:0:root:/root:/usr/bin/zsh\n" ++
+    "tester:x:1000:1000::/home/tester:/usr/bin/zsh\n" ++
+    "other:x:2000:2000::/home/other:/usr/bin/zsh\n";
+
+test "pkexec elevation resolves the invoking identity from passwd" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var environment = std.process.Environ.Map.init(arena.allocator());
+    try environment.put("PKEXEC_UID", "1000");
+
+    const identity = (try invokingIdentity(std.testing.allocator, &environment, sample_passwd)).?;
+    defer identity.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("tester", identity.username);
+    try std.testing.expectEqualStrings("1000", identity.uid);
+}
+
+test "sudo elevation takes precedence over pkexec and resolves its uid" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var environment = std.process.Environ.Map.init(arena.allocator());
+    try environment.put("SUDO_USER", "tester");
+    try environment.put("PKEXEC_UID", "2000");
+
+    const identity = (try invokingIdentity(std.testing.allocator, &environment, sample_passwd)).?;
+    defer identity.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("tester", identity.username);
+    try std.testing.expectEqualStrings("1000", identity.uid);
+}
+
+test "root callers are not treated as an invoking user" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var environment = std.process.Environ.Map.init(arena.allocator());
+    try environment.put("SUDO_USER", "root");
+    try environment.put("PKEXEC_UID", "0");
+
+    try std.testing.expect(try invokingIdentity(
+        std.testing.allocator,
+        &environment,
+        sample_passwd,
+    ) == null);
+}
+
+test "invoking identity is null without elevation markers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var environment = std.process.Environ.Map.init(arena.allocator());
+    try environment.put("HOME", "/home/tester");
+
+    try std.testing.expect(try invokingIdentity(
+        std.testing.allocator,
+        &environment,
+        sample_passwd,
+    ) == null);
 }
