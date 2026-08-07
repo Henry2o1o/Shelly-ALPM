@@ -4,9 +4,8 @@ const gio = bindings.gio;
 const gobject = bindings.gobject;
 const glib = bindings.glib;
 
-const TrayService: [:0]const u8 = "org.shelly.Notifications";
-const TrayPath: [:0]const u8 = "/org/shelly/Notifications";
-const TrayInterface: [:0]const u8 = "org.shelly.Notifications";
+const TrayPath: [:0]const u8 = "/org/shellyorg/Notifications";
+const TrayInterface: [:0]const u8 = "com.shellyorg.shelly";
 
 pub const DBus = struct {
     connection: ?*gio.DBusConnection = null, // session
@@ -18,7 +17,7 @@ pub const DBus = struct {
     }
 
     pub fn updatesMadeInUi(self: *DBus) void {
-        self.callTray("UpdatesMadeInUi");
+        self.emitTray("Refresh");
     }
 
     fn ensureBus(self: *DBus, slot: *?*gio.DBusConnection, bus: gio.BusType) ?*gio.DBusConnection {
@@ -43,22 +42,22 @@ pub const DBus = struct {
         return self.ensureBus(&self.system_connection, .system);
     }
 
-    fn callTray(self: *DBus, method: [:0]const u8) void {
+    fn emitTray(self: *DBus, signal: [:0]const u8) void {
         const conn = self.ensureConnection() orelse return;
-        gio.DBusConnection.call(
+        var err: ?*glib.Error = null;
+        _ = gio.DBusConnection.emitSignal(
             conn,
-            TrayService,
+            null,
             TrayPath,
             TrayInterface,
-            method,
-            null, // parameters
-            null, // reply_type
-            .{}, // flags (G_DBUS_CALL_FLAGS_NONE)
-            -1, // timeout (default)
-            null, // cancellable
-            null, // callback (null = ignore result)
-            null, // user_data
+            signal,
+            null,
+            &err,
         );
+        if (err) |e| {
+            std.log.warn("emit_signal failed: {s}", .{e.f_message orelse "unknown"});
+            glib.Error.free(e);
+        }
     }
 
     pub fn polkitAvailable(self: *DBus) bool {
