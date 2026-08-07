@@ -378,7 +378,7 @@ pub const UpdateManager = struct {
 
         const cache_home = try xdg_paths.xdgCacheHome(self.allocator, self.environ);
         defer self.allocator.free(cache_home);
-        const backup_dir = try std.fs.path.join(self.allocator, &.{ cache_home, "shelly", appimage_ptr.name });
+        const backup_dir = try std.fs.path.join(self.allocator, &.{ cache_home, "Shelly", appimage_ptr.name });
         defer self.allocator.free(backup_dir);
 
         const backup_filename = try std.fmt.allocPrint(
