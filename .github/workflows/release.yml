@@ -109,11 +109,10 @@ jobs:
 
       - name: Publish Shelly.Notifications.Zig
         run: |
-          cd Shelly.Notifications.Zig
-          zig build --verbose \
-            --prefix ../../publish/build-notifications \
+          (cd Shelly.Notifications.Zig && zig build --verbose \
+            --prefix ../publish/build-notifications \
             -Dcpu=baseline \
-            -Doptimize=ReleaseSafe
+            -Doptimize=ReleaseSafe)
           # Bundle Notifications into the UI directory.
           install -Dm755 publish/build-notifications/bin/shelly-notifications publish/shelly-ui/shelly-notifications
 
