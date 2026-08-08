@@ -563,9 +563,12 @@ pub const Model = struct {
         errdefer self.gpa.free(job.name);
         self.install_job = job;
 
-        // The worker owns this copy and wipes it after feeding it to sudo
-        const password = try self.gpa.dupe(u8, prompt.password.items);
-        errdefer self.gpa.free(password);
+        // The worker owns this copy and wipes it after feeding it to sudo.
+        // It must be allocated with the page allocator because the worker
+        // frees it with the page allocator (using a different allocator than
+        // the one that allocated a block is undefined behavior).
+        const password = try std.heap.page_allocator.dupe(u8, prompt.password.items);
+        errdefer std.heap.page_allocator.free(password);
 
         const thread = try std.Thread.spawn(.{}, installElevatedThread, .{ job, password });
         thread.detach();
