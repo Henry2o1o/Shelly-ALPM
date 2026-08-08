@@ -14,6 +14,7 @@ const InstallBackend = shelly_cli.ShellyCli.InstallBackend;
 pub const Tab = enum {
     packages,
     aur,
+    upgrade,
 
     pub const all: []const Tab = &.{ .packages, .aur, .upgrade };
 
