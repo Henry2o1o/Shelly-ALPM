@@ -1,13 +1,19 @@
 const std = @import("std");
-const zz = @import("zigzag");
+const vaxis = @import("vaxis");
+const vxfw = vaxis.vxfw;
 const Shelly_Tui = @import("Shelly_Tui");
 const Model = Shelly_Tui.model.Model;
 
-const Io = std.Io;
-
 pub fn main(init: std.process.Init) !void {
-    var program = zz.Program(Model).init(init.gpa, init.io, init.environ_map);
-    defer program.deinit();
+    var buffer: [1024]u8 = undefined;
+    var app: vxfw.App = try .init(init.io, init.gpa, init.environ_map, &buffer);
+    defer app.deinit();
 
-    try program.run();
+    // The model is heap allocated because vxfw widgets hold a stable pointer
+    // to it across frames
+    const model = try init.gpa.create(Model);
+    defer init.gpa.destroy(model);
+    model.* = .{};
+
+    try app.run(model.widget(), .{});
 }
