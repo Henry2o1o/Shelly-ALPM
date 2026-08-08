@@ -85,6 +85,7 @@ pub const Model = struct {
 
     /// All known packages, borrowed from `parsed`.
     packages: []Package = &.{},
+    selected_packages: std.ArrayList([]const u8),
     /// Owns the package data returned by the CLI.
     parsed: ?std.json.Parsed([]Package) = null,
 
@@ -129,6 +130,7 @@ pub const Model = struct {
             .gpa = gpa,
             .load = load,
             .filtered = .empty,
+            .selected_packages = .empty,
             .list_view = .{
                 .children = .{ .builder = .{
                     .userdata = model,
@@ -160,6 +162,7 @@ pub const Model = struct {
         self.text_field.deinit();
         self.aur_field.deinit();
         self.filtered.deinit(gpa);
+        self.selected_packages.deinit(gpa);
         if (self.query.len > 0) gpa.free(self.query);
         if (self.aur_query.len > 0) gpa.free(self.aur_query);
         if (self.notice.len > 0) gpa.free(self.notice);
@@ -227,6 +230,11 @@ pub const Model = struct {
                         },
                     }
                 }
+                if (key.matches(vaxis.Key.space, .{})) {
+                    try self.toggleSelectedList();
+                    return ctx.consumeEvent();
+                }
+
                 if (key.matches(vaxis.Key.tab, .{})) {
                     self.switchTab(1);
                     try self.focusActiveTab(ctx);
@@ -378,7 +386,16 @@ pub const Model = struct {
             load.done.store(true, .release);
             return;
         };
-
+        const installed = cli.get_installed_packages() catch {
+            load.failed = true;
+            load.done.store(true, .release);
+            return;
+        };
+        for (installed.value) |pkg| {
+            for (parsed.value) |*p_pkg| {
+                if (std.ascii.eqlIgnoreCase(p_pkg.Name, pkg.Name)) p_pkg.Installed = true;
+            }
+        }
         load.result = parsed;
         load.done.store(true, .release);
     }
@@ -498,6 +515,17 @@ pub const Model = struct {
             .password = .empty,
         };
         self.overlay = .{ .sudo = prompt };
+    }
+
+    fn toggleSelectedList(self: *Model) !void {
+        const package_name = self.filtered.items[self.list_view.cursor].Name;
+        for (self.selected_packages.items, 0..) |*item, index| {
+            if (std.mem.eql(u8, item.*, package_name)) {
+                _ = self.selected_packages.orderedRemove(index);
+                return;
+            }
+        }
+        try self.selected_packages.append(self.gpa, package_name);
     }
 
     fn closeOverlay(self: *Model) void {
