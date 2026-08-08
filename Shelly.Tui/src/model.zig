@@ -4,8 +4,24 @@ const vxfw = vaxis.vxfw;
 const shelly_cli = @import("shelly_cli.zig");
 const ShellyCli = shelly_cli.ShellyCli;
 const Package = @import("packages.zig").Package;
+const AurPackage = @import("packages.zig").AurPackage;
 
 const Allocator = std.mem.Allocator;
+const InstallBackend = shelly_cli.ShellyCli.InstallBackend;
+
+pub const Tab = enum {
+    packages,
+    aur,
+
+    pub const all: []const Tab = &.{ .packages, .aur };
+
+    pub fn title(self: Tab) []const u8 {
+        return switch (self) {
+            .packages => "Packages",
+            .aur => "AUR",
+        };
+    }
+};
 
 /// Shared state between the UI and the background package loader. The
 /// loader writes exactly once; `done` is published with release semantics
@@ -17,11 +33,31 @@ const LoadState = struct {
     done: std.atomic.Value(bool) = .init(false),
 };
 
+const AurSearchJob = struct {
+    result: ?std.json.Parsed([]AurPackage) = null,
+    failed: bool = false,
+    done: std.atomic.Value(bool) = .init(false),
+};
+
+const InstallJob = struct {
+    name: []const u8,
+    backend: InstallBackend,
+    failed: bool = false,
+    done: std.atomic.Value(bool) = .init(false),
+};
+
+const Overlay = union(enum) {
+    package: *const Package,
+    aur: *const AurPackage,
+};
+
 pub const Model = struct {
     gpa: Allocator,
 
+    active: Tab = .packages,
+
     /// All known packages, borrowed from `parsed`.
-    packages: []const Package = &.{},
+    packages: []Package = &.{},
     /// Owns the package data returned by the CLI.
     parsed: ?std.json.Parsed([]Package) = null,
 
@@ -34,8 +70,25 @@ pub const Model = struct {
     /// Owned by `gpa` unless empty.
     query: []const u8 = "",
 
+    /// AUR tab state.
+    aur_packages: []const AurPackage = &.{},
+    aur_parsed: ?std.json.Parsed([]AurPackage) = null,
+    aur_job: ?*AurSearchJob = null,
+    /// Last executed AUR query; owned by `gpa` unless empty.
+    aur_query: []const u8 = "",
+    aur_failed: bool = false,
+
+    /// Modal package details.
+    overlay: ?Overlay = null,
+    /// The currently running install, if any.
+    install_job: ?*InstallJob = null,
+    /// Result of the last finished operation; owned by `gpa` unless empty.
+    notice: []const u8 = "",
+
     list_view: vxfw.ListView,
     text_field: vxfw.TextField,
+    aur_list: vxfw.ListView,
+    aur_field: vxfw.TextField,
 
     pub fn init(gpa: Allocator) !*Model {
         const load = try gpa.create(LoadState);
@@ -60,6 +113,17 @@ pub const Model = struct {
                 .userdata = model,
                 .onChange = Model.onQueryChange,
             },
+            .aur_list = .{
+                .children = .{ .builder = .{
+                    .userdata = model,
+                    .buildFn = Model.buildAurRow,
+                } },
+            },
+            .aur_field = .{
+                .buf = .init(gpa),
+                .userdata = model,
+                .onSubmit = Model.onAurSubmit,
+            },
         };
         return model;
     }
@@ -67,17 +131,30 @@ pub const Model = struct {
     pub fn deinit(self: *Model) void {
         const gpa = self.gpa;
         self.text_field.deinit();
+        self.aur_field.deinit();
         self.filtered.deinit(gpa);
         if (self.query.len > 0) gpa.free(self.query);
+        if (self.aur_query.len > 0) gpa.free(self.aur_query);
+        if (self.notice.len > 0) gpa.free(self.notice);
         if (self.parsed) |*parsed| parsed.deinit();
-        // `load` is intentionally leaked: the loader thread may still hold a
-        // reference to it when the app exits.
+        if (self.aur_parsed) |*parsed| parsed.deinit();
+        // Finished jobs are reaped by the pollers; anything still running at
+        // exit is intentionally leaked because its worker thread may still
+        // hold a reference.
+        if (self.aur_job) |job| if (job.done.load(.acquire)) gpa.destroy(job);
+        if (self.install_job) |job| {
+            if (job.done.load(.acquire)) {
+                gpa.free(job.name);
+                gpa.destroy(job);
+            }
+        }
         gpa.destroy(self);
     }
 
     pub fn widget(self: *Model) vxfw.Widget {
         return .{
             .userdata = self,
+            .captureHandler = typeErasedCaptureHandler,
             .eventHandler = typeErasedEventHandler,
             .drawFn = typeErasedDrawFn,
         };
@@ -85,19 +162,69 @@ pub const Model = struct {
 
     // -- events ------------------------------------------------------------
 
+    /// Capture phase runs root-first, before the focused widget sees the
+    /// event. This is where we intercept keys that must work even while the
+    /// user is typing, and where the modal overlay swallows all input.
+    fn typeErasedCaptureHandler(ptr: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
+        const self: *Model = @ptrCast(@alignCast(ptr));
+        switch (event) {
+            .key_press => |key| {
+                if (key.matches('c', .{ .ctrl = true })) {
+                    ctx.quit = true;
+                    return;
+                }
+                if (self.overlay != null) {
+                    if (key.matches(vaxis.Key.escape, .{}) or key.matches('q', .{})) {
+                        self.overlay = null;
+                        return ctx.consumeAndRedraw();
+                    }
+                    if (key.matches('i', .{})) {
+                        try self.installFromOverlay(ctx);
+                        return ctx.consumeAndRedraw();
+                    }
+                    return ctx.consumeEvent();
+                }
+                if (key.matches(vaxis.Key.tab, .{})) {
+                    self.switchTab(1);
+                    try self.focusActiveTab(ctx);
+                    return ctx.consumeAndRedraw();
+                }
+                if (key.matches(vaxis.Key.tab, .{ .shift = true })) {
+                    self.switchTab(-1);
+                    try self.focusActiveTab(ctx);
+                    return ctx.consumeAndRedraw();
+                }
+                // Alt+<n> jumps straight to tab n
+                for (Tab.all, 1..) |tab, number| {
+                    if (key.matches('0' + @as(u21, @intCast(number)), .{ .alt = true })) {
+                        try self.setTab(tab, ctx);
+                        return ctx.consumeAndRedraw();
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
     fn typeErasedEventHandler(ptr: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
         const self: *Model = @ptrCast(@alignCast(ptr));
         switch (event) {
             .init => {
                 try self.startLoad(ctx);
                 ctx.redraw = true;
-                return ctx.requestFocus(self.text_field.widget());
+                return self.focusActiveTab(ctx);
             },
             .focus_in => {
-                return ctx.requestFocus(self.text_field.widget());
+                return self.focusActiveTab(ctx);
             },
             .tick => {
-                return self.pollLoad(ctx);
+                const loading = try self.pollLoad();
+                const searching = try self.pollAurSearch();
+                const installing = try self.pollInstall();
+                if (loading or searching or installing) {
+                    try ctx.tick(100, self.widget());
+                }
+                return ctx.consumeAndRedraw();
             },
             .key_press => |key| {
                 if (key.matches('c', .{ .ctrl = true })) {
@@ -105,23 +232,89 @@ pub const Model = struct {
                     return;
                 }
                 if (key.matches(vaxis.Key.escape, .{})) {
-                    if (self.query.len > 0) {
-                        self.text_field.clearRetainingCapacity();
-                        try self.setQuery("");
-                        return ctx.consumeAndRedraw();
+                    switch (self.active) {
+                        .packages => {
+                            if (self.query.len > 0) {
+                                self.text_field.clearRetainingCapacity();
+                                try self.setQuery("");
+                                return ctx.consumeAndRedraw();
+                            }
+                        },
+                        .aur => {
+                            if (self.aur_field.buf.realLength() > 0) {
+                                self.aur_field.clearRetainingCapacity();
+                                return ctx.consumeAndRedraw();
+                            }
+                        },
                     }
                     ctx.quit = true;
                     return;
                 }
-                // Let the list handle whatever the search field ignored
-                // (arrow keys, page up/down, mouse wheel, ...)
-                return self.list_view.handleEvent(ctx, event);
+                // Enter opens the details of the selected package. On the
+                // AUR tab Enter is consumed by the search field instead.
+                if (key.matches(vaxis.Key.enter, .{})) {
+                    if (self.active == .packages and
+                        self.filtered.items.len > 0 and
+                        @as(usize, self.list_view.cursor) < self.filtered.items.len)
+                    {
+                        self.overlay = .{ .package = self.filtered.items[self.list_view.cursor] };
+                        return ctx.consumeAndRedraw();
+                    }
+                }
+                // Arrows and plain digits switch tabs. Note these only fire
+                // when the search field does not have focus — the field
+                // consumes arrows for cursor movement and digits as text.
+                if (key.matches(vaxis.Key.left, .{})) {
+                    self.switchTab(-1);
+                    try self.focusActiveTab(ctx);
+                    return ctx.consumeAndRedraw();
+                }
+                if (key.matches(vaxis.Key.right, .{})) {
+                    self.switchTab(1);
+                    try self.focusActiveTab(ctx);
+                    return ctx.consumeAndRedraw();
+                }
+                for (Tab.all, 1..) |tab, number| {
+                    if (key.matches('0' + @as(u21, @intCast(number)), .{})) {
+                        try self.setTab(tab, ctx);
+                        return ctx.consumeAndRedraw();
+                    }
+                }
+                // Let the active list handle whatever the search field
+                // ignored (arrow keys, mouse wheel, ...)
+                return switch (self.active) {
+                    .packages => self.list_view.handleEvent(ctx, event),
+                    .aur => self.aur_list.handleEvent(ctx, event),
+                };
             },
             else => {},
         }
     }
 
-    // -- loading -----------------------------------------------------------
+    // -- tabs --------------------------------------------------------------
+
+    fn switchTab(self: *Model, delta: i32) void {
+        const count: i32 = @intCast(Tab.all.len);
+        var next: i32 = @intFromEnum(self.active);
+        next = @rem(next + delta, count);
+        if (next < 0) next += count;
+        self.active = @enumFromInt(@as(std.meta.Tag(Tab), @intCast(next)));
+    }
+
+    fn setTab(self: *Model, tab: Tab, ctx: *vxfw.EventContext) !void {
+        if (tab == self.active) return;
+        self.active = tab;
+        try self.focusActiveTab(ctx);
+    }
+
+    fn focusActiveTab(self: *Model, ctx: *vxfw.EventContext) !void {
+        switch (self.active) {
+            .packages => try ctx.requestFocus(self.text_field.widget()),
+            .aur => try ctx.requestFocus(self.aur_field.widget()),
+        }
+    }
+
+    // -- background jobs ---------------------------------------------------
 
     fn startLoad(self: *Model, ctx: *vxfw.EventContext) !void {
         const thread = try std.Thread.spawn(.{}, loadPackages, .{self.load});
@@ -130,8 +323,8 @@ pub const Model = struct {
     }
 
     fn loadPackages(load: *LoadState) void {
-        // The loader runs its own threaded IO and uses the page allocator so
-        // it never shares state with the UI thread.
+        // Workers run their own threaded IO and use the page allocator so
+        // they never share state with the UI thread.
         const alloc = std.heap.page_allocator;
         var threaded: std.Io.Threaded = .init(alloc, .{});
         defer threaded.deinit();
@@ -147,14 +340,12 @@ pub const Model = struct {
         load.done.store(true, .release);
     }
 
-    fn pollLoad(self: *Model, ctx: *vxfw.EventContext) anyerror!void {
-        if (!self.load.done.load(.acquire)) {
-            // Keep polling until the loader finishes
-            return ctx.tick(100, self.widget());
-        }
+    fn pollLoad(self: *Model) !bool {
+        if (!self.loading) return false;
+        if (!self.load.done.load(.acquire)) return true;
+
         const failed = self.load.failed;
         const parsed = self.load.result;
-
         self.loading = false;
         self.load_failed = failed;
         if (parsed) |p| {
@@ -162,7 +353,158 @@ pub const Model = struct {
             self.packages = p.value;
         }
         try self.rebuildFilter();
-        return ctx.consumeAndRedraw();
+        return false;
+    }
+
+    fn onAurSubmit(maybe_ptr: ?*anyopaque, ctx: *vxfw.EventContext, str: []const u8) anyerror!void {
+        const ptr = maybe_ptr orelse return;
+        const self: *Model = @ptrCast(@alignCast(ptr));
+        const query = std.mem.trim(u8, str, " \t");
+
+        // Enter with an unchanged query opens the selected result instead
+        // of repeating the search
+        if (self.aur_packages.len > 0 and
+            (query.len == 0 or std.mem.eql(u8, query, self.aur_query)))
+        {
+            if (@as(usize, self.aur_list.cursor) < self.aur_packages.len) {
+                self.overlay = .{ .aur = &self.aur_packages[self.aur_list.cursor] };
+                return ctx.consumeAndRedraw();
+            }
+            return;
+        }
+        if (query.len == 0) return;
+        if (self.aur_job != null) return; // search in flight
+        try self.startAurSearch(ctx, query);
+    }
+
+    fn startAurSearch(self: *Model, ctx: *vxfw.EventContext, query: []const u8) !void {
+        const job = try self.gpa.create(AurSearchJob);
+        errdefer self.gpa.destroy(job);
+        job.* = .{};
+
+        const duped = try self.gpa.dupe(u8, query);
+        if (self.aur_query.len > 0) self.gpa.free(self.aur_query);
+        self.aur_query = duped;
+        self.aur_failed = false;
+        self.aur_job = job;
+
+        const thread = try std.Thread.spawn(.{}, aurSearchThread, .{ job, duped });
+        thread.detach();
+        try ctx.tick(100, self.widget());
+    }
+
+    fn aurSearchThread(job: *AurSearchJob, query: []const u8) void {
+        const alloc = std.heap.page_allocator;
+        var threaded: std.Io.Threaded = .init(alloc, .{});
+        defer threaded.deinit();
+
+        const cli: ShellyCli = .{ .allocator = alloc, .io = threaded.io() };
+        const parsed = cli.search_aur(query) catch {
+            job.failed = true;
+            job.done.store(true, .release);
+            return;
+        };
+
+        job.result = parsed;
+        job.done.store(true, .release);
+    }
+
+    fn pollAurSearch(self: *Model) !bool {
+        const job = self.aur_job orelse return false;
+        if (!job.done.load(.acquire)) return true;
+
+        const parsed = job.result;
+        const failed = job.failed;
+        self.aur_job = null;
+        self.gpa.destroy(job);
+
+        if (self.aur_parsed) |*old| old.deinit();
+        self.aur_parsed = null;
+        self.aur_packages = &.{};
+        self.aur_failed = failed;
+        if (parsed) |p| {
+            self.aur_parsed = p;
+            self.aur_packages = p.value;
+        }
+        self.aur_list.item_count = @intCast(self.aur_packages.len);
+        self.aur_list.jumpToItem(0);
+        return false;
+    }
+
+    fn installFromOverlay(self: *Model, ctx: *vxfw.EventContext) !void {
+        if (self.install_job != null) return; // one install at a time
+        switch (self.overlay orelse return) {
+            .package => |pkg| {
+                if (pkg.Installed) return;
+                try self.startInstall(ctx, .standard, pkg.Name);
+            },
+            .aur => |pkg| {
+                try self.startInstall(ctx, .aur, pkg.Name);
+            },
+        }
+    }
+
+    fn startInstall(self: *Model, ctx: *vxfw.EventContext, backend: InstallBackend, name: []const u8) !void {
+        const job = try self.gpa.create(InstallJob);
+        errdefer self.gpa.destroy(job);
+        job.* = .{
+            .name = try self.gpa.dupe(u8, name),
+            .backend = backend,
+        };
+        errdefer self.gpa.free(job.name);
+        self.install_job = job;
+
+        const thread = try std.Thread.spawn(.{}, installThread, .{job});
+        thread.detach();
+        try ctx.tick(100, self.widget());
+    }
+
+    fn installThread(job: *InstallJob) void {
+        const alloc = std.heap.page_allocator;
+        var threaded: std.Io.Threaded = .init(alloc, .{});
+        defer threaded.deinit();
+
+        const cli: ShellyCli = .{ .allocator = alloc, .io = threaded.io() };
+        cli.install_package(job.backend, job.name) catch {
+            job.failed = true;
+            job.done.store(true, .release);
+            return;
+        };
+
+        job.done.store(true, .release);
+    }
+
+    fn pollInstall(self: *Model) !bool {
+        const job = self.install_job orelse return false;
+        if (!job.done.load(.acquire)) return true;
+
+        const failed = job.failed;
+        self.install_job = null;
+
+        // Reflect a successful standard install in the loaded data
+        if (!failed and job.backend == .standard) {
+            for (self.packages) |*pkg| {
+                if (std.mem.eql(u8, pkg.Name, job.name)) {
+                    pkg.Installed = true;
+                    break;
+                }
+            }
+        }
+        const message = if (failed)
+            try std.fmt.allocPrint(self.gpa, "Installation failed: {s}", .{job.name})
+        else
+            try std.fmt.allocPrint(self.gpa, "Installed {s}", .{job.name});
+        try self.setNotice(message);
+        self.gpa.free(message);
+
+        self.gpa.free(job.name);
+        self.gpa.destroy(job);
+        return false;
+    }
+
+    fn setNotice(self: *Model, message: []const u8) Allocator.Error!void {
+        if (self.notice.len > 0) self.gpa.free(self.notice);
+        self.notice = if (message.len > 0) try self.gpa.dupe(u8, message) else "";
     }
 
     // -- filtering ---------------------------------------------------------
@@ -216,7 +558,9 @@ pub const Model = struct {
         const arena = ctx.arena;
         const max = ctx.max.size();
 
-        if (max.width == 0 or max.height < 3) {
+        // Need room for the tab bar, at least one content row and the
+        // status bar
+        if (max.width == 0 or max.height < 4) {
             return .{
                 .size = max,
                 .widget = self.widget(),
@@ -225,53 +569,121 @@ pub const Model = struct {
             };
         }
 
-        // Row 0: search prompt + field
-        var prompt: vxfw.Text = .{ .text = "❯", .style = .{ .fg = .{ .index = 4 } } };
-        const prompt_surface = try prompt.draw(ctx.withConstraints(
-            ctx.min,
-            .{ .width = 2, .height = 1 },
-        ));
-        const search_surface = try self.text_field.draw(ctx.withConstraints(
-            ctx.min,
-            .{ .width = max.width -| 2, .height = 1 },
-        ));
+        var children: std.ArrayList(vxfw.SubSurface) = .empty;
 
-        // Rows 1..height-2: package list
-        const list_surface = try self.list_view.draw(ctx.withConstraints(
-            .{ .width = 0, .height = 0 },
-            .{ .width = max.width, .height = max.height - 2 },
-        ));
+        // Row 0: tab bar
+        const tab_bar = try self.drawTabBar(arena);
+        try children.append(arena, .{
+            .origin = .{ .row = 0, .col = 0 },
+            .surface = try tab_bar.draw(ctx.withConstraints(
+                ctx.min,
+                .{ .width = max.width, .height = 1 },
+            )),
+        });
+
+        switch (self.active) {
+            .packages => {
+                // Row 1: search prompt + field
+                var prompt: vxfw.Text = .{ .text = "❯", .style = .{ .fg = .{ .index = 4 } } };
+                try children.append(arena, .{
+                    .origin = .{ .row = 1, .col = 0 },
+                    .surface = try prompt.draw(ctx.withConstraints(
+                        ctx.min,
+                        .{ .width = 2, .height = 1 },
+                    )),
+                });
+                try children.append(arena, .{
+                    .origin = .{ .row = 1, .col = 2 },
+                    .surface = try self.text_field.draw(ctx.withConstraints(
+                        ctx.min,
+                        .{ .width = max.width -| 2, .height = 1 },
+                    )),
+                });
+
+                // Rows 2..height-2: package list
+                try children.append(arena, .{
+                    .origin = .{ .row = 2, .col = 0 },
+                    .surface = try self.list_view.draw(ctx.withConstraints(
+                        .{ .width = 0, .height = 0 },
+                        .{ .width = max.width, .height = max.height - 3 },
+                    )),
+                });
+
+                if (self.loading or self.load_failed) {
+                    var message: vxfw.Text = if (self.loading)
+                        .{ .text = "Loading packages…", .style = .{ .fg = .{ .index = 245 } } }
+                    else
+                        .{ .text = "Failed to load packages. Is the shelly CLI available?", .style = .{ .fg = .{ .index = 1 } } };
+                    try children.append(arena, .{
+                        .origin = .{ .row = 3, .col = 2 },
+                        .surface = try message.draw(ctx.withConstraints(
+                            ctx.min,
+                            .{ .width = max.width -| 2, .height = 1 },
+                        )),
+                        .z_index = 1,
+                    });
+                }
+            },
+            .aur => {
+                // Row 1: search prompt + field
+                var prompt: vxfw.Text = .{ .text = "❯", .style = .{ .fg = .{ .index = 4 } } };
+                try children.append(arena, .{
+                    .origin = .{ .row = 1, .col = 0 },
+                    .surface = try prompt.draw(ctx.withConstraints(
+                        ctx.min,
+                        .{ .width = 2, .height = 1 },
+                    )),
+                });
+                try children.append(arena, .{
+                    .origin = .{ .row = 1, .col = 2 },
+                    .surface = try self.aur_field.draw(ctx.withConstraints(
+                        ctx.min,
+                        .{ .width = max.width -| 2, .height = 1 },
+                    )),
+                });
+
+                // Rows 2..height-2: results
+                try children.append(arena, .{
+                    .origin = .{ .row = 2, .col = 0 },
+                    .surface = try self.aur_list.draw(ctx.withConstraints(
+                        .{ .width = 0, .height = 0 },
+                        .{ .width = max.width, .height = max.height - 3 },
+                    )),
+                });
+
+                if (try self.aurMessage(arena)) |message| {
+                    var message_text: vxfw.Text = .{
+                        .text = message.text,
+                        .style = .{ .fg = .{ .index = if (message.red) @as(u8, 1) else 245 } },
+                    };
+                    try children.append(arena, .{
+                        .origin = .{ .row = 3, .col = 2 },
+                        .surface = try message_text.draw(ctx.withConstraints(
+                            ctx.min,
+                            .{ .width = max.width -| 2, .height = 1 },
+                        )),
+                        .z_index = 1,
+                    });
+                }
+            },
+        }
 
         // Bottom row: status bar
         var status: vxfw.Text = .{
             .text = try self.statusText(arena),
             .style = .{ .fg = .{ .index = 245 } },
         };
-        const status_surface = try status.draw(ctx.withConstraints(
-            ctx.min,
-            .{ .width = max.width, .height = 1 },
-        ));
-
-        var children: std.ArrayList(vxfw.SubSurface) = .empty;
-        try children.appendSlice(arena, &.{
-            .{ .origin = .{ .row = 0, .col = 0 }, .surface = prompt_surface },
-            .{ .origin = .{ .row = 0, .col = 2 }, .surface = search_surface },
-            .{ .origin = .{ .row = 1, .col = 0 }, .surface = list_surface },
-            .{ .origin = .{ .row = max.height - 1, .col = 0 }, .surface = status_surface },
+        try children.append(arena, .{
+            .origin = .{ .row = max.height - 1, .col = 0 },
+            .surface = try status.draw(ctx.withConstraints(
+                ctx.min,
+                .{ .width = max.width, .height = 1 },
+            )),
         });
 
-        if (self.loading or self.load_failed) {
-            var message: vxfw.Text = if (self.loading)
-                .{ .text = "Loading packages…", .style = .{ .fg = .{ .index = 245 } } }
-            else
-                .{ .text = "Failed to load packages. Is the shelly CLI available?", .style = .{ .fg = .{ .index = 1 } } };
-            try children.append(arena, .{
-                .origin = .{ .row = 2, .col = 2 },
-                .surface = try message.draw(ctx.withConstraints(
-                    ctx.min,
-                    .{ .width = max.width -| 2, .height = 1 },
-                )),
-            });
+        // Modal overlay on top of everything
+        if (try self.drawOverlay(ctx, arena, max)) |overlay| {
+            try children.append(arena, overlay);
         }
 
         return .{
@@ -282,16 +694,117 @@ pub const Model = struct {
         };
     }
 
-    fn statusText(self: *const Model, arena: Allocator) Allocator.Error![]const u8 {
-        if (self.loading) return "Loading packages…";
-        if (self.load_failed) return "Failed to load packages";
-        if (self.query.len > 0) {
-            return std.fmt.allocPrint(arena, "{d} of {d} packages match", .{
-                self.filtered.items.len, self.packages.len,
-            });
+    fn aurMessage(self: *const Model, arena: Allocator) Allocator.Error!?struct { text: []const u8, red: bool } {
+        if (self.aur_job != null) {
+            return .{
+                .text = try std.fmt.allocPrint(arena, "Searching AUR for '{s}'…", .{self.aur_query}),
+                .red = false,
+            };
         }
-        return std.fmt.allocPrint(arena, "{d} packages", .{self.packages.len});
+        if (self.aur_failed) {
+            return .{ .text = "AUR search failed. Check your connection and try again.", .red = true };
+        }
+        if (self.aur_query.len == 0) {
+            return .{ .text = "Type a search term and press Enter to query the AUR.", .red = false };
+        }
+        if (self.aur_packages.len == 0) {
+            return .{ .text = "No AUR packages matched.", .red = false };
+        }
+        return null;
     }
+
+    fn drawTabBar(self: *Model, arena: Allocator) Allocator.Error!vxfw.Widget {
+        const spans = try arena.alloc(vxfw.RichText.TextSpan, Tab.all.len);
+        for (Tab.all, 0..) |tab, i| {
+            spans[i] = .{
+                .text = try std.fmt.allocPrint(arena, " {d}:{s} ", .{ i + 1, tab.title() }),
+                .style = if (tab == self.active)
+                    .{ .bold = true, .reverse = true }
+                else
+                    .{ .fg = .{ .index = 245 } },
+            };
+        }
+        const bar = try arena.create(TabBar);
+        bar.* = .{
+            .model = self,
+            .rich = .{ .text = spans, .softwrap = false },
+        };
+        return bar.widget();
+    }
+
+    fn statusText(self: *const Model, arena: Allocator) Allocator.Error![]const u8 {
+        if (self.install_job) |job| {
+            return try std.fmt.allocPrint(arena, "Installing {s}…", .{job.name});
+        }
+        if (self.notice.len > 0) return self.notice;
+        switch (self.active) {
+            .packages => {
+                if (self.loading) return "Loading packages…";
+                if (self.load_failed) return "Failed to load packages";
+                if (self.query.len > 0) {
+                    return try std.fmt.allocPrint(arena, "{d} of {d} packages match", .{
+                        self.filtered.items.len, self.packages.len,
+                    });
+                }
+                return try std.fmt.allocPrint(arena, "{d} packages", .{self.packages.len});
+            },
+            .aur => {
+                if (self.aur_job != null) {
+                    return try std.fmt.allocPrint(arena, "Searching AUR for '{s}'…", .{self.aur_query});
+                }
+                if (self.aur_failed) return "AUR search failed";
+                if (self.aur_query.len == 0) return "AUR — type a query and press Enter";
+                return try std.fmt.allocPrint(arena, "{d} AUR results for '{s}'", .{
+                    self.aur_packages.len, self.aur_query,
+                });
+            },
+        }
+    }
+
+    fn drawOverlay(self: *const Model, ctx: vxfw.DrawContext, arena: Allocator, max: vxfw.Size) Allocator.Error!?vxfw.SubSurface {
+        const overlay = self.overlay orelse return null;
+
+        var title: []const u8 = undefined;
+        var body: []const u8 = undefined;
+        switch (overlay) {
+            .package => |pkg| {
+                title = try std.fmt.allocPrint(arena, "{s} {s}", .{ pkg.Name, pkg.Version });
+                body = try packageDetailsText(arena, pkg);
+            },
+            .aur => |pkg| {
+                title = try std.fmt.allocPrint(arena, "{s} {s} (AUR)", .{ pkg.Name, pkg.Version });
+                body = try aurDetailsText(arena, pkg);
+            },
+        }
+        if (self.install_job) |job| {
+            body = try std.fmt.allocPrint(arena, "{s}\n\nInstalling {s}…", .{ body, job.name });
+        }
+
+        const box_width = @min(max.width -| 2, @as(u16, 80));
+        const box_height = @min(max.height -| 2, @as(u16, 28));
+        if (box_width < 20 or box_height < 6) return null;
+
+        var text: vxfw.Text = .{ .text = body };
+        const labels = [_]vxfw.Border.BorderLabel{.{ .text = title, .alignment = .top_left }};
+        var border: vxfw.Border = .{
+            .child = text.widget(),
+            .labels = &labels,
+        };
+        const surface = try border.widget().draw(ctx.withConstraints(
+            .{ .width = 0, .height = 0 },
+            .{ .width = box_width, .height = box_height },
+        ));
+        return .{
+            .origin = .{
+                .row = @divFloor(@as(i17, max.height) - @as(i17, surface.size.height), 2),
+                .col = @divFloor(@as(i17, max.width) - @as(i17, surface.size.width), 2),
+            },
+            .surface = surface,
+            .z_index = 2,
+        };
+    }
+
+    // -- list rows ---------------------------------------------------------
 
     /// ListView builder: constructs the widget for a single row on demand, so
     /// only visible rows are ever built.
@@ -333,5 +846,178 @@ pub const Model = struct {
             .overflow = .ellipsis,
         };
         return rich.draw(ctx);
+    }
+
+    fn buildAurRow(ptr: *const anyopaque, idx: usize, _: usize) ?vxfw.Widget {
+        const self: *const Model = @ptrCast(@alignCast(ptr));
+        if (idx >= self.aur_packages.len) return null;
+        const pkg = &self.aur_packages[idx];
+        return .{
+            .userdata = @constCast(pkg),
+            .drawFn = drawAurRow,
+        };
+    }
+
+    fn drawAurRow(ptr: *anyopaque, ctx: vxfw.DrawContext) Allocator.Error!vxfw.Surface {
+        const pkg: *const AurPackage = @ptrCast(@alignCast(ptr));
+        const arena = ctx.arena;
+
+        var spans: std.ArrayList(vxfw.RichText.TextSpan) = .empty;
+        try spans.append(arena, .{ .text = "  " });
+        try spans.append(arena, .{ .text = pkg.Name, .style = .{ .bold = true } });
+        try spans.append(arena, .{ .text = " " });
+        try spans.append(arena, .{
+            .text = pkg.Version,
+            .style = .{ .fg = .{ .index = if (pkg.OutOfDate != null) @as(u8, 1) else 245 } },
+        });
+        try spans.append(arena, .{
+            .text = try std.fmt.allocPrint(arena, " ▲ {d}", .{pkg.NumVotes}),
+            .style = .{ .fg = .{ .index = 245 } },
+        });
+        if (pkg.Description) |description| {
+            if (description.len > 0) {
+                try spans.append(arena, .{ .text = " — " });
+                try spans.append(arena, .{
+                    .text = description,
+                    .style = .{ .fg = .{ .index = 245 } },
+                });
+            }
+        }
+
+        const rich = try arena.create(vxfw.RichText);
+        rich.* = .{
+            .text = spans.items,
+            .softwrap = false,
+            .overflow = .ellipsis,
+        };
+        return rich.draw(ctx);
+    }
+
+    // -- details -----------------------------------------------------------
+
+    fn packageDetailsText(arena: Allocator, pkg: *const Package) Allocator.Error![]const u8 {
+        var lines: std.ArrayList([]const u8) = .empty;
+
+        try lines.append(arena, if (pkg.Description.len > 0) pkg.Description else "No description.");
+        try lines.append(arena, "");
+
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Repository:     {s}", .{pkg.Repository}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Version:        {s}", .{pkg.Version}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Installed:      {s}", .{if (pkg.Installed) "yes" else "no"}));
+        if (pkg.Url) |url| {
+            try lines.append(arena, try std.fmt.allocPrint(arena, "URL:            {s}", .{url}));
+        }
+        try appendDetailList(arena, &lines, "Licenses:     ", pkg.Licenses);
+        try appendDetailList(arena, &lines, "Groups:       ", pkg.Groups);
+        try appendDetailList(arena, &lines, "Depends:      ", pkg.Depends);
+        try appendDetailList(arena, &lines, "Opt depends:  ", pkg.OptDepends);
+        try appendDetailList(arena, &lines, "Provides:     ", pkg.Provides);
+        try appendDetailList(arena, &lines, "Conflicts:    ", pkg.Conflicts);
+        try appendDetailList(arena, &lines, "Replaces:     ", pkg.Replaces);
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Download size:  {s}", .{try formatSize(arena, pkg.DownloadSize)}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Installed size: {s}", .{try formatSize(arena, pkg.InstalledSize)}));
+        if (pkg.BuildDate.len > 0) {
+            try lines.append(arena, try std.fmt.allocPrint(arena, "Build date:     {s}", .{pkg.BuildDate}));
+        }
+
+        return try std.mem.join(arena, "\n", lines.items);
+    }
+
+    fn aurDetailsText(arena: Allocator, pkg: *const AurPackage) Allocator.Error![]const u8 {
+        var lines: std.ArrayList([]const u8) = .empty;
+
+        try lines.append(arena, pkg.Description orelse "No description.");
+        try lines.append(arena, "");
+
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Version:         {s}", .{pkg.Version}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Package base:    {s}", .{pkg.PackageBase}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Votes:           {d}", .{pkg.NumVotes}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Popularity:      {d:.2}", .{pkg.Popularity}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Maintainer:      {s}", .{pkg.Maintainer orelse "—"}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Out of date:     {s}", .{if (pkg.OutOfDate != null) "yes" else "no"}));
+        if (pkg.Url) |url| {
+            try lines.append(arena, try std.fmt.allocPrint(arena, "URL:             {s}", .{url}));
+        }
+        if (pkg.License) |licenses| try appendDetailList(arena, &lines, "Licenses:      ", licenses);
+        if (pkg.Depends) |depends| try appendDetailList(arena, &lines, "Depends:       ", depends);
+        if (pkg.MakeDepends) |make_depends| try appendDetailList(arena, &lines, "Make deps:     ", make_depends);
+        try lines.append(arena, try std.fmt.allocPrint(arena, "First submitted: {s}", .{try formatEpoch(arena, pkg.FirstSubmitted)}));
+        try lines.append(arena, try std.fmt.allocPrint(arena, "Last modified:   {s}", .{try formatEpoch(arena, pkg.LastModified)}));
+
+        return try std.mem.join(arena, "\n", lines.items);
+    }
+
+    fn appendDetailList(arena: Allocator, lines: *std.ArrayList([]const u8), comptime label: []const u8, items: []const []const u8) Allocator.Error!void {
+        if (items.len == 0) return;
+        try lines.append(arena, try std.fmt.allocPrint(arena, "{s}{s}", .{
+            label, try std.mem.join(arena, ", ", items),
+        }));
+    }
+
+    fn formatSize(arena: Allocator, bytes: i64) Allocator.Error![]const u8 {
+        if (bytes <= 0) return "—";
+        const units = [_][]const u8{ "B", "KiB", "MiB", "GiB", "TiB" };
+        var value: f64 = @floatFromInt(bytes);
+        var unit: usize = 0;
+        while (value >= 1024.0 and unit < units.len - 1) {
+            value /= 1024.0;
+            unit += 1;
+        }
+        if (unit == 0) return try std.fmt.allocPrint(arena, "{d} B", .{bytes});
+        return try std.fmt.allocPrint(arena, "{d:.1} {s}", .{ value, units[unit] });
+    }
+
+    fn formatEpoch(arena: Allocator, seconds: i64) Allocator.Error![]const u8 {
+        if (seconds <= 0) return "—";
+        const epoch: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
+        const year_day = epoch.getEpochDay().calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
+        return try std.fmt.allocPrint(arena, "{d}-{d:0>2}-{d:0>2}", .{
+            year_day.year,
+            month_day.month.numeric(),
+            month_day.day_index + 1,
+        });
+    }
+};
+
+/// A clickable tab bar. Only widgets with an event handler participate in
+/// hit testing, so this wraps the RichText instead of using it bare.
+const TabBar = struct {
+    model: *Model,
+    rich: vxfw.RichText,
+
+    pub fn widget(self: *TabBar) vxfw.Widget {
+        return .{
+            .userdata = self,
+            .eventHandler = handleEvent,
+            .drawFn = drawFn,
+        };
+    }
+
+    fn drawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) Allocator.Error!vxfw.Surface {
+        const self: *TabBar = @ptrCast(@alignCast(ptr));
+        return self.rich.draw(ctx);
+    }
+
+    fn handleEvent(ptr: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
+        const self: *TabBar = @ptrCast(@alignCast(ptr));
+        switch (event) {
+            // Mouse coordinates arrive local to this surface
+            .mouse => |mouse| {
+                if (mouse.button != .left or mouse.type != .press) return;
+                if (mouse.col < 0) return;
+                var col: i16 = 0;
+                for (self.rich.text, 0..) |span, i| {
+                    // Labels are ASCII, so byte length == display width
+                    const width: i16 = @intCast(span.text.len);
+                    if (mouse.col < col + width) {
+                        try self.model.setTab(Tab.all[i], ctx);
+                        return ctx.consumeAndRedraw();
+                    }
+                    col += width;
+                }
+            },
+            else => {},
+        }
     }
 };
