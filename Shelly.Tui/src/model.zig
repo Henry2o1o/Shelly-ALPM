@@ -1,8 +1,10 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const vxfw = vaxis.vxfw;
+const builtin = @import("builtin");
 const shelly_cli = @import("shelly_cli.zig");
 const ShellyCli = shelly_cli.ShellyCli;
+const runtime = @import("runtime.zig");
 const Package = @import("packages.zig").Package;
 const AurPackage = @import("packages.zig").AurPackage;
 
@@ -43,12 +45,37 @@ const InstallJob = struct {
     name: []const u8,
     backend: InstallBackend,
     failed: bool = false,
+    /// Failure output captured by the worker; owned by the page allocator.
+    error_detail: []const u8 = "",
     done: std.atomic.Value(bool) = .init(false),
+};
+
+/// Modal password prompt used to elevate installs through sudo.
+const SudoPrompt = struct {
+    /// Package being installed; owned by `gpa`.
+    name: []const u8,
+    backend: InstallBackend,
+    password: std.ArrayList(u8),
+    state: State = .entering,
+    /// Failure detail shown after a failed attempt; owned by `gpa`.
+    detail: []const u8 = "",
+
+    const State = enum { entering, running, succeeded, failed };
+
+    fn deinit(self: *SudoPrompt, gpa: Allocator) void {
+        // Scrub the password before releasing its memory.
+        @memset(self.password.items, 0);
+        self.password.deinit(gpa);
+        gpa.free(self.name);
+        if (self.detail.len > 0) gpa.free(self.detail);
+        gpa.destroy(self);
+    }
 };
 
 const Overlay = union(enum) {
     package: *const Package,
     aur: *const AurPackage,
+    sudo: *SudoPrompt,
 };
 
 pub const Model = struct {
@@ -144,8 +171,17 @@ pub const Model = struct {
         if (self.aur_job) |job| if (job.done.load(.acquire)) gpa.destroy(job);
         if (self.install_job) |job| {
             if (job.done.load(.acquire)) {
+                if (job.error_detail.len > 0) {
+                    std.heap.page_allocator.free(@constCast(job.error_detail));
+                }
                 gpa.free(job.name);
                 gpa.destroy(job);
+            }
+        }
+        if (self.overlay) |overlay| {
+            switch (overlay) {
+                .sudo => |prompt| prompt.deinit(gpa),
+                else => {},
             }
         }
         gpa.destroy(self);
@@ -173,16 +209,23 @@ pub const Model = struct {
                     ctx.quit = true;
                     return;
                 }
-                if (self.overlay != null) {
-                    if (key.matches(vaxis.Key.escape, .{}) or key.matches('q', .{})) {
-                        self.overlay = null;
-                        return ctx.consumeAndRedraw();
+                if (self.overlay) |overlay| {
+                    switch (overlay) {
+                        .package, .aur => {
+                            if (key.matches(vaxis.Key.escape, .{}) or key.matches('q', .{})) {
+                                self.closeOverlay();
+                                return ctx.consumeAndRedraw();
+                            }
+                            if (key.matches('i', .{})) {
+                                try self.installFromOverlay();
+                                return ctx.consumeAndRedraw();
+                            }
+                            return ctx.consumeEvent();
+                        },
+                        .sudo => |prompt| {
+                            return self.handleSudoKey(prompt, ctx, key);
+                        },
                     }
-                    if (key.matches('i', .{})) {
-                        try self.installFromOverlay(ctx);
-                        return ctx.consumeAndRedraw();
-                    }
-                    return ctx.consumeEvent();
                 }
                 if (key.matches(vaxis.Key.tab, .{})) {
                     self.switchTab(1);
@@ -431,47 +474,219 @@ pub const Model = struct {
         return false;
     }
 
-    fn installFromOverlay(self: *Model, ctx: *vxfw.EventContext) !void {
+    fn installFromOverlay(self: *Model) !void {
         if (self.install_job != null) return; // one install at a time
-        switch (self.overlay orelse return) {
+        const overlay = self.overlay orelse return;
+        var name: []const u8 = undefined;
+        var backend: InstallBackend = undefined;
+        switch (overlay) {
             .package => |pkg| {
-                if (pkg.Installed) return;
-                try self.startInstall(ctx, .standard, pkg.Name);
+                name = pkg.Name;
+                backend = .standard;
             },
             .aur => |pkg| {
-                try self.startInstall(ctx, .aur, pkg.Name);
+                name = pkg.Name;
+                backend = .aur;
+            },
+            .sudo => return,
+        }
+        const prompt = try self.gpa.create(SudoPrompt);
+        errdefer self.gpa.destroy(prompt);
+        prompt.* = .{
+            .name = try self.gpa.dupe(u8, name),
+            .backend = backend,
+            .password = .empty,
+        };
+        self.overlay = .{ .sudo = prompt };
+    }
+
+    fn closeOverlay(self: *Model) void {
+        if (self.overlay) |overlay| {
+            switch (overlay) {
+                .sudo => |prompt| prompt.deinit(self.gpa),
+                else => {},
+            }
+        }
+        self.overlay = null;
+    }
+
+    fn handleSudoKey(self: *Model, prompt: *SudoPrompt, ctx: *vxfw.EventContext, key: vaxis.Key) anyerror!void {
+        switch (prompt.state) {
+            .entering => {
+                if (key.matches(vaxis.Key.escape, .{})) {
+                    self.closeOverlay();
+                    return ctx.consumeAndRedraw();
+                }
+                if (key.matches(vaxis.Key.enter, .{})) {
+                    if (prompt.password.items.len == 0) return ctx.consumeEvent();
+                    try self.startElevatedInstall(ctx, prompt);
+                    prompt.state = .running;
+                    return ctx.consumeAndRedraw();
+                }
+                if (key.matches(vaxis.Key.backspace, .{})) {
+                    popGrapheme(&prompt.password);
+                    return ctx.consumeAndRedraw();
+                }
+                if (key.text) |text| {
+                    // Record printable input only; skip control characters
+                    for (text) |b| {
+                        if (b >= 0x20) try prompt.password.append(self.gpa, b);
+                    }
+                    return ctx.consumeAndRedraw();
+                }
+                return ctx.consumeEvent();
+            },
+            .running => {
+                // Ctrl+C is intercepted earlier, in the capture handler
+                return ctx.consumeEvent();
+            },
+            .succeeded, .failed => {
+                if (key.matches(vaxis.Key.escape, .{}) or
+                    key.matches(vaxis.Key.enter, .{}) or
+                    key.matches('q', .{}))
+                {
+                    self.closeOverlay();
+                    return ctx.consumeAndRedraw();
+                }
+                return ctx.consumeEvent();
             },
         }
     }
 
-    fn startInstall(self: *Model, ctx: *vxfw.EventContext, backend: InstallBackend, name: []const u8) !void {
+    fn startElevatedInstall(self: *Model, ctx: *vxfw.EventContext, prompt: *SudoPrompt) !void {
         const job = try self.gpa.create(InstallJob);
         errdefer self.gpa.destroy(job);
         job.* = .{
-            .name = try self.gpa.dupe(u8, name),
-            .backend = backend,
+            .name = try self.gpa.dupe(u8, prompt.name),
+            .backend = prompt.backend,
         };
         errdefer self.gpa.free(job.name);
         self.install_job = job;
 
-        const thread = try std.Thread.spawn(.{}, installThread, .{job});
+        // The worker owns this copy and wipes it after feeding it to sudo
+        const password = try self.gpa.dupe(u8, prompt.password.items);
+        errdefer self.gpa.free(password);
+
+        const thread = try std.Thread.spawn(.{}, installElevatedThread, .{ job, password });
         thread.detach();
         try ctx.tick(100, self.widget());
     }
 
-    fn installThread(job: *InstallJob) void {
+    fn installElevatedThread(job: *InstallJob, password: []u8) void {
         const alloc = std.heap.page_allocator;
+        defer {
+            // Wipe and release the duplicated password
+            @memset(password, 0);
+            alloc.free(password);
+        }
+
         var threaded: std.Io.Threaded = .init(alloc, .{});
         defer threaded.deinit();
 
-        const cli: ShellyCli = .{ .allocator = alloc, .io = threaded.io() };
-        cli.install_package(job.backend, job.name) catch {
+        elevatedInstall(threaded.io(), alloc, job, password);
+        job.done.store(true, .release);
+    }
+
+    fn elevatedInstall(io: std.Io, alloc: Allocator, job: *InstallJob, password: []const u8) void {
+        const argv = alloc.alloc([]const u8, 10) catch {
             job.failed = true;
-            job.done.store(true, .release);
+            return;
+        };
+        defer alloc.free(argv);
+        argv[0] = "sudo";
+        argv[1] = "-S";
+        argv[2] = "-p";
+        argv[3] = "";
+        argv[4] = shellyBin();
+        argv[5] = "install";
+        argv[6] = @tagName(job.backend);
+        argv[7] = job.name;
+        argv[8] = "--no-confirm";
+        argv[9] = "--ui-mode";
+
+        var child = std.process.spawn(io, .{
+            .argv = argv,
+            .environ_map = runtime.environ_map,
+            .stdin = .pipe,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        }) catch {
+            job.error_detail = alloc.dupe(u8, "Failed to start sudo.") catch "";
+            job.failed = true;
+            return;
+        };
+        defer child.kill(io);
+
+        // Feed the password to sudo, then close stdin. The writes fail
+        // harmlessly if sudo already exited (e.g. wrong password); the
+        // error then surfaces via stderr below.
+        {
+            var stdin_buffer: [1024]u8 = undefined;
+            var stdin_writer = child.stdin.?.writer(io, &stdin_buffer);
+            const stdin = &stdin_writer.interface;
+            stdin.writeAll(password) catch {};
+            stdin.writeByte('\n') catch {};
+            stdin.flush() catch {};
+            child.stdin.?.close(io);
+            child.stdin = null;
+        }
+
+        // Drain both streams concurrently, mirroring std.process.run
+        var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+        var multi_reader: std.Io.File.MultiReader = undefined;
+        multi_reader.init(alloc, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+        defer multi_reader.deinit();
+
+        var read_failed = false;
+        while (true) {
+            multi_reader.fill(64, .none) catch |err| {
+                if (err != error.EndOfStream) read_failed = true;
+                break;
+            };
+        }
+        if (read_failed) {
+            job.error_detail = alloc.dupe(u8, "Failed to read the command output.") catch "";
+            job.failed = true;
+            return;
+        }
+
+        const term = child.wait(io) catch {
+            job.error_detail = alloc.dupe(u8, "Failed to wait for the command.") catch "";
+            job.failed = true;
             return;
         };
 
-        job.done.store(true, .release);
+        if (term != .exited or term.exited != 0) {
+            const stderr = multi_reader.toOwnedSlice(1) catch &.{};
+            const stdout = multi_reader.toOwnedSlice(0) catch &.{};
+            defer if (stderr.len > 0) alloc.free(stderr);
+            defer if (stdout.len > 0) alloc.free(stdout);
+            const source = if (stderr.len > 0) stderr else stdout;
+            job.error_detail = dupeTail(alloc, std.mem.trim(u8, source, " \t\r\n"), 300);
+            job.failed = true;
+        }
+    }
+
+    fn shellyBin() []const u8 {
+        return if (builtin.mode == .Debug)
+            "../Shelly.Cli.Zig/zig-out/bin/shelly"
+        else
+            "shelly";
+    }
+
+    fn dupeTail(alloc: Allocator, source: []const u8, max_len: usize) []const u8 {
+        if (source.len == 0) return "";
+        const start = source.len -| max_len;
+        return alloc.dupe(u8, source[start..]) catch "";
+    }
+
+    fn popGrapheme(list: *std.ArrayList(u8)) void {
+        const len = list.items.len;
+        if (len == 0) return;
+        var n: usize = 1;
+        // Walk back over UTF-8 continuation bytes to drop a whole codepoint
+        while (n < len and (list.items[len - n] & 0xC0) == 0x80) n += 1;
+        list.shrinkRetainingCapacity(len - n);
     }
 
     fn pollInstall(self: *Model) !bool {
@@ -490,6 +705,25 @@ pub const Model = struct {
                 }
             }
         }
+        // Reflect the outcome in the sudo prompt if it is still open
+        if (self.overlay) |overlay| {
+            switch (overlay) {
+                .sudo => |prompt| {
+                    if (failed) {
+                        prompt.state = .failed;
+                        if (prompt.detail.len > 0) self.gpa.free(prompt.detail);
+                        prompt.detail = if (job.error_detail.len > 0)
+                            self.gpa.dupe(u8, job.error_detail) catch ""
+                        else
+                            "";
+                    } else {
+                        prompt.state = .succeeded;
+                    }
+                },
+                else => {},
+            }
+        }
+
         const message = if (failed)
             try std.fmt.allocPrint(self.gpa, "Installation failed: {s}", .{job.name})
         else
@@ -497,6 +731,9 @@ pub const Model = struct {
         try self.setNotice(message);
         self.gpa.free(message);
 
+        if (job.error_detail.len > 0) {
+            std.heap.page_allocator.free(@constCast(job.error_detail));
+        }
         self.gpa.free(job.name);
         self.gpa.destroy(job);
         return false;
@@ -682,8 +919,14 @@ pub const Model = struct {
         });
 
         // Modal overlay on top of everything
-        if (try self.drawOverlay(ctx, arena, max)) |overlay| {
-            try children.append(arena, overlay);
+        if (self.overlay) |overlay| {
+            const overlay_child: ?vxfw.SubSurface = switch (overlay) {
+                .package, .aur => try self.drawDetailsOverlay(ctx, arena, max, overlay),
+                .sudo => |prompt| try self.drawSudoPrompt(ctx, arena, max, prompt),
+            };
+            if (overlay_child) |child| {
+                try children.append(arena, child);
+            }
         }
 
         return .{
@@ -761,9 +1004,7 @@ pub const Model = struct {
         }
     }
 
-    fn drawOverlay(self: *const Model, ctx: vxfw.DrawContext, arena: Allocator, max: vxfw.Size) Allocator.Error!?vxfw.SubSurface {
-        const overlay = self.overlay orelse return null;
-
+    fn drawDetailsOverlay(self: *const Model, ctx: vxfw.DrawContext, arena: Allocator, max: vxfw.Size, overlay: Overlay) Allocator.Error!?vxfw.SubSurface {
         var title: []const u8 = undefined;
         var body: []const u8 = undefined;
         switch (overlay) {
@@ -775,6 +1016,7 @@ pub const Model = struct {
                 title = try std.fmt.allocPrint(arena, "{s} {s} (AUR)", .{ pkg.Name, pkg.Version });
                 body = try aurDetailsText(arena, pkg);
             },
+            .sudo => return null,
         }
         if (self.install_job) |job| {
             body = try std.fmt.allocPrint(arena, "{s}\n\nInstalling {s}…", .{ body, job.name });
@@ -802,6 +1044,65 @@ pub const Model = struct {
             .surface = surface,
             .z_index = 2,
         };
+    }
+
+    fn drawSudoPrompt(_: *const Model, ctx: vxfw.DrawContext, arena: Allocator, max: vxfw.Size, prompt: *const SudoPrompt) Allocator.Error!?vxfw.SubSurface {
+        var body: []const u8 = undefined;
+        switch (prompt.state) {
+            .entering => {
+                const count = codepointCount(prompt.password.items);
+                const mask = try arena.alloc(u8, count * 3);
+                var pos: usize = 0;
+                for (0..count) |_| {
+                    @memcpy(mask[pos .. pos + 3], "●");
+                    pos += 3;
+                }
+                body = try std.fmt.allocPrint(arena, "Installing '{s}' requires administrator privileges.\n\nPassword: {s}\n\nEnter: run with sudo    Esc: cancel", .{ prompt.name, mask[0..pos] });
+            },
+            .running => {
+                body = try std.fmt.allocPrint(arena, "Installing '{s}' as root…", .{prompt.name});
+            },
+            .succeeded => {
+                body = try std.fmt.allocPrint(arena, "✔ '{s}' was installed successfully.\n\nEsc: close", .{prompt.name});
+            },
+            .failed => {
+                body = try std.fmt.allocPrint(arena, "✘ Installing '{s}' failed.\n\n{s}\n\nEsc: close", .{ prompt.name, if (prompt.detail.len > 0) prompt.detail else "No error details were captured." });
+            },
+        }
+
+        const box_width = @min(max.width -| 2, @as(u16, 70));
+        const box_height = @min(max.height -| 2, @as(u16, 20));
+        if (box_width < 30 or box_height < 8) return null;
+
+        var text: vxfw.Text = .{ .text = body };
+        const labels = [_]vxfw.Border.BorderLabel{.{ .text = "Administrator privileges", .alignment = .top_left }};
+        var border: vxfw.Border = .{
+            .child = text.widget(),
+            .labels = &labels,
+        };
+        const surface = try border.widget().draw(ctx.withConstraints(
+            .{ .width = 0, .height = 0 },
+            .{ .width = box_width, .height = box_height },
+        ));
+        return .{
+            .origin = .{
+                .row = @divFloor(@as(i17, max.height) - @as(i17, surface.size.height), 2),
+                .col = @divFloor(@as(i17, max.width) - @as(i17, surface.size.width), 2),
+            },
+            .surface = surface,
+            .z_index = 2,
+        };
+    }
+
+    fn codepointCount(bytes: []const u8) usize {
+        var count: usize = 0;
+        var i: usize = 0;
+        while (i < bytes.len) {
+            const seq_len = std.unicode.utf8ByteSequenceLength(bytes[i]) catch 1;
+            i += @min(@as(usize, seq_len), bytes.len - i);
+            count += 1;
+        }
+        return count;
     }
 
     // -- list rows ---------------------------------------------------------
