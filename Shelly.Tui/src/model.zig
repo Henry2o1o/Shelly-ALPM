@@ -306,6 +306,9 @@ pub const Model = struct {
                                 return ctx.consumeAndRedraw();
                             }
                         },
+                        .upgrade => {
+                            return ctx.consumeAndRedraw();
+                        },
                     }
                     ctx.quit = true;
                     return;
@@ -345,6 +348,7 @@ pub const Model = struct {
                 return switch (self.active) {
                     .packages => self.list_view.handleEvent(ctx, event),
                     .aur => self.aur_list.handleEvent(ctx, event),
+                    .upgrade => {},
                 };
             },
             else => {},
@@ -371,6 +375,7 @@ pub const Model = struct {
         switch (self.active) {
             .packages => try ctx.requestFocus(self.text_field.widget()),
             .aur => try ctx.requestFocus(self.aur_field.widget()),
+            .upgrade => {},
         }
     }
 
@@ -949,6 +954,7 @@ pub const Model = struct {
                     });
                 }
             },
+            .upgrade => {},
         }
 
         // Bottom row: status bar
@@ -1046,6 +1052,9 @@ pub const Model = struct {
                 return try std.fmt.allocPrint(arena, "{d} AUR results for '{s}'", .{
                     self.aur_packages.len, self.aur_query,
                 });
+            },
+            .upgrade => {
+                return try std.fmt.allocPrint(arena, "Not implemented yet", .{});
             },
         }
     }
