@@ -15,12 +15,13 @@ pub const Tab = enum {
     packages,
     aur,
 
-    pub const all: []const Tab = &.{ .packages, .aur };
+    pub const all: []const Tab = &.{ .packages, .aur, .upgrade };
 
     pub fn title(self: Tab) []const u8 {
         return switch (self) {
             .packages => "Packages",
             .aur => "AUR",
+            .upgrade => "Upgrade",
         };
     }
 };
