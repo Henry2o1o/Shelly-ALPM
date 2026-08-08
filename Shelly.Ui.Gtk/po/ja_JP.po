@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
-"POT-Creation-Date: 2026-08-06 20:50+0900\n"
-"PO-Revision-Date: 2026-08-06 21:03+0900\n"
+"POT-Creation-Date: 2026-08-08 22:09+0900\n"
+"PO-Revision-Date: 2026-08-09 04:59+0900\n"
 "Last-Translator: UTUMI Hirosi <utuhiro78@yahoo.co.jp>\n"
 "Language-Team: csnyder@seafoamlabs.org\n"
 "Language: ja_JP\n"
@@ -381,7 +381,6 @@ msgstr "明示的にインストールしたパッケージのみを表示する
 msgid "Show Dependency Only"
 msgstr "依存によるパッケージのみを表示"
 
-#| msgid "Show dependency packages on;y"
 msgid "Show dependency packages only"
 msgstr "依存によるパッケージのみを表示する"
 
@@ -1366,6 +1365,24 @@ msgstr "再インストール中"
 
 msgid "Removing"
 msgstr "削除中"
+
+msgid "Checking keyring"
+msgstr "キーリングを確認中"
+
+msgid "Checking integrity"
+msgstr "整合性を確認中"
+
+#| msgid "Upgrading packages"
+msgid "Loading packages"
+msgstr "パッケージを読み込み中"
+
+#| msgid "Conflicts"
+msgid "Checking conflicts"
+msgstr "競合を確認中"
+
+#| msgid "Checking for updates…"
+msgid "Checking disk space"
+msgstr "ディスク容量を確認中"
 
 msgid "Working"
 msgstr "作業中"
