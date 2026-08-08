@@ -113,6 +113,7 @@ pub const Model = struct {
     /// Result of the last finished operation; owned by `gpa` unless empty.
     notice: []const u8 = "",
 
+    selected_list_view: vxfw.ListView,
     list_view: vxfw.ListView,
     text_field: vxfw.TextField,
     aur_list: vxfw.ListView,
@@ -152,6 +153,12 @@ pub const Model = struct {
                 .buf = .init(gpa),
                 .userdata = model,
                 .onSubmit = Model.onAurSubmit,
+            },
+            .selected_list_view = .{
+                .children = .{ .builder = .{
+                    .userdata = model,
+                    .buildFn = Model.buildSelectedRow,
+                } },
             },
         };
         return model;
@@ -232,7 +239,7 @@ pub const Model = struct {
                 }
                 if (key.matches(vaxis.Key.space, .{})) {
                     try self.toggleSelectedList();
-                    return ctx.consumeEvent();
+                    return ctx.consumeAndRedraw();
                 }
 
                 if (key.matches(vaxis.Key.tab, .{})) {
@@ -849,6 +856,8 @@ pub const Model = struct {
             )),
         });
 
+        const right_w: u16 = @max(24, max.width / 4); // pick a panel width
+        const left_w: u16 = max.width -| right_w;
         switch (self.active) {
             .packages => {
                 // Row 1: search prompt + field
@@ -873,8 +882,12 @@ pub const Model = struct {
                     .origin = .{ .row = 2, .col = 0 },
                     .surface = try self.list_view.draw(ctx.withConstraints(
                         .{ .width = 0, .height = 0 },
-                        .{ .width = max.width, .height = max.height - 3 },
+                        .{ .width = left_w -| 1, .height = max.height - 3 },
                     )),
+                });
+                try children.append(arena, .{
+                    .origin = .{ .row = 2, .col = left_w },
+                    .surface = try self.selected_list_view.draw(ctx.withConstraints(.{ .width = 0, .height = 0 }, .{ .width = right_w, .height = max.height - 3 })),
                 });
 
                 if (self.loading or self.load_failed) {
@@ -1177,6 +1190,22 @@ pub const Model = struct {
             .softwrap = false,
             .overflow = .ellipsis,
         };
+        return rich.draw(ctx);
+    }
+    fn buildSelectedRow(ptr: *const anyopaque, idx: usize, _: usize) ?vxfw.Widget {
+        const self: *const Model = @ptrCast(@alignCast(ptr));
+        if (idx >= self.selected_packages.items.len) return null;
+        return .{ .userdata = @ptrCast(&self.selected_packages.items[idx]), .drawFn = drawSelectedRow };
+    }
+
+    fn drawSelectedRow(ptr: *anyopaque, ctx: vxfw.DrawContext) Allocator.Error!vxfw.Surface {
+        const name_ptr: *const []const u8 = @ptrCast(@alignCast(ptr));
+        const name = name_ptr.*;
+        const arena = ctx.arena;
+        var spans: std.ArrayList(vxfw.RichText.TextSpan) = .empty;
+        try spans.append(arena, .{ .text = name });
+        const rich = try arena.create(vxfw.RichText);
+        rich.* = .{ .text = spans.items, .softwrap = false, .overflow = .ellipsis };
         return rich.draw(ctx);
     }
 
