@@ -2,7 +2,7 @@ const std = @import("std");
 const file_inspector = @import("../local/file_inspector.zig");
 const listDictionary = @import("../shared/list_dictionary.zig").ListDictionary;
 
-pub const pkgbuild_info = struct {
+pub const Pkgbuild = struct {
     pkg_name: ?[]const u8 = null,
     pkg_version: ?[]const u8 = null,
     pkg_rel: ?[]const u8 = null,
@@ -32,7 +32,7 @@ pub const pkgbuild_info = struct {
     check_depends: ?[][]const u8 = null,
     execution_steps: ?[]execution_step = null,
 
-    pub fn deinit(self: *pkgbuild_info, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Pkgbuild, allocator: std.mem.Allocator) void {
         if (self.pkg_name) |v| allocator.free(v);
         if (self.pkg_version) |v| allocator.free(v);
         if (self.pkg_rel) |v| allocator.free(v);
@@ -132,7 +132,7 @@ pub const pkgbuild_info = struct {
         }
     }
 
-    pub fn get_full_version(self: pkgbuild_info, allocator: std.mem.Allocator) ![]const u8 {
+    pub fn get_full_version(self: Pkgbuild, allocator: std.mem.Allocator) ![]const u8 {
         const version = self.pkg_version;
         const version_part: []const u8 = version orelse "";
         const epoch_part: []const u8 = if (self.epoch) |e| e else "";
@@ -200,7 +200,7 @@ pub const PkgbuildParser = struct {
         package_scoped: bool,
     };
 
-    pub fn parser(self: PkgbuildParser, path: []const u8) !pkgbuild_info {
+    pub fn parser(self: PkgbuildParser, path: []const u8) !Pkgbuild {
         const content = try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .unlimited);
         defer self.allocator.free(content);
 
@@ -208,7 +208,7 @@ pub const PkgbuildParser = struct {
         return self.parser_content(content, base_dir);
     }
 
-    pub fn parser_content(self: PkgbuildParser, content: []const u8, base_dir: ?[]const u8) !pkgbuild_info {
+    pub fn parser_content(self: PkgbuildParser, content: []const u8, base_dir: ?[]const u8) !Pkgbuild {
         var vars = try self.build_var_hashmap(content);
         errdefer {
             var iterator = vars.iterator();
@@ -240,7 +240,7 @@ pub const PkgbuildParser = struct {
         const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
         const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
 
-        return pkgbuild_info{
+        return Pkgbuild{
             .variables = vars,
             .pkg_name = try resolve_or_parse(self, content, "pkgname", &vars),
             .pkg_version = try resolve_or_parse(self, content, "pkgver", &vars),
