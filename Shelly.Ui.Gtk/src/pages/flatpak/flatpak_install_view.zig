@@ -948,7 +948,7 @@ pub const FlatpakInstallView = extern struct {
             .Recommended => if (!app.getMembership().contains(.popular)) return 0,
             .@"Recently Updated" => if (!app.getMembership().contains(.recently_updated)) return 0,
             .@"Recently Added" => if (!app.getMembership().contains(.recently_added)) return 0,
-
+            .Verified => if (!app.isVerified()) return 0,
             else => {
                 const categories = app.getCategories();
                 var found_match = false;
