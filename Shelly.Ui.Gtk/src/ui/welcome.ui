@@ -275,7 +275,7 @@
             <property name="vexpand">true</property>
             <property name="spacing">16</property>
             <property name="margin-top">24</property>
-
+            <property name="margin-bottom">24</property>
             <property name="margin-start">48</property>
             <property name="margin-end">48</property>
             <property name="valign">center</property>
@@ -454,11 +454,16 @@
     <child>
       <object class="GtkBox" id="nav_bar">
         <property name="spacing">8</property>
-        <property name="margin-bottom">30</property>
+        <property name="margin-top">16</property>
+        <property name="margin-bottom">16</property>
         <property name="margin-start">48</property>
         <property name="margin-end">48</property>
         <property name="halign">center</property>
         <property name="valign">end</property>
+        <style>
+          <class name="linked"/>
+        </style>
+
         <child>
           <object class="GtkButton" id="btn_back">
             <property name="label" translatable="yes">Back</property>
