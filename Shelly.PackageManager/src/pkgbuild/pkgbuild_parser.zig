@@ -30,6 +30,7 @@ pub const pkgbuild_info = struct {
     parsed_make_depends: ?[]parsed_dep = null,
     parsed_check_depends: ?[]parsed_dep = null,
     check_depends: ?[][]const u8 = null,
+    execution_steps: ?[]execution_step = null,
 
     pub fn deinit(self: *pkgbuild_info, allocator: std.mem.Allocator) void {
         if (self.pkg_name) |v| allocator.free(v);
@@ -125,6 +126,10 @@ pub const pkgbuild_info = struct {
             for (deps) |d| d.deinit(allocator);
             allocator.free(deps);
         }
+        if (self.execution_steps) |steps| {
+            for (steps) |step| step.deinit(allocator);
+            allocator.free(steps);
+        }
     }
 
     pub fn get_full_version(self: pkgbuild_info, allocator: std.mem.Allocator) ![]const u8 {
@@ -170,6 +175,18 @@ pub const kvp = struct {
     pub fn deinit(self: kvp, allocator: std.mem.Allocator) void {
         allocator.free(self.key);
         allocator.free(self.value);
+    }
+};
+
+/// One makepkg execution step of a PKGBUILD: a well-known function
+/// (prepare, pkgver, build, check, package/package_<name>) and its body.
+pub const execution_step = struct {
+    name: []const u8,
+    body: []const u8,
+
+    pub fn deinit(self: execution_step, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.body);
     }
 };
 
@@ -251,7 +268,54 @@ pub const PkgbuildParser = struct {
             .parsed_depends = try self.parse_dependencies(depends),
             .parsed_make_depends = try self.parse_dependencies(make_depends),
             .parsed_check_depends = try self.parse_dependencies(check_depends),
+            .execution_steps = try self.resolve_execution_steps(content),
         };
+    }
+
+    /// PKGBUILD functions in the order makepkg executes them.
+    const execution_step_functions = [_][]const u8{ "prepare", "pkgver", "build", "check", "package" };
+
+    fn resolve_execution_steps(self: PkgbuildParser, content: []const u8) !?[]execution_step {
+        var steps: std.ArrayList(execution_step) = .empty;
+        errdefer {
+            for (steps.items) |step| step.deinit(self.allocator);
+            steps.deinit(self.allocator);
+        }
+
+        for (execution_step_functions) |function_name| {
+            // For split packages the packaging step is the package-scoped
+            // function; fall back to the shared package() when absent.
+            if (std.mem.eql(u8, function_name, "package")) {
+                if (self.selected_package_name) |package_name| {
+                    const scoped_name = try std.fmt.allocPrint(
+                        self.allocator,
+                        "package_{s}",
+                        .{package_name},
+                    );
+                    defer self.allocator.free(scoped_name);
+
+                    if (try extract_function_body(content, scoped_name)) |body| {
+                        try steps.append(self.allocator, .{
+                            .name = try self.allocator.dupe(u8, scoped_name),
+                            .body = try self.allocator.dupe(u8, body),
+                        });
+                        continue;
+                    }
+                }
+            }
+
+            const body = try extract_function_body(content, function_name) orelse continue;
+            try steps.append(self.allocator, .{
+                .name = try self.allocator.dupe(u8, function_name),
+                .body = try self.allocator.dupe(u8, body),
+            });
+        }
+
+        if (steps.items.len == 0) {
+            steps.deinit(self.allocator);
+            return null;
+        }
+        return try steps.toOwnedSlice(self.allocator);
     }
 
     fn selected_package_body(self: PkgbuildParser, content: []const u8) !?[]const u8 {
@@ -4878,6 +4942,7 @@ test "parser_content: empty content produces empty arrays and null scalars" {
     try std.testing.expect(info.pkg_name == null);
     try std.testing.expectEqual(@as(usize, 0), info.depends.?.len);
     try std.testing.expectEqual(@as(usize, 0), info.source.?.len);
+    try std.testing.expect(info.execution_steps == null);
 }
 
 test "parser: reads PKGBUILD from disk and resolves relative base_dir" {
@@ -4952,6 +5017,18 @@ test "parser: full PKGBUILD exercises the whole pipeline" {
         \\sha256sums=('abc123'
         \\            'SKIP')
         \\install=myapp.install
+        \\
+        \\prepare() {
+        \\  patch -p1 < fix.patch
+        \\}
+        \\
+        \\build() {
+        \\  make
+        \\}
+        \\
+        \\package() {
+        \\  make DESTDIR="$pkgdir" install
+        \\}
         ,
     });
 
@@ -5049,4 +5126,181 @@ test "parser: full PKGBUILD exercises the whole pipeline" {
     // $pkgname inside the install file body is NOT substituted (matches C# behavior:
     // ResolvePostInstall/ExtractFunctionBody never runs variable resolution on file content).
     try std.testing.expectEqualStrings("echo \"Enjoy $pkgname!\"", info.post_install.?);
+
+    // --- execution steps: functions captured in makepkg execution order ---
+    try std.testing.expectEqual(@as(usize, 3), info.execution_steps.?.len);
+    try std.testing.expectEqualStrings("prepare", info.execution_steps.?[0].name);
+    try std.testing.expectEqualStrings("patch -p1 < fix.patch", info.execution_steps.?[0].body);
+    try std.testing.expectEqualStrings("build", info.execution_steps.?[1].name);
+    try std.testing.expectEqualStrings("make", info.execution_steps.?[1].body);
+    try std.testing.expectEqualStrings("package", info.execution_steps.?[2].name);
+    try std.testing.expectEqualStrings("make DESTDIR=\"$pkgdir\" install", info.execution_steps.?[2].body);
+}
+
+test "parser_content: execution steps follow makepkg execution order" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    // Functions declared in scrambled order on purpose: the stored steps must
+    // follow makepkg's execution order (prepare, pkgver, build, check, package),
+    // not the declaration order.
+    const content =
+        \\pkgname=demo
+        \\
+        \\package() {
+        \\  make install
+        \\}
+        \\
+        \\check() {
+        \\  make test
+        \\}
+        \\
+        \\pkgver() {
+        \\  git describe --long
+        \\}
+        \\
+        \\prepare() {
+        \\  patch -p1 < fix.patch
+        \\}
+        \\
+        \\build() {
+        \\  make
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 5), steps.len);
+
+    try std.testing.expectEqualStrings("prepare", steps[0].name);
+    try std.testing.expectEqualStrings("patch -p1 < fix.patch", steps[0].body);
+
+    try std.testing.expectEqualStrings("pkgver", steps[1].name);
+    try std.testing.expectEqualStrings("git describe --long", steps[1].body);
+
+    try std.testing.expectEqualStrings("build", steps[2].name);
+    try std.testing.expectEqualStrings("make", steps[2].body);
+
+    try std.testing.expectEqualStrings("check", steps[3].name);
+    try std.testing.expectEqualStrings("make test", steps[3].body);
+
+    try std.testing.expectEqualStrings("package", steps[4].name);
+    try std.testing.expectEqualStrings("make install", steps[4].body);
+}
+
+test "parser_content: execution steps skip functions the PKGBUILD does not define" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\
+        \\build() {
+        \\  cargo build --release
+        \\}
+        \\
+        \\package() {
+        \\  install -Dm755 target/demo "$pkgdir/usr/bin/demo"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 2), steps.len);
+    try std.testing.expectEqualStrings("build", steps[0].name);
+    try std.testing.expectEqualStrings("cargo build --release", steps[0].body);
+    try std.testing.expectEqualStrings("package", steps[1].name);
+    try std.testing.expectEqualStrings("install -Dm755 target/demo \"$pkgdir/usr/bin/demo\"", steps[1].body);
+}
+
+test "parser_content: execution steps is null when no known functions are defined" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\
+        \\helper() {
+        \\  echo "not an execution step"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expect(info.execution_steps == null);
+}
+
+test "parser_content: execution steps resolve package-scoped function for selected split package" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-two",
+    };
+    const content =
+        \\pkgname=('demo-one' 'demo-two')
+        \\
+        \\build() {
+        \\  make
+        \\}
+        \\
+        \\package_demo-one() {
+        \\  make install-one
+        \\}
+        \\
+        \\package_demo-two() {
+        \\  make install-two
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 2), steps.len);
+    try std.testing.expectEqualStrings("build", steps[0].name);
+    try std.testing.expectEqualStrings("make", steps[0].body);
+    try std.testing.expectEqualStrings("package_demo-two", steps[1].name);
+    try std.testing.expectEqualStrings("make install-two", steps[1].body);
+}
+
+test "parser_content: execution steps fall back to package() when package-scoped function is missing" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo",
+    };
+    const content =
+        \\pkgname=('demo')
+        \\
+        \\package() {
+        \\  make install
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings("package", steps[0].name);
+    try std.testing.expectEqualStrings("make install", steps[0].body);
+}
+
+test "parser_content: execution step bodies preserve nested blocks" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\
+        \\check() {
+        \\  if [ "$CARCH" = "x86_64" ]; then
+        \\    make test
+        \\  fi
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings("check", steps[0].name);
+    // The body is preserved verbatim; only surrounding whitespace is trimmed.
+    try std.testing.expectEqualStrings(
+        \\if [ "$CARCH" = "x86_64" ]; then
+        \\    make test
+        \\  fi
+    , steps[0].body);
 }
