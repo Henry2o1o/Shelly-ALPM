@@ -221,7 +221,7 @@ pub const FlatpakPage = extern struct {
         return switch (category) {
             .@"All Applications" => "view-grid-symbolic",
             .Recommended => "starred-symbolic",
-            .Verified => "verified-symbolic",
+            .Verified => "security-high-symbolic",
             .@"Most Wanted" => "user-bookmarks-symbolic",
             .@"Recently Added" => "list-add-symbolic",
             .@"Recently Updated" => "view-refresh-symbolic",
