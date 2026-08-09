@@ -592,6 +592,8 @@ fn runStandard(
         );
     }
     var cache_operation = operation_context.begin(.{ .backend = .alpm, .kind = .cleanup });
+    var cache_completion: Zigalpm.OperationCompletionStatus = .failed;
+    defer cache_operation.finish(cache_completion);
     var answer = try cache_operation.ask(.{
         .kind = .confirmation,
         .prompt = "Would you like to remove extra cache entries?",
@@ -605,6 +607,7 @@ fn runStandard(
         const plan = try cleaner.plan_cache_cleanup(.{ .keep = 3, .dry_run = false });
         _ = try cleaner.execute_cache_removal_plan(&plan);
     }
+    cache_completion = .success;
 }
 
 fn runAur(
