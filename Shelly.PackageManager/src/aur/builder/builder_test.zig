@@ -51,7 +51,10 @@ const Fixture = struct {
     builder: *PackageBuilder,
     operation_context: op_context.OperationContext,
     config: *MakePkgConfiguration,
-    build_dir: []const u8,
+    // Sentinel-terminated: realPathFileAlloc allocates len+1 for the 0 byte,
+    // and free() only releases the full allocation when the slice type still
+    // carries the sentinel.
+    build_dir: [:0]const u8,
     allocator: std.mem.Allocator,
     temporary: std.testing.TmpDir,
 

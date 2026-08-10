@@ -53,7 +53,12 @@ pub const PackageBuilder = struct {
     pub fn BuildPackage(self: *PackageBuilder) BuilderErrors!BuildArtifact {
         var operation = self.operation_context.begin(op_context.OperationDescriptor{ .backend = .aur, .kind = .build, .subject = "Package Build" });
         defer operation.finish(.cancelled);
-        for (self.package_build.execution_steps.?) |step| {
+        const steps = self.package_build.execution_steps orelse {
+            self.dispatcher.raiseError(.{ .message = "PKGBUILD defines no execution steps" });
+            operation.finish(.failed);
+            return BuilderErrors.BuildFailed;
+        };
+        for (steps) |step| {
             var child = std.process.spawn(self.io, .{ .argv = &.{ "/bin/sh", "-c", step.expanded_body }, .stdout = .inherit, .stderr = .inherit, .cwd = .{ .path = self.makepkg_config.build_directory } }) catch {
                 return BuilderErrors.BuildFailed;
             };
@@ -99,11 +104,9 @@ pub const PackageBuilder = struct {
             }
         }
         operation.finish(.success);
+        const package_name = self.allocator.dupe(u8, self.package_build.pkg_name orelse "") catch return BuilderErrors.OutOfMemory;
+        errdefer self.allocator.free(package_name);
         const path = self.allocator.dupeSentinel(u8, self.makepkg_config.build_directory, 0) catch return BuilderErrors.OutOfMemory;
-        defer self.allocator.free(path);
-        return .{
-            .package_name = self.package_build.pkg_name orelse "",
-            .path = path,
-        };
+        return .{ .package_name = package_name, .path = path };
     }
 };
