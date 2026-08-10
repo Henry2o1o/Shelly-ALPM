@@ -482,6 +482,7 @@ test {
     _ = @import("pkgbuild/post_install_validator.zig");
     _ = @import("pkgbuild/homograph_validator.zig");
     _ = @import("aur/manager.zig");
+    _ = @import("aur/builder/builder_test.zig");
     _ = @import("local/manager.zig");
     _ = @import("local/file_inspector.zig");
     _ = @import("local/xdg_integration.zig");
