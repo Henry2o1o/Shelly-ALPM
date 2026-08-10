@@ -4,9 +4,8 @@ const gio = bindings.gio;
 const gobject = bindings.gobject;
 const glib = bindings.glib;
 
-const TrayService: [:0]const u8 = "org.shelly.Notifications";
-const TrayPath: [:0]const u8 = "/org/shelly/Notifications";
-const TrayInterface: [:0]const u8 = "org.shelly.Notifications";
+const TrayPath: [:0]const u8 = "/org/shellyorg/Notifications";
+const TrayInterface: [:0]const u8 = "com.shellyorg.shelly";
 
 const POLKIT_NAME: [:0]const u8 = "org.freedesktop.PolicyKit1";
 const POLKIT_AUTH_PATH: [:0]const u8 = "/org/freedesktop/PolicyKit1/Authority";
@@ -34,7 +33,7 @@ pub const DBus = struct {
     }
 
     pub fn updatesMadeInUi(self: *DBus) void {
-        self.callTray("UpdatesMadeInUi");
+        self.emitTray("Refresh");
     }
 
     fn ensureBus(self: *DBus, slot: *?*gio.DBusConnection, bus: gio.BusType) ?*gio.DBusConnection {
@@ -59,22 +58,22 @@ pub const DBus = struct {
         return self.ensureBus(&self.system_connection, .system);
     }
 
-    fn callTray(self: *DBus, method: [:0]const u8) void {
+    fn emitTray(self: *DBus, signal: [:0]const u8) void {
         const conn = self.ensureConnection() orelse return;
-        gio.DBusConnection.call(
+        var err: ?*glib.Error = null;
+        _ = gio.DBusConnection.emitSignal(
             conn,
-            TrayService,
+            null,
             TrayPath,
             TrayInterface,
-            method,
+            signal,
             null,
-            null,
-            .{},
-            -1,
-            null,
-            null,
-            null,
+            &err,
         );
+        if (err) |e| {
+            std.log.warn("emit_signal failed: {s}", .{e.f_message orelse "unknown"});
+            glib.Error.free(e);
+        }
     }
 
     pub fn checkPolkitStatus(self: *DBus) PolkitStatus {
