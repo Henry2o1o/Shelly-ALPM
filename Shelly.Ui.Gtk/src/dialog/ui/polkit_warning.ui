@@ -40,9 +40,9 @@
                 <property name="use-markup">true</property>
                 <property name="label" translatable="yes">Shelly's GUI needs &lt;b&gt;polkit&lt;/b&gt; installed and running to authorize privileged actions, but it wasn't found on the system bus.
 
-Install and enable it, then retry. If you using noctalia v5 their built in polkit can be turned on the in the noctalia settings.
+Install and enable it, then retry.
 
-&lt;a href="https://wiki.archlinux.org/title/Polkit"&gt;wiki.archlinux.org/title/Polkit&lt;/a&gt;</property>
+&lt;a href="https://www.seafoam-labs.org/shelly-alpm/docs/polkit/"&gt;seafoam-labs.org/shelly-alpm/docs/polkit&lt;/a&gt;</property>
               </object>
             </child>
             <child>
