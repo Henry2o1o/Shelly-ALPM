@@ -3251,6 +3251,186 @@ test "AUR package failures are emitted after all builds and fail the operation" 
     try std.testing.expectEqual(operation_api.CompletionStatus.failed, capture.completion.?);
 }
 
+test "build-only dependencies are removed after a failed build" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const root = try temporary.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const remote_root = try std.fs.path.join(allocator, &.{ root, "remotes" });
+    defer allocator.free(remote_root);
+    const cache_root = try std.fs.path.join(allocator, &.{ root, "cache" });
+    defer allocator.free(cache_root);
+    const alpm_root = try std.fs.path.join(allocator, &.{ root, "alpm-root" });
+    defer allocator.free(alpm_root);
+    const db_path = try std.fs.path.join(allocator, &.{ root, "db" });
+    defer allocator.free(db_path);
+    const package_cache = try std.fs.path.join(allocator, &.{ root, "packages" });
+    defer allocator.free(package_cache);
+    try std.Io.Dir.cwd().createDirPath(io, remote_root);
+    try std.Io.Dir.cwd().createDirPath(io, cache_root);
+    try std.Io.Dir.cwd().createDirPath(io, alpm_root);
+    try std.Io.Dir.cwd().createDirPath(io, db_path);
+    try std.Io.Dir.cwd().createDirPath(io, package_cache);
+
+    // The build-only dependency is a real AUR fixture that the fake makepkg
+    // below builds into an installable package archive.
+    try createAurFixtureRepository(allocator, io, remote_root, "makedep-tool", null);
+
+    // The requested package needs the tool only for its build, and its own
+    // build fails.
+    const failpkg_remote = try std.fs.path.join(allocator, &.{ remote_root, "failpkg.git" });
+    defer allocator.free(failpkg_remote);
+    try std.Io.Dir.cwd().createDirPath(io, failpkg_remote);
+    const failpkg_pkgbuild = try std.fs.path.join(allocator, &.{ failpkg_remote, "PKGBUILD" });
+    defer allocator.free(failpkg_pkgbuild);
+    try writeFixtureFile(io, failpkg_pkgbuild,
+        \\pkgname=failpkg
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\makedepends=('makedep-tool')
+        \\package() { :; }
+    , false);
+    const failpkg_srcinfo = try std.fs.path.join(allocator, &.{ failpkg_remote, ".SRCINFO" });
+    defer allocator.free(failpkg_srcinfo);
+    try writeFixtureFile(io, failpkg_srcinfo, "pkgbase = failpkg\n\tpkgver = 1\n\tpkgrel = 1\n\tarch = any\n\tmakedepends = makedep-tool\n\tpkgname = failpkg\n", false);
+    try runFixtureCommand(allocator, io, &.{ "git", "init" }, failpkg_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "config", "user.email", "shelly-tests@example.invalid" }, failpkg_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "config", "user.name", "Shelly Tests" }, failpkg_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "add", "PKGBUILD", ".SRCINFO" }, failpkg_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "commit", "-m", "fixture" }, failpkg_remote);
+
+    // The fake makepkg produces a valid package archive for the dependency
+    // and fails for everything else.
+    const fake_makepkg_path = try std.fs.path.join(allocator, &.{ root, "fake-makepkg" });
+    defer allocator.free(fake_makepkg_path);
+    try writeFixtureFile(io, fake_makepkg_path,
+        \\#!/bin/sh
+        \\if grep -q '^pkgname=makedep-tool$' PKGBUILD; then
+        \\  printf 'pkgname = makedep-tool\npkgbase = makedep-tool\npkgver = 1-1\npkgdesc = fixture build-only dependency\nurl = https://example.invalid\nbuilddate = 1700000000\npackager = Shelly Tests\nsize = 0\narch = any\n' > .PKGINFO
+        \\  tar -czf makedep-tool-1-1-any.pkg.tar.gz .PKGINFO
+        \\  rm -f .PKGINFO
+        \\  exit 0
+        \\fi
+        \\exit 1
+    , true);
+
+    const config_path = try std.fs.path.join(allocator, &.{ root, "pacman.conf" });
+    defer allocator.free(config_path);
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\nArchitecture = auto\nSigLevel = Never\nRootDir = {s}\nDBPath = {s}\nCacheDir = {s}\n",
+        .{ alpm_root, db_path, package_cache },
+    );
+    defer allocator.free(config);
+    try writeFixtureFile(io, config_path, config, false);
+
+    var operation_context = operation_api.OperationContext.init(allocator, io);
+    defer operation_context.deinit();
+    operation_context.setQuestionHandler(.{
+        .function = struct {
+            fn answer(_: ?*anyopaque, question: operation_api.Question) operation_api.QuestionResponse {
+                return switch (question.kind) {
+                    .review_changes, .confirm_transaction => .accepted,
+                    else => .default,
+                };
+            }
+        }.answer,
+    });
+
+    const Capture = struct {
+        build_starts: usize = 0,
+        failures: usize = 0,
+        dependency_completed: usize = 0,
+        cleanup_starts: usize = 0,
+        cleanup_dones: usize = 0,
+        completion: ?operation_api.CompletionStatus = null,
+
+        fn handle(data: ?*anyopaque, event: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            const envelope = switch (event) {
+                inline else => |payload| payload.envelope,
+            };
+            if (envelope.backend != .aur or envelope.kind != .install or envelope.parent_id != null) return;
+
+            switch (event) {
+                .status => |status| {
+                    const code = status.code orelse return;
+                    if (std.mem.eql(u8, code, "aur_build_start")) {
+                        self.build_starts += 1;
+                    } else if (std.mem.eql(u8, code, "aur_package_failed")) {
+                        self.failures += 1;
+                        std.debug.assert(std.mem.eql(u8, status.message, "Failed to build package"));
+                    }
+                },
+                .progress => |progress| {
+                    const stage = progress.update.stage orelse return;
+                    if (std.mem.eql(u8, stage, "aur_cleanup_start")) {
+                        self.cleanup_starts += 1;
+                    } else if (std.mem.eql(u8, stage, "aur_cleanup_done")) {
+                        self.cleanup_dones += 1;
+                    } else if (std.mem.eql(u8, stage, "aur_package_completed")) {
+                        const name = progress.update.message orelse return;
+                        if (std.mem.eql(u8, name, "makedep-tool")) self.dependency_completed += 1;
+                    }
+                },
+                .completed => |completed| {
+                    self.completion = completed.status;
+                },
+                else => {},
+            }
+        }
+    };
+    var capture: Capture = .{};
+    const subscription = try operation_context.subscribe(.{
+        .function = Capture.handle,
+        .data = &capture,
+    });
+    defer _ = operation_context.unsubscribe(subscription);
+
+    var manager = try Manager.init(allocator, std.testing.environ, .{
+        .config_path = config_path,
+        .cache_root = cache_root,
+        .aur_git_base_url = remote_root,
+        .makepkg_command = fake_makepkg_path,
+    });
+    defer manager.deinit();
+    // Keep host system transaction hooks away from the fixture root.
+    manager.alpm.disable_transaction_hooks();
+    manager.setOperationContext(&operation_context);
+    defer manager.setOperationContext(null);
+    _ = try manager.cachePkgbase("failpkg", "failpkg");
+    _ = try manager.cachePkgbase("makedep-tool", "makedep-tool");
+    // Resolve the binary-variant question from cache so the test never
+    // touches the network.
+    try manager.bin_variant_cache.put(try allocator.dupe(u8, "makedep-tool"), null);
+
+    const package_names = [_][]const u8{"failpkg"};
+    try manager.installPackages(&package_names);
+
+    // The dependency was built and installed as part of the operation...
+    try std.testing.expectEqual(@as(usize, 2), capture.build_starts);
+    try std.testing.expectEqual(@as(usize, 1), capture.dependency_completed);
+    // ...the requested package failed and the operation failed overall...
+    try std.testing.expectEqual(@as(usize, 1), capture.failures);
+    try std.testing.expectEqual(operation_api.CompletionStatus.failed, capture.completion.?);
+    // ...and the failure path cleaned up the installed build-only
+    // dependency. The cleanup events only fire when something installed
+    // was found for removal.
+    try std.testing.expectEqual(@as(usize, 1), capture.cleanup_starts);
+    try std.testing.expectEqual(@as(usize, 1), capture.cleanup_dones);
+
+    const makedep_z = try allocator.dupeZ(u8, "makedep-tool");
+    defer allocator.free(makedep_z);
+    try std.testing.expect(!manager.alpm.is_package_installed(makedep_z));
+    const failpkg_z = try allocator.dupeZ(u8, "failpkg");
+    defer allocator.free(failpkg_z);
+    try std.testing.expect(!manager.alpm.is_package_installed(failpkg_z));
+}
+
 test "AUR operation-hooked public APIs compile" {
     var run = false;
     std.mem.doNotOptimizeAway(&run);
