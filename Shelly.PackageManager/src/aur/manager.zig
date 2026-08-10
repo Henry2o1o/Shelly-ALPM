@@ -764,6 +764,11 @@ pub const Manager = struct {
             const backend = self.dependencyBackend();
             const build_only = try dependency_resolver.collectBuildOnlyDependencies(self.allocator, &prepared.info, self.no_check, backend);
             defer builder.deinitPaths(self.allocator, build_only);
+            // Build-only dependencies are also removed when the operation
+            // fails: the errdefer covers hard errors propagating out of
+            // this iteration, while the soft-failure `continue` paths call
+            // the cleanup explicitly before skipping to the next package.
+            errdefer self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), current, plans.items.len);
 
             try self.installCollection(&plan.dependencies);
 
@@ -778,6 +783,7 @@ pub const Manager = struct {
                     self.allocator.free(owned_name);
                     return err;
                 };
+                self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), current, plans.items.len);
                 continue;
             }
             self.raisePackageProgress(.aur_build_done, package_name, current, plans.items.len, "");
@@ -793,6 +799,7 @@ pub const Manager = struct {
                     self.allocator.free(owned_name);
                     return err;
                 };
+                self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), current, plans.items.len);
                 continue;
             }
             self.raisePackageProgress(.aur_install_start, package_name, current, plans.items.len, "");
@@ -804,12 +811,7 @@ pub const Manager = struct {
                     self.raiseBestEffortFailure(requested_name, "Failed to update VCS metadata", err);
             self.installSelectedOptionalDependencies(package_name, selected_optional) catch |err|
                 self.raiseBestEffortFailure(package_name, "Failed to install some optional dependencies", err);
-            if (build_only.len > 0) {
-                self.raisePackageProgress(.aur_cleanup_start, package_name, current, plans.items.len, "Removing build-only dependencies");
-                const build_names: []const []const u8 = @ptrCast(build_only);
-                self.removeRepoPackages(build_names, .{}, true) catch {};
-                self.raisePackageProgress(.aur_cleanup_done, package_name, current, plans.items.len, "");
-            }
+            self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), current, plans.items.len);
             self.cleanBuildArtifacts(prepared.cache_path);
             for (requested_names) |requested_name|
                 self.raisePackageProgress(.aur_package_completed, requested_name, current, plans.items.len, "");
@@ -1001,6 +1003,9 @@ pub const Manager = struct {
         try self.alpm.sync(false);
         const build_only = try dependency_resolver.collectBuildOnlyDependencies(self.allocator, &prepared.info, self.no_check, self.dependencyBackend());
         defer builder.deinitPaths(self.allocator, build_only);
+        // Build-only dependencies are also removed when the build, artifact
+        // selection, or installation below fails.
+        errdefer self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), 1, 1);
         var collection = DependencyCollection.init(self.allocator);
         defer collection.deinit();
         var visited = std.StringHashMap(void).init(self.allocator);
@@ -1030,12 +1035,7 @@ pub const Manager = struct {
         const install_paths: []const []const u8 = @ptrCast(package_files);
         try self.alpm.install_local_packages(install_paths, .{});
         self.raisePackageProgress(.aur_install_done, package_name, 1, 1, "");
-        if (build_only.len > 0) {
-            self.raisePackageProgress(.aur_cleanup_start, package_name, 1, 1, "Removing build-only dependencies");
-            const build_names: []const []const u8 = @ptrCast(build_only);
-            self.removeRepoPackages(build_names, .{}, true) catch {};
-            self.raisePackageProgress(.aur_cleanup_done, package_name, 1, 1, "");
-        }
+        self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), 1, 1);
         self.raisePackageProgress(.aur_package_completed, package_name, 1, 1, "");
     }
 
@@ -1161,6 +1161,37 @@ pub const Manager = struct {
         }
         for (names) |name| try terminated.append(self.allocator, try self.allocator.dupeZ(u8, name));
         try self.alpm.remove_packages(terminated.items, flags, keep_optional_dependencies);
+    }
+
+    /// Removes build-only dependencies after a build, keeping optional
+    /// dependencies. Runs on both the success and failure paths. Only
+    /// packages that are actually installed are targeted so a partially
+    /// installed dependency set (for example after a failed dependency
+    /// install) cannot abort the whole removal transaction. Best-effort:
+    /// removal errors are swallowed so cleanup never masks the primary
+    /// build result.
+    fn removeBuildOnlyDependencies(
+        self: *Self,
+        package_name: []const u8,
+        build_only: []const []const u8,
+        current: usize,
+        total: usize,
+    ) void {
+        if (build_only.len == 0) return;
+
+        var installed: std.ArrayList([]const u8) = .empty;
+        defer installed.deinit(self.allocator);
+        for (build_only) |name| {
+            const name_z = self.allocator.dupeZ(u8, name) catch continue;
+            const is_installed = self.alpm.is_package_installed(name_z);
+            self.allocator.free(name_z);
+            if (is_installed) installed.append(self.allocator, name) catch continue;
+        }
+        if (installed.items.len == 0) return;
+
+        self.raisePackageProgress(.aur_cleanup_start, package_name, current, total, "Removing build-only dependencies");
+        self.removeRepoPackages(installed.items, .{}, true) catch {};
+        self.raisePackageProgress(.aur_cleanup_done, package_name, current, total, "");
     }
 
     fn selectOptionalDependencies(self: *Self, info: *const PkgbuildInfo) ![][]const u8 {

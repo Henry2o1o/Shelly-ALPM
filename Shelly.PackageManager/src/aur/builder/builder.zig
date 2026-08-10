@@ -4,6 +4,16 @@ const PackageBuild = @import("../../pkgbuild/pkgbuild_parser.zig").Pkgbuild;
 const events = @import("../events.zig");
 const op_context = @import("../../shared/operation_context.zig");
 
+pub const BuildArtifact = struct {
+    path: [:0]u8,
+    package_name: []const u8,
+
+    pub fn deinit(self: BuildArtifact, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        allocator.free(self.package_name);
+    }
+};
+
 /// Builder expects to be passed all items and should not construct
 /// these items as it's context only exists to serve inside manager
 pub const PackageBuilder = struct {
@@ -44,7 +54,7 @@ pub const PackageBuilder = struct {
         self.*;
     }
 
-    pub fn BuildPackage(self: *PackageBuilder) !void {
+    pub fn BuildPackage(self: *PackageBuilder) !BuildArtifact {
         var operation = self.operation_context.begin(op_context.OperationDescriptor{ .backend = .aur, .kind = .build, .subject = "Package Build" });
         defer operation.finish(.cancelled);
         for (self.package_build.execution_steps.?) |step| {
@@ -73,5 +83,9 @@ pub const PackageBuilder = struct {
             }
         }
         operation.finish(.success);
+        return .{
+            .package_name = self.package_build.pkg_name,
+            .path = self.makepkg_config.build_directory,
+        };
     }
 };
