@@ -52,7 +52,7 @@ pub const SessionLog = struct {
         const seconds = day_seconds.getSecondsIntoMinute();
     
         try writer.print(
-            "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}",
+            "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
             .{
                 year,
                 month,
