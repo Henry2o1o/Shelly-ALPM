@@ -33,36 +33,6 @@ pub const SessionLog = struct {
         self.* = undefined;
     }
 
-    pub fn writeUtcTime(writer: *std.Io.Writer, unix_seconds: u64,) !void {
-        const epoch_seconds = std.time.epoch.EpochSeconds{
-            .secs = unix_seconds,
-        };
-    
-        const epoch_day = epoch_seconds.getEpochDay();
-        const epoch_year = epoch_day.calculateYearDay();
-        const epoch_month = epoch_year.calculateMonthDay();
-    
-        const year = epoch_year.year;
-        const month = epoch_month.month.numeric();
-        const day = epoch_month.day_index + 1;
-    
-        const day_seconds = epoch_seconds.getDaySeconds();
-        const hours = day_seconds.getHoursIntoDay();
-        const minutes = day_seconds.getMinutesIntoHour();
-        const seconds = day_seconds.getSecondsIntoMinute();
-    
-        try writer.print(
-            "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
-            .{
-                year,
-                month,
-                day,
-                hours,
-                minutes,
-                seconds,
-            },
-        );
-    }
     
     pub fn writeSessionHeader(
         self: *SessionLog,
@@ -146,7 +116,7 @@ pub const TransactionLog = struct {
     }
 
     pub fn writeEntry(self: *TransactionLog, allocator: std.mem.Allocator, level: LogLevel, source: Source, message: []const u8) void {
-        const timestamp = std.Io.Clock.real.now(self.session.io).toSeconds();
+        const raw = std.Io.Clock.real.now(self.session.io).toSeconds();
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
         const level_str: []const u8 = switch (level) {
@@ -162,7 +132,9 @@ pub const TransactionLog = struct {
             .local => "local",
             .download => "download",
         };
-        buffer.writer.print("[{d}] Level: {s}  Source: {s} Message: {s}\n", .{ timestamp, level_str, source_str, message }) catch return;
+        buffer.writer.writeAll("[") catch return;
+        writeUtcTime(&buffer.writer, raw) catch return;
+        buffer.writer.print("] Level: {s}  Source: {s} Message: {s}\n",.{ level_str, source_str, message },) catch return;        
         self.session.append(buffer.writer.buffered());
     }
 
@@ -207,6 +179,37 @@ pub const TransactionLog = struct {
         }
     }
 };
+
+pub fn writeUtcTime(writer: *std.Io.Writer, unix_seconds: u64,) !void {
+    const epoch_seconds = std.time.epoch.EpochSeconds{
+        .secs = unix_seconds,
+    };
+
+    const epoch_day = epoch_seconds.getEpochDay();
+    const epoch_year = epoch_day.calculateYearDay();
+    const epoch_month = epoch_year.calculateMonthDay();
+
+    const year = epoch_year.year;
+    const month = epoch_month.month.numeric();
+    const day = epoch_month.day_index + 1;
+
+    const day_seconds = epoch_seconds.getDaySeconds();
+    const hours = day_seconds.getHoursIntoDay();
+    const minutes = day_seconds.getMinutesIntoHour();
+    const seconds = day_seconds.getSecondsIntoMinute();
+
+    try writer.print(
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
+        .{
+            year,
+            month,
+            day,
+            hours,
+            minutes,
+            seconds,
+        },
+    );
+}
 
 fn sourceForBackend(backend: Zigalpm.operation.Backend) Source {
     return switch (backend) {
