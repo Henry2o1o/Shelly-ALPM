@@ -603,8 +603,11 @@ pub const PkgbuildParser = struct {
                 continue;
             }
             cursor += 1;
-            var offset: i32 = undefined;
-            var matched_offset = false;
+            // Bash permits the offset to be omitted when a length is present:
+            // `${parameter::length}` is equivalent to
+            // `${parameter:0:length}`.
+            var offset: i32 = 0;
+            var matched_offset = cursor < input.len and input[cursor] == ':';
             {
                 const ws_end = scan_whitespace(input, cursor);
                 const digit_end = scan_digits(input, ws_end);
@@ -1310,12 +1313,36 @@ pub const PkgbuildParser = struct {
     }
 
     fn split_source_entry(entry: []const u8) split_entry {
-        const idx = std.ascii.indexOfIgnoreCase(entry, "::");
+        const idx = find_source_rename_delimiter(entry);
         if (idx) |i| {
             return split_entry{ .file_name = entry[0..i], .location = entry[i + 2 ..] };
         } else {
             return split_entry{ .file_name = "", .location = entry };
         }
+    }
+
+    fn find_source_rename_delimiter(entry: []const u8) ?usize {
+        var parameter_depth: usize = 0;
+        var pos: usize = 0;
+        while (pos + 1 < entry.len) {
+            if (entry[pos] == '\\') {
+                pos += @min(@as(usize, 2), entry.len - pos);
+                continue;
+            }
+            if (entry[pos] == '$' and entry[pos + 1] == '{') {
+                parameter_depth += 1;
+                pos += 2;
+                continue;
+            }
+            if (parameter_depth > 0) {
+                if (entry[pos] == '}') parameter_depth -= 1;
+                pos += 1;
+                continue;
+            }
+            if (entry[pos] == ':' and entry[pos + 1] == ':') return pos;
+            pos += 1;
+        }
+        return null;
     }
 
     fn parse_kvp(line: []const u8) ?kvp {
@@ -2721,6 +2748,27 @@ test "split_source_entry: multiple separators" {
     try std.testing.expectEqualStrings("key::value", result.location);
 }
 
+test "split_source_entry: ignores separator inside parameter expansion" {
+    const source = "https://files.pythonhosted.org/packages/source/${_name::1}/${_name}/archive.tar.gz";
+    const result = PkgbuildParser.split_source_entry(source);
+    try std.testing.expectEqualStrings("", result.file_name);
+    try std.testing.expectEqualStrings(source, result.location);
+}
+
+test "split_source_entry: finds outer separator before parameter expansion" {
+    const location = "https://example.com/${name::1}/archive.tar.gz";
+    const result = PkgbuildParser.split_source_entry("renamed.tar.gz::" ++ location);
+    try std.testing.expectEqualStrings("renamed.tar.gz", result.file_name);
+    try std.testing.expectEqualStrings(location, result.location);
+}
+
+test "split_source_entry: ignores separator inside nested parameter expansions" {
+    const source = "https://example.com/${outer:-${inner::1}}/archive.tar.gz";
+    const result = PkgbuildParser.split_source_entry(source);
+    try std.testing.expectEqualStrings("", result.file_name);
+    try std.testing.expectEqualStrings(source, result.location);
+}
+
 test "split_source_entry: case insensitive separator" {
     // :: has no alphabetic characters, so case doesn't matter,
     // but this confirms the function handles the input as-is
@@ -3522,6 +3570,39 @@ test "replace_substring_expansion: offset and length" {
     try std.testing.expectEqualStrings("hello", result);
 }
 
+test "replace_substring_expansion: omitted offset starts at zero" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer vars.deinit();
+    try vars.put("word", "hello world");
+
+    const first = try parser.replace_substring_expansion("${word::1}", &vars);
+    defer parser.allocator.free(first);
+    try std.testing.expectEqualStrings("h", first);
+
+    const prefix = try parser.replace_substring_expansion("${word::5}", &vars);
+    defer parser.allocator.free(prefix);
+    try std.testing.expectEqualStrings("hello", prefix);
+
+    const empty = try parser.replace_substring_expansion("${word::0}", &vars);
+    defer parser.allocator.free(empty);
+    try std.testing.expectEqualStrings("", empty);
+
+    const clamped = try parser.replace_substring_expansion("${word::100}", &vars);
+    defer parser.allocator.free(clamped);
+    try std.testing.expectEqualStrings("hello world", clamped);
+}
+
+test "replace_substring_expansion: omitted offset supports negative length" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer vars.deinit();
+    try vars.put("word", "hello world");
+    const result = try parser.replace_substring_expansion("${word::-1}", &vars);
+    defer parser.allocator.free(result);
+    try std.testing.expectEqualStrings("hello worl", result);
+}
+
 test "replace_substring_expansion: negative offset counts from the end" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
@@ -3561,6 +3642,15 @@ test "replace_substring_expansion: variable not found keeps original text" {
     try std.testing.expectEqualStrings("${missing:0:3}", result);
 }
 
+test "replace_substring_expansion: unknown variable with omitted offset is preserved" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer vars.deinit();
+    const result = try parser.replace_substring_expansion("${missing::1}", &vars);
+    defer parser.allocator.free(result);
+    try std.testing.expectEqualStrings("${missing::1}", result);
+}
+
 test "replace_substring_expansion: no colon after var name is not a match" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
@@ -3590,6 +3680,26 @@ test "replace_substring_expansion: multiple expansions in one string" {
     const result = try parser.replace_substring_expansion("${a:0:3} and ${b:3}", &vars);
     defer parser.allocator.free(result);
     try std.testing.expectEqualStrings("abc and 456", result);
+}
+
+test "parser_content resolves python-sabctools source as remote" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var info = try parser.parser_content(
+        \\pkgname=python-sabctools
+        \\_name=sabctools
+        \\pkgver=9.6.3
+        \\pkgrel=1
+        \\source=("https://files.pythonhosted.org/packages/source/${_name::1}/${_name}/${_name}-${pkgver}.tar.gz")
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), info.source.?.len);
+    try std.testing.expectEqualStrings(
+        "https://files.pythonhosted.org/packages/source/s/sabctools/sabctools-9.6.3.tar.gz",
+        info.source.?[0],
+    );
+    try std.testing.expectEqual(@as(usize, 0), info.local_source_files.?.len);
+    try std.testing.expectEqual(@as(usize, 0), info.local_source_contents.count());
 }
 
 test "resolve_string: plain braced variable" {
