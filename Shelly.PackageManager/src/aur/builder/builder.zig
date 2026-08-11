@@ -4,6 +4,11 @@ const PackageBuild = @import("../../pkgbuild/pkgbuild_parser.zig").Pkgbuild;
 const events = @import("../events.zig");
 const op_context = @import("operation_context");
 
+const c = @cImport({
+    @cInclude("archive.h");
+    @cInclude("archive_entry.h");
+});
+
 pub const BuildArtifact = struct {
     path: [:0]u8,
     package_name: []const u8,
@@ -108,5 +113,10 @@ pub const PackageBuilder = struct {
         errdefer self.allocator.free(package_name);
         const path = self.allocator.dupeSentinel(u8, self.makepkg_config.build_directory, 0) catch return BuilderErrors.OutOfMemory;
         return .{ .package_name = package_name, .path = path };
+    }
+
+    fn SetPermissions(self: *PackageBuilder, path: []const u8) ![]const u8 {
+        _ = self;
+        _ = path;
     }
 };

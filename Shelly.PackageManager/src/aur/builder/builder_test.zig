@@ -135,6 +135,28 @@ const Fixture = struct {
     }
 };
 
+fn printPackageTree(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    package_directory: []const u8,
+) !void {
+    var directory = try std.Io.Dir.cwd().openDir(io, package_directory, .{ .iterate = true });
+    defer directory.close(io);
+
+    var walker = try directory.walk(allocator);
+    defer walker.deinit();
+
+    std.debug.print("[builder-test] staged package tree: {s}\n", .{package_directory});
+    while (try walker.next(io)) |entry| {
+        const stat = try entry.dir.statFile(io, entry.basename, .{ .follow_symlinks = false });
+        const mode = stat.permissions.toMode() & 0o7777;
+        std.debug.print(
+            "[builder-test]   {s: <13} {o:0>4} {s}\n",
+            .{ @tagName(entry.kind), mode, entry.path },
+        );
+    }
+}
+
 test "PackageBuilder init keeps the provided collaborators" {
     const allocator = testing.allocator;
 
@@ -486,6 +508,7 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     // package_shelly-bin installed the full tree into $pkgdir.
     const pkgdir = try std.fs.path.join(allocator, &.{ fixture.build_dir, "pkg", "shelly-bin" });
     defer allocator.free(pkgdir);
+    try printPackageTree(allocator, io, pkgdir);
 
     // Binaries and generated scripts are installed executable.
     for ([_][]const u8{
