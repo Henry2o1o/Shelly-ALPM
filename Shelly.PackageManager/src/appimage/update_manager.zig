@@ -2164,7 +2164,7 @@ test "update: downloads real AppImage and returns true" {
     defer std.testing.allocator.free(expected_path);
     try std.testing.expectEqualStrings(expected_path, apps[0].path);
     const installed_stat = try std.Io.Dir.cwd().statFile(std.testing.io, expected_path, .{});
-    try std.testing.expect(installed_stat.mode & 0o111 != 0);
+    try std.testing.expect(installed_stat.permissions.toMode() & 0o111 != 0);
     try std.testing.expect(
         std.mem.eql(u8, apps[0].version, "continuous") or apps[0].version.len > 0,
     );
