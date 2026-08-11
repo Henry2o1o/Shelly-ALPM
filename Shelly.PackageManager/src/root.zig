@@ -158,6 +158,7 @@ pub const operation = @import("operation_context");
 pub const HttpClient = @import("ShellyHttp");
 
 pub const shared = struct {
+    pub const archive = @import("archive");
     pub const downloader = @import("shared/downloader.zig");
     pub const list_dictionary = @import("shared/list_dictionary.zig");
     pub const xdg_paths = @import("shared/xdg_paths.zig");
@@ -476,6 +477,7 @@ test {
     _ = @import("flatpak/appstream_parser.zig");
     _ = @import("flatpak/events.zig");
     _ = @import("appimage/manager.zig");
+    _ = @import("archive");
     _ = @import("shared/downloader.zig");
     _ = @import("appimage/update_manager.zig");
     _ = @import("pkgbuild/pkgbuild_parser.zig");

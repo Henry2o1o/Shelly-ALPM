@@ -43,6 +43,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const archive_mod = b.createModule(.{
+        .root_source_file = b.path("src/shared/archive.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    archive_mod.linkSystemLibrary("archive", .{});
 
     // This creates a module, which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
@@ -66,9 +73,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addImport("alpm_c", alpm_c);
+    mod.addImport("archive", archive_mod);
     mod.addImport("operation_context", operation_context_mod);
     mod.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
-    mod.linkSystemLibrary("archive", .{});
 
     // PackageManager imports only the backend's data-only protocol module.
     // The native implementation is discovered with dlopen at runtime and is
@@ -229,8 +236,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    local_test_module.addImport("archive", archive_mod);
     local_test_module.addImport("operation_context", operation_context_mod);
-    local_test_module.linkSystemLibrary("archive", .{});
     const local_tests = b.addTest(.{ .root_module = local_test_module });
     const run_local_tests = b.addRunArtifact(local_tests);
     const local_test_step = b.step("local-test", "Run safe local package tests");
