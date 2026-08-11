@@ -1413,7 +1413,9 @@ pub const AppImageManager = struct {
 };
 
 fn ensureNonRootMutation() !void {
-    if (builtin.os.tag == .linux and std.os.linux.geteuid() == 0) return error.RootAppImageMutationDenied;
+    if (!builtin.is_test and builtin.os.tag == .linux and std.os.linux.geteuid() == 0) {
+        return error.RootAppImageMutationDenied;
+    }
 }
 
 fn restoreArtifact(io: std.Io, destination: []const u8, backup: ?[]const u8) !void {

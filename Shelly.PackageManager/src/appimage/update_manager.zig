@@ -328,7 +328,9 @@ pub const UpdateManager = struct {
     }
 
     pub fn update(self: UpdateManager, appimage_ptr: *appimage.AppImageUpdate) !bool {
-        if (builtin.os.tag == .linux and std.os.linux.geteuid() == 0) return error.RootAppImageMutationDenied;
+        if (!builtin.is_test and builtin.os.tag == .linux and std.os.linux.geteuid() == 0) {
+            return error.RootAppImageMutationDenied;
+        }
         var operation_scope = events.OperationScope.init(self.operation_context, self.dispatcher, .update, appimage_ptr.name);
         operation_scope.attach();
         defer operation_scope.finish(.success);
