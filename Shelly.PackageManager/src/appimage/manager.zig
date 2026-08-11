@@ -556,12 +556,15 @@ pub const AppImageManager = struct {
     fn updateIconCache(self: AppImageManager, data_home: []const u8) !void {
         const theme_dir = try std.fs.path.join(self.allocator, &.{ data_home, "icons/hicolor" });
         defer self.allocator.free(theme_dir);
-        var proc = try std.process.spawn(self.io, .{
+        var proc = std.process.spawn(self.io, .{
             .argv = &.{ "gtk-update-icon-cache", "-f", "-t", theme_dir },
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .ignore,
-        });
+        }) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
         const term = try proc.wait(self.io);
         if (term != .exited or term.exited != 0) return error.IconCacheRefreshFailed;
     }
@@ -802,12 +805,15 @@ pub const AppImageManager = struct {
     }
 
     fn updateDesktopDatabase(self: AppImageManager, desktop_dir: []const u8) !void {
-        var proc = try std.process.spawn(self.io, .{
+        var proc = std.process.spawn(self.io, .{
             .argv = &.{ "update-desktop-database", desktop_dir },
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .ignore,
-        });
+        }) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
         const term = try proc.wait(self.io);
         if (term != .exited or term.exited != 0) return error.DesktopDatabaseRefreshFailed;
     }
