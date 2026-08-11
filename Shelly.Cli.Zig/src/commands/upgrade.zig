@@ -817,11 +817,8 @@ fn runAppImage(
             if (exit_code != 0) return UpgradeError.BackendFailed;
             return;
         }
-        try context.stderr.print(
-            "AppImage upgrades are user-scoped and cannot run as root without an invoking user.\n",
-            .{},
-        );
-        return UpgradeError.BackendFailed;
+        // A direct root invocation has no user to re-launch as. Continue
+        // with root's own user-scoped AppImage store in that case.
     }
 
     const configuration = config_manager.Manager.init(context).read() catch

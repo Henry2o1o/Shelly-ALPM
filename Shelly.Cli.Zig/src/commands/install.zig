@@ -624,11 +624,8 @@ fn runAppImage(
             if (exit_code != 0) return InstallError.BackendFailed;
             return;
         }
-        try context.stderr.print(
-            "AppImage installs are user-scoped and cannot run as root without an invoking user.\n",
-            .{},
-        );
-        return InstallError.BackendFailed;
+        // A direct root invocation has no user to re-launch as. Continue
+        // with root's own user-scoped AppImage store in that case.
     }
 
     const location = invocation.positionals[0];

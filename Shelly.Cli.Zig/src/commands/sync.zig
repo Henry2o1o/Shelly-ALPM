@@ -153,11 +153,9 @@ fn runRealAppImageSync(
             if (exit_code != 0) return error.AppImageMetadataSyncFailed;
             return;
         }
-        try context.stderr.print(
-            "AppImage sync is user-scoped and cannot run as root without an invoking user.\n",
-            .{},
-        );
-        return error.AppImageMetadataSyncFailed;
+        // A direct root invocation has no user to re-launch as. In that
+        // case, continue with root's own user-scoped AppImage store; only
+        // return early when a child was actually launched above.
     }
 
     const configure_updates = optionEnabled(invocation, "--configure-updates") or
