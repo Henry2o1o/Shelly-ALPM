@@ -33,6 +33,37 @@ pub const SessionLog = struct {
         self.* = undefined;
     }
 
+    pub fn writeUtcTime(writer: *std.Io.Writer, unix_seconds: u64,) !void {
+        const epoch_seconds = std.time.epoch.EpochSeconds{
+            .secs = unix_seconds,
+        };
+    
+        const epoch_day = epoch_seconds.getEpochDay();
+        const epoch_year = epoch_day.calculateYearDay();
+        const epoch_month = epoch_year.calculateMonthDay();
+    
+        const year = epoch_year.year;
+        const month = epoch_month.month.numeric();
+        const day = epoch_month.day_index + 1;
+    
+        const day_seconds = epoch_seconds.getDaySeconds();
+        const hours = day_seconds.getHoursIntoDay();
+        const minutes = day_seconds.getMinutesIntoHour();
+        const seconds = day_seconds.getSecondsIntoMinute();
+    
+        try writer.print(
+            "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}",
+            .{
+                year,
+                month,
+                day,
+                hours,
+                minutes,
+                seconds,
+            },
+        );
+    }
+    
     pub fn writeSessionHeader(
         self: *SessionLog,
         allocator: std.mem.Allocator,
@@ -40,12 +71,18 @@ pub const SessionLog = struct {
     ) void {
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
-        const timestamp = std.Io.Clock.real.now(self.io).toSeconds();
+        const raw: u64 = @intCast(std.Io.Clock.real.now(self.io).toSeconds());
         buffer.writer.writeAll("=====================================\n") catch return;
-        buffer.writer.print("[{d}] SESSION START\n", .{timestamp}) catch return;
-        buffer.writer.print("[{d}] Command: shelly", .{timestamp}) catch return;
-        for (arguments) |argument| buffer.writer.print(" {s}", .{argument}) catch return;
-        buffer.writer.writeAll("\n=====================================\n") catch return;
+        buffer.writer.writeAll("[") catch return;
+        writeUtcTime(&buffer.writer, raw) catch return;
+        buffer.writer.writeAll("] SESSION START\n") catch return;
+        buffer.writer.writeAll("[") catch return;
+        writeUtcTime(&buffer.writer, raw) catch return;
+        buffer.writer.writeAll("] Command: shelly") catch return;
+        for (arguments) |argument| {
+            buffer.writer.print(" {s}", .{argument}) catch return;
+        }
+        buffer.writer.writeAll("\n=====================================\n") catch return;        
         self.append(buffer.writer.buffered());
     }
 
