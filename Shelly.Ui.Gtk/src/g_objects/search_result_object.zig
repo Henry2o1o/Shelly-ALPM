@@ -2,6 +2,8 @@ const std = @import("std");
 const bindings = @import("Shelly_Ui_Gtk");
 const gobject = bindings.gobject;
 const search = @import("../models/search_result.zig");
+const AurPackage = @import("../models/aur_package.zig").AurPackage;
+const Hit = @import("../models/flatpak.zig").Hit;
 
 pub const SearchResultObject = extern struct {
     parent_instance: Parent,
@@ -78,6 +80,20 @@ pub const SearchResultObject = extern struct {
         return asZ(self.getResult().repository);
     }
 
+    /// Full AUR record for the eventual detail pane, when source is .aur.
+    pub fn getAurPackage(self: *const Self) ?*const AurPackage {
+        const p = @constCast(self).priv();
+        if (p.result.aur) |*value| return value;
+        return null;
+    }
+
+    /// Full Flatpak hit for the eventual detail pane, when source is .flatpak.
+    pub fn getFlatpakHit(self: *const Self) ?*const Hit {
+        const p = @constCast(self).priv();
+        if (p.result.flatpak) |*value| return value;
+        return null;
+    }
+
     pub fn isInstalled(self: *const Self) bool {
         return self.getResult().installed;
     }
@@ -109,17 +125,7 @@ pub const SearchResultObject = extern struct {
     }
 
     fn cloneResult(allocator: std.mem.Allocator, source: search.SearchResult) !search.SearchResult {
-        return .{
-            .source = source.source,
-            .name = try allocator.dupeZ(u8, source.name),
-            .install_target = try allocator.dupeZ(u8, source.install_target),
-            .version = try allocator.dupeZ(u8, source.version),
-            .description = try allocator.dupeZ(u8, source.description),
-            .repository = try allocator.dupeZ(u8, source.repository),
-            .installed = source.installed,
-            .out_of_date = source.out_of_date,
-            .verified = source.verified,
-        };
+        return search.clone(allocator, source);
     }
 
     fn asZ(value: []const u8) [:0]const u8 {
@@ -165,6 +171,23 @@ test "search GObject owns result data" {
         .description = "Minecraft launcher with the ability to manage multiple instances",
         .repository = "AUR",
         .out_of_date = true,
+        .aur = .{
+            .Id = 2160856,
+            .Name = "polymc",
+            .PackageBaseId = 174947,
+            .PackageBase = "polymc",
+            .Version = "7.1-2",
+            .Description = "Minecraft launcher with the ability to manage multiple instances",
+            .Url = "https://github.com/PolyMC/PolyMC",
+            .NumVotes = 74,
+            .Popularity = 1.766204,
+            .Maintainer = "LennyLennington",
+            .FirstSubmitted = 1641934424,
+            .LastModified = 1783993900,
+            .UrlPath = "/cgit/aur.git/snapshot/polymc.tar.gz",
+            .Depends = &.{ "java-runtime", "libgl" },
+            .License = &.{"GPL3"},
+        },
     });
     defer object.as(gobject.Object).unref();
 
@@ -176,6 +199,47 @@ test "search GObject owns result data" {
     try std.testing.expect(object.isOutOfDate());
     try std.testing.expect(!object.isInstalled());
     try std.testing.expect(!object.isSelected());
+
+    const aur = object.getAurPackage().?;
+    try std.testing.expectEqual(@as(u32, 74), aur.NumVotes);
+    try std.testing.expectEqualStrings("LennyLennington", aur.Maintainer.?);
+    try std.testing.expectEqualStrings("libgl", aur.Depends.?[1]);
+    try std.testing.expect(object.getFlatpakHit() == null);
+}
+
+test "search GObject keeps flatpak hit data" {
+    const object = try SearchResultObject.new(.{
+        .source = .flatpak,
+        .name = "Firefox",
+        .install_target = "org.mozilla.firefox",
+        .description = "Fast, Private & Safe Web Browser",
+        .repository = "flathub",
+        .verified = true,
+        .flatpak = .{
+            .name = "Firefox",
+            .id = "org.mozilla.firefox",
+            .summary = "Fast, Private & Safe Web Browser",
+            .description = "Firefox is a browser",
+            .remote = "flathub",
+            .developer_name = "Mozilla",
+            .project_license = "MPL-2.0",
+            .verification_verified = true,
+            .download_size = 90000000,
+            .installed_size = 300000000,
+            .keywords = &.{ "browser", "web" },
+        },
+    });
+    defer object.as(gobject.Object).unref();
+
+    try std.testing.expectEqual(search.Source.flatpak, object.getSource());
+    try std.testing.expect(object.isVerified());
+    try std.testing.expect(object.getAurPackage() == null);
+
+    const hit = object.getFlatpakHit().?;
+    try std.testing.expectEqualStrings("org.mozilla.firefox", hit.id);
+    try std.testing.expectEqualStrings("Mozilla", hit.developer_name);
+    try std.testing.expectEqual(@as(i64, 90000000), hit.download_size);
+    try std.testing.expectEqualStrings("browser", hit.keywords[0]);
 }
 
 test "search GObject handles defaults" {
