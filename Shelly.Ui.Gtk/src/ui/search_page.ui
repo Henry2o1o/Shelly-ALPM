@@ -17,7 +17,7 @@
         <property name="spacing">5</property>
         <child>
           <object class="GtkSearchEntry" id="search_entry">
-            <property name="placeholder-text" translatable="yes">Search...</property>
+            <property name="placeholder-text" translatable="yes">Search standard repositories, AUR and Flatpak</property>
             <property name="width-request">200</property>
             <signal name="activate" handler="on_search_activate" swapped="true"/>
             <style><class name="spaced-search"/></style>
@@ -31,6 +31,33 @@
                         </object>
                     </child>
                 </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox">
+            <property name="valign">center</property>
+            <property name="spacing">8</property>
+            <child>
+              <object class="GtkToggleButton" id="standard_toggle">
+                <property name="label" translatable="yes">Standard</property>
+                <property name="active">true</property>
+                <property name="tooltip-text" translatable="yes">Show results from the configured ALPM sync databases</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkToggleButton" id="aur_toggle">
+                <property name="label" translatable="yes">AUR</property>
+                <property name="active">true</property>
+                <property name="tooltip-text" translatable="yes">Show results from the Arch User Repository</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkToggleButton" id="flatpak_toggle">
+                <property name="label" translatable="yes">Flatpak</property>
+                <property name="active">true</property>
+                <property name="tooltip-text" translatable="yes">Show results from the configured Flatpak remotes</property>
+              </object>
             </child>
           </object>
         </child>
@@ -179,26 +206,10 @@
         <property name="margin-start">12</property>
         <property name="margin-end">12</property>
         <child>
-          <object class="GtkLabel">
-            <property name="label" translatable="yes">Sources</property>
-            <property name="halign">start</property>
-            <style><class name="heading"/></style>
-          </object>
-        </child>
-        <child>
-          <object class="GtkCheckButton" id="standard_check">
-            <property name="label" translatable="yes">Standard Repositories</property>
-            <property name="active">true</property>
-          </object>
-        </child>
-        <child>
-          <object class="GtkCheckButton" id="aur_check">
-            <property name="label" translatable="yes">AUR</property>
-          </object>
-        </child>
-        <child>
-          <object class="GtkCheckButton" id="flatpak_check">
-            <property name="label" translatable="yes">Flatpak</property>
+          <object class="GtkCheckButton" id="show_detail_pane_check">
+            <property name="label" translatable="yes">Hide Detail Pane</property>
+            <property name="tooltip-text" translatable="yes">Hide the detail pane on the right</property>
+            <signal name="toggled" handler="on_detail_pane"/>
           </object>
         </child>
       </object>

@@ -16,6 +16,7 @@ const ConfirmDialog = @import("../dialog/page/yn_dialog.zig").ConfirmDialog;
 const ShellyWindow = @import("../shelly_window.zig").ShellyWindow;
 const ShellyCli = @import("../services/shelly_cli.zig").ShellyCli;
 const ShellyCommands = @import("../services/shelly_operation.zig").ShellyCommands;
+const ShellyConfig = @import("../models/shelly_config.zig").ShellyConfig;
 const runtime = @import("../services/runtime.zig");
 const translations = @import("../helpers/translations.zig");
 const sorters = @import("../helpers/sorters.zig");
@@ -47,9 +48,10 @@ pub const ShellySearchPage = extern struct {
         name_column: *gtk.ColumnViewColumn,
         source_column: *gtk.ColumnViewColumn,
         version_column: *gtk.ColumnViewColumn,
-        standard_check: *gtk.CheckButton,
-        aur_check: *gtk.CheckButton,
-        flatpak_check: *gtk.CheckButton,
+        standard_toggle: *gtk.ToggleButton,
+        aur_toggle: *gtk.ToggleButton,
+        flatpak_toggle: *gtk.ToggleButton,
+        show_detail_pane_check: *gtk.CheckButton,
         source_filter: *gtk.CustomFilter,
         detail_revealer: *gtk.Revealer,
         detail_stack: *gtk.Stack,
@@ -58,6 +60,8 @@ pub const ShellySearchPage = extern struct {
         flatpak_detail: *FlatpakPackageDetail,
         generation: u64,
         loaded: bool,
+        applying_config: bool,
+        show_detail_pane: bool,
         install_running: bool,
         last_query: [256]u8,
         last_query_len: usize,
@@ -112,6 +116,8 @@ pub const ShellySearchPage = extern struct {
         gtk.Widget.initTemplate(self.as(gtk.Widget));
         const p = self.priv();
         p.loaded = false;
+        p.applying_config = false;
+        p.show_detail_pane = false;
         p.install_running = false;
         p.generation = 0;
         p.last_query_len = 0;
@@ -146,9 +152,9 @@ pub const ShellySearchPage = extern struct {
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
 
-        _ = gtk.CheckButton.signals.toggled.connect(p.standard_check, *Self, &on_source_filter_toggled, self, .{});
-        _ = gtk.CheckButton.signals.toggled.connect(p.aur_check, *Self, &on_source_filter_toggled, self, .{});
-        _ = gtk.CheckButton.signals.toggled.connect(p.flatpak_check, *Self, &on_source_filter_toggled, self, .{});
+        _ = gtk.ToggleButton.signals.toggled.connect(p.standard_toggle, *Self, &on_source_filter_toggled, self, .{});
+        _ = gtk.ToggleButton.signals.toggled.connect(p.aur_toggle, *Self, &on_source_filter_toggled, self, .{});
+        _ = gtk.ToggleButton.signals.toggled.connect(p.flatpak_toggle, *Self, &on_source_filter_toggled, self, .{});
 
         const standard_detail = StandardPackageDetail.new();
         p.standard_detail = standard_detail;
@@ -496,6 +502,21 @@ pub const ShellySearchPage = extern struct {
         gtk.Widget.setTooltipText(btn, null);
     }
 
+    fn update_source_labels(self: *Self, standard_count: u32, aur_count: u32, flatpak_count: u32) void {
+        const p = self.priv();
+        var buf: [64]u8 = undefined;
+        gtk.Button.setLabel(p.standard_toggle.as(gtk.Button), std.fmt.bufPrintZ(&buf, "{s} \u{00b7} {d}", .{ translations._("Standard"), standard_count }) catch translations._("Standard"));
+        gtk.Button.setLabel(p.aur_toggle.as(gtk.Button), std.fmt.bufPrintZ(&buf, "{s} \u{00b7} {d}", .{ translations._("AUR"), aur_count }) catch translations._("AUR"));
+        gtk.Button.setLabel(p.flatpak_toggle.as(gtk.Button), std.fmt.bufPrintZ(&buf, "{s} \u{00b7} {d}", .{ translations._("Flatpak"), flatpak_count }) catch translations._("Flatpak"));
+    }
+
+    fn reset_source_labels(self: *Self) void {
+        const p = self.priv();
+        gtk.Button.setLabel(p.standard_toggle.as(gtk.Button), translations._("Standard"));
+        gtk.Button.setLabel(p.aur_toggle.as(gtk.Button), translations._("AUR"));
+        gtk.Button.setLabel(p.flatpak_toggle.as(gtk.Button), translations._("Flatpak"));
+    }
+
     pub fn onMap(self: *Self) void {
         const p = self.priv();
         if (p.loaded) return;
@@ -503,13 +524,14 @@ pub const ShellySearchPage = extern struct {
 
         const sources = enabledSources();
 
-        gtk.CheckButton.setActive(p.standard_check, 1);
+        gtk.ToggleButton.setActive(p.standard_toggle, 1);
+        // Disabled sources are neither queried nor offered in the filter.
+        gtk.Widget.setVisible(p.aur_toggle.as(gtk.Widget), @intFromBool(sources.aur));
+        gtk.ToggleButton.setActive(p.aur_toggle, @intFromBool(sources.aur));
+        gtk.Widget.setVisible(p.flatpak_toggle.as(gtk.Widget), @intFromBool(sources.flatpak));
+        gtk.ToggleButton.setActive(p.flatpak_toggle, @intFromBool(sources.flatpak));
 
-        gtk.Widget.setVisible(p.aur_check.as(gtk.Widget), @intFromBool(sources.aur));
-        gtk.CheckButton.setActive(p.aur_check, @intFromBool(sources.aur));
-        gtk.Widget.setVisible(p.flatpak_check.as(gtk.Widget), @intFromBool(sources.flatpak));
-        gtk.CheckButton.setActive(p.flatpak_check, @intFromBool(sources.flatpak));
-
+        self.applyOptionsFromConfig();
         self.update_selection_ui();
         _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
     }
@@ -525,6 +547,7 @@ pub const ShellySearchPage = extern struct {
         gio.ListStore.removeAll(p.list_store);
         self.drainPendingInstalls();
         p.install_running = false;
+        self.reset_source_labels();
 
         _ = malloc_trim(0);
     }
@@ -534,30 +557,61 @@ pub const ShellySearchPage = extern struct {
         const pkg = gobject.ext.cast(SearchResultObject, item) orelse return 0;
         const p = self.priv();
         return switch (pkg.getSource()) {
-            .standard => gtk.CheckButton.getActive(p.standard_check),
-            .aur => gtk.CheckButton.getActive(p.aur_check),
-            .flatpak => gtk.CheckButton.getActive(p.flatpak_check),
+            .standard => gtk.ToggleButton.getActive(p.standard_toggle),
+            .aur => gtk.ToggleButton.getActive(p.aur_toggle),
+            .flatpak => gtk.ToggleButton.getActive(p.flatpak_toggle),
         };
     }
 
-    fn on_source_filter_toggled(_: *gtk.CheckButton, self: *Self) callconv(.c) void {
+    fn on_source_filter_toggled(_: *gtk.ToggleButton, self: *Self) callconv(.c) void {
         const p = self.priv();
         gtk.Filter.changed(p.source_filter.as(gtk.Filter), .different);
 
+        // Results stay loaded; explain the grid if every source is filtered out.
         if (gio.ListModel.getNItems(p.list_store.as(gio.ListModel)) == 0) return;
         const any_enabled =
-            gtk.CheckButton.getActive(p.standard_check) != 0 or
-            gtk.CheckButton.getActive(p.aur_check) != 0 or
-            gtk.CheckButton.getActive(p.flatpak_check) != 0;
+            gtk.ToggleButton.getActive(p.standard_toggle) != 0 or
+            gtk.ToggleButton.getActive(p.aur_toggle) != 0 or
+            gtk.ToggleButton.getActive(p.flatpak_toggle) != 0;
         if (!any_enabled) {
             self.show_placeholder(
                 "dialog-warning-symbolic",
                 translations._("No sources selected"),
-                translations._("Enable at least one source in the options menu."),
+                translations._("Enable at least one source filter above."),
             );
         } else {
             self.set_state(.results);
         }
+    }
+
+    fn applyOptionsFromConfig(self: *Self) void {
+        const svc = runtime.config orelse return;
+        const cfg = svc.get() catch return;
+        const p = self.priv();
+        p.applying_config = true;
+        defer p.applying_config = false;
+        p.show_detail_pane = cfg.SearchShowDetailPane;
+        gtk.CheckButton.setActive(p.show_detail_pane_check, @intFromBool(cfg.SearchShowDetailPane));
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (cfg.SearchShowDetailPane) 0 else 1);
+    }
+
+    fn on_detail_pane(check: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.applying_config) return;
+        const active = gtk.CheckButton.getActive(check) != 0;
+        p.show_detail_pane = active;
+        gtk.Widget.setVisible(p.detail_revealer.as(gtk.Widget), if (active) 0 else 1);
+        updateConfigField(.SearchShowDetailPane, active);
+    }
+
+    fn updateConfigField(
+        comptime field: std.meta.FieldEnum(ShellyConfig),
+        value: std.meta.fieldInfo(ShellyConfig, field).type,
+    ) void {
+        const svc = runtime.config orelse return;
+        svc.updateField(field, value) catch |err| {
+            std.log.err("search page: failed to update config: {t}", .{err});
+        };
     }
 
     const Sources = struct {
@@ -582,6 +636,7 @@ pub const ShellySearchPage = extern struct {
         p.generation += 1;
         gio.ListStore.removeAll(p.list_store);
         self.update_selection_ui();
+        self.reset_source_labels();
         self.set_state(.loading);
 
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, sources }) catch {
@@ -813,6 +868,18 @@ pub const ShellySearchPage = extern struct {
         page.set_state(.results);
         page.update_selection_ui();
 
+        var standard_count: u32 = 0;
+        var aur_count: u32 = 0;
+        var flatpak_count: u32 = 0;
+        for (result.items) |item| {
+            switch (item.source) {
+                .standard => standard_count += 1,
+                .aur => aur_count += 1,
+                .flatpak => flatpak_count += 1,
+            }
+        }
+        page.update_source_labels(standard_count, aur_count, flatpak_count);
+
         finish(result);
         return 0;
     }
@@ -830,6 +897,7 @@ pub const ShellySearchPage = extern struct {
             p.last_query_len = 0;
             gio.ListStore.removeAll(p.list_store);
             self.update_selection_ui();
+            self.reset_source_labels();
             self.set_state(.prompt);
             return;
         }
@@ -1029,9 +1097,10 @@ pub const ShellySearchPage = extern struct {
         .{ "name_column", @offsetOf(Private, "name_column") },
         .{ "source_column", @offsetOf(Private, "source_column") },
         .{ "version_column", @offsetOf(Private, "version_column") },
-        .{ "standard_check", @offsetOf(Private, "standard_check") },
-        .{ "aur_check", @offsetOf(Private, "aur_check") },
-        .{ "flatpak_check", @offsetOf(Private, "flatpak_check") },
+        .{ "standard_toggle", @offsetOf(Private, "standard_toggle") },
+        .{ "aur_toggle", @offsetOf(Private, "aur_toggle") },
+        .{ "flatpak_toggle", @offsetOf(Private, "flatpak_toggle") },
+        .{ "show_detail_pane_check", @offsetOf(Private, "show_detail_pane_check") },
         .{ "detail_revealer", @offsetOf(Private, "detail_revealer") },
         .{ "detail_stack", @offsetOf(Private, "detail_stack") },
     };
@@ -1039,6 +1108,7 @@ pub const ShellySearchPage = extern struct {
     const template_callbacks = .{
         .{ "on_search_activate", &on_search_activate },
         .{ "on_install_clicked", &on_install_clicked },
+        .{ "on_detail_pane", &on_detail_pane },
     };
 
     pub const Class = extern struct {
