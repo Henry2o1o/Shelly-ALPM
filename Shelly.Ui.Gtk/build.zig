@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
     gresource.addFileInput(b.path("src/ui/package_page.ui"));
     gresource.addFileInput(b.path("src/ui/update_page.ui"));
     gresource.addFileInput(b.path("src/dialog/ui/yn.ui"));
+    gresource.addFileInput(b.path("src/dialog/ui/flatpak_remove.ui"));
     gresource.addFileInput(b.path("src/dialog/ui/multiselect.ui"));
     gresource.addFileInput(b.path("src/ui/package_detail.ui"));
     gresource.addFileInput(b.path("src/ui/aur_package_detail.ui"));
