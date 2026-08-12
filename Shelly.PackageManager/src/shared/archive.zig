@@ -36,6 +36,20 @@ pub const Entry = struct {
     permissions: u32,
 };
 
+pub const ArchiveResult = struct {
+    fileName: []const u8,
+
+    pub fn deinit(self: ArchiveResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.fileName);
+    }
+};
+
+pub const Writer = struct {
+    allocator: std.mem.Allocator,
+    handle: *c.struct_archive,
+    directory: []const u8,
+}!Writer{};
+
 pub const Reader = struct {
     allocator: std.mem.Allocator,
     handle: *c.struct_archive,
