@@ -151,6 +151,20 @@
             </child>
           </object>
         </child>
+
+        <child>
+          <object class="GtkRevealer" id="detail_revealer">
+            <property name="reveal-child">false</property>
+            <property name="transition-type">slide-left</property>
+            <property name="hexpand">false</property>
+            <property name="halign">end</property>
+            <child>
+              <object class="GtkStack" id="detail_stack">
+                <property name="transition-type">crossfade</property>
+              </object>
+            </child>
+          </object>
+        </child>
       </object>
     </child>
   </template>
@@ -174,20 +188,17 @@
         <child>
           <object class="GtkCheckButton" id="standard_check">
             <property name="label" translatable="yes">Standard Repositories</property>
-            <property name="tooltip-text" translatable="yes">Include packages from the configured ALPM sync databases</property>
             <property name="active">true</property>
           </object>
         </child>
         <child>
           <object class="GtkCheckButton" id="aur_check">
             <property name="label" translatable="yes">AUR</property>
-            <property name="tooltip-text" translatable="yes">Include packages from the Arch User Repository</property>
           </object>
         </child>
         <child>
           <object class="GtkCheckButton" id="flatpak_check">
             <property name="label" translatable="yes">Flatpak</property>
-            <property name="tooltip-text" translatable="yes">Include applications from the configured Flatpak remotes</property>
           </object>
         </child>
       </object>

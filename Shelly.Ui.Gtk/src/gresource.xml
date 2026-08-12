@@ -37,6 +37,7 @@
     <file>ui/search_page.ui</file>
     <file>ui/package_detail.ui</file>
     <file>ui/aur_package_detail.ui</file>
+    <file>ui/flatpak_package_detail.ui</file>
     <file>ui/update_page.ui</file>
     <file>ui/recommend_page.ui</file>
     <file>style.css</file>

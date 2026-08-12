@@ -120,7 +120,6 @@ pub const FlatpakPackageDetail = extern struct {
             const c = raw[i];
             if (c == '<') {
                 const end = std.mem.indexOfScalarPos(u8, raw, i + 1, '>') orelse {
-                    // Unterminated tag: keep the remainder as plain text.
                     try stripped.appendSlice(allocator, raw[i..]);
                     break;
                 };
