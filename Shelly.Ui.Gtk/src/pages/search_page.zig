@@ -501,17 +501,14 @@ pub const ShellySearchPage = extern struct {
         if (p.loaded) return;
         p.loaded = true;
 
+        const sources = enabledSources();
+
         gtk.CheckButton.setActive(p.standard_check, 1);
-        var aur_on: c_int = 0;
-        var flatpak_on: c_int = 0;
-        if (runtime.config) |svc| {
-            if (svc.get()) |cfg| {
-                aur_on = @intFromBool(cfg.AurEnabled);
-                flatpak_on = @intFromBool(cfg.FlatPackEnabled);
-            } else |_| {}
-        }
-        gtk.CheckButton.setActive(p.aur_check, aur_on);
-        gtk.CheckButton.setActive(p.flatpak_check, flatpak_on);
+
+        gtk.Widget.setVisible(p.aur_check.as(gtk.Widget), @intFromBool(sources.aur));
+        gtk.CheckButton.setActive(p.aur_check, @intFromBool(sources.aur));
+        gtk.Widget.setVisible(p.flatpak_check.as(gtk.Widget), @intFromBool(sources.flatpak));
+        gtk.CheckButton.setActive(p.flatpak_check, @intFromBool(sources.flatpak));
 
         self.update_selection_ui();
         _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
@@ -563,29 +560,46 @@ pub const ShellySearchPage = extern struct {
         }
     }
 
-    fn start_load(self: *Self) void {
+    const Sources = struct {
+        standard: bool = true,
+        aur: bool = false,
+        flatpak: bool = false,
+    };
+
+    fn enabledSources() Sources {
+        var sources = Sources{};
+        if (runtime.config) |svc| {
+            if (svc.get()) |cfg| {
+                sources.aur = cfg.AurEnabled;
+                sources.flatpak = cfg.FlatPackEnabled;
+            } else |_| {}
+        }
+        return sources;
+    }
+
+    fn start_load(self: *Self, sources: Sources) void {
         const p = self.priv();
         p.generation += 1;
         gio.ListStore.removeAll(p.list_store);
         self.update_selection_ui();
         self.set_state(.loading);
 
-        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch {
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, sources }) catch {
             self.set_state(.err);
             return;
         };
         thread.detach();
     }
 
-    fn load_worker(page: *Self, generation: u64) void {
+    fn load_worker(page: *Self, generation: u64, sources: Sources) void {
         const p = page.priv();
         const query_buf: *[256]u8 = &p.last_query;
         const query_len = p.last_query_len;
 
         var slots = [3]SourceSlot{ .{}, .{}, .{} };
-        slots[0].enabled = true;
-        slots[1].enabled = true;
-        slots[2].enabled = true;
+        slots[0].enabled = sources.standard;
+        slots[1].enabled = sources.aur;
+        slots[2].enabled = sources.flatpak;
 
         const tags = [3]Source{ .standard, .aur, .flatpak };
         var threads: [3]?std.Thread = .{ null, null, null };
@@ -824,7 +838,7 @@ pub const ShellySearchPage = extern struct {
         @memcpy(p.last_query[0..len], text[0..len]);
         p.last_query_len = len;
 
-        self.start_load();
+        self.start_load(enabledSources());
     }
 
     fn on_install_clicked(self: *Self) callconv(.c) void {
@@ -933,7 +947,7 @@ pub const ShellySearchPage = extern struct {
             p.install_running = false;
             self.clear_selection();
             if (p.last_query_len > 0) {
-                self.start_load();
+                self.start_load(enabledSources());
             }
             return;
         }
