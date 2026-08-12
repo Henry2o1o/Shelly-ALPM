@@ -2,7 +2,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: shelly-ui 2.2.4.1\n"
 "Report-Msgid-Bugs-To: csnyder@seafoamlabs.org\n"
-"POT-Creation-Date: 2026-08-05 12:25+0300\n"
+"POT-Creation-Date: 2026-08-12 09:19-0400\n"
 "PO-Revision-Date: 2026-07-29 17:32+0000\n"
 "Last-Translator: Tiago Centurion <tiagodecgo2@gmail.com>\n"
 "Language-Team: Spanish <https://hosted.weblate.org/projects/shelly-alpm/"
@@ -15,13 +15,30 @@ msgstr ""
 "X-Generator: Weblate 2026.8.dev0\n"
 
 msgid "No installable addons available"
-msgstr ""
+msgstr "No hay complementos instalables disponibles"
 
 msgid "Close"
 msgstr "Cerrar"
 
+#| msgid "Saving update configuration"
+msgid "Keep configuration"
+msgstr ""
+
+msgid "App data and settings will be kept."
+msgstr ""
+
+#| msgid "Saving update configuration"
+msgid "Remove configuration"
+msgstr ""
+
+msgid "App data will be permanently removed."
+msgstr ""
+
 msgid "Confirm"
 msgstr "Confirmar"
+
+msgid "Cancel"
+msgstr "Cancelar"
 
 msgid "Skip"
 msgstr "Saltar"
@@ -33,7 +50,7 @@ msgid "Review PKGBUILD changes"
 msgstr "Vista previa de los cambios de PKGBUILD"
 
 msgid "Changes"
-msgstr "Gambios"
+msgstr "Cambios"
 
 msgid "Warnings"
 msgstr "Advertencias"
@@ -48,11 +65,8 @@ msgstr ""
 msgid "Source Files"
 msgstr "Archivos fuente"
 
-msgid "Cancel"
-msgstr "Cancelar"
-
 msgid "polkit is required"
-msgstr ""
+msgstr "Se requiere polkit"
 
 msgid ""
 "Shelly's GUI needs <b>polkit</b> installed and running to authorize "
@@ -60,12 +74,12 @@ msgid ""
 "\n"
 "Install and enable it, then retry.\n"
 "\n"
-"<a href=\"https://wiki.archlinux.org/title/Polkit\">wiki.archlinux.org/title/"
-"Polkit</a>"
+"<a href=\"https://www.seafoam-labs.org/shelly-alpm/docs/polkit/\">seafoam-"
+"labs.org/shelly-alpm/docs/polkit</a>"
 msgstr ""
 
 msgid "Review PKGBUILD"
-msgstr ""
+msgstr "Revisar PKGBUILD"
 
 msgid "Search..."
 msgstr "Buscar..."
@@ -307,6 +321,9 @@ msgstr "Reparar Flatpak"
 msgid "Repairs Flatpak Installation (Experimental)"
 msgstr "Repara la instalación de Flatpak (experimental)"
 
+msgid "About"
+msgstr ""
+
 msgid "Shelly"
 msgstr ""
 
@@ -378,11 +395,11 @@ msgstr "Mostrar sólo paquetes instalados explícitamente"
 msgid "Show Dependency Only"
 msgstr ""
 
-msgid "Show dependency packages on;y"
+msgid "Show dependency packages only"
 msgstr ""
 
 msgid "Recommended Packages"
-msgstr ""
+msgstr "Paquetes recomendados"
 
 msgid "Curated suggestions from Seafoam Labs"
 msgstr "Sugerencias seleccionadas de Seafoam Labs"
@@ -399,6 +416,39 @@ msgid ""
 msgstr ""
 "No se encontraron recomendaciones. Verifica tu conexión a Internet e "
 "inténtalo de nuevo."
+
+msgid "Search standard repositories, AUR and Flatpak"
+msgstr ""
+
+msgid "Standard"
+msgstr ""
+
+msgid "Show results from the configured ALPM sync databases"
+msgstr ""
+
+msgid "AUR"
+msgstr "AUR"
+
+msgid "Show results from the Arch User Repository"
+msgstr ""
+
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgid "Show results from the configured Flatpak remotes"
+msgstr ""
+
+#| msgid "Source Files"
+msgid "Source"
+msgstr ""
+
+msgid "Search everywhere"
+msgstr ""
+
+msgid ""
+"Search standard repositories, the AUR and Flatpak at once. Type a name to "
+"begin."
+msgstr ""
 
 msgid "General"
 msgstr "General"
@@ -561,12 +611,6 @@ msgstr "Actualización"
 msgid "System"
 msgstr "Sistema"
 
-msgid "AUR"
-msgstr "AUR"
-
-msgid "Flatpak"
-msgstr "Flatpak"
-
 msgid "Checking for updates…"
 msgstr "Comprobando actualizaciones…"
 
@@ -632,7 +676,7 @@ msgid "Number of cached versions to keep per package"
 msgstr "Cantidad de versiones en caché a conservar por paquete"
 
 msgid "Welcome to Shelly v3"
-msgstr ""
+msgstr "Bienvenido a Shelly v3"
 
 msgid ""
 "Shelly is a modern package manager for Arch Linux. Configure your sources "
@@ -681,7 +725,7 @@ msgid "Navigation Style"
 msgstr "Estilo de navegación"
 
 msgid "Sidebar"
-msgstr ""
+msgstr "Barra lateral"
 
 msgid "Vertical icon rail on the left"
 msgstr "Barra de íconos vertical a la izquierda"
@@ -693,16 +737,16 @@ msgid "Horizontal tab switcher at the top"
 msgstr "Cambiador de pestañas horizontal en la parte superior"
 
 msgid "System Tray"
-msgstr ""
+msgstr "Bandeja del sistema"
 
 msgid "Run in system tray when minimized"
-msgstr ""
+msgstr "Ejecutar en la bandeja del sistema cuando sea minimizado"
 
 msgid "Next"
 msgstr "Siguiente"
 
 msgid "Start Shelly"
-msgstr ""
+msgstr "Iniciar Shelly"
 
 msgid "Filesystem"
 msgstr "Sistema de archivos"
@@ -906,7 +950,7 @@ msgid "Select one or more packages"
 msgstr "Seleccione uno o más paquetes"
 
 msgid "Package(s)"
-msgstr ""
+msgstr "Paquete(s)"
 
 msgid "Remove Packages"
 msgstr "Eliminar paquetes"
@@ -1102,17 +1146,52 @@ msgstr "Eliminando repositorio remoto"
 msgid "Adding Remote"
 msgstr "Añadiendo repositorio remoto"
 
+#| msgid "Removing Flatpak"
+msgid "Remove this Flatpak?"
+msgstr ""
+
+#| msgid "Removing Flatpak"
+msgid "Remove Flatpak"
+msgstr ""
+
 msgid "Removing Flatpak"
 msgstr "Desinstalar Flatpak"
 
-msgid "Loading..."
-msgstr "Cargando..."
+msgid "App ID"
+msgstr ""
+
+#| msgid "Remove"
+msgid "Remote"
+msgstr ""
+
+#| msgid "Development"
+msgid "Developer"
+msgstr ""
+
+msgid "Type"
+msgstr ""
+
+msgid "Download Size"
+msgstr "Tamaño de descarga"
 
 msgid "Installed Size"
 msgstr "Tamaño instalado"
 
-msgid "Download Size"
-msgstr "Tamaño de descarga"
+msgid "Yes"
+msgstr "Si"
+
+msgid "No"
+msgstr "No"
+
+msgid "Keywords"
+msgstr ""
+
+#| msgid "e.g., flathub"
+msgid "Flathub"
+msgstr ""
+
+msgid "Loading..."
+msgstr "Cargando..."
 
 msgid "Build Date"
 msgstr "Fecha de compilación"
@@ -1180,6 +1259,29 @@ msgstr "Eliminando paquete"
 msgid "Installing packages"
 msgstr "Instalando paquete"
 
+#| msgid "Operation failed"
+msgid "Search failed"
+msgstr ""
+
+#| msgid "Installation failed."
+msgid "Installation in progress"
+msgstr ""
+
+#| msgid "No packages selected"
+msgid "No sources selected"
+msgstr ""
+
+msgid "Enable at least one source filter above."
+msgstr ""
+
+#| msgid "Installing packages"
+msgid "Install Packages"
+msgstr ""
+
+#| msgid "Remove the selected packages?"
+msgid "Install the selected packages?"
+msgstr ""
+
 msgid "Failed to save settings"
 msgstr "No se pudo guardar la configuración"
 
@@ -1187,28 +1289,28 @@ msgid "Settings saved"
 msgstr "Ajustes guardados"
 
 msgid "Installing Flatpak support"
-msgstr ""
+msgstr "Instalando soporte para Flatpak"
 
 msgid "Installing AppImage support"
-msgstr ""
+msgstr "Instalando soporte para AppImage"
 
 msgid "Failed to start Flatpak support installation"
-msgstr ""
+msgstr "Error al iniciar la instalación de soporte para Flatpak"
 
 msgid "Failed to start AppImage support installation"
-msgstr ""
+msgstr "Error al iniciar la instalación de soporte para AppImage"
 
 msgid "Flatpak support installation failed"
-msgstr ""
+msgstr "La instalación de soporte para Flatpak ha fallado"
 
 msgid "AppImage support installation failed"
-msgstr ""
+msgstr "La instalación de soporte para AppImage ha fallado"
 
 msgid "Flatpak support enabled"
-msgstr ""
+msgstr "Soporte para Flatpak activado"
 
 msgid "AppImage support enabled"
-msgstr ""
+msgstr "Soporte para AppImage activado"
 
 msgid "No changelog entries found"
 msgstr "No se encontraron entradas en el registro de cambios"
@@ -1359,6 +1461,21 @@ msgstr "Reinstalando"
 msgid "Removing"
 msgstr "Eliminando"
 
+msgid "Checking keyring"
+msgstr ""
+
+msgid "Checking integrity"
+msgstr ""
+
+msgid "Loading packages"
+msgstr ""
+
+msgid "Checking conflicts"
+msgstr ""
+
+msgid "Checking disk space"
+msgstr ""
+
 msgid "Working"
 msgstr "Trabajando"
 
@@ -1377,12 +1494,6 @@ msgstr "salir"
 msgid "Cancelled"
 msgstr "Cancelado"
 
-msgid "Yes"
-msgstr "Si"
-
-msgid "No"
-msgstr "No"
-
 msgid "System package update"
 msgstr "Actualización del paquete del sistema"
 
@@ -1395,7 +1506,7 @@ msgstr ""
 "intentarlo."
 
 msgid "Update this package"
-msgstr ""
+msgstr "Actualizar este paquete"
 
 msgid "of"
 msgstr "de"
@@ -1436,7 +1547,7 @@ msgid ""
 msgstr ""
 
 msgid "Enable Recommended?"
-msgstr ""
+msgstr "Activar Recomendados?"
 
 msgid ""
 "Recommended shows curated package suggestions based on your installed "
@@ -1447,7 +1558,7 @@ msgstr ""
 "externas."
 
 msgid "Installing Flatpak and AppImage support"
-msgstr ""
+msgstr "Instalando soporte para Flatpak y AppImage"
 
 msgid "Settings"
 msgstr "Configuración"

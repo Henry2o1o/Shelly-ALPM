@@ -113,6 +113,12 @@ const Updates = struct {
         return self.repo.items.len + self.aur.items.len + self.flatpak.items.len;
     }
 
+    fn count(self: *Updates) usize {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return self.total();
+    }
+
     fn signalRefresh(self: *Updates) void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
@@ -394,6 +400,8 @@ pub fn main(init: std.process.Init) !void {
 
         if (updates.takeRefresh()) {
             menu_ctrl.invalidate() catch |e| log_loop.err("invalidate: {any}", .{e});
+            const target_icon = if (updates.count() > 0) attention_icon_name else icon_name;
+            t.emitNewIcon(target_icon) catch |e| log_loop.err("emitNewIcon: {any}", .{e});
         }
 
         if (updates.takeNotif()) |n| {
@@ -408,16 +416,11 @@ pub fn main(init: std.process.Init) !void {
                 .on_activate = &openShelly,
                 .ctx = &runner,
             }) catch |e| log_loop.err("notify: {any}", .{e});
-            try t.emitNewIcon(attention_icon_name);
         }
 
         if (updates.takeConfigChange()) {
-            if (icon_name.len > 0) {
-                _ = t.emitNewIcon(icon_name) catch |e| log_loop.err("notify: {any}", .{e});
-            }
-            if (attention_icon_name.len > 0) {
-                _ = t.emitNewIcon(attention_icon_name) catch |e| log_loop.err("notify: {any}", .{e});
-            }
+            const target_icon = if (updates.count() > 0) attention_icon_name else icon_name;
+            t.emitNewIcon(target_icon) catch |e| log_loop.err("emitNewIcon: {any}", .{e});
         }
 
         if (launch_requested.swap(false, .seq_cst)) {
@@ -462,11 +465,9 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
 
     const count = updates.total();
     if (count == 0) {
-        tray_index += 1;
         try addItem(arena, &items, &tray_index, trans("No updates"), false, true, .normal);
     } else {
         if (updates.repo.items.len > 0) {
-            tray_index += 1;
             try addItemWithSubmenu(
                 @TypeOf(updates.repo.items[0]),
                 arena,
@@ -480,7 +481,6 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
         }
 
         if (updates.aur.items.len > 0) {
-            tray_index += 1;
             try addItemWithSubmenu(
                 @TypeOf(updates.aur.items[0]),
                 arena,
@@ -494,7 +494,6 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
         }
 
         if (updates.flatpak.items.len > 0) {
-            tray_index += 1;
             try addItemWithSubmenu(
                 @TypeOf(updates.flatpak.items[0]),
                 arena,
@@ -551,6 +550,7 @@ fn addItemWithSubmenu(
 ) !void {
     var children = std.ArrayList(MenuItem).empty;
     defer children.deinit(arena);
+    id.* += 1;
 
     for (source) |pkg| {
         const child_label = try labelFn(arena, pkg);
@@ -564,7 +564,6 @@ fn addItemWithSubmenu(
         .children = try children.toOwnedSlice(arena),
         .label = label,
     });
-    id.* += 1;
 }
 
 fn onEvent(ctx: ?*anyopaque, id: i32) void {
