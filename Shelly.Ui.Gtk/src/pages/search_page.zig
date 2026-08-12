@@ -50,6 +50,7 @@ pub const ShellySearchPage = extern struct {
         standard_check: *gtk.CheckButton,
         aur_check: *gtk.CheckButton,
         flatpak_check: *gtk.CheckButton,
+        source_filter: *gtk.CustomFilter,
         detail_revealer: *gtk.Revealer,
         detail_stack: *gtk.Stack,
         standard_detail: *StandardPackageDetail,
@@ -63,12 +64,6 @@ pub const ShellySearchPage = extern struct {
         check_map: std.AutoHashMapUnmanaged(*SearchResultObject, *gtk.CheckButton),
         pending_installs: std.ArrayListUnmanaged(PendingInstall),
         var offset: c_int = 0;
-    };
-
-    const Sources = struct {
-        standard: bool = true,
-        aur: bool = false,
-        flatpak: bool = false,
     };
 
     const SourceSlot = struct {
@@ -125,7 +120,10 @@ pub const ShellySearchPage = extern struct {
 
         p.list_store = gio.ListStore.new(SearchResultObject.getGObjectType());
 
-        const sort_model = gtk.SortListModel.new(p.list_store.as(gio.ListModel), null);
+        p.source_filter = gtk.CustomFilter.new(&source_filter_match, self, null);
+        const filter_model = gtk.FilterListModel.new(p.list_store.as(gio.ListModel), p.source_filter.as(gtk.Filter));
+
+        const sort_model = gtk.SortListModel.new(filter_model.as(gio.ListModel), null);
 
         p.selection = gtk.SingleSelection.new(sort_model.as(gio.ListModel));
         gtk.SingleSelection.setAutoselect(p.selection, 0);
@@ -147,6 +145,10 @@ pub const ShellySearchPage = extern struct {
 
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
+
+        _ = gtk.CheckButton.signals.toggled.connect(p.standard_check, *Self, &on_source_filter_toggled, self, .{});
+        _ = gtk.CheckButton.signals.toggled.connect(p.aur_check, *Self, &on_source_filter_toggled, self, .{});
+        _ = gtk.CheckButton.signals.toggled.connect(p.flatpak_check, *Self, &on_source_filter_toggled, self, .{});
 
         const standard_detail = StandardPackageDetail.new();
         p.standard_detail = standard_detail;
@@ -530,38 +532,60 @@ pub const ShellySearchPage = extern struct {
         _ = malloc_trim(0);
     }
 
-    fn selectedSources(self: *Self) Sources {
+    fn source_filter_match(item: *gobject.Object, data: ?*anyopaque) callconv(.c) c_int {
+        const self: *Self = @ptrCast(@alignCast(data.?));
+        const pkg = gobject.ext.cast(SearchResultObject, item) orelse return 0;
         const p = self.priv();
-        return .{
-            .standard = gtk.CheckButton.getActive(p.standard_check) != 0,
-            .aur = gtk.CheckButton.getActive(p.aur_check) != 0,
-            .flatpak = gtk.CheckButton.getActive(p.flatpak_check) != 0,
+        return switch (pkg.getSource()) {
+            .standard => gtk.CheckButton.getActive(p.standard_check),
+            .aur => gtk.CheckButton.getActive(p.aur_check),
+            .flatpak => gtk.CheckButton.getActive(p.flatpak_check),
         };
     }
 
-    fn start_load(self: *Self, sources: Sources) void {
+    fn on_source_filter_toggled(_: *gtk.CheckButton, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        gtk.Filter.changed(p.source_filter.as(gtk.Filter), .different);
+
+        if (gio.ListModel.getNItems(p.list_store.as(gio.ListModel)) == 0) return;
+        const any_enabled =
+            gtk.CheckButton.getActive(p.standard_check) != 0 or
+            gtk.CheckButton.getActive(p.aur_check) != 0 or
+            gtk.CheckButton.getActive(p.flatpak_check) != 0;
+        if (!any_enabled) {
+            self.show_placeholder(
+                "dialog-warning-symbolic",
+                translations._("No sources selected"),
+                translations._("Enable at least one source in the options menu."),
+            );
+        } else {
+            self.set_state(.results);
+        }
+    }
+
+    fn start_load(self: *Self) void {
         const p = self.priv();
         p.generation += 1;
         gio.ListStore.removeAll(p.list_store);
         self.update_selection_ui();
         self.set_state(.loading);
 
-        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, sources }) catch {
+        const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation }) catch {
             self.set_state(.err);
             return;
         };
         thread.detach();
     }
 
-    fn load_worker(page: *Self, generation: u64, sources: Sources) void {
+    fn load_worker(page: *Self, generation: u64) void {
         const p = page.priv();
         const query_buf: *[256]u8 = &p.last_query;
         const query_len = p.last_query_len;
 
         var slots = [3]SourceSlot{ .{}, .{}, .{} };
-        slots[0].enabled = sources.standard;
-        slots[1].enabled = sources.aur;
-        slots[2].enabled = sources.flatpak;
+        slots[0].enabled = true;
+        slots[1].enabled = true;
+        slots[2].enabled = true;
 
         const tags = [3]Source{ .standard, .aur, .flatpak };
         var threads: [3]?std.Thread = .{ null, null, null };
@@ -640,7 +664,6 @@ pub const ShellySearchPage = extern struct {
                         .version = alloc.dupeZ(u8, pkg.Version) catch continue,
                         .description = alloc.dupeZ(u8, pkg.Description) catch continue,
                         .repository = alloc.dupeZ(u8, pkg.Repository) catch continue,
-                        // The CLI reports installed packages with the "local" repository.
                         .installed = std.mem.eql(u8, pkg.Repository, "local"),
                     }) catch continue;
                 }
@@ -659,7 +682,6 @@ pub const ShellySearchPage = extern struct {
                         .description = if (pkg.Description) |value| alloc.dupeZ(u8, value) catch "" else "",
                         .repository = alloc.dupeZ(u8, "AUR") catch continue,
                         .out_of_date = pkg.OutOfDate != null,
-                        // Full record kept for the eventual detail pane.
                         .aur = pkg,
                     }) catch continue;
                 }
@@ -798,23 +820,11 @@ pub const ShellySearchPage = extern struct {
             return;
         }
 
-        const sources = self.selectedSources();
-        if (!sources.standard and !sources.aur and !sources.flatpak) {
-            gio.ListStore.removeAll(p.list_store);
-            self.update_selection_ui();
-            self.show_placeholder(
-                "dialog-warning-symbolic",
-                translations._("No sources selected"),
-                translations._("Enable at least one source in the options menu."),
-            );
-            return;
-        }
-
         const len = @min(text.len, p.last_query.len);
         @memcpy(p.last_query[0..len], text[0..len]);
         p.last_query_len = len;
 
-        self.start_load(sources);
+        self.start_load();
     }
 
     fn on_install_clicked(self: *Self) callconv(.c) void {
@@ -923,7 +933,7 @@ pub const ShellySearchPage = extern struct {
             p.install_running = false;
             self.clear_selection();
             if (p.last_query_len > 0) {
-                self.start_load(self.selectedSources());
+                self.start_load();
             }
             return;
         }
