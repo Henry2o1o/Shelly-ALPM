@@ -47,8 +47,23 @@ pub const ArchiveResult = struct {
 pub const Writer = struct {
     allocator: std.mem.Allocator,
     handle: *c.struct_archive,
-    directory: []const u8,
-}!Writer{};
+    directory: [:0]const u8,
+    package_name: [:0]const u8,
+
+    pub fn init(allocator: std.mem.Allocator, directory: []const u8, package_name: []const u8) !Writer {
+        const sentinel_path: [:0]u8 = try std.fs.path.joinZ(
+            allocator,
+            &.{ directory, "pkg", package_name },
+        );
+        errdefer allocator.free(sentinel_path);
+
+        const handle = c.archive_write_new() orelse Error.ArchiveCreateFailed;
+        errdefer _ = c.archive_write_free(handle);
+
+        try requireStatus(c.archive_write_add_filter_zstd(handle));
+        try requireStatus(c.archive_write_set_format_pax_restricted(handle));
+    }
+};
 
 pub const Reader = struct {
     allocator: std.mem.Allocator,
