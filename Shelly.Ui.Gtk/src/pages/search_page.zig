@@ -678,7 +678,6 @@ pub const ShellySearchPage = extern struct {
                         .description = alloc.dupeZ(u8, hit.summary) catch continue,
                         .repository = alloc.dupeZ(u8, hit.remote) catch continue,
                         .verified = hit.verification_verified,
-                        // Full hit kept for the eventual detail pane.
                         .flatpak = hit,
                     }) catch continue;
                 }
