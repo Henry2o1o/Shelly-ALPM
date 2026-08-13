@@ -135,6 +135,7 @@ pub fn build(b: *std.Build) void {
         "--track-origins=yes",
         "--num-callers=50",
         "--error-exitcode=42",
+        "--log-file=valgrind-%p.log",
     });
     valgrind_cmd.addPrefixedFileArg("--suppressions=", b.path("valgrind/glib-gtk.supp"));
     valgrind_cmd.addArtifactArg(exe);
