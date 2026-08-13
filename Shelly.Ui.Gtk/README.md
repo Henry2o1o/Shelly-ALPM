@@ -34,7 +34,10 @@ zig build valgrind -Dcpu=x86_64
 Notes:
 
 - Background threads (icon download, tray) should be done before you quit,
-  otherwise their still-live allocations appear in the report.
+  otherwise their still-live allocations appear in the report. To keep them
+  out of a leak-checking session entirely, pass
+  `-Dskip-background-services=true`, e.g.
+  `zig build valgrind -Dcpu=x86_64_v3 -Dskip-background-services=true`.
 - `--error-exitcode=42` makes `zig build valgrind` fail when definite or
   indirect leaks are found, so it can be used in checks.
 - Repeated noise not covered by the suppression file can be captured with

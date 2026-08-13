@@ -41,6 +41,15 @@ pub fn build(b: *std.Build) void {
             "Package containing the Flatpak backend for this Shelly build",
         ) orelse "shelly-flatpak-backend",
     );
+    options.addOption(
+        bool,
+        "skip_background_services",
+        b.option(
+            bool,
+            "skip-background-services",
+            "Skip starting background services (icon download, tray); useful for Valgrind leak checks",
+        ) orelse false,
+    );
 
     const exe = b.addExecutable(.{
         .name = "Shelly_Ui_Gtk",
