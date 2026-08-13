@@ -715,6 +715,11 @@ pub const PackagePage = extern struct {
 
         gio.ListStore.removeAll(p.list_store);
 
+        p.check_map_grid.deinit(std.heap.c_allocator);
+        p.check_map_grid = .empty;
+        p.check_map_column.deinit(std.heap.c_allocator);
+        p.check_map_column = .empty;
+
         if (p.arena) |a| {
             a.deinit();
             std.heap.c_allocator.destroy(a);
@@ -823,6 +828,9 @@ pub const PackagePage = extern struct {
 
         if (result.index == 0) {
             gio.ListStore.removeAll(p.list_store);
+
+            p.check_map_grid.clearAndFree(std.heap.c_allocator);
+            p.check_map_column.clearAndFree(std.heap.c_allocator);
 
             const strings = gtk.StringList.new(null);
             gtk.StringList.append(strings, "Any");
