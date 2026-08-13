@@ -2805,6 +2805,12 @@ pub const Manager = struct {
                     .position = @intCast(hook.position),
                     .total = @intCast(hook.total),
                 });
+
+                self.dispatcher.raiseInformational(.{
+                    .event_type = event_type,
+                    .message = message,
+                });
+
             },
             .pacnew_created => self.dispatcher.raisePacnew(.{
                 .file = spanC(event.*.pacnew_created.file),

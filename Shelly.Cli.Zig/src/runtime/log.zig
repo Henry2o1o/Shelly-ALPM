@@ -154,7 +154,7 @@ pub const TransactionLog = struct {
         switch (event) {
             .started => {
                 if (envelope.parent_id == null)
-                    self.writeEntry(self.allocator, .info, source, "transaction started");
+                    self.writeEntry(self.allocator, .info, source, "Transaction started");
             },
             .progress => {},
             .status => |status| switch (status.level) {
@@ -166,9 +166,9 @@ pub const TransactionLog = struct {
             .completed => |completed| {
                 if (envelope.parent_id != null) return;
                 const message: []const u8 = switch (completed.status) {
-                    .success => "transaction completed",
-                    .failed => "transaction failed",
-                    .cancelled => "transaction cancelled",
+                    .success => "Transaction Completed",
+                    .failed => "Transaction Failed",
+                    .cancelled => "Transaction Cancelled",
                 };
                 self.writeEntry(
                     self.allocator,
