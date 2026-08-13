@@ -2707,10 +2707,20 @@ pub const Manager = struct {
         const self: *Manager = @ptrCast(@alignCast(ctx));
         const path = event.destination_path orelse "";
         switch (event.event_type) {
-            .Start => self.dispatcher.raiseInformational(.{
-                .event_type = .pkg_retrieve_start,
-                .message = path,
-            }),
+            .Start => {
+                const message = std.fmt.allocPrint(
+                    self.allocator,
+                    "Retrieving package: {s}",
+                    .{std.fs.path.basename(path)},
+                ) catch return;
+            
+                defer self.allocator.free(message);
+            
+                self.dispatcher.raiseInformational(.{
+                    .event_type = .pkg_retrieve_start,
+                    .message = message,
+                });
+            },
             .Progress => if (event.progress) |p| {
                 // CoreDownloader forwards rich byte progress to the logical
                 // download operation. Retain this fallback only for legacy
@@ -2723,10 +2733,20 @@ pub const Manager = struct {
                     .current = 1,
                 });
             },
-            .Complete => self.dispatcher.raiseInformational(.{
-                .event_type = .pkg_retrieve_done,
-                .message = path,
-            }),
+            .Complete => {
+                const message = std.fmt.allocPrint(
+                    self.allocator,
+                    "Package retrieval completed: {s}",
+                    .{std.fs.path.basename(path)},
+                ) catch return;
+            
+                defer self.allocator.free(message);
+            
+                self.dispatcher.raiseInformational(.{
+                    .event_type = .pkg_retrieve_done,
+                    .message = message,
+                });
+            },
             .Error => self.dispatcher.raiseError(.{
                 .message = if (event.download_error) |e| @errorName(e) else "download failed",
             }),

@@ -63,13 +63,14 @@ pub const SessionLog = struct {
     ) void {
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
-        const timestamp = std.Io.Clock.real.now(self.io).toSeconds();
+        const raw: u64 = @intCast(std.Io.Clock.real.now(self.io).toSeconds());
+        buffer.writer.writeAll("[") catch return;
+        writeUtcTime(&buffer.writer, raw) catch return;
         buffer.writer.print(
-            "[{d}] SESSION END — exit code: {d}\n",
-            .{ timestamp, exit_code },
+            "] SESSION END — exit code: {d}\n",
+            .{exit_code},
         ) catch return;
-        self.append(buffer.writer.buffered());
-    }
+        self.append(buffer.writer.buffered());    }
 
     fn append(self: *SessionLog, bytes: []const u8) void {
         self.mutex.lockUncancelable(self.io);
@@ -116,7 +117,7 @@ pub const TransactionLog = struct {
     }
 
     pub fn writeEntry(self: *TransactionLog, allocator: std.mem.Allocator, level: LogLevel, source: Source, message: []const u8) void {
-        const raw = std.Io.Clock.real.now(self.session.io).toSeconds();
+        const raw: u64 = @intCast(std.Io.Clock.real.now(self.session.io).toSeconds());
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
         const level_str: []const u8 = switch (level) {
@@ -180,7 +181,7 @@ pub const TransactionLog = struct {
     }
 };
 
-pub fn writeUtcTime(writer: *std.Io.Writer, unix_seconds: u64,) !void {
+fn writeUtcTime(writer: *std.Io.Writer, unix_seconds: u64,) !void {
     const epoch_seconds = std.time.epoch.EpochSeconds{
         .secs = unix_seconds,
     };
