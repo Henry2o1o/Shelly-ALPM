@@ -134,19 +134,6 @@ pub fn build(b: *std.Build) void {
     const valgrind_step = b.step("valgrind", "Run the app under Valgrind (memcheck) to check for memory leaks");
     valgrind_step.dependOn(&valgrind_cmd.step);
 
-    // Run the app under Heaptrack, an LD_PRELOAD-based heap profiler. Unlike
-    // Valgrind it does not need symbols from the dynamic linker, so it also
-    // works on glibc builds whose ld.so is stripped (where Valgrind fails at
-    // startup). Requires the `heaptrack` package. A leak summary is printed and
-    // a heaptrack.<exe>.<pid>.zst data file is written when the app exits
-    // normally; analyze it with `heaptrack_gui` or `heaptrack_print`.
-    const heaptrack_cmd = b.addSystemCommand(&.{"heaptrack"});
-    heaptrack_cmd.addArtifactArg(exe);
-    if (b.args) |args| heaptrack_cmd.addArgs(args);
-
-    const heaptrack_step = b.step("heaptrack", "Run the app under Heaptrack to profile heap usage and find leaks");
-    heaptrack_step.dependOn(&heaptrack_cmd.step);
-
     const root_tests = b.addTest(.{ .root_module = shelly_ui_gtk });
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
 
