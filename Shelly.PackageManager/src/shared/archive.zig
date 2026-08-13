@@ -15,6 +15,7 @@ pub const Error = error{
     ArchiveCreateFailed,
     ArchiveOpenFailed,
     ArchiveReadFailed,
+    ArchiveEntryCreateFailed,
     ArchiveWriteFailed,
     InvalidEntryPath,
     EntryTooLarge,
@@ -62,8 +63,29 @@ pub const Writer = struct {
 
         try requireStatus(c.archive_write_add_filter_zstd(handle));
         try requireStatus(c.archive_write_set_format_pax_restricted(handle));
+        try requireStatus(c.archive_write_open_filename(handle, sentinel_path.ptr));
 
-        if(c.archive_write_open_filename(?*struct_archive, _file: [*c]const u8))
+        return Writer{
+            .allocator = allocator,
+            .handle = handle,
+            .directory = directory,
+            .package_name = package_name,
+        };
+    }
+
+    pub fn addItem(self: *Writer, file_path: []const u8) !void {
+        const entry = c.archive_entry_new() orelse return Error.ArchiveEntryCreateFailed;
+        defer c.archive_entry_free(entry);
+
+        const sentinel_path: [:0]u8 = try std.fs.path.joinZ(
+            self.allocator,
+            &.{file_path},
+        );
+        errdefer self.allocator.free(sentinel_path);
+
+        c.archive_entry_set_pathname(entry, sentinel_path.ptr);
+        //todo: finish archive entry setup
+
     }
 };
 
