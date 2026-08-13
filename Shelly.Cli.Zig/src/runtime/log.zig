@@ -166,9 +166,9 @@ pub const TransactionLog = struct {
             .completed => |completed| {
                 if (envelope.parent_id != null) return;
                 const message: []const u8 = switch (completed.status) {
-                    .success => "Transaction Completed",
-                    .failed => "Transaction Failed",
-                    .cancelled => "Transaction Cancelled",
+                    .success => "Transaction completed",
+                    .failed => "Transaction failed",
+                    .cancelled => "Transaction cancelled",
                 };
                 self.writeEntry(
                     self.allocator,
@@ -403,7 +403,7 @@ test "transaction log records operation lifecycle without progress noise" {
         .limited(4096),
     );
     defer allocator.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "Message: transaction started") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "Message: Transaction started") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "Message: installed example (1.0-1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "Message: transaction completed") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "ignored progress") == null);
