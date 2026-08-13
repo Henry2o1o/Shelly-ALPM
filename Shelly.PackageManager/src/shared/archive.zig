@@ -62,6 +62,8 @@ pub const Writer = struct {
 
         try requireStatus(c.archive_write_add_filter_zstd(handle));
         try requireStatus(c.archive_write_set_format_pax_restricted(handle));
+
+        if(c.archive_write_open_filename(?*struct_archive, _file: [*c]const u8))
     }
 };
 
