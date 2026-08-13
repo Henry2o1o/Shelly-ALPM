@@ -126,16 +126,16 @@ pub const TransactionLog = struct {
             .exception => "EXCEPTION",
         };
         const source_str: []const u8 = switch (source) {
-            .standard => "standard",
-            .aur => "aur",
-            .flatpak => "flatpak",
-            .appimage => "appimage",
-            .local => "local",
-            .download => "download",
+            .standard => "STANDARD",
+            .aur => "AUR",
+            .flatpak => "FLATPAK",
+            .appimage => "APPIMAGE",
+            .local => "LOCAL",
+            .download => "DOWNLOAD",
         };
         buffer.writer.writeAll("[") catch return;
         writeUtcTime(&buffer.writer, raw) catch return;
-        buffer.writer.print("] Level: {s}  Source: {s} Message: {s}\n",.{ level_str, source_str, message },) catch return;        
+        buffer.writer.print("] {s} [{s}]: {s}\n",.{ level_str, source_str, message },) catch return;        
         self.session.append(buffer.writer.buffered());
     }
 
