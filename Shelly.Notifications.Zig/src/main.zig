@@ -35,11 +35,13 @@ const log_main = std.log.scoped(.main);
 const log_loop = std.log.scoped(.loop);
 const log_menu = std.log.scoped(.menu);
 
-var quit_index: usize = 0;
-var open_index: usize = 0;
-var check_update_index: usize = 0;
-var run_update_index: usize = 0;
-var open_shelly_index: usize = 0;
+var quit_index: i32 = 0;
+var check_update_index: i32 = 0;
+var run_update_index: i32 = 0;
+var open_shelly_index: i32 = 0;
+var tray_index: i32 = 0;
+var menu_generation_seen: u64 = 0;
+var menu_generation_start: i32 = 0;
 
 var icon_name: [:0]const u8 = undefined;
 var attention_icon_name: [:0]const u8 = undefined;
@@ -67,6 +69,7 @@ const Updates = struct {
     flatpak: std.ArrayListUnmanaged(Flatpak) = .empty,
 
     needs_refresh: bool = false,
+    menu_generation: u64 = 0,
     pending_notif: ?NotifText = null,
     needs_config_change: bool = false,
     last_check: i64 = 0,
@@ -113,10 +116,17 @@ const Updates = struct {
         return self.repo.items.len + self.aur.items.len + self.flatpak.items.len;
     }
 
+    fn count(self: *Updates) usize {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return self.total();
+    }
+
     fn signalRefresh(self: *Updates) void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
         self.needs_refresh = true;
+        self.menu_generation += 1;
     }
 
     fn signalConfigChange(self: *Updates) void {
@@ -394,6 +404,8 @@ pub fn main(init: std.process.Init) !void {
 
         if (updates.takeRefresh()) {
             menu_ctrl.invalidate() catch |e| log_loop.err("invalidate: {any}", .{e});
+            const target_icon = if (updates.count() > 0) attention_icon_name else icon_name;
+            t.emitNewIcon(target_icon) catch |e| log_loop.err("emitNewIcon: {any}", .{e});
         }
 
         if (updates.takeNotif()) |n| {
@@ -408,16 +420,11 @@ pub fn main(init: std.process.Init) !void {
                 .on_activate = &openShelly,
                 .ctx = &runner,
             }) catch |e| log_loop.err("notify: {any}", .{e});
-            try t.emitNewIcon(attention_icon_name);
         }
 
         if (updates.takeConfigChange()) {
-            if (icon_name.len > 0) {
-                _ = t.emitNewIcon(icon_name) catch |e| log_loop.err("notify: {any}", .{e});
-            }
-            if (attention_icon_name.len > 0) {
-                _ = t.emitNewIcon(attention_icon_name) catch |e| log_loop.err("notify: {any}", .{e});
-            }
+            const target_icon = if (updates.count() > 0) attention_icon_name else icon_name;
+            t.emitNewIcon(target_icon) catch |e| log_loop.err("emitNewIcon: {any}", .{e});
         }
 
         if (launch_requested.swap(false, .seq_cst)) {
@@ -443,8 +450,18 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
 
     updates.mutex.lockUncancelable(updates.io);
     defer updates.mutex.unlock(updates.io);
+
+    // The menu provider can ask for the root and then a submenu in separate
+    // GetLayout calls. Reuse the same ID range until the menu data changes;
+    // otherwise the submenu's parent ID no longer exists in the rebuilt tree.
+    if (menu_generation_seen != updates.menu_generation) {
+        menu_generation_seen = updates.menu_generation;
+        menu_generation_start = tray_index;
+    } else {
+        tray_index = menu_generation_start;
+    }
+
     var items = std.ArrayList(MenuItem).empty;
-    var tray_index: usize = 0;
 
     try addItem(arena, &items, &tray_index, trans("Open Shelly"), true, true, .normal);
     open_shelly_index = tray_index;
@@ -511,9 +528,13 @@ fn buildMenu(ctx: ?*anyopaque, arena: std.mem.Allocator) !Tree {
     return .{ .root = .{ .id = 0, .children = try items.toOwnedSlice(arena) } };
 }
 
-fn addItem(arena: std.mem.Allocator, items: *std.ArrayList(MenuItem), id: *usize, label: []const u8, enabled: bool, visible: bool, itype: ItemType) !void {
-    id.* += 1;
-    const item: MenuItem = .{ .id = @as(i32, @intCast(id.*)), .label = label, .enabled = enabled, .visible = visible, .type = itype };
+fn nextId(id: *i32) i32 {
+    id.* = if (id.* == std.math.maxInt(i32)) 1 else id.* + 1;
+    return id.*;
+}
+
+fn addItem(arena: std.mem.Allocator, items: *std.ArrayList(MenuItem), id: *i32, label: []const u8, enabled: bool, visible: bool, itype: ItemType) !void {
+    const item: MenuItem = .{ .id = nextId(id), .label = label, .enabled = enabled, .visible = visible, .type = itype };
     try items.append(arena, item);
 }
 
@@ -539,7 +560,7 @@ fn addItemWithSubmenu(
     comptime T: type,
     arena: std.mem.Allocator,
     items: *std.ArrayList(MenuItem),
-    id: *usize,
+    id: *i32,
     source: []const T,
     labelFn: fn (std.mem.Allocator, T) anyerror![]const u8,
     label: []const u8,
@@ -547,16 +568,16 @@ fn addItemWithSubmenu(
 ) !void {
     var children = std.ArrayList(MenuItem).empty;
     defer children.deinit(arena);
-    id.* += 1;
+
+    const parent_id = nextId(id);
 
     for (source) |pkg| {
         const child_label = try labelFn(arena, pkg);
-        try children.append(arena, .{ .id = @as(i32, @intCast(id.*)), .label = child_label });
-        id.* += 1;
+        try children.append(arena, .{ .id = nextId(id), .label = child_label });
     }
 
     try items.append(arena, .{
-        .id = @as(i32, @intCast(id.*)),
+        .id = parent_id,
         .type = itype,
         .children = try children.toOwnedSlice(arena),
         .label = label,

@@ -77,7 +77,11 @@ pub const DBus = struct {
     }
 
     pub fn checkPolkitStatus(self: *DBus) PolkitStatus {
-        if (!self.polkitAvailable()) return .no_daemon;
+        switch (self.polkitDaemonPresence()) {
+            .absent => return .no_daemon,
+            .unknown => return .unknown,
+            .present => {},
+        }
         return switch (self.authAgentPresent()) {
             .present => .ready,
             .absent => .no_agent,
@@ -86,8 +90,16 @@ pub const DBus = struct {
     }
 
     pub fn polkitAvailable(self: *DBus) bool {
-        const conn = self.ensureSystemConnection() orelse return false;
+        return self.polkitDaemonPresence() == .present;
+    }
+
+    const DaemonPresence = enum { present, absent, unknown };
+
+    fn polkitDaemonPresence(self: *DBus) DaemonPresence {
+        const conn = self.ensureSystemConnection() orelse return .unknown;
         const params = glib.Variant.new("(s)", POLKIT_NAME.ptr);
+        const reply_type = glib.VariantType.new("(b)");
+        defer reply_type.free();
         var call_err: ?*glib.Error = null;
         const result = conn.callSync(
             "org.freedesktop.DBus",
@@ -95,23 +107,23 @@ pub const DBus = struct {
             "org.freedesktop.DBus",
             "NameHasOwner",
             params,
-            glib.VariantType.new("(b)"),
+            reply_type,
             .{},
             -1,
             null,
             &call_err,
         );
         if (call_err) |e| {
-            std.log.warn("NameHasOwner failed: {s}", .{e.f_message orelse "unknown"});
+            std.log.info("NameHasOwner(PolicyKit1) failed: {s}", .{e.f_message orelse "unknown"});
             glib.Error.free(e);
-            return false;
+            return .unknown;
         }
-        const res = result orelse return false;
+        const res = result orelse return .unknown;
         defer res.unref();
         const child = res.getChildValue(0);
         defer child.unref();
         std.log.debug("NameHasOwner(PolicyKit1) = {}", .{child.getBoolean()});
-        return child.getBoolean() != 0;
+        return if (child.getBoolean() != 0) .present else .absent;
     }
 
     const AgentPresence = enum { present, absent, unknown };
@@ -121,7 +133,7 @@ pub const DBus = struct {
 
         var sid_buf: [64]u8 = undefined;
         const sid = self.currentSessionId(&sid_buf) orelse {
-            std.log.warn("could not resolve session id; cannot probe polkit agent", .{});
+            std.log.info("could not resolve session id; skipping polkit agent probe", .{});
             return .unknown;
         };
 
@@ -149,9 +161,11 @@ pub const DBus = struct {
         );
 
         if (err) |e| {
-            glib.Error.free(e);
-
-            return .present;
+            defer glib.Error.free(e);
+            const msg: []const u8 = if (e.f_message) |m| std.mem.span(m) else "";
+            if (std.mem.indexOf(u8, msg, "already exists") != null) return .present;
+            std.log.debug("polkit agent probe inconclusive: {s}", .{msg});
+            return .unknown;
         }
 
         if (result) |r| r.unref();
@@ -184,10 +198,13 @@ pub const DBus = struct {
     }
 
     fn buildUnixSessionSubject(sid: []const u8) ?*glib.Variant {
-        const builder = glib.VariantBuilder.new(glib.VariantType.new("a{sv}"));
+        const vt = glib.VariantType.new("a{sv}");
+        defer vt.free();
 
+        const builder = glib.VariantBuilder.new(vt);
         builder.add("{sv}", "session-id", glib.Variant.new("s", sid.ptr));
         const dict = builder.end();
+        _ = &builder;
 
         return glib.Variant.new("(s@a{sv})", "unix-session", dict);
     }
@@ -209,6 +226,8 @@ pub const DBus = struct {
         const pid: u32 = @intCast(std.os.linux.getpid());
 
         const params = glib.Variant.new("(u)", pid);
+        const reply_type = glib.VariantType.new("(o)");
+        defer reply_type.free();
         var err: ?*glib.Error = null;
         const result = conn.callSync(
             LOGIND_NAME,
@@ -216,14 +235,14 @@ pub const DBus = struct {
             LOGIND_MANAGER_IFACE,
             "GetSessionByPID",
             params,
-            glib.VariantType.new("(o)"),
+            reply_type,
             .{},
             -1,
             null,
             &err,
         );
         if (err) |e| {
-            std.log.warn("logind GetSessionByPID failed: {s}", .{e.f_message orelse "unknown"});
+            std.log.info("logind GetSessionByPID failed: {s}", .{e.f_message orelse "unknown"});
             glib.Error.free(e);
             return null;
         }
@@ -254,6 +273,8 @@ pub const DBus = struct {
             "org.freedesktop.login1.Session",
             "Id",
         );
+        const reply_type = glib.VariantType.new("(v)");
+        defer reply_type.free();
         var err: ?*glib.Error = null;
         const result = conn.callSync(
             LOGIND_NAME,
@@ -261,7 +282,7 @@ pub const DBus = struct {
             "org.freedesktop.DBus.Properties",
             "Get",
             params,
-            glib.VariantType.new("(v)"),
+            reply_type,
             .{},
             -1,
             null,
