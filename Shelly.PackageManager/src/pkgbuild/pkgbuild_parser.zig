@@ -2,7 +2,7 @@ const std = @import("std");
 const file_inspector = @import("../local/file_inspector.zig");
 const listDictionary = @import("../shared/list_dictionary.zig").ListDictionary;
 
-pub const pkgbuild_info = struct {
+pub const Pkgbuild = struct {
     pkg_name: ?[]const u8 = null,
     pkg_version: ?[]const u8 = null,
     pkg_rel: ?[]const u8 = null,
@@ -30,8 +30,9 @@ pub const pkgbuild_info = struct {
     parsed_make_depends: ?[]parsed_dep = null,
     parsed_check_depends: ?[]parsed_dep = null,
     check_depends: ?[][]const u8 = null,
+    execution_steps: ?[]execution_step = null,
 
-    pub fn deinit(self: *pkgbuild_info, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Pkgbuild, allocator: std.mem.Allocator) void {
         if (self.pkg_name) |v| allocator.free(v);
         if (self.pkg_version) |v| allocator.free(v);
         if (self.pkg_rel) |v| allocator.free(v);
@@ -125,9 +126,13 @@ pub const pkgbuild_info = struct {
             for (deps) |d| d.deinit(allocator);
             allocator.free(deps);
         }
+        if (self.execution_steps) |steps| {
+            for (steps) |step| step.deinit(allocator);
+            allocator.free(steps);
+        }
     }
 
-    pub fn get_full_version(self: pkgbuild_info, allocator: std.mem.Allocator) ![]const u8 {
+    pub fn get_full_version(self: Pkgbuild, allocator: std.mem.Allocator) ![]const u8 {
         const version = self.pkg_version;
         const version_part: []const u8 = version orelse "";
         const epoch_part: []const u8 = if (self.epoch) |e| e else "";
@@ -173,6 +178,37 @@ pub const kvp = struct {
     }
 };
 
+/// One makepkg execution step of a PKGBUILD: a well-known function
+/// (prepare, pkgver, build, check, package/package_<name>) and its body.
+pub const execution_step = struct {
+    name: []const u8,
+    /// The function body exactly as written in the PKGBUILD.
+    body: []const u8,
+    /// `body` with every statically knowable variable expanded: PKGBUILD
+    /// assignments plus the makepkg built-ins that are known at parse time
+    /// (pkgbase, startdir, srcdir, pkgdir). References only the shell can
+    /// resolve (command substitutions, loop variables, unknown names) are
+    /// left untouched for the shell, and single-quoted, backslash-escaped,
+    /// and quoted-heredoc regions are preserved verbatim to match bash
+    /// expansion rules.
+    expanded_body: []const u8,
+
+    pub fn deinit(self: execution_step, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.body);
+        allocator.free(self.expanded_body);
+    }
+};
+
+/// A contiguous slice of a shell snippet tagged with whether bash performs
+/// parameter expansion inside it (everything except single-quoted runs and
+/// backslash-escaped pairs).
+const shell_segment = struct {
+    start: usize,
+    end: usize,
+    expandable: bool,
+};
+
 pub const PkgbuildParser = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -183,7 +219,7 @@ pub const PkgbuildParser = struct {
         package_scoped: bool,
     };
 
-    pub fn parser(self: PkgbuildParser, path: []const u8) !pkgbuild_info {
+    pub fn parser(self: PkgbuildParser, path: []const u8) !Pkgbuild {
         const content = try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .unlimited);
         defer self.allocator.free(content);
 
@@ -191,7 +227,7 @@ pub const PkgbuildParser = struct {
         return self.parser_content(content, base_dir);
     }
 
-    pub fn parser_content(self: PkgbuildParser, content: []const u8, base_dir: ?[]const u8) !pkgbuild_info {
+    pub fn parser_content(self: PkgbuildParser, content: []const u8, base_dir: ?[]const u8) !Pkgbuild {
         var vars = try self.build_var_hashmap(content);
         errdefer {
             var iterator = vars.iterator();
@@ -223,7 +259,7 @@ pub const PkgbuildParser = struct {
         const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
         const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
 
-        return pkgbuild_info{
+        return Pkgbuild{
             .variables = vars,
             .pkg_name = try resolve_or_parse(self, content, "pkgname", &vars),
             .pkg_version = try resolve_or_parse(self, content, "pkgver", &vars),
@@ -251,7 +287,157 @@ pub const PkgbuildParser = struct {
             .parsed_depends = try self.parse_dependencies(depends),
             .parsed_make_depends = try self.parse_dependencies(make_depends),
             .parsed_check_depends = try self.parse_dependencies(check_depends),
+            .execution_steps = try self.resolve_execution_steps(content, &vars, base_dir),
         };
+    }
+
+    /// PKGBUILD functions in the order makepkg executes them.
+    const execution_step_functions = [_][]const u8{ "prepare", "pkgver", "build", "check", "package" };
+
+    fn resolve_execution_steps(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+        base_dir: ?[]const u8,
+    ) !?[]execution_step {
+        var steps: std.ArrayList(execution_step) = .empty;
+        errdefer {
+            for (steps.items) |step| step.deinit(self.allocator);
+            steps.deinit(self.allocator);
+        }
+
+        var step_vars = try self.build_step_env(content, vars, base_dir);
+        defer {
+            var step_var_it = step_vars.iterator();
+            while (step_var_it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            step_vars.deinit();
+        }
+
+        for (execution_step_functions) |function_name| {
+            // For split packages the packaging step is the package-scoped
+            // function; fall back to the shared package() when absent.
+            if (std.mem.eql(u8, function_name, "package")) {
+                if (self.selected_package_name) |package_name| {
+                    const scoped_name = try std.fmt.allocPrint(
+                        self.allocator,
+                        "package_{s}",
+                        .{package_name},
+                    );
+                    defer self.allocator.free(scoped_name);
+
+                    if (try extract_function_body(content, scoped_name)) |body| {
+                        try self.append_execution_step(&steps, scoped_name, body, &step_vars);
+                        continue;
+                    }
+                }
+            }
+
+            const body = try extract_function_body(content, function_name) orelse continue;
+            try self.append_execution_step(&steps, function_name, body, &step_vars);
+        }
+
+        if (steps.items.len == 0) {
+            steps.deinit(self.allocator);
+            return null;
+        }
+        return try steps.toOwnedSlice(self.allocator);
+    }
+
+    fn append_execution_step(
+        self: PkgbuildParser,
+        steps: *std.ArrayList(execution_step),
+        name: []const u8,
+        body: []const u8,
+        vars: *std.StringHashMap([]const u8),
+    ) !void {
+        const name_owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_owned);
+        const body_owned = try self.allocator.dupe(u8, body);
+        errdefer self.allocator.free(body_owned);
+        const expanded_owned = try self.resolve_step_string(body, vars);
+        errdefer self.allocator.free(expanded_owned);
+        try steps.append(self.allocator, .{
+            .name = name_owned,
+            .body = body_owned,
+            .expanded_body = expanded_owned,
+        });
+    }
+
+    /// Builds the variable environment visible to makepkg execution steps:
+    /// the PKGBUILD's own assignments (already fixpoint-resolved by
+    /// build_var_hashmap) plus the makepkg built-ins that are statically
+    /// knowable at parse time. The returned map owns all keys and values;
+    /// the caller must free them.
+    fn build_step_env(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *const std.StringHashMap([]const u8),
+        base_dir: ?[]const u8,
+    ) !std.StringHashMap([]const u8) {
+        var env = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer {
+            var it = env.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            env.deinit();
+        }
+
+        var var_it = vars.iterator();
+        while (var_it.next()) |entry| {
+            try self.put_env_entry(&env, entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        // makepkg defaults pkgbase to the first pkgname element when unset.
+        if (!env.contains("pkgbase")) {
+            const names = try self.parse_array(content, "pkgname");
+            defer {
+                for (names) |item| self.allocator.free(item);
+                self.allocator.free(names);
+            }
+            const fallback = if (names.len > 0) names[0] else env.get("pkgname");
+            if (fallback) |value| try self.put_env_entry(&env, "pkgbase", value);
+        }
+
+        if (base_dir) |dir| {
+            try self.put_env_entry(&env, "startdir", dir);
+
+            const srcdir = try std.fs.path.join(self.allocator, &.{ dir, "src" });
+            defer self.allocator.free(srcdir);
+            try self.put_env_entry(&env, "srcdir", srcdir);
+
+            const pkgname = env.get("pkgname") orelse "";
+            const pkgdir = if (pkgname.len > 0)
+                try std.fs.path.join(self.allocator, &.{ dir, "pkg", pkgname })
+            else
+                try std.fs.path.join(self.allocator, &.{ dir, "pkg" });
+            defer self.allocator.free(pkgdir);
+            try self.put_env_entry(&env, "pkgdir", pkgdir);
+        }
+
+        return env;
+    }
+
+    fn put_env_entry(
+        self: PkgbuildParser,
+        env: *std.StringHashMap([]const u8),
+        key: []const u8,
+        value: []const u8,
+    ) !void {
+        const key_owned = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(key_owned);
+        const value_owned = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(value_owned);
+
+        if (env.fetchRemove(key_owned)) |old| {
+            self.allocator.free(old.key);
+            self.allocator.free(old.value);
+        }
+        try env.put(key_owned, value_owned);
     }
 
     fn selected_package_body(self: PkgbuildParser, content: []const u8) !?[]const u8 {
@@ -516,6 +702,56 @@ pub const PkgbuildParser = struct {
         return self.replace_plain_var(step5, vars);
     }
 
+    /// Resolves statically knowable variables in an execution step body.
+    ///
+    /// Unlike resolve_string this never destroys information the shell
+    /// still needs: command substitutions are preserved (the shell runs
+    /// them at execution time) and unknown references stay literal for
+    /// runtime expansion. Bash quoting rules are honored — single-quoted
+    /// and backslash-escaped regions pass through untouched, and heredoc
+    /// bodies follow bash semantics: quoted-delimiter bodies (<<'EOF')
+    /// stay verbatim while unquoted ones (<<EOF) expand.
+    fn resolve_step_string(self: PkgbuildParser, input: []const u8, vars: *std.StringHashMap([]const u8)) ![]const u8 {
+        const segments = try self.split_shell_segments(input);
+        defer self.allocator.free(segments);
+
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+
+        for (segments) |segment| {
+            if (segment.expandable) {
+                const expanded = try self.resolve_step_segment(input[segment.start..segment.end], vars);
+                defer self.allocator.free(expanded);
+                try out.appendSlice(self.allocator, expanded);
+            } else {
+                try out.appendSlice(self.allocator, input[segment.start..segment.end]);
+            }
+        }
+
+        return out.toOwnedSlice(self.allocator);
+    }
+
+    /// The resolve_string pipeline adapted for step bodies: command
+    /// substitutions are kept instead of stripped.
+    fn resolve_step_segment(self: PkgbuildParser, input: []const u8, vars: *std.StringHashMap([]const u8)) ![]const u8 {
+        const step1 = try self.replace_arithmetic(input, vars);
+        defer self.allocator.free(step1);
+
+        const step2 = try self.replace_command_keep(step1);
+        defer self.allocator.free(step2);
+
+        const step3 = try self.replace_trim_expansion(step2, vars);
+        defer self.allocator.free(step3);
+
+        const step4 = try self.replace_replacement_expansion(step3, vars);
+        defer self.allocator.free(step4);
+
+        const step5 = try self.replace_substring_expansion(step4, vars);
+        defer self.allocator.free(step5);
+
+        return self.replace_plain_var(step5, vars);
+    }
+
     fn replace_replacement_expansion(self: PkgbuildParser, input: []const u8, vars: *const std.StringHashMap([]const u8)) ![]const u8 {
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(self.allocator);
@@ -722,6 +958,271 @@ pub const PkgbuildParser = struct {
         }
 
         return result.toOwnedSlice(self.allocator);
+    }
+
+    /// Preserves $(...) command substitutions instead of stripping them so
+    /// the shell can evaluate them at execution time. Nested parentheses
+    /// are balanced so substitutions like $(foo $(bar)) are kept whole.
+    fn replace_command_keep(self: PkgbuildParser, input: []const u8) ![]const u8 {
+        var result: std.ArrayList(u8) = .empty;
+        defer result.deinit(self.allocator);
+
+        var pos: usize = 0;
+        while (pos < input.len) {
+            const open = std.mem.indexOfPos(u8, input, pos, "$(") orelse {
+                try result.appendSlice(self.allocator, input[pos..]);
+                break;
+            };
+            try result.appendSlice(self.allocator, input[pos..open]);
+
+            const start = open + 2;
+            if (start < input.len and input[start] == '(') {
+                // $(( ... )) is arithmetic expansion, handled by an earlier
+                // pipeline stage; pass it through untouched.
+                try result.appendSlice(self.allocator, input[open..start]);
+                pos = start;
+                continue;
+            }
+
+            const close = find_command_substitution_close(input, start) orelse {
+                try result.appendSlice(self.allocator, input[open..]);
+                pos = input.len;
+                break;
+            };
+
+            try result.appendSlice(self.allocator, input[open .. close + 1]);
+            pos = close + 1;
+        }
+
+        return result.toOwnedSlice(self.allocator);
+    }
+
+    fn find_command_substitution_close(input: []const u8, start: usize) ?usize {
+        var depth: usize = 1;
+        var i: usize = start;
+        while (i < input.len) : (i += 1) {
+            switch (input[i]) {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if (depth == 0) return i;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    /// A heredoc opened on a command line. Its body starts on the next
+    /// line and runs up to (and including) the delimiter line.
+    const heredoc_declaration = struct {
+        delimiter: []const u8, // owned
+        expandable: bool, // bash expands bodies only when the delimiter is unquoted
+        strip_tabs: bool, // <<- tolerates leading tabs before the delimiter
+        end: usize, // index just past the delimiter token
+    };
+
+    /// Splits a shell snippet into contiguous slices tagged with whether
+    /// bash performs parameter expansion inside them. Single-quoted runs
+    /// and backslash-escaped pairs are not expandable; everything else
+    /// (including double-quoted and backtick runs) is. Heredoc bodies are
+    /// emitted as one atomic slice each — non-expandable when the
+    /// delimiter is quoted (<<'EOF'), expandable otherwise (<<EOF) — so
+    /// their contents can never disturb quote tracking of later lines.
+    fn split_shell_segments(self: PkgbuildParser, input: []const u8) ![]shell_segment {
+        var segments: std.ArrayList(shell_segment) = .empty;
+        errdefer segments.deinit(self.allocator);
+
+        var pending: std.ArrayList(heredoc_declaration) = .empty;
+        defer {
+            for (pending.items) |declaration| self.allocator.free(declaration.delimiter);
+            pending.deinit(self.allocator);
+        }
+
+        var seg_start: usize = 0;
+        var in_single = false;
+        var in_double = false;
+        var i: usize = 0;
+
+        while (i < input.len) {
+            const c = input[i];
+
+            if (in_single) {
+                i += 1;
+                if (c == '\'') {
+                    try segments.append(self.allocator, .{ .start = seg_start, .end = i, .expandable = false });
+                    seg_start = i;
+                    in_single = false;
+                }
+                continue;
+            }
+
+            // Heredoc bodies declared on this line start on the next one.
+            if (c == '\n' and !in_double and pending.items.len > 0) {
+                if (i + 1 > seg_start) {
+                    try segments.append(self.allocator, .{ .start = seg_start, .end = i + 1, .expandable = true });
+                }
+                i += 1;
+                seg_start = i;
+
+                while (pending.items.len > 0) {
+                    const declaration = pending.orderedRemove(0);
+                    defer self.allocator.free(declaration.delimiter);
+
+                    var cursor = i;
+                    var body_end = input.len;
+                    while (cursor < input.len) {
+                        const line_end = std.mem.indexOfScalarPos(u8, input, cursor, '\n') orelse input.len;
+                        var line = input[cursor..line_end];
+                        if (declaration.strip_tabs) line = std.mem.trimStart(u8, line, "\t");
+                        line = std.mem.trimEnd(u8, line, "\r");
+                        if (std.mem.eql(u8, line, declaration.delimiter)) {
+                            body_end = if (line_end < input.len) line_end + 1 else line_end;
+                            break;
+                        }
+                        if (line_end == input.len) break;
+                        cursor = line_end + 1;
+                    }
+
+                    try segments.append(self.allocator, .{ .start = i, .end = body_end, .expandable = declaration.expandable });
+                    i = body_end;
+                    seg_start = i;
+                    if (i >= input.len) break;
+                }
+                continue;
+            }
+
+            if (c == '\\' and i + 1 < input.len) {
+                const target = input[i + 1];
+                // Inside double quotes a backslash is only special before
+                // $, `, " or another backslash.
+                const special = !in_double or std.mem.indexOfScalar(u8, "$`\"\\", target) != null;
+                if (special) {
+                    if (i > seg_start) {
+                        try segments.append(self.allocator, .{ .start = seg_start, .end = i, .expandable = true });
+                    }
+                    try segments.append(self.allocator, .{ .start = i, .end = i + 2, .expandable = false });
+                    i += 2;
+                    seg_start = i;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if (c == '\'' and !in_double) {
+                if (i > seg_start) {
+                    try segments.append(self.allocator, .{ .start = seg_start, .end = i, .expandable = true });
+                }
+                seg_start = i;
+                in_single = true;
+                i += 1;
+                continue;
+            }
+
+            if (c == '"' or c == '`') {
+                in_double = !in_double;
+                i += 1;
+                continue;
+            }
+
+            // Skip arithmetic expansions whole so a << shift inside them
+            // is not mistaken for a heredoc introducer.
+            if (c == '$' and i + 2 < input.len and input[i + 1] == '(' and input[i + 2] == '(') {
+                const close = std.mem.indexOfPos(u8, input, i + 3, "))") orelse {
+                    i += 1;
+                    continue;
+                };
+                i = close + 2;
+                continue;
+            }
+
+            if (c == '<' and !in_double and i + 1 < input.len and input[i + 1] == '<' and
+                (i + 2 >= input.len or input[i + 2] != '<'))
+            {
+                if (try self.parse_heredoc_declaration(input, i + 2)) |declaration| {
+                    errdefer self.allocator.free(declaration.delimiter);
+                    try pending.append(self.allocator, declaration);
+                    i = declaration.end;
+                    continue;
+                }
+            }
+
+            i += 1;
+        }
+
+        if (seg_start < input.len) {
+            try segments.append(self.allocator, .{ .start = seg_start, .end = input.len, .expandable = !in_single });
+        }
+
+        return segments.toOwnedSlice(self.allocator);
+    }
+
+    /// Parses the delimiter of a heredoc introducer starting right after
+    /// the `<<`. Any quoting in the delimiter (<<'EOF', <<"EOF", <<\EOF)
+    /// marks the body as non-expanding, mirroring bash. Returns null when
+    /// no delimiter token follows the introducer.
+    fn parse_heredoc_declaration(self: PkgbuildParser, input: []const u8, start: usize) !?heredoc_declaration {
+        var j = start;
+        var strip_tabs = false;
+        if (j < input.len and input[j] == '-') {
+            strip_tabs = true;
+            j += 1;
+        }
+        while (j < input.len and (input[j] == ' ' or input[j] == '\t')) j += 1;
+
+        var delim: std.ArrayList(u8) = .empty;
+        errdefer delim.deinit(self.allocator);
+
+        var quoted = false;
+        var quote_char: u8 = 0;
+        var k = j;
+        while (k < input.len) {
+            const ch = input[k];
+            if (quote_char != 0) {
+                if (ch == quote_char) {
+                    quote_char = 0;
+                } else {
+                    try delim.append(self.allocator, ch);
+                }
+                k += 1;
+                continue;
+            }
+            if (ch == '\'' or ch == '"') {
+                quoted = true;
+                quote_char = ch;
+                k += 1;
+                continue;
+            }
+            if (ch == '\\' and k + 1 < input.len) {
+                quoted = true;
+                try delim.append(self.allocator, input[k + 1]);
+                k += 2;
+                continue;
+            }
+            if (!is_heredoc_delimiter_char(ch)) break;
+            try delim.append(self.allocator, ch);
+            k += 1;
+        }
+
+        if (delim.items.len == 0) {
+            delim.deinit(self.allocator);
+            return null;
+        }
+
+        return heredoc_declaration{
+            .delimiter = try delim.toOwnedSlice(self.allocator),
+            .expandable = !quoted,
+            .strip_tabs = strip_tabs,
+            .end = k,
+        };
+    }
+
+    fn is_heredoc_delimiter_char(ch: u8) bool {
+        return switch (ch) {
+            ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '<', '>', '#', '$', '`' => false,
+            else => true,
+        };
     }
 
     fn replace_arithmetic(self: PkgbuildParser, input: []const u8, vars: *std.StringHashMap([]const u8)) ![]const u8 {
@@ -5293,6 +5794,7 @@ test "parser_content: empty content produces empty arrays and null scalars" {
     try std.testing.expect(info.pkg_name == null);
     try std.testing.expectEqual(@as(usize, 0), info.depends.?.len);
     try std.testing.expectEqual(@as(usize, 0), info.source.?.len);
+    try std.testing.expect(info.execution_steps == null);
 }
 
 test "parser: reads PKGBUILD from disk and resolves relative base_dir" {
@@ -5367,6 +5869,18 @@ test "parser: full PKGBUILD exercises the whole pipeline" {
         \\sha256sums=('abc123'
         \\            'SKIP')
         \\install=myapp.install
+        \\
+        \\prepare() {
+        \\  patch -p1 < fix.patch
+        \\}
+        \\
+        \\build() {
+        \\  make
+        \\}
+        \\
+        \\package() {
+        \\  make DESTDIR="$pkgdir" install
+        \\}
         ,
     });
 
@@ -5464,4 +5978,487 @@ test "parser: full PKGBUILD exercises the whole pipeline" {
     // $pkgname inside the install file body is NOT substituted (matches C# behavior:
     // ResolvePostInstall/ExtractFunctionBody never runs variable resolution on file content).
     try std.testing.expectEqualStrings("echo \"Enjoy $pkgname!\"", info.post_install.?);
+
+    // --- execution steps: functions captured in makepkg execution order ---
+    try std.testing.expectEqual(@as(usize, 3), info.execution_steps.?.len);
+    try std.testing.expectEqualStrings("prepare", info.execution_steps.?[0].name);
+    try std.testing.expectEqualStrings("patch -p1 < fix.patch", info.execution_steps.?[0].body);
+    try std.testing.expectEqualStrings("build", info.execution_steps.?[1].name);
+    try std.testing.expectEqualStrings("make", info.execution_steps.?[1].body);
+    try std.testing.expectEqualStrings("package", info.execution_steps.?[2].name);
+    try std.testing.expectEqualStrings("make DESTDIR=\"$pkgdir\" install", info.execution_steps.?[2].body);
+}
+
+test "parser_content: execution steps follow makepkg execution order" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    // Functions declared in scrambled order on purpose: the stored steps must
+    // follow makepkg's execution order (prepare, pkgver, build, check, package),
+    // not the declaration order.
+    const content =
+        \\pkgname=demo
+        \\
+        \\package() {
+        \\  make install
+        \\}
+        \\
+        \\check() {
+        \\  make test
+        \\}
+        \\
+        \\pkgver() {
+        \\  git describe --long
+        \\}
+        \\
+        \\prepare() {
+        \\  patch -p1 < fix.patch
+        \\}
+        \\
+        \\build() {
+        \\  make
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 5), steps.len);
+
+    try std.testing.expectEqualStrings("prepare", steps[0].name);
+    try std.testing.expectEqualStrings("patch -p1 < fix.patch", steps[0].body);
+
+    try std.testing.expectEqualStrings("pkgver", steps[1].name);
+    try std.testing.expectEqualStrings("git describe --long", steps[1].body);
+
+    try std.testing.expectEqualStrings("build", steps[2].name);
+    try std.testing.expectEqualStrings("make", steps[2].body);
+
+    try std.testing.expectEqualStrings("check", steps[3].name);
+    try std.testing.expectEqualStrings("make test", steps[3].body);
+
+    try std.testing.expectEqualStrings("package", steps[4].name);
+    try std.testing.expectEqualStrings("make install", steps[4].body);
+}
+
+test "parser_content: execution steps skip functions the PKGBUILD does not define" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\
+        \\build() {
+        \\  cargo build --release
+        \\}
+        \\
+        \\package() {
+        \\  install -Dm755 target/demo "$pkgdir/usr/bin/demo"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 2), steps.len);
+    try std.testing.expectEqualStrings("build", steps[0].name);
+    try std.testing.expectEqualStrings("cargo build --release", steps[0].body);
+    try std.testing.expectEqualStrings("package", steps[1].name);
+    try std.testing.expectEqualStrings("install -Dm755 target/demo \"$pkgdir/usr/bin/demo\"", steps[1].body);
+}
+
+test "parser_content: execution steps is null when no known functions are defined" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\
+        \\helper() {
+        \\  echo "not an execution step"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expect(info.execution_steps == null);
+}
+
+test "parser_content: execution steps resolve package-scoped function for selected split package" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-two",
+    };
+    const content =
+        \\pkgname=('demo-one' 'demo-two')
+        \\
+        \\build() {
+        \\  make
+        \\}
+        \\
+        \\package_demo-one() {
+        \\  make install-one
+        \\}
+        \\
+        \\package_demo-two() {
+        \\  make install-two
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 2), steps.len);
+    try std.testing.expectEqualStrings("build", steps[0].name);
+    try std.testing.expectEqualStrings("make", steps[0].body);
+    try std.testing.expectEqualStrings("package_demo-two", steps[1].name);
+    try std.testing.expectEqualStrings("make install-two", steps[1].body);
+}
+
+test "parser_content: execution steps fall back to package() when package-scoped function is missing" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo",
+    };
+    const content =
+        \\pkgname=('demo')
+        \\
+        \\package() {
+        \\  make install
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings("package", steps[0].name);
+    try std.testing.expectEqualStrings("make install", steps[0].body);
+}
+
+test "parser_content: execution step bodies preserve nested blocks" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\
+        \\check() {
+        \\  if [ "$CARCH" = "x86_64" ]; then
+        \\    make test
+        \\  fi
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings("check", steps[0].name);
+    // The body is preserved verbatim; only surrounding whitespace is trimmed.
+    try std.testing.expectEqualStrings(
+        \\if [ "$CARCH" = "x86_64" ]; then
+        \\    make test
+        \\  fi
+    , steps[0].body);
+}
+
+test "parser_content: execution step expanded bodies resolve PKGBUILD and makepkg variables" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello
+        \\pkgver=1.2.3
+        \\pkgrel=2
+        \\_commit=abc1234
+        \\
+        \\prepare() {
+        \\  git checkout "$_commit"
+        \\}
+        \\
+        \\build() {
+        \\  cd "$srcdir/$pkgname-$pkgver"
+        \\  make
+        \\}
+        \\
+        \\package() {
+        \\  make DESTDIR="$pkgdir" install
+        \\  install -Dm644 README "$pkgdir/usr/share/doc/$pkgname/README"
+        \\}
+    ;
+    var info = try parser.parser_content(content, "/build/hello");
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 3), steps.len);
+
+    // raw bodies are preserved for review
+    try std.testing.expectEqualStrings("git checkout \"$_commit\"", steps[0].body);
+    try std.testing.expectEqualStrings("cd \"$srcdir/$pkgname-$pkgver\"\n  make", steps[1].body);
+
+    try std.testing.expectEqualStrings("git checkout \"abc1234\"", steps[0].expanded_body);
+    try std.testing.expectEqualStrings(
+        \\cd "/build/hello/src/hello-1.2.3"
+        \\  make
+    , steps[1].expanded_body);
+    try std.testing.expectEqualStrings(
+        \\make DESTDIR="/build/hello/pkg/hello" install
+        \\  install -Dm644 README "/build/hello/pkg/hello/usr/share/doc/hello/README"
+    , steps[2].expanded_body);
+}
+
+test "parser_content: execution step expansion respects single quotes and escapes" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello
+        \\pkgver=1.2.3
+        \\
+        \\package() {
+        \\  echo '$pkgname is not expanded'
+        \\  echo "$pkgname is expanded"
+        \\  echo \$pkgname stays literal
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings(
+        \\echo '$pkgname is not expanded'
+        \\  echo "hello is expanded"
+        \\  echo \$pkgname stays literal
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion keeps runtime syntax for the shell" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello
+        \\
+        \\build() {
+        \\  cd "$pkgname-$(pkgver)"
+        \\  for f in *.patch; do patch -p1 < "$f"; done
+        \\  test $? -eq 0 && echo ${UNSET_VAR:-ok} $$
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings(
+        \\cd "hello-$(pkgver)"
+        \\  for f in *.patch; do patch -p1 < "$f"; done
+        \\  test $? -eq 0 && echo ${UNSET_VAR:-ok} $$
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion leaves directory variables literal without base_dir" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello
+        \\pkgver=1.0
+        \\
+        \\package() {
+        \\  install -Dm755 hello "$pkgdir/usr/bin/hello"
+        \\  cd "$srcdir/$pkgname-$pkgver"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings(
+        \\install -Dm755 hello "$pkgdir/usr/bin/hello"
+        \\  cd "$srcdir/hello-1.0"
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion uses selected split package for pkgname and pkgdir" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-two",
+    };
+    const content =
+        \\pkgname=('demo-one' 'demo-two')
+        \\pkgver=2.0
+        \\
+        \\package_demo-two() {
+        \\  echo "$pkgbase $pkgname"
+        \\  install -Dm644 license "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+        \\}
+    ;
+    var info = try parser.parser_content(content, "/build/demo");
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings("package_demo-two", steps[0].name);
+    try std.testing.expectEqualStrings(
+        \\echo "demo-one demo-two"
+        \\  install -Dm644 license "/build/demo/pkg/demo-two/usr/share/licenses/demo-two/LICENSE"
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion applies parameter expansion operators" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello-world
+        \\pkgver=1.2.3
+        \\pkgrel=2
+        \\_archive=hello-world-1.2.3.tar.gz
+        \\
+        \\build() {
+        \\  tar xf ${_archive%%.tar.gz}.tar.xz
+        \\  dir=${pkgname##*-}
+        \\  short=${pkgver:0:3}
+        \\  fixed=${pkgname//-/_}
+        \\  rel=$((pkgrel + 1))
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings(
+        \\tar xf hello-world-1.2.3.tar.xz
+        \\  dir=world
+        \\  short=1.2
+        \\  fixed=hello_world
+        \\  rel=3
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion keeps quoted heredoc bodies literal" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello
+        \\
+        \\package() {
+        \\  cat <<'EOF' | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/hello.desktop"
+        \\[Desktop Entry]
+        \\Name=$pkgname stays literal
+        \\Comment=don't let apostrophes break expansion
+        \\EOF
+        \\  echo "$pkgname"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    // The quoted body survives verbatim (including $pkgname), while code
+    // before and after it still expands — proving quote tracking did not
+    // leak out of the heredoc body.
+    try std.testing.expectEqualStrings(
+        \\cat <<'EOF' | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/hello.desktop"
+        \\[Desktop Entry]
+        \\Name=$pkgname stays literal
+        \\Comment=don't let apostrophes break expansion
+        \\EOF
+        \\  echo "hello"
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion expands unquoted heredoc bodies" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello
+        \\pkgver=1.0
+        \\
+        \\package() {
+        \\  cat > "$pkgdir/hello.txt" << EOF
+        \\Name=$pkgname
+        \\Version=$pkgver
+        \\Note=quotes do not protect ' inside heredoc bodies
+        \\EOF
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings(
+        \\cat > "$pkgdir/hello.txt" << EOF
+        \\Name=hello
+        \\Version=1.0
+        \\Note=quotes do not protect ' inside heredoc bodies
+        \\EOF
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion shields nested heredocs inside quoted bodies" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    // Mirrors the Shelly PKGBUILD: a quoted <<'SCRIPT' body that is itself
+    // a bash script containing variables, apostrophes and a nested heredoc.
+    const content =
+        \\pkgname=shelly
+        \\
+        \\package() {
+        \\  cat <<'SCRIPT' | install -Dm755 /dev/stdin "$pkgdir/usr/bin/tool"
+        \\#!/bin/bash
+        \\# don't break on apostrophes
+        \\dest="$HOME/.local/share"
+        \\filename=app.desktop
+        \\app_id="${filename%.desktop}"
+        \\cat >> "$dest" << EOF
+        \\Name=$pkgname
+        \\EOF
+        \\SCRIPT
+        \\  install -Dm644 README "$pkgdir/README"
+        \\}
+    ;
+    var info = try parser.parser_content(content, "/build/shelly");
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings(
+        \\cat <<'SCRIPT' | install -Dm755 /dev/stdin "/build/shelly/pkg/shelly/usr/bin/tool"
+        \\#!/bin/bash
+        \\# don't break on apostrophes
+        \\dest="$HOME/.local/share"
+        \\filename=app.desktop
+        \\app_id="${filename%.desktop}"
+        \\cat >> "$dest" << EOF
+        \\Name=$pkgname
+        \\EOF
+        \\SCRIPT
+        \\  install -Dm644 README "/build/shelly/pkg/shelly/README"
+    , steps[0].expanded_body);
+}
+
+test "parser_content: execution step expansion matches tab-indented heredoc terminators" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content = "pkgname=hello\n\npackage() {\n  cat <<-EOF\n\tbody line $pkgname\n\tEOF\n  echo done\n}";
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    try std.testing.expectEqualStrings(
+        "cat <<-EOF\n\tbody line hello\n\tEOF\n  echo done",
+        steps[0].expanded_body,
+    );
+}
+
+test "parser_content: execution step expansion does not mistake arithmetic shifts for heredocs" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=hello
+        \\
+        \\build() {
+        \\  echo $((1 << 4))
+        \\  echo "$pkgname"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    const steps = info.execution_steps.?;
+    try std.testing.expectEqual(@as(usize, 1), steps.len);
+    // The shift never opens a heredoc: the following line still expands.
+    try std.testing.expectEqualStrings(
+        \\echo 1
+        \\  echo "hello"
+    , steps[0].expanded_body);
 }
