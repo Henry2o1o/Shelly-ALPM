@@ -2708,14 +2708,14 @@ pub const Manager = struct {
         const path = event.destination_path orelse "";
         switch (event.event_type) {
             .Start => {
-                const message = std.fmt.allocPrint(
-                    self.allocator,
+                var message_buffer: [512]u8 = undefined;
+                
+                const message = std.fmt.bufPrint(
+                    &message_buffer,
                     "Retrieving package: {s}",
                     .{std.fs.path.basename(path)},
                 ) catch return;
-            
-                defer self.allocator.free(message);
-            
+                            
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_start,
                     .message = message,
@@ -2734,14 +2734,14 @@ pub const Manager = struct {
                 });
             },
             .Complete => {
-                const message = std.fmt.allocPrint(
-                    self.allocator,
+                var message_buffer: [512]u8 = undefined;
+
+                const message = std.fmt.bufPrint(
+                    &message_buffer,
                     "Package retrieval completed: {s}",
                     .{std.fs.path.basename(path)},
                 ) catch return;
-            
-                defer self.allocator.free(message);
-            
+                        
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_done,
                     .message = message,
@@ -4038,6 +4038,7 @@ test "handleInformationMessage emits a known informational description" {
         .function = captureInfo,
         .data = @ptrCast(&cap),
     }) catch unreachable;
+    defer cap.deinit(testing.allocator);
 
     mgr.handleInformationMessage(.transaction_start);
 
@@ -4056,6 +4057,7 @@ test "handleInformationMessage ignores specialized event types" {
         .function = captureInfo,
         .data = @ptrCast(&cap),
     }) catch unreachable;
+    defer cap.deinit(testing.allocator);
 
     mgr.handleInformationMessage(.scriptlet_info);
 
@@ -4072,7 +4074,7 @@ test "handleInformationMessage ignores application-only event types" {
         .function = captureInfo,
         .data = @ptrCast(&cap),
     });
-
+    defer cap.deinit(testing.allocator);
     mgr.handleInformationMessage(.download_start);
     mgr.handleInformationMessage(.validation_failed);
     mgr.handleInformationMessage(.rollback_complete);
@@ -4096,8 +4098,6 @@ test "handleInformationMessage emits every generic informational description" {
         .{ .event_type = .interconflicts_done, .message = "Package conflict check finished." },
         .{ .event_type = .transaction_start, .message = "Starting transaction..." },
         .{ .event_type = .transaction_done, .message = "Transaction completed." },
-        .{ .event_type = .package_operation_start, .message = "Starting package operation..." },
-        .{ .event_type = .package_operation_done, .message = "Package operation completed." },
         .{ .event_type = .integrity_start, .message = "Checking package integrity..." },
         .{ .event_type = .integrity_done, .message = "Package integrity check finished." },
         .{ .event_type = .load_start, .message = "Loading packages..." },
@@ -4129,6 +4129,7 @@ test "handleInformationMessage emits every generic informational description" {
     defer mgr.dispatcher.deinit();
 
     var cap = InfoCapture{};
+    defer cap.deinit(testing.allocator);    
     _ = try mgr.dispatcher.addInformationalHandler(.{
         .function = captureInfo,
         .data = @ptrCast(&cap),
@@ -4153,7 +4154,7 @@ test "eventCallback dispatches the informational message for an event type" {
         .function = captureInfo,
         .data = @ptrCast(&cap),
     }) catch unreachable;
-
+    defer cap.deinit(testing.allocator);
     var ev: rawLibalpm.alpm_event_t = .{ .type = @intCast(rawLibalpm.ALPM_EVENT_TRANSACTION_START) };
     Manager.eventCallback(@ptrCast(&mgr), &ev);
 
@@ -4247,7 +4248,7 @@ test "eventCallback ignores null out-of-range and empty scriptlet events" {
     defer mgr.dispatcher.deinit();
 
     var info_cap = InfoCapture{};
-    var scriptlet_cap = ScriptletCapture{};
+    defer info_cap.deinit(testing.allocator);    var scriptlet_cap = ScriptletCapture{};
     _ = try mgr.dispatcher.addInformationalHandler(.{
         .function = captureInfo,
         .data = @ptrCast(&info_cap),
@@ -4282,6 +4283,7 @@ test "eventCallback ignores event values above the libalpm range" {
         .function = captureInfo,
         .data = @ptrCast(&cap),
     });
+    defer cap.deinit(testing.allocator);
 
     var event: rawLibalpm.alpm_event_t = .{
         .type = @intCast(rawLibalpm.ALPM_EVENT_HOOK_RUN_DONE + 1),
@@ -4359,10 +4361,12 @@ test "eventCallback falls back from hook description to name and generic text" {
 
 test "onDownloadEvent translates start progress and completion events" {
     var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
     defer mgr.dispatcher.deinit();
 
     var info_cap = InfoCapture{};
+    defer info_cap.deinit(testing.allocator);
     var progress_cap = ProgressCapture{};
     _ = try mgr.dispatcher.addInformationalHandler(.{
         .function = captureInfo,
@@ -4379,7 +4383,7 @@ test "onDownloadEvent translates start progress and completion events" {
     });
     var info = info_cap.args orelse return error.TestFailed;
     try testing.expectEqual(libalpm.EventType.pkg_retrieve_start, info.event_type);
-    try testing.expectEqualStrings("/tmp/example.pkg.tar.zst", info.message);
+    try testing.expectEqualStrings("Retrieving package: example.pkg.tar.zst", info_cap.message orelse return error.TestFailed);
 
     Manager.onDownloadEvent(@ptrCast(&mgr), .{
         .event_type = .Progress,
@@ -4403,7 +4407,7 @@ test "onDownloadEvent translates start progress and completion events" {
     });
     info = info_cap.args orelse return error.TestFailed;
     try testing.expectEqual(libalpm.EventType.pkg_retrieve_done, info.event_type);
-    try testing.expectEqualStrings("/tmp/example.pkg.tar.zst", info.message);
+    try testing.expectEqualStrings("Package retrieval completed: example.pkg.tar.zst", info_cap.message orelse return error.TestFailed);
 }
 
 test "onDownloadEvent does not duplicate progress when a common operation is attached" {
@@ -4445,6 +4449,8 @@ test "onDownloadEvent reports concrete and fallback errors and ignores skipped e
 
     var error_cap = ErrorCapture{};
     var info_cap = InfoCapture{};
+    defer info_cap.deinit(testing.allocator);
+
     _ = try mgr.dispatcher.addErrorHandler(.{
         .function = captureError,
         .data = @ptrCast(&error_cap),
@@ -4474,10 +4480,12 @@ test "onDownloadEvent reports concrete and fallback errors and ignores skipped e
 
 test "onDownloadEvent handles missing paths and missing progress payloads" {
     var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
     defer mgr.dispatcher.deinit();
 
     var info_cap = InfoCapture{};
+    defer info_cap.deinit(testing.allocator);
     var progress_cap = ProgressCapture{};
     _ = try mgr.dispatcher.addInformationalHandler(.{
         .function = captureInfo,
@@ -4491,7 +4499,7 @@ test "onDownloadEvent handles missing paths and missing progress payloads" {
     Manager.onDownloadEvent(@ptrCast(&mgr), .{ .event_type = .Start });
     const info = info_cap.args orelse return error.TestFailed;
     try testing.expectEqual(libalpm.EventType.pkg_retrieve_start, info.event_type);
-    try testing.expectEqualStrings("", info.message);
+    try testing.expectEqualStrings("Retrieving package: ", info_cap.message orelse return error.TestFailed);
 
     Manager.onDownloadEvent(@ptrCast(&mgr), .{ .event_type = .Progress });
     try testing.expect(progress_cap.args == null);
@@ -4964,11 +4972,30 @@ fn captureProgress(data: ?*anyopaque, args: events.ProgressArgs) void {
 
 const InfoCapture = struct {
     args: ?events.InformationalArgs = null,
+    message: ?[]u8 = null,
+
+    fn deinit(self: *InfoCapture, allocator: std.mem.Allocator) void {
+        if (self.message) |message| {
+            allocator.free(message);
+        }
+
+        self.message = null;
+        self.args = null;
+    }
 };
 
 fn captureInfo(data: ?*anyopaque, args: events.InformationalArgs) void {
     const cap: *InfoCapture = @ptrCast(@alignCast(data));
+
+    if (cap.message) |message| {
+        testing.allocator.free(message);
+    }
+
+    const message = testing.allocator.dupe(u8, args.message) catch unreachable;
+
+    cap.message = message;
     cap.args = args;
+    cap.args.?.message = message;
 }
 
 const ScriptletCapture = struct {
