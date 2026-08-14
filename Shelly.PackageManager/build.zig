@@ -43,6 +43,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const archive_mod = b.createModule(.{
+        .root_source_file = b.path("src/shared/archive.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    archive_mod.linkSystemLibrary("archive", .{});
 
     // This creates a module, which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
@@ -66,9 +73,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addImport("alpm_c", alpm_c);
+    mod.addImport("archive", archive_mod);
     mod.addImport("operation_context", operation_context_mod);
     mod.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
-    mod.linkSystemLibrary("archive", .{});
 
     // PackageManager imports only the backend's data-only protocol module.
     // The native implementation is discovered with dlopen at runtime and is
@@ -229,8 +236,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    local_test_module.addImport("archive", archive_mod);
     local_test_module.addImport("operation_context", operation_context_mod);
-    local_test_module.linkSystemLibrary("archive", .{});
     const local_tests = b.addTest(.{ .root_module = local_test_module });
     const run_local_tests = b.addRunArtifact(local_tests);
     const local_test_step = b.step("local-test", "Run safe local package tests");
@@ -524,8 +531,20 @@ pub fn build(b: *std.Build) void {
             "VCS package checks execute concurrently and retain per-package results",
             "VCS checks retry and baseline transiently failed sources",
             "helper cache identity recognizes installed split-package members",
+            "prepared non-chroot split package builds use the custom builder",
             "all requested PKGBUILDs are reviewed before the first build",
             "AUR package failures are emitted after all builds and fail the operation",
+            "build-only dependencies are removed after a failed build",
+            "PackageBuilder init keeps the provided collaborators",
+            "PackageBuilder runs execution steps in the configured build directory",
+            "PackageBuilder reports failure when a step exits non-zero",
+            "PackageBuilder reports failure instead of crashing without execution steps",
+            "PackageBuilder builds all requested split members after shared steps run once",
+            "PackageBuilder honors check and overwrite policies",
+            "PackageBuilder cleans work directories only after successful configured builds",
+            "PackageBuilder rolls back completed split artifacts when a later member fails",
+            "PackageBuilder builds a real package from the repository PKGBUILD-bin",
+            "archive writer preserves tree modes and symlinks while forcing root ownership",
             "AUR operation-hooked public APIs compile",
             "build progress parser recognizes makepkg percentage lines",
             "streaming process execution forwards stdout stderr and a final unterminated line",
