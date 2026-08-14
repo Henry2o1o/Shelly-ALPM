@@ -2788,6 +2788,85 @@ pub const Manager = struct {
                 const line = spanC(event.*.scriptlet_info.line) orelse return;
                 if (line.len != 0) self.dispatcher.raiseScriptlet(.{ .line = line });
             },
+            .package_operation_start => {
+                const operation = event.*.package_operation;
+            
+                var message_buffer: [512]u8 = undefined;
+            
+                const message = switch (operation.operation) {
+                    rawLibalpm.ALPM_PACKAGE_INSTALL => blk: {
+                        const pkg = operation.newpkg orelse return;
+                        const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse return;
+                        const version = libalpm.str(rawLibalpm.alpm_pkg_get_version(pkg)) orelse return;
+            
+                        break :blk std.fmt.bufPrint(
+                            &message_buffer,
+                            "Installing package: {s}-{s}",
+                            .{ name, version },
+                        ) catch return;
+                    },
+            
+                    rawLibalpm.ALPM_PACKAGE_UPGRADE => blk: {
+                        const oldpkg = operation.oldpkg orelse return;
+                        const newpkg = operation.newpkg orelse return;
+            
+                        const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(newpkg)) orelse return;
+                        const old_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(oldpkg)) orelse return;
+                        const new_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(newpkg)) orelse return;
+            
+                        break :blk std.fmt.bufPrint(
+                            &message_buffer,
+                            "Upgrading package: {s} {s} -> {s}",
+                            .{ name, old_version, new_version },
+                        ) catch return;
+                    },
+            
+                    rawLibalpm.ALPM_PACKAGE_REINSTALL => blk: {
+                        const pkg = operation.newpkg orelse return;
+                        const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse return;
+                        const version = libalpm.str(rawLibalpm.alpm_pkg_get_version(pkg)) orelse return;
+            
+                        break :blk std.fmt.bufPrint(
+                            &message_buffer,
+                            "Reinstalling package: {s}-{s}",
+                            .{ name, version },
+                        ) catch return;
+                    },
+            
+                    rawLibalpm.ALPM_PACKAGE_DOWNGRADE => blk: {
+                        const oldpkg = operation.oldpkg orelse return;
+                        const newpkg = operation.newpkg orelse return;
+            
+                        const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(newpkg)) orelse return;
+                        const old_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(oldpkg)) orelse return;
+                        const new_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(newpkg)) orelse return;
+            
+                        break :blk std.fmt.bufPrint(
+                            &message_buffer,
+                            "Downgrading package: {s} {s} -> {s}",
+                            .{ name, old_version, new_version },
+                        ) catch return;
+                    },
+            
+                    rawLibalpm.ALPM_PACKAGE_REMOVE => blk: {
+                        const pkg = operation.oldpkg orelse return;
+                        const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse return;
+                        const version = libalpm.str(rawLibalpm.alpm_pkg_get_version(pkg)) orelse return;
+            
+                        break :blk std.fmt.bufPrint(
+                            &message_buffer,
+                            "Removing package: {s}-{s}",
+                            .{ name, version },
+                        ) catch return;
+                    },
+                    else => return
+                };
+            
+                self.dispatcher.raiseInformational(.{
+                    .event_type = event_type,
+                    .message = message,
+                });
+            },
             .hook_run_start => {
                 const hook = event.*.hook_run;
                 const name = spanC(hook.name);
@@ -2842,7 +2921,6 @@ pub const Manager = struct {
             .interconflicts_done => "Package conflict check finished.",
             .transaction_start => "Starting transaction...",
             .transaction_done => "Transaction completed.",
-            .package_operation_start => "Starting package operation...",
             .package_operation_done => "Package operation completed.",
             .integrity_start => "Checking package integrity...",
             .integrity_done => "Package integrity check finished.",
