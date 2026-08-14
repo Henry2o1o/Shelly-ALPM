@@ -25,32 +25,51 @@ pub fn main(init: std.process.Init) void {
         IconDownloadService(std.heap.c_allocator, runtime.io);
     }
 
-    const app = gtk.Application.new("com.shellyorg.shelly", .{});
+    const app = gtk.Application.new("com.shellyorg.shelly", .{
+        .handles_command_line = true,
+    });
     defer app.unref();
     const gapp = gobject.ext.as(gio.Application, app);
 
-    _ = gio.Application.signals.startup.connect(
-        app,
-        ?*anyopaque,
-        &startup,
-        null,
-        .{},
-    );
-    _ = gio.Application.signals.activate.connect(
-        app,
-        ?*anyopaque,
-        &activate,
-        null,
-        .{},
-    );
+    _ = gio.Application.signals.startup.connect(app, ?*anyopaque, &startup, null, .{});
+    _ = gio.Application.signals.activate.connect(app, ?*anyopaque, &activate, null, .{});
+    _ = gio.Application.signals.command_line.connect(app, ?*anyopaque, &commandLine, null, .{});
 
-    const status = gio.Application.run(gapp, 0, null);
+    const argv_vector = init.minimal.args.vector;
+    const status = gio.Application.run(
+        gapp,
+        @intCast(argv_vector.len),
+        @ptrCast(@constCast(argv_vector.ptr)),
+    );
 
     if (did_activate) {
         tryStopTray(runtime.io, std.heap.c_allocator);
     }
     runtime.teardownConfig(std.heap.c_allocator);
     std.process.exit(@intCast(status));
+}
+
+fn commandLine(
+    app: *gtk.Application,
+    cmdline: *gio.ApplicationCommandLine,
+    _: ?*anyopaque,
+) callconv(.c) c_int {
+    var argc: c_int = 0;
+    const argv = gio.ApplicationCommandLine.getArguments(cmdline, &argc);
+    defer glib.strfreev(@ptrCast(argv));
+
+    var i: usize = 1;
+    while (i < @as(usize, @intCast(argc))) : (i += 1) {
+        const arg = std.mem.span(argv[i]);
+
+        if (std.mem.eql(u8, arg, "--tray-updates")) {
+            runtime.pending_navigate_updates = true;
+        }
+    }
+
+    gio.Application.activate(app.as(gio.Application));
+    gio.ApplicationCommandLine.setExitStatus(cmdline, 0);
+    return 0;
 }
 
 fn tryStopTray(io: std.Io, alloc: std.mem.Allocator) void {
@@ -85,6 +104,13 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
 
     if (gtk.Application.getActiveWindow(app)) |window| {
         gtk.Window.present(window);
+
+        if (runtime.pending_navigate_updates) {
+            runtime.pending_navigate_updates = false;
+            if (gobject.ext.cast(ShellyWindow, window)) |shelly_window| {
+                shelly_window.navigateToUpdates();
+            }
+        }
         return;
     }
 
@@ -126,6 +152,12 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
     setupGnomeThemePreference();
 
     const window = ShellyWindow.new(app);
+
+    if (runtime.pending_navigate_updates) {
+        runtime.pending_navigate_updates = false;
+        window.navigateToUpdates();
+    }
+
     gtk.Window.present(gobject.ext.as(gtk.Window, window));
 }
 
