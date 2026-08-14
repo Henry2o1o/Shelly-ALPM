@@ -17,8 +17,11 @@ pub const Error = error{
     ArchiveReadFailed,
     ArchiveEntryCreateFailed,
     ArchiveWriteFailed,
+    ArchiveCloseFailed,
     InvalidEntryPath,
     EntryTooLarge,
+    UnsupportedCompression,
+    UnsupportedFileType,
 };
 
 pub const EntryKind = enum {
@@ -35,61 +38,214 @@ pub const Entry = struct {
     kind: EntryKind,
     size: u64,
     permissions: u32,
-};
-
-pub const ArchiveResult = struct {
-    fileName: []const u8,
-
-    pub fn deinit(self: ArchiveResult, allocator: std.mem.Allocator) void {
-        allocator.free(self.fileName);
-    }
+    uid: i64,
+    gid: i64,
+    link_target: ?[]const u8,
 };
 
 pub const Writer = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     handle: *c.struct_archive,
-    directory: [:0]const u8,
-    package_name: [:0]const u8,
+    output_path_z: [:0]u8,
+    closed: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator, directory: []const u8, package_name: []const u8) !Writer {
-        const sentinel_path: [:0]u8 = try std.fs.path.joinZ(
-            allocator,
-            &.{ directory, "pkg", package_name },
-        );
-        errdefer allocator.free(sentinel_path);
+    pub fn init(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        output_path: []const u8,
+    ) !Writer {
+        const output_path_z = try allocator.dupeZ(u8, output_path);
+        errdefer allocator.free(output_path_z);
 
-        const handle = c.archive_write_new() orelse Error.ArchiveCreateFailed;
+        const handle = c.archive_write_new() orelse return Error.ArchiveCreateFailed;
         errdefer _ = c.archive_write_free(handle);
 
-        try requireStatus(c.archive_write_add_filter_zstd(handle));
-        try requireStatus(c.archive_write_set_format_pax_restricted(handle));
-        try requireStatus(c.archive_write_open_filename(handle, sentinel_path.ptr));
+        try addFilterForPath(handle, output_path);
+        try requireWriteStatus(c.archive_write_set_format_pax_restricted(handle));
+        try requireWriteStatus(c.archive_write_open_filename(handle, output_path_z.ptr));
 
-        return Writer{
+        return .{
             .allocator = allocator,
+            .io = io,
             .handle = handle,
-            .directory = directory,
-            .package_name = package_name,
+            .output_path_z = output_path_z,
         };
     }
 
-    pub fn addItem(self: *Writer, file_path: []const u8) !void {
-        const entry = c.archive_entry_new() orelse return Error.ArchiveEntryCreateFailed;
-        defer c.archive_entry_free(entry);
+    pub fn deinit(self: *Writer) void {
+        if (!self.closed) _ = c.archive_write_close(self.handle);
+        _ = c.archive_write_free(self.handle);
+        self.allocator.free(self.output_path_z);
+        self.* = undefined;
+    }
 
-        const sentinel_path: [:0]u8 = try std.fs.path.joinZ(
+    pub fn addDirectory(self: *Writer, source_directory: []const u8) !void {
+        try writeDirectory(
             self.allocator,
-            &.{file_path},
+            self.io,
+            self.handle,
+            source_directory,
+            null,
         );
-        errdefer self.allocator.free(sentinel_path);
+    }
 
-        c.archive_entry_set_pathname(entry, sentinel_path.ptr);
-        c.archive_entry_set_filetype(entry, c.S_IFREG);
-
-        //todo: finish archive entry setup
-
+    pub fn finish(self: *Writer) !void {
+        if (self.closed) return;
+        const status = c.archive_write_close(self.handle);
+        self.closed = true;
+        if (status < c.ARCHIVE_WARN) return Error.ArchiveCloseFailed;
     }
 };
+
+/// Writes a gzip-compressed mtree description of `source_directory`. The
+/// output itself is excluded so callers may place it inside that directory as
+/// `.MTREE`, matching the layout of an Arch package.
+pub fn writeMtree(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    source_directory: []const u8,
+    output_path: []const u8,
+) !void {
+    const output_path_z = try allocator.dupeZ(u8, output_path);
+    defer allocator.free(output_path_z);
+
+    const handle = c.archive_write_new() orelse return Error.ArchiveCreateFailed;
+    defer _ = c.archive_write_free(handle);
+
+    try requireWriteStatus(c.archive_write_add_filter_gzip(handle));
+    try requireWriteStatus(c.archive_write_set_format_mtree(handle));
+    try requireWriteStatus(c.archive_write_open_filename(handle, output_path_z.ptr));
+
+    try writeDirectory(allocator, io, handle, source_directory, ".MTREE");
+    if (c.archive_write_close(handle) < c.ARCHIVE_WARN)
+        return Error.ArchiveCloseFailed;
+}
+
+fn writeDirectory(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    handle: *c.struct_archive,
+    source_directory: []const u8,
+    skip_path: ?[]const u8,
+) !void {
+    var directory = try std.Io.Dir.cwd().openDir(io, source_directory, .{ .iterate = true });
+    defer directory.close(io);
+
+    var walker = try directory.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |file_entry| {
+        if (skip_path) |skip| {
+            if (std.mem.eql(u8, file_entry.path, skip)) continue;
+        }
+
+        const stat = try file_entry.dir.statFile(
+            io,
+            file_entry.basename,
+            .{ .follow_symlinks = false },
+        );
+        if (stat.size > std.math.maxInt(i64)) return Error.EntryTooLarge;
+
+        const archive_entry = c.archive_entry_new() orelse
+            return Error.ArchiveEntryCreateFailed;
+        defer c.archive_entry_free(archive_entry);
+        const archive_path_z = try allocator.dupeZ(u8, file_entry.path);
+        defer allocator.free(archive_path_z);
+
+        const file_type: c_uint = switch (file_entry.kind) {
+            .file => ae_ifreg,
+            .directory => ae_ifdir,
+            .sym_link => ae_iflnk,
+            else => return Error.UnsupportedFileType,
+        };
+        setCommonEntryMetadata(
+            archive_entry,
+            archive_path_z.ptr,
+            file_type,
+            @intCast(stat.permissions.toMode() & 0o7777),
+        );
+        setEntryMtime(archive_entry, stat.mtime.nanoseconds);
+        c.archive_entry_set_nlink(archive_entry, @intCast(stat.nlink));
+
+        switch (file_entry.kind) {
+            .file => c.archive_entry_set_size(archive_entry, @intCast(stat.size)),
+            .sym_link => {
+                var target_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                const target_len = try file_entry.dir.readLink(io, file_entry.basename, &target_buffer);
+                const target_z = try allocator.dupeZ(u8, target_buffer[0..target_len]);
+                defer allocator.free(target_z);
+                c.archive_entry_set_symlink(archive_entry, target_z.ptr);
+                c.archive_entry_set_size(archive_entry, 0);
+            },
+            .directory => c.archive_entry_set_size(archive_entry, 0),
+            else => unreachable,
+        }
+
+        try requireWriteStatus(c.archive_write_header(handle, archive_entry));
+        if (file_entry.kind == .file) {
+            var file = try file_entry.dir.openFile(io, file_entry.basename, .{});
+            defer file.close(io);
+
+            var buffer: [64 * 1024]u8 = undefined;
+            var offset: u64 = 0;
+            while (offset < stat.size) {
+                const remaining: usize = @intCast(@min(stat.size - offset, buffer.len));
+                const amount = try file.readPositionalAll(io, buffer[0..remaining], offset);
+                if (amount == 0) return Error.ArchiveWriteFailed;
+                try writeDataAll(handle, buffer[0..amount]);
+                offset += amount;
+            }
+        }
+        try requireWriteStatus(c.archive_write_finish_entry(handle));
+    }
+}
+
+fn setCommonEntryMetadata(
+    entry: *c.struct_archive_entry,
+    pathname: [*c]const u8,
+    file_type: c_uint,
+    permissions: u32,
+) void {
+    c.archive_entry_set_pathname(entry, pathname);
+    c.archive_entry_set_filetype(entry, file_type);
+    c.archive_entry_set_perm(entry, @intCast(permissions));
+    c.archive_entry_set_uid(entry, 0);
+    c.archive_entry_set_gid(entry, 0);
+    c.archive_entry_set_uname(entry, "root");
+    c.archive_entry_set_gname(entry, "root");
+}
+
+fn setEntryMtime(entry: *c.struct_archive_entry, nanoseconds: i96) void {
+    const seconds = @divFloor(nanoseconds, std.time.ns_per_s);
+    const remainder = @mod(nanoseconds, std.time.ns_per_s);
+    c.archive_entry_set_mtime(entry, @intCast(seconds), @intCast(remainder));
+}
+
+fn writeDataAll(handle: *c.struct_archive, contents: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < contents.len) {
+        const amount = c.archive_write_data(handle, contents[offset..].ptr, contents.len - offset);
+        if (amount <= 0) return Error.ArchiveWriteFailed;
+        offset += @intCast(amount);
+    }
+}
+
+fn addFilterForPath(handle: *c.struct_archive, output_path: []const u8) !void {
+    const status = if (std.mem.endsWith(u8, output_path, ".zst"))
+        c.archive_write_add_filter_zstd(handle)
+    else if (std.mem.endsWith(u8, output_path, ".gz"))
+        c.archive_write_add_filter_gzip(handle)
+    else if (std.mem.endsWith(u8, output_path, ".xz"))
+        c.archive_write_add_filter_xz(handle)
+    else if (std.mem.endsWith(u8, output_path, ".bz2"))
+        c.archive_write_add_filter_bzip2(handle)
+    else if (std.mem.endsWith(u8, output_path, ".tar"))
+        c.archive_write_add_filter_none(handle)
+    else
+        return Error.UnsupportedCompression;
+    try requireWriteStatus(status);
+}
 
 pub const Reader = struct {
     allocator: std.mem.Allocator,
@@ -145,6 +301,14 @@ pub const Reader = struct {
             },
             .size = if (raw_size > 0) @intCast(raw_size) else 0,
             .permissions = @intCast(c.archive_entry_perm(entry)),
+            .uid = @intCast(c.archive_entry_uid(entry)),
+            .gid = @intCast(c.archive_entry_gid(entry)),
+            .link_target = if (c.archive_entry_symlink_utf8(entry)) |target|
+                std.mem.span(target)
+            else if (c.archive_entry_symlink(entry)) |target|
+                std.mem.span(target)
+            else
+                null,
         };
     }
 
@@ -174,6 +338,10 @@ pub const Reader = struct {
 
 fn requireStatus(status: c_int) !void {
     if (status < c.ARCHIVE_WARN) return Error.ArchiveReadFailed;
+}
+
+fn requireWriteStatus(status: c_int) !void {
+    if (status < c.ARCHIVE_WARN) return Error.ArchiveWriteFailed;
 }
 
 /// Normalizes an archive entry into a path relative to an extraction root.
@@ -245,6 +413,58 @@ pub fn writeFixture(
             if (amount < 0 or amount != fixture.contents.len) return Error.ArchiveWriteFailed;
         }
     }
+}
+
+test "archive writer preserves tree modes and symlinks while forcing root ownership" {
+    const testing = std.testing;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "tree/bin");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "tree/bin/demo",
+        .data = "payload",
+        .flags = .{ .permissions = .fromMode(0o755) },
+    });
+    try tmp.dir.symLink(io, "demo", "tree/bin/demo-link", .{});
+
+    const source_path = try tmp.dir.realPathFileAlloc(io, "tree", testing.allocator);
+    defer testing.allocator.free(source_path);
+    const output_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/writer.pkg.tar.zst",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(output_path);
+
+    var writer = try Writer.init(testing.allocator, io, output_path);
+    defer writer.deinit();
+    try writer.addDirectory(source_path);
+    try writer.finish();
+
+    var reader = try Reader.init(testing.allocator, output_path);
+    defer reader.deinit();
+    var saw_file = false;
+    var saw_link = false;
+    while (try reader.next()) |entry| {
+        try testing.expectEqual(@as(i64, 0), entry.uid);
+        try testing.expectEqual(@as(i64, 0), entry.gid);
+        if (std.mem.eql(u8, entry.path, "bin/demo")) {
+            saw_file = true;
+            try testing.expectEqual(EntryKind.regular_file, entry.kind);
+            try testing.expectEqual(@as(u32, 0o755), entry.permissions);
+            var contents: [7]u8 = undefined;
+            try testing.expectEqual(contents.len, try reader.readPrefix(&contents));
+            try testing.expectEqualStrings("payload", &contents);
+        } else if (std.mem.eql(u8, entry.path, "bin/demo-link")) {
+            saw_link = true;
+            try testing.expectEqual(EntryKind.symbolic_link, entry.kind);
+            try testing.expectEqualStrings("demo", entry.link_target.?);
+        }
+    }
+    try testing.expect(saw_file);
+    try testing.expect(saw_link);
 }
 
 test "archive reader supports gzip and zstd tar streams" {

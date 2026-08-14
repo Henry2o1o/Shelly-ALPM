@@ -539,6 +539,7 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder reports failure when a step exits non-zero",
             "PackageBuilder reports failure instead of crashing without execution steps",
             "PackageBuilder builds a real package from the repository PKGBUILD-bin",
+            "archive writer preserves tree modes and symlinks while forcing root ownership",
             "AUR operation-hooked public APIs compile",
             "build progress parser recognizes makepkg percentage lines",
             "streaming process execution forwards stdout stderr and a final unterminated line",

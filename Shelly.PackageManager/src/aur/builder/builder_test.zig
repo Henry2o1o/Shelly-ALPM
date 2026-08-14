@@ -25,6 +25,8 @@ const pkgbuild_mod = @import("../../pkgbuild/pkgbuild_parser.zig");
 const events = @import("../events.zig");
 const op_context = @import("operation_context");
 const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
+const archive = @import("archive");
+const raw_alpm = @import("../../alpm/bindings.zig").libalpm.alpm;
 
 const ErrorCapture = struct {
     count: usize = 0,
@@ -101,7 +103,11 @@ const Fixture = struct {
         var dispatcher = events.Dispatcher.init(allocator);
         errdefer dispatcher.deinit();
 
-        const config_content = try std.fmt.allocPrint(allocator, "builddir={s}\n", .{build_dir});
+        const config_content = try std.fmt.allocPrint(
+            allocator,
+            "builddir={s}\npkgdest={s}\n",
+            .{ build_dir, build_dir },
+        );
         defer allocator.free(config_content);
         const config = try MakePkgConfiguration.initFromBuffer(io, allocator, config_content);
         errdefer config.deinit();
@@ -181,12 +187,14 @@ test "PackageBuilder runs execution steps in the configured build directory" {
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
         \\pkgver=1.0
+        \\arch=('any')
         \\
         \\build() {
         \\  echo built > build-marker
         \\}
         \\package() {
-        \\  echo packaged > package-marker
+        \\  mkdir -p "$pkgdir"
+        \\  echo packaged > "$pkgdir/package-marker"
         \\}
     , .{ .function = CompletionCapture.handle, .data = &capture }, null);
     defer fixture.destroy();
@@ -197,12 +205,14 @@ test "PackageBuilder runs execution steps in the configured build directory" {
     // Both steps ran, in makepkg order, inside the configured build
     // directory (the markers only exist when cwd is the build directory).
     try fixture.temporary.dir.access(io, "build-marker", .{});
-    try fixture.temporary.dir.access(io, "package-marker", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/package-marker", .{});
 
     // The artifact identifies the built package and owns its storage
     // (deinit above must not free borrowed memory).
     try testing.expectEqualStrings("demo", artifact.package_name);
     try testing.expect(artifact.path.len > 0);
+    try testing.expect(std.mem.endsWith(u8, artifact.path, "demo-1.0-any.pkg.tar.zst"));
+    try std.Io.Dir.cwd().access(io, artifact.path, .{});
 
     // The operation completed successfully.
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
@@ -503,7 +513,9 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
 
     try testing.expectEqualStrings("shelly-bin", artifact.package_name);
     try testing.expect(artifact.path.len > 0);
-    std.debug.print("[builder-test] BuildPackage succeeded: artifact '{s}'\n", .{artifact.package_name});
+    try testing.expect(std.mem.endsWith(u8, artifact.path, "shelly-bin-3.0.3-1-x86_64.pkg.tar.zst"));
+    try std.Io.Dir.cwd().access(io, artifact.path, .{});
+    std.debug.print("[builder-test] BuildPackage succeeded: artifact '{s}' at {s}\n", .{ artifact.package_name, artifact.path });
 
     // package_shelly-bin installed the full tree into $pkgdir.
     const pkgdir = try std.fs.path.join(allocator, &.{ fixture.build_dir, "pkg", "shelly-bin" });
@@ -559,6 +571,66 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     const desktop = try std.Io.Dir.cwd().readFileAlloc(io, desktop_path, allocator, .unlimited);
     defer allocator.free(desktop);
     try testing.expect(std.mem.indexOf(u8, desktop, "Name=Shelly\n") != null);
+
+    // Read the assembled package back through libarchive. Metadata must be
+    // present, staged modes must survive, and ownership must be normalized to
+    // root independently of the user running the test.
+    var package_reader = try archive.Reader.init(allocator, artifact.path);
+    defer package_reader.deinit();
+    var saw_pkginfo = false;
+    var saw_buildinfo = false;
+    var saw_mtree = false;
+    var saw_executable = false;
+    var saw_data_file = false;
+    while (try package_reader.next()) |entry| {
+        try testing.expectEqual(@as(i64, 0), entry.uid);
+        try testing.expectEqual(@as(i64, 0), entry.gid);
+        if (std.mem.eql(u8, entry.path, ".PKGINFO")) {
+            saw_pkginfo = true;
+            var contents: [16 * 1024]u8 = undefined;
+            const amount = try package_reader.readPrefix(&contents);
+            try testing.expect(std.mem.indexOf(u8, contents[0..amount], "pkgname = shelly-bin\n") != null);
+        } else if (std.mem.eql(u8, entry.path, ".BUILDINFO")) {
+            saw_buildinfo = true;
+        } else if (std.mem.eql(u8, entry.path, ".MTREE")) {
+            saw_mtree = true;
+        } else if (std.mem.eql(u8, entry.path, "usr/bin/shelly")) {
+            saw_executable = true;
+            try testing.expectEqual(@as(u32, 0o755), entry.permissions);
+        } else if (std.mem.eql(u8, entry.path, "usr/share/applications/com.shellyorg.shelly.desktop")) {
+            saw_data_file = true;
+            try testing.expectEqual(@as(u32, 0o644), entry.permissions);
+        }
+    }
+    try testing.expect(saw_pkginfo);
+    try testing.expect(saw_buildinfo);
+    try testing.expect(saw_mtree);
+    try testing.expect(saw_executable);
+    try testing.expect(saw_data_file);
+
+    // libalpm is the final consumer of the artifact. Loading it here catches
+    // package-format or metadata defects that a libarchive readback alone
+    // would accept.
+    try fixture.temporary.dir.createDir(io, "alpm-root", .default_dir);
+    try fixture.temporary.dir.createDir(io, "alpm-db", .default_dir);
+    const alpm_root = try std.fs.path.joinZ(allocator, &.{ fixture.build_dir, "alpm-root" });
+    defer allocator.free(alpm_root);
+    const alpm_db = try std.fs.path.joinZ(allocator, &.{ fixture.build_dir, "alpm-db" });
+    defer allocator.free(alpm_db);
+
+    var alpm_error: raw_alpm.alpm_errno_t = 0;
+    const alpm_handle = raw_alpm.alpm_initialize(alpm_root.ptr, alpm_db.ptr, &alpm_error) orelse
+        return error.AlpmInitializeFailed;
+    defer _ = raw_alpm.alpm_release(alpm_handle);
+
+    var loaded_package: ?*raw_alpm.alpm_pkg_t = null;
+    try testing.expectEqual(
+        @as(c_int, 0),
+        raw_alpm.alpm_pkg_load(alpm_handle, artifact.path.ptr, 1, 0, &loaded_package),
+    );
+    try testing.expect(loaded_package != null);
+    defer _ = raw_alpm.alpm_pkg_free(loaded_package.?);
+    try testing.expectEqualStrings("shelly-bin", std.mem.span(raw_alpm.alpm_pkg_get_name(loaded_package.?)));
 
     // The operation completed successfully.
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
