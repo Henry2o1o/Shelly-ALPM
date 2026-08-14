@@ -294,12 +294,12 @@ test "transaction log writes every level and source" {
         source_text: []const u8,
         message: []const u8,
     }{
-        .{ .level = .info, .source = .standard, .level_text = "INFO", .source_text = "standard", .message = "standard message" },
-        .{ .level = .warning, .source = .aur, .level_text = "WARNING", .source_text = "aur", .message = "aur message" },
-        .{ .level = .exception, .source = .flatpak, .level_text = "EXCEPTION", .source_text = "flatpak", .message = "flatpak message" },
-        .{ .level = .info, .source = .appimage, .level_text = "INFO", .source_text = "appimage", .message = "appimage message" },
-        .{ .level = .warning, .source = .local, .level_text = "WARNING", .source_text = "local", .message = "local message" },
-        .{ .level = .info, .source = .download, .level_text = "INFO", .source_text = "download", .message = "download message" },
+        .{ .level = .info, .source = .standard, .level_text = "INFO", .source_text = "STANDARD", .message = "standard message" },
+        .{ .level = .warning, .source = .aur, .level_text = "WARNING", .source_text = "AUR", .message = "aur message" },
+        .{ .level = .exception, .source = .flatpak, .level_text = "EXCEPTION", .source_text = "FLATPAK", .message = "flatpak message" },
+        .{ .level = .info, .source = .appimage, .level_text = "INFO", .source_text = "APPIMAGE", .message = "appimage message" },
+        .{ .level = .warning, .source = .local, .level_text = "WARNING", .source_text = "LOCAL", .message = "local message" },
+        .{ .level = .info, .source = .download, .level_text = "INFO", .source_text = "DOWNLOAD", .message = "download message" },
     };
 
     const rotated_path = try std.fmt.allocPrint(allocator, "{s}.1", .{path});
@@ -323,13 +323,22 @@ test "transaction log writes every level and source" {
     for (cases) |case| {
         const expected = try std.fmt.allocPrint(
             allocator,
-            "Level: {s}  Source: {s} Message: {s}\n",
+            "] {s} [{s}]: {s}\n",
             .{ case.level_text, case.source_text, case.message },
         );
         defer allocator.free(expected);
         try std.testing.expect(std.mem.indexOf(u8, contents, expected) != null);
     }
     try std.testing.expectEqual(cases.len, std.mem.count(u8, contents, "\n"));
+}
+
+test "transaction log converts timestamp to UTC time" {
+    var buffer: [64]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    try writeUtcTime(&writer, 0);
+
+    try std.testing.expectEqualStrings("1970-01-01T00:00:00Z", writer.buffered(),);
 }
 
 test "transaction log appends after existing content" {
@@ -365,7 +374,7 @@ test "transaction log appends after existing content" {
     );
     defer allocator.free(contents);
     try std.testing.expect(std.mem.startsWith(u8, contents, "existing entry\n"));
-    try std.testing.expect(std.mem.endsWith(u8, contents, "Source: standard Message: new entry\n"));
+    try std.testing.expect(std.mem.endsWith(u8, contents, "] INFO [STANDARD]: new entry\n"));
 }
 
 test "transaction log records operation lifecycle without progress noise" {
@@ -403,8 +412,9 @@ test "transaction log records operation lifecycle without progress noise" {
         .limited(4096),
     );
     defer allocator.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "Message: Transaction started") != null);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "Message: installed example (1.0-1)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "Message: transaction completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "Transaction started") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "installed example (1.0-1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "Transaction completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "installed example (1.0-1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "ignored progress") == null);
 }
