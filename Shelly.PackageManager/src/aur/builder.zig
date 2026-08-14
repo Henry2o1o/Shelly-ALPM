@@ -329,50 +329,26 @@ fn appendOwned(allocator: std.mem.Allocator, list: *std.ArrayList([]u8), values:
     for (values) |value| try list.append(allocator, try allocator.dupe(u8, value));
 }
 
-pub fn makepkgCommand(
+pub fn makechrootpkgCommand(
     allocator: std.mem.Allocator,
     io: std.Io,
     environ: std.process.Environ,
-    use_chroot: bool,
     chroot_path: []const u8,
-    no_check: bool,
 ) !OwnedCommand {
-    if (use_chroot) {
-        var argv: std.ArrayList([]u8) = .empty;
-        errdefer {
-            for (argv.items) |argument| allocator.free(argument);
-            argv.deinit(allocator);
-        }
-        try appendOwned(allocator, &argv, &.{ "makechrootpkg", "-c", "-r", chroot_path });
-        if (environ.getPosix("SUDO_USER")) |user| {
-            try appendOwned(allocator, &argv, &.{ "-U", user });
-        } else if (environ.getPosix("PKEXEC_UID")) |uid| {
-            const user = try resolveUsernameForUid(allocator, io, uid);
-            defer allocator.free(user);
-            if (user.len != 0) try appendOwned(allocator, &argv, &.{ "-U", user });
-        }
-        return .{ .argv = try argv.toOwnedSlice(allocator) };
+    var argv: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (argv.items) |argument| allocator.free(argument);
+        argv.deinit(allocator);
     }
-
-    const base = [_][]const u8{ "-f", "-c", "-s", "--noconfirm", "--needed", "--skippgpcheck" };
-    var args: std.ArrayList([]const u8) = .empty;
-    defer args.deinit(allocator);
-    try args.appendSlice(allocator, &base);
-    if (no_check) try args.append(allocator, "--nocheck");
-    return invokingUserCommand(allocator, io, environ, "makepkg", args.items);
-}
-
-pub fn makepkgHistoricalCommand(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    environ: std.process.Environ,
-    no_check: bool,
-) !OwnedCommand {
-    var args: std.ArrayList([]const u8) = .empty;
-    defer args.deinit(allocator);
-    try args.append(allocator, "--noconfirm");
-    if (no_check) try args.append(allocator, "--nocheck");
-    return invokingUserCommand(allocator, io, environ, "makepkg", args.items);
+    try appendOwned(allocator, &argv, &.{ "makechrootpkg", "-c", "-r", chroot_path });
+    if (environ.getPosix("SUDO_USER")) |user| {
+        try appendOwned(allocator, &argv, &.{ "-U", user });
+    } else if (environ.getPosix("PKEXEC_UID")) |uid| {
+        const user = try resolveUsernameForUid(allocator, io, uid);
+        defer allocator.free(user);
+        if (user.len != 0) try appendOwned(allocator, &argv, &.{ "-U", user });
+    }
+    return .{ .argv = try argv.toOwnedSlice(allocator) };
 }
 
 pub const BuildProgress = struct {
@@ -499,36 +475,21 @@ test "UID lookup and VCS build commands replicate invoking-user behavior" {
     try std.testing.expectEqualStrings("/home/zoey", homeFromPasswd(passwd, "zoey", null).?);
     try std.testing.expectEqualStrings("/home/zoey", homeFromPasswd(passwd, null, "1000").?);
 
-    var command = try makepkgCommand(
+    var command = try makechrootpkgCommand(
         std.testing.allocator,
         std.testing.io,
         std.testing.environ,
-        false,
         "/var/lib/shelly/chroot",
-        true,
     );
     defer command.deinit(std.testing.allocator);
-    var found_nocheck = false;
-    for (command.argv) |argument| {
-        if (std.mem.eql(u8, argument, "--nocheck")) found_nocheck = true;
+    var command_index: ?usize = null;
+    for (command.argv, 0..) |argument, index| {
+        if (std.mem.eql(u8, argument, "makechrootpkg")) command_index = index;
     }
-    try std.testing.expect(found_nocheck);
-
-    var historical = try makepkgHistoricalCommand(
-        std.testing.allocator,
-        std.testing.io,
-        std.testing.environ,
-        true,
-    );
-    defer historical.deinit(std.testing.allocator);
-    var found_force = false;
-    var found_historical_nocheck = false;
-    for (historical.argv) |argument| {
-        if (std.mem.eql(u8, argument, "-f")) found_force = true;
-        if (std.mem.eql(u8, argument, "--nocheck")) found_historical_nocheck = true;
-    }
-    try std.testing.expect(!found_force);
-    try std.testing.expect(found_historical_nocheck);
+    const index = command_index orelse return error.MissingMakechrootpkgCommand;
+    try std.testing.expectEqualStrings("-c", command.argv[index + 1]);
+    try std.testing.expectEqualStrings("-r", command.argv[index + 2]);
+    try std.testing.expectEqualStrings("/var/lib/shelly/chroot", command.argv[index + 3]);
 }
 
 test "built package selection mirrors split-package and stale-output safeguards" {
