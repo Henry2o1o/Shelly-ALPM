@@ -84,6 +84,8 @@ pub const Writer = struct {
         errdefer self.allocator.free(sentinel_path);
 
         c.archive_entry_set_pathname(entry, sentinel_path.ptr);
+        c.archive_entry_set_filetype(entry, c.S_IFREG);
+
         //todo: finish archive entry setup
 
     }
