@@ -9,6 +9,7 @@ const ShellyWindow = @import("shelly_window.zig").ShellyWindow;
 const runtime = @import("services/runtime.zig");
 const translations = @import("helpers/translations.zig");
 const tray_service = @import("services/tray_service.zig");
+const options = @import("options");
 const IconDownloadService = @import("services/icon_fetcher.zig").downloadIconsInBackground;
 
 var did_activate: bool = false;
@@ -20,7 +21,9 @@ pub fn main(init: std.process.Init) void {
     if (!translations.init()) {
         std.log.warn("translations: failed to initialize gettext", .{});
     }
-    IconDownloadService(std.heap.c_allocator, runtime.io);
+    if (!options.skip_background_services) {
+        IconDownloadService(std.heap.c_allocator, runtime.io);
+    }
 
     const app = gtk.Application.new("com.shellyorg.shelly", .{});
     defer app.unref();
@@ -118,7 +121,7 @@ fn activate(app: *gtk.Application, _: ?*anyopaque) callconv(.c) void {
         }
     }
 
-    tryStartTray(runtime.io, std.heap.c_allocator);
+    if (!options.skip_background_services) tryStartTray(runtime.io, std.heap.c_allocator);
 
     setupGnomeThemePreference();
 

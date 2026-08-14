@@ -9,6 +9,7 @@ Shelly-UI.sln.DotSettings.user
 .zig-cache/
 zig-out/
 zig-pkg/
+valgrind*.log
 Shelly.Notifications.Zig/build/
 .codex-zig-cache/
 .codex-zig-global-cache/
