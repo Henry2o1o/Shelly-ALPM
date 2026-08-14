@@ -12,6 +12,7 @@ makedepends=(
   'pkgconf'
   'zig>=0.16.0'
   'flatpak'
+  'ripgrep'
   'go-md2man'
 )
 source=("${pkgname}::git+https://github.com/Seafoam-Labs/Shelly-ALPM.git#branch=development")
