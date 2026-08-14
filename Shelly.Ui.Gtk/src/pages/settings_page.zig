@@ -57,6 +57,8 @@ pub const ShellySettingsPage = extern struct {
         tray_auto_switch_box: *gtk.Box,
         daily_schedule: *gtk.Switch,
         weekly_schedule_switch_box: *gtk.Box,
+        use_ui: *gtk.Switch,
+        use_ui_switch_box: *gtk.Box,
         tray_interval_box: *gtk.Box,
         tray_interval_spin: *gtk.SpinButton,
         weekly_schedule_box: *gtk.Box,
@@ -74,6 +76,8 @@ pub const ShellySettingsPage = extern struct {
         shelly_icons_switch: *gtk.Switch,
         symbolic_tray_box: *gtk.Box,
         symbolic_tray_switch: *gtk.Switch,
+        use_ui_for_update_switch: *gtk.Switch,
+
         tray_icon_button: *gtk.Button,
         tray_icon_clear_button: *gtk.Button,
         tray_updates_icon_button: *gtk.Button,
@@ -157,6 +161,13 @@ pub const ShellySettingsPage = extern struct {
             p.daily_schedule.as(gobject.Object),
             *Self,
             &on_schedule_notify,
+            self,
+            .{ .detail = "active" },
+        );
+        _ = gobject.Object.signals.notify.connect(
+            p.use_ui.as(gobject.Object),
+            *Self,
+            &on_use_ui_notify,
             self,
             .{ .detail = "active" },
         );
@@ -897,6 +908,12 @@ pub const ShellySettingsPage = extern struct {
         self.autosave();
     }
 
+    fn on_use_ui_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const active = gtk.Switch.getActive(p.use_ui) != 0;
+        updateConfigField(.UseUiForUpdate, active);
+    }
+
     fn on_tray_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         const p = self.priv();
 
@@ -1027,6 +1044,8 @@ pub const ShellySettingsPage = extern struct {
         .{ "tray_auto_switch_box", @offsetOf(Private, "tray_auto_switch_box") },
         .{ "daily_schedule", @offsetOf(Private, "daily_schedule") },
         .{ "weekly_schedule_switch_box", @offsetOf(Private, "weekly_schedule_switch_box") },
+        .{ "use_ui", @offsetOf(Private, "use_ui") },
+        .{ "use_ui_switch_box", @offsetOf(Private, "use_ui_switch_box") },
         .{ "tray_interval_box", @offsetOf(Private, "tray_interval_box") },
         .{ "tray_interval_spin", @offsetOf(Private, "tray_interval_spin") },
         .{ "weekly_schedule_box", @offsetOf(Private, "weekly_schedule_box") },
@@ -1266,6 +1285,7 @@ fn applyConfig(p: *ShellySettingsPage.Private, cfg: *ShellyConfig) void {
     setSwitch(p.tray_switch, cfg.TrayEnabled);
     setSwitch(p.tray_auto_switch, cfg.TrayAutoStart);
     setSwitch(p.daily_schedule, cfg.UseWeeklySchedule);
+    setSwitch(p.use_ui, cfg.UseUiForUpdate);
 
     gtk.SpinButton.setValue(p.tray_interval_spin, @floatFromInt(cfg.TrayCheckIntervalHours));
 
@@ -1326,6 +1346,7 @@ fn collectIntoConfig(p: *ShellySettingsPage.Private, allocator: std.mem.Allocato
     cfg.TrayEnabled = getSwitch(p.tray_switch);
     cfg.TrayAutoStart = getSwitch(p.tray_auto_switch);
     cfg.UseWeeklySchedule = getSwitch(p.daily_schedule);
+    cfg.UseUiForUpdate = getSwitch(p.use_ui);
 
     cfg.TrayCheckIntervalHours = gtk.SpinButton.getValueAsInt(p.tray_interval_spin);
 
@@ -1409,6 +1430,7 @@ fn applyScheduleVisibility(p: *ShellySettingsPage.Private) void {
         gtk.Widget.setVisible(p.weekly_schedule_switch_box.as(gtk.Widget), 0);
         gtk.Widget.setVisible(p.weekly_schedule_box.as(gtk.Widget), 0);
         gtk.Widget.setVisible(p.tray_interval_box.as(gtk.Widget), 0);
+        gtk.Widget.setVisible(p.use_ui_switch_box.as(gtk.Widget), 0);
         return;
     }
 
