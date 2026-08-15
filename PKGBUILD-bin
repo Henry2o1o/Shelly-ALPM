@@ -53,6 +53,7 @@ package_shelly-bin() {
 
   # Install Shelly.Cli binary
   install -Dm755 "$srcdir/shelly" "$pkgdir/usr/bin/shelly"
+  install -Dm755 "$srcdir/shelly-builder" "$pkgdir/usr/bin/shelly-builder"
 
   # Install Shelly.Key binary
   install -Dm755 "$srcdir/shelly-key" "$pkgdir/usr/bin/shelly-key"

@@ -273,6 +273,10 @@ pub fn resolveInvokingUserHome(
         if (user.len != 0 and !std.mem.eql(u8, user, "root")) {
             if (homeFromPasswd(passwd, user, null)) |home| return allocator.dupe(u8, home);
         }
+    } else if (environ.getPosix("DOAS_USER")) |user| {
+        if (user.len != 0 and !std.mem.eql(u8, user, "root")) {
+            if (homeFromPasswd(passwd, user, null)) |home| return allocator.dupe(u8, home);
+        }
     } else if (environ.getPosix("PKEXEC_UID")) |uid| {
         if (homeFromPasswd(passwd, null, uid)) |home| return allocator.dupe(u8, home);
     }
@@ -315,14 +319,97 @@ pub fn invokingUserCommand(
 
     if (environ.getPosix("SUDO_USER")) |sudo_user| {
         try appendOwned(allocator, &argv, &.{ "sudo", "--preserve-env=PATH", "-u", sudo_user, command });
+    } else if (environ.getPosix("DOAS_USER")) |doas_user| {
+        try appendOwned(allocator, &argv, &.{ "/usr/bin/runuser", "-u", doas_user, "-w", "PATH", "--", command });
     } else if (environ.getPosix("PKEXEC_UID")) |uid| {
         const username = try resolveUsernameForUid(allocator, io, uid);
         defer allocator.free(username);
-        try appendOwned(allocator, &argv, &.{ "runuser", "-u", username, "-w", "PATH", "--", command });
+        try appendOwned(allocator, &argv, &.{ "/usr/bin/runuser", "-u", username, "-w", "PATH", "--", command });
     } else try appendOwned(allocator, &argv, &.{command});
 
     try appendOwned(allocator, &argv, arguments);
     return .{ .argv = try argv.toOwnedSlice(allocator) };
+}
+
+/// Constructs a process-isolated, non-root command. Unlike
+/// `invokingUserCommand`, this has no direct-execution fallback: callers use it
+/// specifically at a privilege boundary and must fail closed when the original
+/// user cannot be identified.
+pub fn deescalatedInvokingUserCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    command: []const u8,
+    arguments: []const []const u8,
+) !OwnedCommand {
+    const username = try invokingUsername(allocator, io, environ);
+    defer allocator.free(username);
+
+    return deescalatedCommandForUsername(allocator, username, command, arguments);
+}
+
+pub fn deescalatedCommandForUsername(
+    allocator: std.mem.Allocator,
+    username: []const u8,
+    command: []const u8,
+    arguments: []const []const u8,
+) !OwnedCommand {
+    if (username.len == 0 or std.mem.eql(u8, username, "root") or std.mem.eql(u8, username, "0"))
+        return error.InvokingUserUnavailable;
+
+    var argv: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (argv.items) |argument| allocator.free(argument);
+        argv.deinit(allocator);
+    }
+    try appendOwned(allocator, &argv, &.{ "/usr/bin/runuser", "-u", username, "-w", "PATH", "--", command });
+    try appendOwned(allocator, &argv, arguments);
+    return .{ .argv = try argv.toOwnedSlice(allocator) };
+}
+
+pub fn invokingUsername(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+) ![]u8 {
+    if (environ.getPosix("SUDO_USER")) |username|
+        return validateInvokingUsername(allocator, io, username);
+    if (environ.getPosix("DOAS_USER")) |username|
+        return validateInvokingUsername(allocator, io, username);
+    if (environ.getPosix("PKEXEC_UID")) |uid| {
+        if (uid.len == 0 or std.mem.eql(u8, uid, "0")) return error.InvokingUserUnavailable;
+        const username = try resolveUsernameForUid(allocator, io, uid);
+        errdefer allocator.free(username);
+        if (username.len == 0 or std.mem.eql(u8, username, "root") or std.mem.eql(u8, username, "0"))
+            return error.InvokingUserUnavailable;
+        return username;
+    }
+    return error.InvokingUserUnavailable;
+}
+
+fn validateInvokingUsername(allocator: std.mem.Allocator, io: std.Io, username: []const u8) ![]u8 {
+    if (username.len == 0 or std.mem.eql(u8, username, "root") or std.mem.eql(u8, username, "0"))
+        return error.InvokingUserUnavailable;
+    const passwd = std.Io.Dir.cwd().readFileAlloc(io, "/etc/passwd", allocator, .limited(4 * 1024 * 1024)) catch
+        return error.InvokingUserUnavailable;
+    defer allocator.free(passwd);
+    const uid = uidForUsernameFromPasswd(username, passwd) orelse return error.InvokingUserUnavailable;
+    if (std.mem.eql(u8, uid, "0")) return error.InvokingUserUnavailable;
+    return allocator.dupe(u8, username);
+}
+
+pub fn uidForUsernameFromPasswd(username: []const u8, passwd: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, passwd, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+        var fields = std.mem.splitScalar(u8, trimmed, ':');
+        const field_user = fields.next() orelse continue;
+        _ = fields.next() orelse continue;
+        const field_uid = fields.next() orelse continue;
+        if (std.mem.eql(u8, username, field_user)) return field_uid;
+    }
+    return null;
 }
 
 fn appendOwned(allocator: std.mem.Allocator, list: *std.ArrayList([]u8), values: []const []const u8) !void {
@@ -472,6 +559,9 @@ test "UID lookup and VCS build commands replicate invoking-user behavior" {
     const passwd = "root:x:0:0::/root:/bin/bash\nzoey:x:1000:1000::/home/zoey:/bin/bash\n";
     try std.testing.expectEqualStrings("zoey", resolveUsernameForUidFromPasswd("1000", passwd));
     try std.testing.expectEqualStrings("55", resolveUsernameForUidFromPasswd("55", passwd));
+    try std.testing.expectEqualStrings("1000", uidForUsernameFromPasswd("zoey", passwd).?);
+    try std.testing.expectEqualStrings("0", uidForUsernameFromPasswd("root", passwd).?);
+    try std.testing.expect(uidForUsernameFromPasswd("missing", passwd) == null);
     try std.testing.expectEqualStrings("/home/zoey", homeFromPasswd(passwd, "zoey", null).?);
     try std.testing.expectEqualStrings("/home/zoey", homeFromPasswd(passwd, null, "1000").?);
 
@@ -490,6 +580,24 @@ test "UID lookup and VCS build commands replicate invoking-user behavior" {
     try std.testing.expectEqualStrings("-c", command.argv[index + 1]);
     try std.testing.expectEqualStrings("-r", command.argv[index + 2]);
     try std.testing.expectEqualStrings("/var/lib/shelly/chroot", command.argv[index + 3]);
+}
+
+test "de-escalated builder command uses process-isolated runuser" {
+    var command = try deescalatedCommandForUsername(
+        std.testing.allocator,
+        "zoey",
+        "/usr/bin/shelly-builder",
+        &.{"request-json"},
+    );
+    defer command.deinit(std.testing.allocator);
+    try std.testing.expectEqualDeep(
+        &[_][]const u8{ "/usr/bin/runuser", "-u", "zoey", "-w", "PATH", "--", "/usr/bin/shelly-builder", "request-json" },
+        command.asConst(),
+    );
+    try std.testing.expectError(
+        error.InvokingUserUnavailable,
+        deescalatedCommandForUsername(std.testing.allocator, "root", "/bin/false", &.{}),
+    );
 }
 
 test "built package selection mirrors split-package and stale-output safeguards" {

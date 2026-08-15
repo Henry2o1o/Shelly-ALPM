@@ -292,6 +292,150 @@ test "PackageBuilder init keeps the provided collaborators" {
     try testing.expectEqualStrings("demo", fixture.builder.package_builds[0].pkg_name.?);
 }
 
+test "non-root worker guard rejects root effective uid" {
+    try testing.expectError(
+        error.BuilderMustNotRunAsRoot,
+        builder_mod.requireNonRootEffectiveUid(0),
+    );
+    try builder_mod.requireNonRootEffectiveUid(1000);
+}
+
+test "root effective uid selects the de-escalated worker boundary" {
+    try testing.expect(builder_mod.requiresDeescalatedWorker(0));
+    try testing.expect(!builder_mod.requiresDeescalatedWorker(1000));
+}
+
+test "PackageBuilder rejects a legacy unwritable package tree" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try fixture.temporary.dir.createDirPath(io, "pkg/demo");
+    try fixture.temporary.dir.setFilePermissions(io, "pkg", .fromMode(0o555), .{});
+    defer fixture.temporary.dir.setFilePermissions(io, "pkg", .fromMode(0o755), .{}) catch {};
+
+    try testing.expectError(error.BuildDirectoryNotWritable, fixture.builder.BuildPackage());
+}
+
+test "PackageBuilder rejects privileged package filesystem operations" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  mknod "$pkgdir/usr/share/demo/device" c 1 3
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try testing.expectError(
+        error.PrivilegedPackageOperationUnsupported,
+        fixture.builder.BuildPackage(),
+    );
+}
+
+test "PackageBuilder simulates root ownership without host chown" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  printf payload > "$pkgdir/usr/share/demo/data"
+        \\  chown root:root "$pkgdir/usr/share/demo/data"
+        \\  install -o root -g root -m 0644 /dev/null "$pkgdir/usr/share/demo/installed"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+
+    const staged_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "pkg/demo/usr/share/demo/data" });
+    defer allocator.free(staged_path);
+    var stat_result = try process_runner.run(allocator, io, &.{ "stat", "-c", "%u", staged_path }, null, null);
+    defer stat_result.deinit(allocator);
+    try testing.expectEqual(@as(u8, 0), stat_result.exit_code);
+    var expected_uid_buffer: [32]u8 = undefined;
+    const expected_uid = try std.fmt.bufPrint(&expected_uid_buffer, "{d}", .{std.os.linux.geteuid()});
+    try testing.expectEqualStrings(expected_uid, std.mem.trim(u8, stat_result.stdout, " \t\r\n"));
+
+    var reader = try archive.Reader.init(allocator, artifacts[0].path);
+    defer reader.deinit();
+    var saw_data = false;
+    var saw_installed = false;
+    while (try reader.next()) |entry| {
+        if (std.mem.eql(u8, entry.path, "usr/share/demo/data")) saw_data = true;
+        if (std.mem.eql(u8, entry.path, "usr/share/demo/installed")) saw_installed = true;
+        try testing.expectEqual(@as(i64, 0), entry.uid);
+        try testing.expectEqual(@as(i64, 0), entry.gid);
+    }
+    try testing.expect(saw_data);
+    try testing.expect(saw_installed);
+}
+
+test "PackageBuilder rejects unsupported virtual ownership" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  touch "$pkgdir/usr/share/demo/data"
+        \\  chown 42:84 "$pkgdir/usr/share/demo/data"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try testing.expectError(
+        error.PrivilegedPackageOperationUnsupported,
+        fixture.builder.BuildPackage(),
+    );
+}
+
+test "PackageBuilder applies explicit virtual ownership to the archive" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  printf payload > "$pkgdir/usr/share/demo/data"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const overrides = [_]archive.OwnershipOverride{.{
+        .path = "usr/share/demo/data",
+        .ownership = .{ .uid = 42, .gid = 84 },
+    }};
+    fixture.builder.options.virtual_ownership_overrides = &overrides;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    var reader = try archive.Reader.init(allocator, artifacts[0].path);
+    defer reader.deinit();
+    var saw_data = false;
+    while (try reader.next()) |entry| {
+        if (!std.mem.eql(u8, entry.path, "usr/share/demo/data")) continue;
+        saw_data = true;
+        try testing.expectEqual(@as(i64, 42), entry.uid);
+        try testing.expectEqual(@as(i64, 84), entry.gid);
+    }
+    try testing.expect(saw_data);
+}
+
 test "PackageBuilder runs execution steps in the configured build directory" {
     const allocator = testing.allocator;
     const io = testing.io;
@@ -799,6 +943,7 @@ const shelly_bin_pkgbuild =
     \\
     \\  # Install Shelly.Cli binary
     \\  install -Dm755 "$srcdir/shelly" "$pkgdir/usr/bin/shelly"
+    \\  install -Dm755 "$srcdir/shelly-builder" "$pkgdir/usr/bin/shelly-builder"
     \\
     \\  # Install Shelly.Key binary
     \\  install -Dm755 "$srcdir/shelly-key" "$pkgdir/usr/bin/shelly-key"
@@ -969,7 +1114,7 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     // Populate $srcdir the way makepkg would after extracting the release
     // tarballs referenced by the PKGBUILD's source array.
     try fixture.temporary.dir.createDir(io, "src", .default_dir);
-    for ([_][]const u8{ "shelly-ui", "shelly-notifications", "shelly", "shelly-key" }) |binary| {
+    for ([_][]const u8{ "shelly-ui", "shelly-notifications", "shelly", "shelly-builder", "shelly-key" }) |binary| {
         const sub_path = try std.fmt.allocPrint(allocator, "src/{s}", .{binary});
         defer allocator.free(sub_path);
         try fixture.temporary.dir.writeFile(io, .{ .sub_path = sub_path, .data = "#!/bin/sh\nexit 0\n" });
@@ -1001,6 +1146,7 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
         "usr/bin/shelly-ui",
         "usr/bin/shelly-notifications",
         "usr/bin/shelly",
+        "usr/bin/shelly-builder",
         "usr/bin/shelly-key",
         "usr/bin/shelly-flatpak-integrate",
     }) |file| {

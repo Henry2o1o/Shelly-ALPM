@@ -42,6 +42,18 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(executable);
 
+    const builder_worker_module = b.createModule(.{
+        .root_source_file = b.path("src/builder_worker_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    builder_worker_module.addImport("Zigalpm", zigalpm);
+    const builder_worker = b.addExecutable(.{
+        .name = "shelly-builder",
+        .root_module = builder_worker_module,
+    });
+    b.installArtifact(builder_worker);
+
     const run_command = b.addRunArtifact(executable);
     run_command.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_command.addArgs(args);

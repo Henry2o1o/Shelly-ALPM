@@ -11,6 +11,7 @@ const validation = @import("../pkgbuild/shared_validtor.zig");
 const operation_api = @import("operation_context");
 const MakePackageConfiguration = @import("makepackage.zig").MakePackageConfiguration;
 const package_builder = @import("builder/builder.zig");
+const review_integrity = @import("review_integrity.zig");
 
 pub const models = @import("models.zig");
 pub const rpc = @import("rpc_client.zig");
@@ -18,6 +19,7 @@ pub const vcs = @import("vcs.zig");
 pub const srcinfo = @import("srcinfo.zig");
 pub const events = @import("events.zig");
 pub const builder = @import("builder.zig");
+pub const builder_worker = @import("builder/worker.zig");
 pub const dependency_resolver = @import("dependency_resolver.zig");
 pub const version = @import("version.zig");
 pub const native_events = alpm_events;
@@ -29,6 +31,10 @@ const PkgbuildInfo = pkgbuild_parser.Pkgbuild;
 const ParsedDependency = pkgbuild_parser.parsed_dep;
 const ValidationFinding = validation.ValidationFinding;
 const max_file_size = 32 * 1024 * 1024;
+const requireReviewInputs = review_integrity.requireReviewInputs;
+const requireReviewedFile = review_integrity.requireReviewedFile;
+const pathIsInside = review_integrity.pathIsInside;
+const reviewDigest = review_integrity.reviewDigest;
 
 pub const InitOptions = struct {
     config_path: ?[]const u8 = null,
@@ -1536,6 +1542,7 @@ pub const Manager = struct {
                 .clean_after_success = !historical,
                 .skip_source_pgp_verification = !historical,
                 .build_directory = prepared.cache_path,
+                .reviewed_pkgbuild_digest = prepared.digest,
             },
             self.environ,
             self.io(),
@@ -2465,94 +2472,6 @@ fn resolveXdgHome(
     const home = try builder.resolveInvokingUserHome(allocator, io, environ);
     defer allocator.free(home);
     return std.fs.path.join(allocator, &.{ home, fallback_relative });
-}
-
-fn hashReviewField(
-    hash: *std.crypto.hash.sha2.Sha256,
-    name: []const u8,
-    content: []const u8,
-) void {
-    const name_length: u64 = @intCast(name.len);
-    const content_length: u64 = @intCast(content.len);
-    hash.update(std.mem.asBytes(&name_length));
-    hash.update(name);
-    hash.update(std.mem.asBytes(&content_length));
-    hash.update(content);
-}
-
-fn requireReviewInputs(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    cache_path: []const u8,
-    info: *const PkgbuildInfo,
-) !void {
-    if (info.install_file) |install_file|
-        try requireReviewedFile(allocator, io, cache_path, install_file);
-    if (info.local_source_files) |files| for (files) |file_name| {
-        try requireReviewedFile(allocator, io, cache_path, file_name);
-        if (!info.local_source_contents.contains(file_name)) return error.MissingPkgbuildSourceFile;
-    };
-}
-
-fn requireReviewedFile(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    cache_path: []const u8,
-    file_name: []const u8,
-) !void {
-    if (file_name.len == 0 or std.fs.path.isAbsolute(file_name))
-        return error.UnsafePkgbuildSourcePath;
-    const path = try std.fs.path.join(allocator, &.{ cache_path, file_name });
-    defer allocator.free(path);
-    const status = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch |err| switch (err) {
-        error.FileNotFound => return error.MissingPkgbuildSourceFile,
-        else => return err,
-    };
-    if (status.kind != .file) return error.UnsafePkgbuildSourcePath;
-    const canonical_root = try std.Io.Dir.cwd().realPathFileAlloc(io, cache_path, allocator);
-    defer allocator.free(canonical_root);
-    const canonical_file = try std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator);
-    defer allocator.free(canonical_file);
-    if (!pathIsInside(canonical_root, canonical_file)) return error.UnsafePkgbuildSourcePath;
-}
-
-fn pathIsInside(root: []const u8, candidate: []const u8) bool {
-    return candidate.len > root.len and
-        std.mem.startsWith(u8, candidate, root) and
-        std.fs.path.isSep(candidate[root.len]);
-}
-
-fn reviewDigest(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    cache_path: []const u8,
-    pkgbuild_content: []const u8,
-    info: *const PkgbuildInfo,
-) ![std.crypto.hash.sha2.Sha256.digest_length]u8 {
-    var hash = std.crypto.hash.sha2.Sha256.init(.{});
-    hashReviewField(&hash, "PKGBUILD", pkgbuild_content);
-    if (info.install_file) |install_file|
-        try hashReviewedFile(allocator, io, &hash, cache_path, install_file);
-    if (info.local_source_files) |files| for (files) |file_name|
-        try hashReviewedFile(allocator, io, &hash, cache_path, file_name);
-    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
-    hash.final(&digest);
-    return digest;
-}
-
-fn hashReviewedFile(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    hash: *std.crypto.hash.sha2.Sha256,
-    cache_path: []const u8,
-    file_name: []const u8,
-) !void {
-    try requireReviewedFile(allocator, io, cache_path, file_name);
-    const path = try std.fs.path.join(allocator, &.{ cache_path, file_name });
-    defer allocator.free(path);
-    const content = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_file_size));
-    defer allocator.free(content);
-    hashReviewField(hash, file_name, content);
 }
 
 fn parseAurGitRemote(allocator: std.mem.Allocator, remote: []const u8) !?[]u8 {

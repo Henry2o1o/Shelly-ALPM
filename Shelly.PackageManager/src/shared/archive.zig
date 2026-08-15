@@ -43,17 +43,54 @@ pub const Entry = struct {
     link_target: ?[]const u8,
 };
 
+/// Ownership recorded in a package archive. This is deliberately independent
+/// of the ownership of the staging tree on the host filesystem.
+pub const VirtualOwnership = struct {
+    uid: i64 = 0,
+    gid: i64 = 0,
+};
+
+pub const OwnershipOverride = struct {
+    path: []const u8,
+    ownership: VirtualOwnership,
+};
+
+/// Metadata view used by both package and mtree generation. Package staging
+/// always remains owned by the unprivileged build user; only this view is
+/// written to the resulting archive.
+pub const VirtualMetadata = struct {
+    default_ownership: VirtualOwnership = .{},
+    ownership_overrides: []const OwnershipOverride = &.{},
+
+    pub fn ownershipForPath(self: VirtualMetadata, path: []const u8) VirtualOwnership {
+        for (self.ownership_overrides) |override| {
+            if (std.mem.eql(u8, override.path, path)) return override.ownership;
+        }
+        return self.default_ownership;
+    }
+};
+
 pub const Writer = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     handle: *c.struct_archive,
     output_path_z: [:0]u8,
+    virtual_metadata: VirtualMetadata,
     closed: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
         io: std.Io,
         output_path: []const u8,
+    ) !Writer {
+        return initWithMetadata(allocator, io, output_path, .{});
+    }
+
+    pub fn initWithMetadata(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        output_path: []const u8,
+        virtual_metadata: VirtualMetadata,
     ) !Writer {
         const output_path_z = try allocator.dupeZ(u8, output_path);
         errdefer allocator.free(output_path_z);
@@ -70,6 +107,7 @@ pub const Writer = struct {
             .io = io,
             .handle = handle,
             .output_path_z = output_path_z,
+            .virtual_metadata = virtual_metadata,
         };
     }
 
@@ -87,6 +125,7 @@ pub const Writer = struct {
             self.handle,
             source_directory,
             null,
+            self.virtual_metadata,
         );
     }
 
@@ -107,6 +146,16 @@ pub fn writeMtree(
     source_directory: []const u8,
     output_path: []const u8,
 ) !void {
+    return writeMtreeWithMetadata(allocator, io, source_directory, output_path, .{});
+}
+
+pub fn writeMtreeWithMetadata(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    source_directory: []const u8,
+    output_path: []const u8,
+    virtual_metadata: VirtualMetadata,
+) !void {
     const output_path_z = try allocator.dupeZ(u8, output_path);
     defer allocator.free(output_path_z);
 
@@ -117,7 +166,7 @@ pub fn writeMtree(
     try requireWriteStatus(c.archive_write_set_format_mtree(handle));
     try requireWriteStatus(c.archive_write_open_filename(handle, output_path_z.ptr));
 
-    try writeDirectory(allocator, io, handle, source_directory, ".MTREE");
+    try writeDirectory(allocator, io, handle, source_directory, ".MTREE", virtual_metadata);
     if (c.archive_write_close(handle) < c.ARCHIVE_WARN)
         return Error.ArchiveCloseFailed;
 }
@@ -128,6 +177,7 @@ fn writeDirectory(
     handle: *c.struct_archive,
     source_directory: []const u8,
     skip_path: ?[]const u8,
+    virtual_metadata: VirtualMetadata,
 ) !void {
     var directory = try std.Io.Dir.cwd().openDir(io, source_directory, .{ .iterate = true });
     defer directory.close(io);
@@ -164,6 +214,7 @@ fn writeDirectory(
             archive_path_z.ptr,
             file_type,
             @intCast(stat.permissions.toMode() & 0o7777),
+            virtual_metadata.ownershipForPath(file_entry.path),
         );
         setEntryMtime(archive_entry, stat.mtime.nanoseconds);
         c.archive_entry_set_nlink(archive_entry, @intCast(stat.nlink));
@@ -206,14 +257,15 @@ fn setCommonEntryMetadata(
     pathname: [*c]const u8,
     file_type: c_uint,
     permissions: u32,
+    ownership: VirtualOwnership,
 ) void {
     c.archive_entry_set_pathname(entry, pathname);
     c.archive_entry_set_filetype(entry, file_type);
     c.archive_entry_set_perm(entry, @intCast(permissions));
-    c.archive_entry_set_uid(entry, 0);
-    c.archive_entry_set_gid(entry, 0);
-    c.archive_entry_set_uname(entry, "root");
-    c.archive_entry_set_gname(entry, "root");
+    c.archive_entry_set_uid(entry, ownership.uid);
+    c.archive_entry_set_gid(entry, ownership.gid);
+    c.archive_entry_set_uname(entry, if (ownership.uid == 0) "root" else null);
+    c.archive_entry_set_gname(entry, if (ownership.gid == 0) "root" else null);
 }
 
 fn setEntryMtime(entry: *c.struct_archive_entry, nanoseconds: i96) void {
@@ -480,6 +532,54 @@ test "archive writer preserves tree modes and symlinks while forcing root owners
     }
     try testing.expect(saw_file);
     try testing.expect(saw_link);
+}
+
+test "archive virtual ownership is shared by package and mtree writers" {
+    const testing = std.testing;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "tree/usr/share/demo");
+    try tmp.dir.writeFile(io, .{ .sub_path = "tree/usr/share/demo/data", .data = "payload" });
+    const source_path = try tmp.dir.realPathFileAlloc(io, "tree", testing.allocator);
+    defer testing.allocator.free(source_path);
+    const package_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/virtual.pkg.tar.zst",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(package_path);
+    const mtree_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/virtual.mtree.gz",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(mtree_path);
+
+    const overrides = [_]OwnershipOverride{.{
+        .path = "usr/share/demo/data",
+        .ownership = .{ .uid = 42, .gid = 84 },
+    }};
+    const metadata: VirtualMetadata = .{ .ownership_overrides = &overrides };
+    var writer = try Writer.initWithMetadata(testing.allocator, io, package_path, metadata);
+    defer writer.deinit();
+    try writer.addDirectory(source_path);
+    try writer.finish();
+    try writeMtreeWithMetadata(testing.allocator, io, source_path, mtree_path, metadata);
+
+    inline for (.{ package_path, mtree_path }) |path| {
+        var reader = try Reader.initAll(testing.allocator, path);
+        defer reader.deinit();
+        var saw_data = false;
+        while (try reader.next()) |entry| {
+            if (!std.mem.eql(u8, entry.path, "usr/share/demo/data")) continue;
+            saw_data = true;
+            try testing.expectEqual(@as(i64, 42), entry.uid);
+            try testing.expectEqual(@as(i64, 84), entry.gid);
+        }
+        try testing.expect(saw_data);
+    }
 }
 
 test "archive reader supports gzip and zstd tar streams" {

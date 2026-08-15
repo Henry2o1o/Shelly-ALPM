@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
 const pkgbuild_parser = @import("../../pkgbuild/pkgbuild_parser.zig");
 const PackageBuild = pkgbuild_parser.Pkgbuild;
@@ -8,6 +9,7 @@ const op_context = @import("operation_context");
 const archive = @import("archive");
 const process_runner = @import("../builder.zig");
 const downloader = @import("../../shared/downloader.zig");
+const worker_protocol = @import("worker_protocol.zig");
 
 pub const BuildArtifact = struct {
     path: [:0]u8,
@@ -34,9 +36,36 @@ pub const BuildOptions = struct {
     /// packaging machinery without reacquiring sources. Normal AUR builds must
     /// leave this false so PackageBuilder creates $srcdir itself.
     sources_prepared: bool = false,
+    /// Package ownership is virtual: the staging tree remains owned by the
+    /// build user and these overrides are applied only to .MTREE and the
+    /// completed package archive.
+    virtual_ownership_overrides: []const archive.OwnershipOverride = &.{},
+    /// Digest of the PKGBUILD and its reviewed local/install files. A root
+    /// caller must provide it so the worker can reject review/build races.
+    reviewed_pkgbuild_digest: ?[std.crypto.hash.sha2.Sha256.digest_length]u8 = null,
 };
 
-pub const BuilderErrors = error{ BuildFailed, OutOfMemory, Cancelled, AlreadyBuilt };
+pub const BuilderErrors = error{
+    BuildFailed,
+    OutOfMemory,
+    Cancelled,
+    AlreadyBuilt,
+    BuilderMustNotRunAsRoot,
+    BuilderDeescalationFailed,
+    BuilderWorkerUnavailable,
+    UnreviewedBuilderRequest,
+    ReviewedPkgbuildChanged,
+    BuildDirectoryNotWritable,
+    PrivilegedPackageOperationUnsupported,
+};
+
+pub fn requireNonRootEffectiveUid(effective_uid: u32) error{BuilderMustNotRunAsRoot}!void {
+    if (effective_uid == 0) return error.BuilderMustNotRunAsRoot;
+}
+
+pub fn requiresDeescalatedWorker(effective_uid: u32) bool {
+    return effective_uid == 0;
+}
 
 /// Builder expects to be passed all items and should not construct
 /// these items as it's context only exists to serve inside manager
@@ -90,7 +119,7 @@ pub const PackageBuilder = struct {
     pub fn BuildPackage(self: *PackageBuilder) BuilderErrors![]BuildArtifact {
         var operation = self.operation_context.begin(op_context.OperationDescriptor{ .backend = .aur, .kind = .build, .subject = "Package Build" });
         defer operation.finish(.cancelled);
-        const artifacts = self.buildPackage(&operation) catch |err| {
+        const artifacts = self.dispatchBuild(&operation) catch |err| {
             const message = std.fmt.allocPrint(
                 self.allocator,
                 "Failed to build package: {s}",
@@ -106,6 +135,13 @@ pub const PackageBuilder = struct {
             return switch (err) {
                 error.OutOfMemory => BuilderErrors.OutOfMemory,
                 error.AlreadyBuilt => BuilderErrors.AlreadyBuilt,
+                error.BuilderMustNotRunAsRoot => BuilderErrors.BuilderMustNotRunAsRoot,
+                error.BuilderDeescalationFailed, error.InvokingUserUnavailable => BuilderErrors.BuilderDeescalationFailed,
+                error.BuilderWorkerUnavailable => BuilderErrors.BuilderWorkerUnavailable,
+                error.UnreviewedBuilderRequest => BuilderErrors.UnreviewedBuilderRequest,
+                error.ReviewedPkgbuildChanged => BuilderErrors.ReviewedPkgbuildChanged,
+                error.BuildDirectoryNotWritable => BuilderErrors.BuildDirectoryNotWritable,
+                error.PrivilegedPackageOperationUnsupported => BuilderErrors.PrivilegedPackageOperationUnsupported,
                 else => BuilderErrors.BuildFailed,
             };
         };
@@ -113,7 +149,16 @@ pub const PackageBuilder = struct {
         return artifacts;
     }
 
+    fn dispatchBuild(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
+        if (builtin.os.tag == .linux and requiresDeescalatedWorker(@intCast(std.os.linux.geteuid())))
+            return self.buildAsInvokingUser(operation);
+        return self.buildPackage(operation);
+    }
+
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
+        if (builtin.os.tag == .linux)
+            try requireNonRootEffectiveUid(@intCast(std.os.linux.geteuid()));
+        try self.validateBuildDirectories();
         if (!self.options.sources_prepared) try self.prepareSources(operation);
         const shared_steps = self.package_builds[0].execution_steps orelse
             return error.MissingExecutionSteps;
@@ -156,6 +201,108 @@ pub const PackageBuilder = struct {
         return artifacts.toOwnedSlice(self.allocator);
     }
 
+    fn buildAsInvokingUser(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
+        const digest = self.options.reviewed_pkgbuild_digest orelse return error.UnreviewedBuilderRequest;
+        const worker_path = try self.resolveWorkerPath();
+        defer self.allocator.free(worker_path);
+
+        const request: worker_protocol.Request = .{
+            .build_directory = self.options.build_directory,
+            .requested_names = self.requested_names,
+            .options = .{
+                .run_check = self.options.run_check,
+                .overwrite = self.options.overwrite,
+                .clean_after_success = self.options.clean_after_success,
+                .skip_source_pgp_verification = self.options.skip_source_pgp_verification,
+                .sources_prepared = self.options.sources_prepared,
+            },
+            .makepkg = .{
+                .package_extension = self.makepkg_config.package_extension,
+                .package_carch = self.makepkg_config.package_carch,
+                .packager = self.makepkg_config.packager,
+                .build_environment = self.makepkg_config.build_environment,
+                .options = self.makepkg_config.options,
+            },
+            .reviewed_pkgbuild_digest = digest,
+            .virtual_ownership_overrides = self.options.virtual_ownership_overrides,
+        };
+        const request_json = try std.json.Stringify.valueAlloc(self.allocator, request, .{});
+        defer self.allocator.free(request_json);
+
+        var command = process_runner.deescalatedInvokingUserCommand(
+            self.allocator,
+            self.io,
+            self.environ,
+            worker_path,
+            &.{request_json},
+        ) catch |err| switch (err) {
+            error.InvokingUserUnavailable => return err,
+            else => return error.BuilderDeescalationFailed,
+        };
+        defer command.deinit(self.allocator);
+
+        var stream_context: WorkerStreamContext = .{ .builder = self };
+        defer if (stream_context.response_json) |json| self.allocator.free(json);
+        const exit_code = process_runner.runStreamingWithEnvironmentOperation(
+            self.allocator,
+            self.io,
+            self.environ,
+            command.asConst(),
+            null,
+            null,
+            .{ .function = forwardWorkerLine, .data = &stream_context },
+            operation,
+        ) catch |err| switch (err) {
+            error.FileNotFound => return error.BuilderWorkerUnavailable,
+            else => return err,
+        };
+        const response_json = stream_context.response_json orelse {
+            if (exit_code == 127) return error.BuilderWorkerUnavailable;
+            return error.BuilderDeescalationFailed;
+        };
+        var parsed = try std.json.parseFromSlice(worker_protocol.Response, self.allocator, response_json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed.deinit();
+        if (parsed.value.version != worker_protocol.protocol_version) return error.BuilderDeescalationFailed;
+        if (parsed.value.error_name) |name| return workerError(name);
+        if (exit_code != 0) return error.BuilderDeescalationFailed;
+
+        const artifacts = try self.allocator.alloc(BuildArtifact, parsed.value.artifacts.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (artifacts[0..initialized]) |artifact| artifact.deinit(self.allocator);
+            self.allocator.free(artifacts);
+        }
+        for (parsed.value.artifacts, artifacts) |source, *destination| {
+            destination.* = .{
+                .path = try self.allocator.dupeZ(u8, source.path),
+                .package_name = self.allocator.dupe(u8, source.package_name) catch |err| {
+                    self.allocator.free(destination.path);
+                    return err;
+                },
+            };
+            initialized += 1;
+        }
+        return artifacts;
+    }
+
+    fn resolveWorkerPath(self: *PackageBuilder) ![]u8 {
+        if (self.environ.getPosix("SHELLY_BUILDER_WORKER")) |path| {
+            if (path.len == 0) return error.BuilderWorkerUnavailable;
+            return self.allocator.dupe(u8, path);
+        }
+        const executable_directory = std.process.executableDirPathAlloc(self.io, self.allocator) catch
+            return self.allocator.dupe(u8, "/usr/bin/shelly-builder");
+        defer self.allocator.free(executable_directory);
+        const sibling = try std.fs.path.join(self.allocator, &.{ executable_directory, "shelly-builder" });
+        std.Io.Dir.cwd().access(self.io, sibling, .{ .execute = true }) catch {
+            self.allocator.free(sibling);
+            return self.allocator.dupe(u8, "/usr/bin/shelly-builder");
+        };
+        return sibling;
+    }
+
     fn prepareSources(self: *PackageBuilder, operation: *op_context.Operation) !void {
         try operation.checkCancelled();
         const package_build = &self.package_builds[0];
@@ -177,7 +324,6 @@ pub const PackageBuilder = struct {
         std.Io.Dir.cwd().deleteTree(self.io, staging) catch {};
         try std.Io.Dir.cwd().createDirPath(self.io, staging);
         errdefer std.Io.Dir.cwd().deleteTree(self.io, staging) catch {};
-        try self.ensureInvokingUserOwns(operation, staging);
 
         self.raiseSourceMessage(package_build, "Preparing package sources");
         for (sources, 0..) |raw_source, index| {
@@ -203,8 +349,6 @@ pub const PackageBuilder = struct {
 
         if (!self.options.skip_source_pgp_verification and containsSignatureSource(sources))
             return error.SourcePgpVerificationUnsupported;
-        try self.ensureInvokingUserOwns(operation, staging);
-
         // Commit the complete source tree while preserving the previous tree
         // until the replacement rename succeeds.
         std.Io.Dir.cwd().deleteTree(self.io, backup) catch {};
@@ -279,14 +423,10 @@ pub const PackageBuilder = struct {
         args: []const []const u8,
     ) !void {
         try operation.checkCancelled();
-        var command = try process_runner.invokingUserCommand(
-            self.allocator,
-            self.io,
-            self.environ,
-            "git",
-            args,
-        );
+        var command: std.ArrayList([]const u8) = .empty;
         defer command.deinit(self.allocator);
+        try command.append(self.allocator, "git");
+        try command.appendSlice(self.allocator, args);
         var stream_context: StepStreamContext = .{
             .builder = self,
             .package_name = self.requested_names[0],
@@ -295,34 +435,13 @@ pub const PackageBuilder = struct {
             self.allocator,
             self.io,
             self.environ,
-            command.asConst(),
+            command.items,
             self.options.build_directory,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
             operation,
         );
         if (exit_code != 0) return error.SourceVcsFailed;
-    }
-
-    fn ensureInvokingUserOwns(
-        self: *PackageBuilder,
-        operation: *op_context.Operation,
-        path: []const u8,
-    ) !void {
-        const owner = self.environ.getPosix("SUDO_USER") orelse
-            self.environ.getPosix("PKEXEC_UID") orelse return;
-        if (owner.len == 0 or std.mem.eql(u8, owner, "root") or std.mem.eql(u8, owner, "0")) return;
-        try operation.checkCancelled();
-        var result = try process_runner.runWithEnvironment(
-            self.allocator,
-            self.io,
-            self.environ,
-            &.{ "chown", "-R", "-h", "--", owner, path },
-            null,
-            null,
-        );
-        defer result.deinit(self.allocator);
-        if (result.exit_code != 0) return error.SourceOwnershipFailed;
     }
 
     fn verifySourceChecksums(
@@ -426,6 +545,85 @@ pub const PackageBuilder = struct {
         });
     }
 
+    fn validateBuildDirectories(self: *PackageBuilder) !void {
+        const cwd = std.Io.Dir.cwd();
+        const root_stat = cwd.statFile(self.io, self.options.build_directory, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                cwd.createDirPath(self.io, self.options.build_directory) catch {
+                    self.reportUnwritableBuildDirectory(self.options.build_directory);
+                    return error.BuildDirectoryNotWritable;
+                };
+                return;
+            },
+            else => return err,
+        };
+        if (root_stat.kind != .directory) {
+            self.reportUnwritableBuildDirectory(self.options.build_directory);
+            return error.BuildDirectoryNotWritable;
+        }
+        try self.validateWritableDirectoryTree(self.options.build_directory, false);
+
+        for ([_][]const u8{ "src", "pkg", ".src.shelly-staging", ".src.shelly-backup" }) |name| {
+            const path = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, name });
+            defer self.allocator.free(path);
+            try self.validateWritableDirectoryTree(path, true);
+        }
+    }
+
+    fn validateWritableDirectoryTree(
+        self: *PackageBuilder,
+        root_path: []const u8,
+        recurse: bool,
+    ) !void {
+        const cwd = std.Io.Dir.cwd();
+        const stat = cwd.statFile(self.io, root_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        if (stat.kind != .directory) {
+            self.reportUnwritableBuildDirectory(root_path);
+            return error.BuildDirectoryNotWritable;
+        }
+        cwd.access(self.io, root_path, .{ .write = true, .execute = true }) catch {
+            self.reportUnwritableBuildDirectory(root_path);
+            return error.BuildDirectoryNotWritable;
+        };
+        if (!recurse) return;
+
+        var directory = cwd.openDir(self.io, root_path, .{ .iterate = true }) catch {
+            self.reportUnwritableBuildDirectory(root_path);
+            return error.BuildDirectoryNotWritable;
+        };
+        defer directory.close(self.io);
+        var walker = directory.walk(self.allocator) catch {
+            self.reportUnwritableBuildDirectory(root_path);
+            return error.BuildDirectoryNotWritable;
+        };
+        defer walker.deinit();
+        while (walker.next(self.io) catch {
+            self.reportUnwritableBuildDirectory(root_path);
+            return error.BuildDirectoryNotWritable;
+        }) |entry| {
+            if (entry.kind != .directory) continue;
+            const path = try std.fs.path.join(self.allocator, &.{ root_path, entry.path });
+            defer self.allocator.free(path);
+            cwd.access(self.io, path, .{ .write = true, .execute = true }) catch {
+                self.reportUnwritableBuildDirectory(path);
+                return error.BuildDirectoryNotWritable;
+            };
+        }
+    }
+
+    fn reportUnwritableBuildDirectory(self: *PackageBuilder, path: []const u8) void {
+        const message = std.fmt.allocPrint(
+            self.allocator,
+            "Build directory is not writable by the non-root builder: {s}. Remove it or restore ownership to the invoking user.",
+            .{path},
+        ) catch return;
+        defer self.allocator.free(message);
+        self.dispatcher.raiseError(.{ .message = message });
+    }
+
     fn runStep(
         self: *PackageBuilder,
         operation: *op_context.Operation,
@@ -435,26 +633,27 @@ pub const PackageBuilder = struct {
     ) !void {
         const active_operation = self.dispatcher.operation orelse operation;
         try active_operation.checkCancelled();
-        var command = try process_runner.invokingUserCommand(
-            self.allocator,
-            self.io,
-            self.environ,
-            "/bin/bash",
-            &.{ "-e", "-c", body },
-        );
-        defer command.deinit(self.allocator);
+        const package_step = isPackageStep(step_name);
+        if (package_step) try rejectPrivilegedPackageOperations(body);
+        const executable_body = if (package_step)
+            try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ virtualMetadataShellPrelude, body })
+        else
+            body;
+        defer if (package_step) self.allocator.free(executable_body);
 
         var stream_context: StepStreamContext = .{ .builder = self, .package_name = package_name };
         const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
             self.allocator,
             self.io,
             self.environ,
-            command.asConst(),
+            &.{ "/bin/bash", "-e", "-c", executable_body },
             self.options.build_directory,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
             active_operation,
         );
+        if (package_step and exit_code == virtual_metadata_rejected_exit_code)
+            return error.PrivilegedPackageOperationUnsupported;
         if (exit_code != 0) return error.StepFailed;
         self.dispatcher.raiseInformational(.{
             .event_type = .aur_build_output,
@@ -503,7 +702,10 @@ pub const PackageBuilder = struct {
 
         const mtree_path = try std.fs.path.join(self.allocator, &.{ pkgdir, ".MTREE" });
         defer self.allocator.free(mtree_path);
-        try archive.writeMtree(self.allocator, self.io, pkgdir, mtree_path);
+        const virtual_metadata: archive.VirtualMetadata = .{
+            .ownership_overrides = self.options.virtual_ownership_overrides,
+        };
+        try archive.writeMtreeWithMetadata(self.allocator, self.io, pkgdir, mtree_path, virtual_metadata);
         var mtree_file = try pkgdir_handle.openFile(self.io, ".MTREE", .{});
         defer mtree_file.close(self.io);
         try mtree_file.setPermissions(self.io, .fromMode(0o644));
@@ -530,7 +732,7 @@ pub const PackageBuilder = struct {
         }
         errdefer std.Io.Dir.cwd().deleteFile(self.io, output_path) catch {};
 
-        var writer = try archive.Writer.init(self.allocator, self.io, output_path);
+        var writer = try archive.Writer.initWithMetadata(self.allocator, self.io, output_path, virtual_metadata);
         defer writer.deinit();
         try writer.addDirectory(pkgdir);
         try writer.finish();
@@ -614,6 +816,153 @@ pub const PackageBuilder = struct {
         try writeMetadataFile(pkgdir, self.io, ".BUILDINFO", output.written());
     }
 };
+
+fn rejectPrivilegedPackageOperations(body: []const u8) error{PrivilegedPackageOperationUnsupported}!void {
+    const commands = [_][]const u8{
+        "sudo",    "sudoedit", "doas",  "pkexec", "run0",
+        "runuser", "su",       "mknod", "setcap", "mount",
+        "umount",
+    };
+    var heredoc_delimiter: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| {
+        if (heredoc_delimiter) |delimiter| {
+            if (std.mem.eql(u8, std.mem.trim(u8, line, " \t\r"), delimiter))
+                heredoc_delimiter = null;
+            continue;
+        }
+
+        const command_line = stripShellComment(line);
+        for (commands) |command| {
+            if (containsShellCommand(command_line, command))
+                return error.PrivilegedPackageOperationUnsupported;
+        }
+        heredoc_delimiter = shellHeredocDelimiter(command_line);
+    }
+}
+
+const virtual_metadata_rejected_exit_code: u8 = 97;
+
+/// Bash functions used only for package() and package_<name>(). They simulate
+/// the common fakeroot ownership operations without changing host ownership.
+/// The archive writer independently records root ownership for every entry.
+const virtualMetadataShellPrelude =
+    \\__shelly_metadata_reject() {
+    \\  printf '%s\n' 'shelly: unsupported privileged package metadata operation' >&2
+    \\  return 97
+    \\}
+    \\__shelly_root_identity() {
+    \\  case "$1" in
+    \\    root|0|root:root|root:0|0:root|0:0) return 0 ;;
+    \\    *) return 1 ;;
+    \\  esac
+    \\}
+    \\chown() {
+    \\  while [ "$#" -gt 0 ]; do
+    \\    case "$1" in
+    \\      -R|-h|-H|-L|-P|--recursive|--no-dereference|--dereference|--preserve-root) shift ;;
+    \\      --) shift; break ;;
+    \\      -*) __shelly_metadata_reject; return $? ;;
+    \\      *) break ;;
+    \\    esac
+    \\  done
+    \\  [ "$#" -ge 2 ] || { __shelly_metadata_reject; return $?; }
+    \\  __shelly_root_identity "$1" || { __shelly_metadata_reject; return $?; }
+    \\  return 0
+    \\}
+    \\chgrp() {
+    \\  while [ "$#" -gt 0 ]; do
+    \\    case "$1" in
+    \\      -R|-h|-H|-L|-P|--recursive|--no-dereference|--dereference|--preserve-root) shift ;;
+    \\      --) shift; break ;;
+    \\      -*) __shelly_metadata_reject; return $? ;;
+    \\      *) break ;;
+    \\    esac
+    \\  done
+    \\  [ "$#" -ge 2 ] || { __shelly_metadata_reject; return $?; }
+    \\  case "$1" in root|0) return 0 ;; *) __shelly_metadata_reject; return $? ;; esac
+    \\}
+    \\install() {
+    \\  local -a shelly_install_args=()
+    \\  while [ "$#" -gt 0 ]; do
+    \\    case "$1" in
+    \\      -o|--owner|-g|--group)
+    \\        [ "$#" -ge 2 ] || { __shelly_metadata_reject; return $?; }
+    \\        case "$2" in root|0) shift 2 ;; *) __shelly_metadata_reject; return $? ;; esac ;;
+    \\      --owner=*|--group=*)
+    \\        case "${1#*=}" in root|0) shift ;; *) __shelly_metadata_reject; return $? ;; esac ;;
+    \\      *) shelly_install_args+=("$1"); shift ;;
+    \\    esac
+    \\  done
+    \\  /usr/bin/install "${shelly_install_args[@]}"
+    \\}
+;
+
+fn stripShellComment(line: []const u8) []const u8 {
+    var single_quoted = false;
+    var double_quoted = false;
+    var escaped = false;
+    for (line, 0..) |byte, index| {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (byte == '\\' and !single_quoted) {
+            escaped = true;
+            continue;
+        }
+        if (byte == '\'' and !double_quoted) {
+            single_quoted = !single_quoted;
+            continue;
+        }
+        if (byte == '"' and !single_quoted) {
+            double_quoted = !double_quoted;
+            continue;
+        }
+        if (byte == '#' and !single_quoted and !double_quoted and
+            (index == 0 or std.ascii.isWhitespace(line[index - 1])))
+            return line[0..index];
+    }
+    return line;
+}
+
+fn shellHeredocDelimiter(line: []const u8) ?[]const u8 {
+    const marker = std.mem.indexOf(u8, line, "<<") orelse return null;
+    var index = marker + 2;
+    if (index < line.len and line[index] == '-') index += 1;
+    while (index < line.len and std.ascii.isWhitespace(line[index])) : (index += 1) {}
+    if (index == line.len) return null;
+
+    const quote: ?u8 = if (line[index] == '\'' or line[index] == '"') line[index] else null;
+    if (quote != null) index += 1;
+    const start = index;
+    while (index < line.len) : (index += 1) {
+        if (quote) |quoted| {
+            if (line[index] == quoted) break;
+        } else if (std.ascii.isWhitespace(line[index]) or line[index] == ';') break;
+    }
+    if (index == start) return null;
+    return line[start..index];
+}
+
+fn containsShellCommand(body: []const u8, command: []const u8) bool {
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, body, start, command)) |index| {
+        const before_ok = index == 0 or isShellBoundary(body[index - 1]) or body[index - 1] == '/';
+        const after = index + command.len;
+        const after_ok = after == body.len or isShellBoundary(body[after]);
+        if (before_ok and after_ok) return true;
+        start = index + 1;
+    }
+    return false;
+}
+
+fn isShellBoundary(byte: u8) bool {
+    return std.ascii.isWhitespace(byte) or switch (byte) {
+        ';', '&', '|', '(', ')', '{', '}', '`' => true,
+        else => false,
+    };
+}
 
 const SourceKind = enum { local, http, git };
 const GitReferenceKind = enum { branch, tag, commit };
@@ -805,6 +1154,42 @@ const StepStreamContext = struct {
     builder: *PackageBuilder,
     package_name: []const u8,
 };
+
+const WorkerStreamContext = struct {
+    builder: *PackageBuilder,
+    response_json: ?[]u8 = null,
+};
+
+fn forwardWorkerLine(data: ?*anyopaque, stream: process_runner.StreamKind, line: []const u8) void {
+    const context: *WorkerStreamContext = @ptrCast(@alignCast(data.?));
+    if (std.mem.startsWith(u8, line, worker_protocol.result_prefix)) {
+        if (context.response_json) |old| context.builder.allocator.free(old);
+        context.response_json = context.builder.allocator.dupe(
+            u8,
+            line[worker_protocol.result_prefix.len..],
+        ) catch null;
+        return;
+    }
+    context.builder.dispatcher.raiseInformational(.{
+        .event_type = if (stream == .stderr) .aur_build_error else .aur_build_output,
+        .message = line,
+        .package_name = if (context.builder.requested_names.len > 0)
+            context.builder.requested_names[0]
+        else
+            null,
+    });
+}
+
+fn workerError(name: []const u8) anyerror {
+    if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
+    if (std.mem.eql(u8, name, "Cancelled")) return error.Cancelled;
+    if (std.mem.eql(u8, name, "AlreadyBuilt")) return error.AlreadyBuilt;
+    if (std.mem.eql(u8, name, "BuildDirectoryNotWritable")) return error.BuildDirectoryNotWritable;
+    if (std.mem.eql(u8, name, "PrivilegedPackageOperationUnsupported")) return error.PrivilegedPackageOperationUnsupported;
+    if (std.mem.eql(u8, name, "BuilderMustNotRunAsRoot")) return error.BuilderMustNotRunAsRoot;
+    if (std.mem.eql(u8, name, "ReviewedPkgbuildChanged")) return error.ReviewedPkgbuildChanged;
+    return error.BuildFailed;
+}
 
 fn forwardStepLine(data: ?*anyopaque, stream: process_runner.StreamKind, line: []const u8) void {
     const context: *StepStreamContext = @ptrCast(@alignCast(data.?));
