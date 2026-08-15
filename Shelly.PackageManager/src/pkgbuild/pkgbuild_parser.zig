@@ -268,6 +268,7 @@ pub const PkgbuildParser = struct {
             }
             vars.deinit();
         }
+        try self.validate_selected_package(content, &vars);
 
         const install_assignment = try self.resolve_install_assignment(content, &vars);
         defer if (install_assignment) |assignment| self.allocator.free(assignment.value);
@@ -286,7 +287,7 @@ pub const PkgbuildParser = struct {
             else
                 null;
 
-        const depends = try self.resolve_package_depends(content, &vars);
+        const depends = try self.resolve_package_array_field(content, &vars, "depends");
         const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
         const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
 
@@ -299,17 +300,17 @@ pub const PkgbuildParser = struct {
             .pkg_version = try resolve_or_parse(self, content, "pkgver", &vars),
             .pkg_rel = try resolve_or_parse(self, content, "pkgrel", &vars),
             .epoch = try resolve_or_parse(self, content, "epoch", &vars),
-            .pkg_desc = try resolve_or_parse(self, content, "pkgdesc", &vars),
-            .url = try resolve_or_parse(self, content, "url", &vars),
-            .license = try self.parse_array(content, "license"),
-            .arch = try self.parse_array(content, "arch"),
+            .pkg_desc = try self.resolve_package_string_field(content, &vars, "pkgdesc"),
+            .url = try self.resolve_package_string_field(content, &vars, "url"),
+            .license = try self.resolve_package_array_field(content, &vars, "license"),
+            .arch = try self.resolve_package_array_field(content, &vars, "arch"),
             .depends = depends,
             .make_depends = make_depends,
             .check_depends = check_depends,
-            .opt_depends = try self.resolve_array_field(content, &vars, "optdepends"),
-            .provides = try self.resolve_array_field(content, &vars, "provides"),
-            .conflicts = try self.parse_array(content, "conflicts"),
-            .replaces = try self.parse_array(content, "replaces"),
+            .opt_depends = try self.resolve_package_array_field(content, &vars, "optdepends"),
+            .provides = try self.resolve_package_array_field(content, &vars, "provides"),
+            .conflicts = try self.resolve_package_array_field(content, &vars, "conflicts"),
+            .replaces = try self.resolve_package_array_field(content, &vars, "replaces"),
             .source = source,
             .no_extract = try self.resolve_array_field(content, &vars, "noextract"),
             .sha_1_sums = try self.resolve_arch_array_field(content, &vars, "sha1sums"),
@@ -666,39 +667,104 @@ pub const PkgbuildParser = struct {
         return combined;
     }
 
-    fn resolve_package_depends(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8)) ![][]const u8 {
-        const global = try self.resolve_array_field(content, vars, "depends");
-        errdefer {
-            for (global) |item| self.allocator.free(item);
-            self.allocator.free(global);
+    fn validate_selected_package(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+    ) !void {
+        const selected = self.selected_package_name orelse return;
+        const names = try self.resolve_array_field(content, vars, "pkgname");
+        defer freeStringSlice(self.allocator, names);
+        if (names.len > 0) {
+            for (names) |name| if (std.mem.eql(u8, name, selected)) return;
+            return error.SelectedPackageNotFound;
         }
+        if (vars.get("pkgname")) |name|
+            if (std.mem.eql(u8, name, selected)) return;
+        return error.SelectedPackageNotFound;
+    }
 
-        const package_body = try self.selected_package_body(content) orelse return global;
-        const raw_scoped = try self.parse_array(package_body, "depends");
-        defer {
-            for (raw_scoped) |item| self.allocator.free(item);
-            self.allocator.free(raw_scoped);
+    fn package_scoped_vars(
+        self: PkgbuildParser,
+        vars: *const std.StringHashMap([]const u8),
+    ) !std.StringHashMap([]const u8) {
+        var scoped = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer scoped.deinit();
+        var iterator = vars.iterator();
+        while (iterator.next()) |entry|
+            try scoped.put(entry.key_ptr.*, entry.value_ptr.*);
+        if (self.selected_package_name) |name| try scoped.put("pkgname", name);
+        return scoped;
+    }
+
+    fn resolve_package_string_field(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+        var_name: []const u8,
+    ) !?[]const u8 {
+        var result: ?[]const u8 = if (vars.get(var_name)) |value|
+            try self.allocator.dupe(u8, value)
+        else
+            null;
+        errdefer if (result) |value| self.allocator.free(value);
+
+        const body = try self.selected_package_body(content) orelse return result;
+        var lines = std.mem.splitScalar(u8, body, '\n');
+        var scoped_value: ?[]const u8 = null;
+        while (lines.next()) |line| {
+            if (try parse_variable(line, var_name)) |value| scoped_value = value;
         }
-        if (raw_scoped.len == 0) return global;
+        const raw = scoped_value orelse return result;
 
-        var scoped_vars = std.StringHashMap([]const u8).init(self.allocator);
+        var scoped_vars = try self.package_scoped_vars(vars);
         defer scoped_vars.deinit();
-        var variable_iterator = vars.iterator();
-        while (variable_iterator.next()) |entry|
-            try scoped_vars.put(entry.key_ptr.*, entry.value_ptr.*);
-        if (self.selected_package_name) |name| try scoped_vars.put("pkgname", name);
-        const scoped = try self.resolve_variable_references(content, &scoped_vars, raw_scoped);
+        const resolved = try self.resolve_string(raw, &scoped_vars);
+        if (result) |old| self.allocator.free(old);
+        result = resolved;
+        return result;
+    }
+
+    fn resolve_package_array_field(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+        var_name: []const u8,
+    ) ![][]const u8 {
+        const global = try self.resolve_array_field(content, vars, var_name);
+        var global_owned = true;
+        errdefer if (global_owned) freeStringSlice(self.allocator, global);
+        const body = try self.selected_package_body(content) orelse return global;
+
+        var values: std.ArrayList([]const u8) = .empty;
         errdefer {
-            for (scoped) |item| self.allocator.free(item);
-            self.allocator.free(scoped);
+            for (values.items) |value| self.allocator.free(value);
+            values.deinit(self.allocator);
+        }
+        try values.appendSlice(self.allocator, global);
+        self.allocator.free(global);
+        global_owned = false;
+
+        var scoped_vars = try self.package_scoped_vars(vars);
+        defer scoped_vars.deinit();
+        var search_from: usize = 0;
+        while (find_next_scoped_array_start(body, var_name, search_from)) |assignment| {
+            const scanned = try scan_array_body(self.allocator, body, assignment.after_paren);
+            defer self.allocator.free(scanned.body);
+            search_from = scanned.end;
+            if (!assignment.append) {
+                for (values.items) |value| self.allocator.free(value);
+                values.clearRetainingCapacity();
+            }
+
+            const raw_items = try parse_array_body_items(self.allocator, scanned.body);
+            defer freeStringSlice(self.allocator, raw_items);
+            const resolved = try self.resolve_variable_references(content, &scoped_vars, raw_items);
+            defer self.allocator.free(resolved);
+            try values.appendSlice(self.allocator, resolved);
         }
 
-        const combined = try self.allocator.alloc([]const u8, global.len + scoped.len);
-        @memcpy(combined[0..global.len], global);
-        @memcpy(combined[global.len..], scoped);
-        self.allocator.free(global);
-        self.allocator.free(scoped);
-        return combined;
+        return values.toOwnedSlice(self.allocator);
     }
 
     fn tokenize(self: PkgbuildParser, expr: []const u8) ![][]const u8 {
@@ -2282,6 +2348,51 @@ pub const PkgbuildParser = struct {
             return .{ .start = i, .after_paren = cursor };
         }
         return null;
+    }
+
+    const ScopedArrayStart = struct {
+        after_paren: usize,
+        append: bool,
+    };
+
+    fn find_next_scoped_array_start(
+        content: []const u8,
+        variable_name: []const u8,
+        search_from: usize,
+    ) ?ScopedArrayStart {
+        var line_start = search_from;
+        while (line_start < content.len) {
+            var cursor = line_start;
+            while (cursor < content.len and (content[cursor] == ' ' or content[cursor] == '\t'))
+                cursor += 1;
+            if (std.mem.startsWith(u8, content[cursor..], variable_name)) {
+                cursor += variable_name.len;
+                if (cursor == content.len or !is_word(content[cursor])) {
+                    const append = cursor < content.len and content[cursor] == '+';
+                    if (append) cursor += 1;
+                    if (cursor < content.len and content[cursor] == '=') {
+                        cursor += 1;
+                        if (cursor < content.len and content[cursor] == '(')
+                            return .{ .after_paren = cursor + 1, .append = append };
+                    }
+                }
+            }
+            line_start = (std.mem.indexOfScalarPos(u8, content, line_start, '\n') orelse return null) + 1;
+        }
+        return null;
+    }
+
+    fn parse_array_body_items(allocator: std.mem.Allocator, body: []const u8) ![][]const u8 {
+        var cleaned: std.ArrayList(u8) = .empty;
+        defer cleaned.deinit(allocator);
+        var lines = std.mem.splitScalar(u8, body, '\n');
+        var first_line = true;
+        while (lines.next()) |line| {
+            if (!first_line) try cleaned.append(allocator, '\n');
+            first_line = false;
+            try cleaned.appendSlice(allocator, try strip_comment(line));
+        }
+        return scan_array_items(allocator, cleaned.items);
     }
 
     fn scan_array_body(allocator: std.mem.Allocator, content: []const u8, start: usize) !struct { body: []u8, end: usize } {
@@ -5700,6 +5811,18 @@ test "parser_content: selected split package isolates package-scoped dependencie
     try std.testing.expectEqualStrings("readline", info.depends.?[1]);
 }
 
+test "parser_content: selected package must belong to pkgname" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "not-a-member",
+    };
+    try std.testing.expectError(
+        error.SelectedPackageNotFound,
+        parser.parser_content("pkgname=('demo' 'demo-docs')\n", null),
+    );
+}
+
 test "parser_content: selected split package resolves package-scoped install file" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -5849,7 +5972,7 @@ test "parser_content: split sources retain the first global pkgname" {
     try std.testing.expectEqualStrings("1.4.2", info_qt5.pkg_version.?);
     try std.testing.expectEqualStrings("1", info_qt5.pkg_rel.?);
     try std.testing.expectEqualStrings(
-        "A style to bend Qt applications to look like they belong into GNOME Shell",
+        "A style to bend Qt5 applications to look like they belong into GNOME Shell",
         info_qt5.pkg_desc.?,
     );
     try std.testing.expectEqualStrings("https://github.com/FedoraQt/adwaita-qt", info_qt5.url.?);
@@ -5878,7 +6001,10 @@ test "parser_content: split sources retain the first global pkgname" {
         info_qt5.sha_256_sums.?[0],
     );
 
-    try std.testing.expectEqual(@as(usize, 0), info_qt5.depends.?.len);
+    try std.testing.expectEqual(@as(usize, 1), info_qt5.depends.?.len);
+    try std.testing.expectEqualStrings("qt5-x11extras", info_qt5.depends.?[0]);
+    try std.testing.expectEqual(@as(usize, 1), info_qt5.replaces.?.len);
+    try std.testing.expectEqualStrings("adwaita-qt", info_qt5.replaces.?[0]);
 
     try std.testing.expect(info_qt5.install_file == null);
     try std.testing.expect(info_qt5.post_install == null);
@@ -5893,9 +6019,11 @@ test "parser_content: split sources retain the first global pkgname" {
     try std.testing.expectEqualStrings("adwaita-qt6", info_qt6.pkg_name.?);
     try std.testing.expectEqualStrings("adwaita-qt", info_qt6.variables.get("pkgbase").?);
     try std.testing.expectEqualStrings(
-        "A style to bend Qt applications to look like they belong into GNOME Shell",
+        "A style to bend Qt6 applications to look like they belong into GNOME Shell",
         info_qt6.pkg_desc.?,
     );
+    try std.testing.expectEqual(@as(usize, 1), info_qt6.depends.?.len);
+    try std.testing.expectEqualStrings("qt6-base", info_qt6.depends.?[0]);
     try std.testing.expectEqual(@as(usize, 1), info_qt6.source.?.len);
     try std.testing.expectEqualStrings(
         "https://github.com/FedoraQt/adwaita-qt/archive/1.4.2/adwaita-qt5-1.4.2.tar.gz",

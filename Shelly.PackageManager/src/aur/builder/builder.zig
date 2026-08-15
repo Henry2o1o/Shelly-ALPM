@@ -1267,6 +1267,7 @@ fn workerError(name: []const u8) anyerror {
     if (std.mem.eql(u8, name, "UnsupportedVcsChecksum")) return error.UnsupportedVcsChecksum;
     if (std.mem.eql(u8, name, "MissingExecutionSteps")) return error.MissingExecutionSteps;
     if (std.mem.eql(u8, name, "MissingPackageStep")) return error.MissingPackageStep;
+    if (std.mem.eql(u8, name, "SelectedPackageNotFound")) return error.SelectedPackageNotFound;
     if (std.mem.eql(u8, name, "StepFailed")) return error.StepFailed;
     return error.BuildFailed;
 }

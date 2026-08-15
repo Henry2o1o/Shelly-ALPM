@@ -262,6 +262,18 @@ fn printPackageTree(
     }
 }
 
+fn readPkgInfo(allocator: std.mem.Allocator, package_path: []const u8) ![]u8 {
+    var reader = try archive.Reader.init(allocator, package_path);
+    defer reader.deinit();
+    while (try reader.next()) |entry| {
+        if (!std.mem.eql(u8, entry.path, ".PKGINFO")) continue;
+        var buffer: [32 * 1024]u8 = undefined;
+        const amount = try reader.readPrefix(&buffer);
+        return allocator.dupe(u8, buffer[0..amount]);
+    }
+    return error.MissingPkgInfo;
+}
+
 fn runTestCommand(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -889,6 +901,79 @@ test "PackageBuilder keeps shared split builds under the global pkgname" {
     try fixture.temporary.dir.access(io, "src/shelly-git/out/bin/Shelly_Ui_Gtk", .{});
     try fixture.temporary.dir.access(io, "pkg/shelly-git/usr/bin/shelly-ui", .{});
     try fixture.temporary.dir.access(io, "pkg/shelly-flatpak-backend-git/usr/bin/backend", .{});
+}
+
+test "PackageBuilder preserves selected split metadata in PKGINFO" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const content =
+        \\pkgbase=shelly-git
+        \\pkgname=('shelly-git' 'shelly-flatpak-backend-git')
+        \\pkgver=1
+        \\pkgrel=2
+        \\pkgdesc='Shared description'
+        \\arch=('x86_64')
+        \\license=('GPL-3.0-only')
+        \\makedepends=('zig')
+        \\package_shelly-git() {
+        \\  pkgdesc='Shelly git package'
+        \\  provides=('shelly')
+        \\  conflicts=('shelly' 'shelly-bin')
+        \\  replaces=('old-shelly')
+        \\  depends=('pacman' 'gtk4')
+        \\  optdepends=('libstarfish: dependency viewer')
+        \\  mkdir -p "$pkgdir/usr/bin"
+        \\  printf main > "$pkgdir/usr/bin/shelly"
+        \\}
+        \\package_shelly-flatpak-backend-git() {
+        \\  pkgdesc='Shelly Flatpak backend'
+        \\  depends=("shelly-git=${pkgver}-${pkgrel}" 'flatpak')
+        \\  mkdir -p "$pkgdir/usr/lib"
+        \\  printf backend > "$pkgdir/usr/lib/backend"
+        \\}
+    ;
+    const requested = [_][]const u8{ "shelly-git", "shelly-flatpak-backend-git" };
+    var fixture = try Fixture.createMany(allocator, content, &requested, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const main_info = try readPkgInfo(allocator, artifacts[0].path);
+    defer allocator.free(main_info);
+    try testing.expect(std.mem.indexOf(u8, main_info, "pkgdesc = Shelly git package\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "provides = shelly\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "conflict = shelly\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "conflict = shelly-bin\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "replaces = old-shelly\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "depend = pacman\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "depend = gtk4\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "optdepend = libstarfish: dependency viewer\n") != null);
+
+    const backend_info = try readPkgInfo(allocator, artifacts[1].path);
+    defer allocator.free(backend_info);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "pkgdesc = Shelly Flatpak backend\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "depend = shelly-git=1-2\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "depend = flatpak\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "provides = shelly\n") == null);
+
+    try fixture.temporary.dir.createDir(io, "metadata-alpm-root", .default_dir);
+    try fixture.temporary.dir.createDir(io, "metadata-alpm-db", .default_dir);
+    const alpm_root = try std.fs.path.joinZ(allocator, &.{ fixture.build_dir, "metadata-alpm-root" });
+    defer allocator.free(alpm_root);
+    const alpm_db = try std.fs.path.joinZ(allocator, &.{ fixture.build_dir, "metadata-alpm-db" });
+    defer allocator.free(alpm_db);
+    var alpm_error: raw_alpm.alpm_errno_t = 0;
+    const handle = raw_alpm.alpm_initialize(alpm_root.ptr, alpm_db.ptr, &alpm_error) orelse
+        return error.AlpmInitializeFailed;
+    defer _ = raw_alpm.alpm_release(handle);
+    var loaded: ?*raw_alpm.alpm_pkg_t = null;
+    try testing.expectEqual(@as(c_int, 0), raw_alpm.alpm_pkg_load(handle, artifacts[0].path.ptr, 1, 0, &loaded));
+    defer _ = raw_alpm.alpm_pkg_free(loaded.?);
+    const candidates = raw_alpm.alpm_list_add(null, @ptrCast(loaded.?)) orelse return error.OutOfMemory;
+    defer raw_alpm.alpm_list_free(candidates);
+    const virtual_dependency = try allocator.dupeZ(u8, "shelly");
+    defer allocator.free(virtual_dependency);
+    try testing.expectEqual(loaded.?, raw_alpm.alpm_find_satisfier(candidates, virtual_dependency.ptr).?);
 }
 
 test "PackageBuilder honors check and overwrite policies" {
