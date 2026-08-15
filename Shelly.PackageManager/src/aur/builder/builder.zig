@@ -7,6 +7,7 @@ const events = @import("../events.zig");
 const op_context = @import("operation_context");
 const archive = @import("archive");
 const process_runner = @import("../builder.zig");
+const downloader = @import("../../shared/downloader.zig");
 
 pub const BuildArtifact = struct {
     path: [:0]u8,
@@ -29,6 +30,10 @@ pub const BuildOptions = struct {
     clean_after_success: bool,
     skip_source_pgp_verification: bool,
     build_directory: []const u8,
+    /// Allows callers with an already-verified source tree to use the custom
+    /// packaging machinery without reacquiring sources. Normal AUR builds must
+    /// leave this false so PackageBuilder creates $srcdir itself.
+    sources_prepared: bool = false,
 };
 
 pub const BuilderErrors = error{ BuildFailed, OutOfMemory, Cancelled, AlreadyBuilt };
@@ -109,7 +114,7 @@ pub const PackageBuilder = struct {
     }
 
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
-        _ = self.options.skip_source_pgp_verification;
+        if (!self.options.sources_prepared) try self.prepareSources(operation);
         const shared_steps = self.package_builds[0].execution_steps orelse
             return error.MissingExecutionSteps;
         for (shared_steps) |step| {
@@ -149,6 +154,276 @@ pub const PackageBuilder = struct {
         }
 
         return artifacts.toOwnedSlice(self.allocator);
+    }
+
+    fn prepareSources(self: *PackageBuilder, operation: *op_context.Operation) !void {
+        try operation.checkCancelled();
+        const package_build = &self.package_builds[0];
+        const sources = package_build.source orelse &.{};
+
+        try validateChecksumCount(sources.len, package_build.sha_512_sums);
+        try validateChecksumCount(sources.len, package_build.sha_256_sums);
+        try validateChecksumCount(sources.len, package_build.md_5_sums);
+        if (sources.len > 0 and !hasSourceChecksums(package_build))
+            return error.MissingSourceChecksums;
+
+        const srcdir = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, "src" });
+        defer self.allocator.free(srcdir);
+        const staging = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, ".src.shelly-staging" });
+        defer self.allocator.free(staging);
+        const backup = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, ".src.shelly-backup" });
+        defer self.allocator.free(backup);
+
+        std.Io.Dir.cwd().deleteTree(self.io, staging) catch {};
+        try std.Io.Dir.cwd().createDirPath(self.io, staging);
+        errdefer std.Io.Dir.cwd().deleteTree(self.io, staging) catch {};
+        try self.ensureInvokingUserOwns(operation, staging);
+
+        self.raiseSourceMessage(package_build, "Preparing package sources");
+        for (sources, 0..) |raw_source, index| {
+            try operation.checkCancelled();
+            var source = try ParsedSource.parse(self.allocator, raw_source);
+            defer source.deinit(self.allocator);
+            const destination = try std.fs.path.join(self.allocator, &.{ staging, source.name });
+            defer self.allocator.free(destination);
+
+            self.raiseSourceMessage(package_build, source.name);
+            switch (source.kind) {
+                .local => try self.copyLocalSource(source.location, destination),
+                .http => try self.downloadSource(operation, source.location, destination),
+                .git => try self.cloneGitSource(operation, source, destination),
+            }
+
+            if (source.kind != .git) {
+                try self.verifySourceChecksums(package_build, index, destination);
+                if (isExtractableArchive(source.name))
+                    try self.extractSourceArchive(operation, destination, staging);
+            } else try requireSkippedVcsChecksums(package_build, index);
+        }
+
+        if (!self.options.skip_source_pgp_verification and containsSignatureSource(sources))
+            return error.SourcePgpVerificationUnsupported;
+        try self.ensureInvokingUserOwns(operation, staging);
+
+        // Commit the complete source tree while preserving the previous tree
+        // until the replacement rename succeeds.
+        std.Io.Dir.cwd().deleteTree(self.io, backup) catch {};
+        const had_existing = blk: {
+            std.Io.Dir.rename(.cwd(), srcdir, .cwd(), backup, self.io) catch |err| switch (err) {
+                error.FileNotFound => break :blk false,
+                else => return err,
+            };
+            break :blk true;
+        };
+        std.Io.Dir.rename(.cwd(), staging, .cwd(), srcdir, self.io) catch |err| {
+            if (had_existing) std.Io.Dir.rename(.cwd(), backup, .cwd(), srcdir, self.io) catch {};
+            return err;
+        };
+        if (had_existing) std.Io.Dir.cwd().deleteTree(self.io, backup) catch {};
+    }
+
+    fn copyLocalSource(self: *PackageBuilder, source_name: []const u8, destination: []const u8) !void {
+        const normalized = try archive.normalizeEntryPath(self.allocator, source_name);
+        defer self.allocator.free(normalized);
+        const source_path = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, normalized });
+        defer self.allocator.free(source_path);
+        const stat = try std.Io.Dir.cwd().statFile(self.io, source_path, .{ .follow_symlinks = false });
+        if (stat.kind != .file) return error.InvalidLocalSource;
+        try std.Io.Dir.copyFile(.cwd(), source_path, .cwd(), destination, self.io, .{});
+    }
+
+    fn downloadSource(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        url: []const u8,
+        destination: []const u8,
+    ) !void {
+        var core = downloader.CoreDownloader.init(self.allocator, self.io, .default());
+        defer core.deinit();
+        core.setParentOperation(operation);
+        switch (core.downloadToFile(url, destination, true)) {
+            .succes, .skipped => {},
+            .failure => |err| return if (err == downloader.DownloadError.Cancelled)
+                error.Cancelled
+            else
+                error.SourceDownloadFailed,
+        }
+    }
+
+    fn cloneGitSource(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        source: ParsedSource,
+        destination: []const u8,
+    ) !void {
+        var clone_args: std.ArrayList([]const u8) = .empty;
+        defer clone_args.deinit(self.allocator);
+        try clone_args.appendSlice(self.allocator, &.{ "clone", "--", source.location, destination });
+        if (source.reference) |reference| switch (reference.kind) {
+            .branch, .tag => {
+                clone_args.clearRetainingCapacity();
+                try clone_args.appendSlice(self.allocator, &.{
+                    "clone", "--branch", reference.value, "--single-branch", "--", source.location, destination,
+                });
+            },
+            .commit => {},
+        };
+        try self.runSourceCommand(operation, clone_args.items);
+        if (source.reference) |reference| if (reference.kind == .commit)
+            try self.runSourceCommand(operation, &.{ "-C", destination, "checkout", "--detach", reference.value });
+    }
+
+    fn runSourceCommand(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        args: []const []const u8,
+    ) !void {
+        try operation.checkCancelled();
+        var command = try process_runner.invokingUserCommand(
+            self.allocator,
+            self.io,
+            self.environ,
+            "git",
+            args,
+        );
+        defer command.deinit(self.allocator);
+        var stream_context: StepStreamContext = .{
+            .builder = self,
+            .package_name = self.requested_names[0],
+        };
+        const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
+            self.allocator,
+            self.io,
+            self.environ,
+            command.asConst(),
+            self.options.build_directory,
+            null,
+            .{ .function = forwardStepLine, .data = &stream_context },
+            operation,
+        );
+        if (exit_code != 0) return error.SourceVcsFailed;
+    }
+
+    fn ensureInvokingUserOwns(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        path: []const u8,
+    ) !void {
+        const owner = self.environ.getPosix("SUDO_USER") orelse
+            self.environ.getPosix("PKEXEC_UID") orelse return;
+        if (owner.len == 0 or std.mem.eql(u8, owner, "root") or std.mem.eql(u8, owner, "0")) return;
+        try operation.checkCancelled();
+        var result = try process_runner.runWithEnvironment(
+            self.allocator,
+            self.io,
+            self.environ,
+            &.{ "chown", "-R", "-h", "--", owner, path },
+            null,
+            null,
+        );
+        defer result.deinit(self.allocator);
+        if (result.exit_code != 0) return error.SourceOwnershipFailed;
+    }
+
+    fn verifySourceChecksums(
+        self: *PackageBuilder,
+        package_build: *const PackageBuild,
+        index: usize,
+        path: []const u8,
+    ) !void {
+        if (package_build.sha_512_sums) |sums| if (sums.len > 0)
+            try verifyFileHash(std.crypto.hash.sha2.Sha512, self.io, path, sums[index]);
+        if (package_build.sha_256_sums) |sums| if (sums.len > 0)
+            try verifyFileHash(std.crypto.hash.sha2.Sha256, self.io, path, sums[index]);
+        if (package_build.md_5_sums) |sums| if (sums.len > 0)
+            try verifyFileHash(std.crypto.hash.Md5, self.io, path, sums[index]);
+    }
+
+    fn extractSourceArchive(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        archive_path: []const u8,
+        destination_root: []const u8,
+    ) !void {
+        var reader = try archive.Reader.initAll(self.allocator, archive_path);
+        defer reader.deinit();
+        var buffer: [64 * 1024]u8 = undefined;
+        var entry_count: usize = 0;
+        var total_size: u64 = 0;
+        while (try reader.next()) |entry| {
+            try operation.checkCancelled();
+            entry_count += 1;
+            if (entry_count > 1_000_000 or entry.size > 4 * 1024 * 1024 * 1024)
+                return error.SourceArchiveTooLarge;
+            const relative = try archive.normalizeEntryPath(self.allocator, entry.path);
+            defer self.allocator.free(relative);
+            const destination = try std.fs.path.join(self.allocator, &.{ destination_root, relative });
+            defer self.allocator.free(destination);
+            switch (entry.kind) {
+                .directory => try self.ensureSafeArchivePath(destination_root, relative, true),
+                .regular_file => {
+                    try self.ensureSafeArchivePath(destination_root, relative, false);
+                    try rejectSymlinkDestination(self.io, destination);
+                    var output = try std.Io.Dir.cwd().createFile(self.io, destination, .{
+                        .truncate = true,
+                        .permissions = std.Io.File.Permissions.fromMode(entry.permissions & 0o777),
+                    });
+                    defer output.close(self.io);
+                    var writer = output.writer(self.io, &.{});
+                    var entry_size: u64 = 0;
+                    while (true) {
+                        const amount = try reader.read(&buffer);
+                        if (amount == 0) break;
+                        entry_size += amount;
+                        total_size += amount;
+                        if (entry_size > 4 * 1024 * 1024 * 1024 or total_size > 16 * 1024 * 1024 * 1024)
+                            return error.SourceArchiveTooLarge;
+                        try writer.interface.writeAll(buffer[0..amount]);
+                    }
+                },
+                .symbolic_link => {
+                    const target = entry.link_target orelse return error.UnsafeSourceArchiveLink;
+                    try validateArchiveLink(target);
+                    try self.ensureSafeArchivePath(destination_root, relative, false);
+                    try rejectExistingDestination(self.io, destination);
+                    try std.Io.Dir.cwd().symLink(self.io, target, destination, .{});
+                },
+                .other => return error.UnsupportedSourceArchiveEntry,
+            }
+        }
+    }
+
+    fn ensureSafeArchivePath(
+        self: *PackageBuilder,
+        destination_root: []const u8,
+        relative: []const u8,
+        include_last: bool,
+    ) !void {
+        var current = try self.allocator.dupe(u8, destination_root);
+        defer self.allocator.free(current);
+        var components = std.mem.splitScalar(u8, relative, '/');
+        while (components.next()) |component| {
+            if (!include_last and components.peek() == null) break;
+            const next = try std.fs.path.join(self.allocator, &.{ current, component });
+            self.allocator.free(current);
+            current = next;
+            const stat = std.Io.Dir.cwd().statFile(self.io, current, .{ .follow_symlinks = false }) catch |err| switch (err) {
+                error.FileNotFound => {
+                    try std.Io.Dir.cwd().createDir(self.io, current, .default_dir);
+                    continue;
+                },
+                else => return err,
+            };
+            if (stat.kind != .directory) return error.UnsafeSourceArchivePath;
+        }
+    }
+
+    fn raiseSourceMessage(self: *PackageBuilder, package_build: *const PackageBuild, message: []const u8) void {
+        self.dispatcher.raiseInformational(.{
+            .event_type = .aur_build_output,
+            .message = message,
+            .package_name = package_build.pkg_name,
+        });
     }
 
     fn runStep(
@@ -339,6 +614,192 @@ pub const PackageBuilder = struct {
         try writeMetadataFile(pkgdir, self.io, ".BUILDINFO", output.written());
     }
 };
+
+const SourceKind = enum { local, http, git };
+const GitReferenceKind = enum { branch, tag, commit };
+const GitReference = struct {
+    kind: GitReferenceKind,
+    value: []u8,
+
+    fn deinit(self: GitReference, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+    }
+};
+
+const ParsedSource = struct {
+    name: []u8,
+    location: []u8,
+    kind: SourceKind,
+    reference: ?GitReference = null,
+
+    fn parse(allocator: std.mem.Allocator, raw: []const u8) !ParsedSource {
+        const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+        if (trimmed.len == 0) return error.InvalidSource;
+        const rename_separator = std.mem.indexOf(u8, trimmed, "::");
+        const explicit_name = if (rename_separator) |separator| trimmed[0..separator] else null;
+        const raw_location = if (rename_separator) |separator| trimmed[separator + 2 ..] else trimmed;
+        if (raw_location.len == 0) return error.InvalidSource;
+
+        const fragment_start = std.mem.indexOfScalar(u8, raw_location, '#');
+        const location_without_fragment = if (fragment_start) |index| raw_location[0..index] else raw_location;
+        const is_git = std.ascii.startsWithIgnoreCase(location_without_fragment, "git+");
+        const kind: SourceKind = if (is_git)
+            .git
+        else if (std.ascii.startsWithIgnoreCase(location_without_fragment, "https://") or
+            std.ascii.startsWithIgnoreCase(location_without_fragment, "http://") or
+            std.ascii.startsWithIgnoreCase(location_without_fragment, "file://"))
+            .http
+        else if (std.mem.indexOf(u8, location_without_fragment, "://") != null)
+            return error.UnsupportedSourceProtocol
+        else
+            .local;
+
+        const effective_location = if (is_git)
+            location_without_fragment["git+".len..]
+        else if (kind == .http)
+            location_without_fragment
+        else
+            raw_location;
+        if (effective_location.len == 0) return error.InvalidSource;
+
+        const inferred_name = if (explicit_name) |name|
+            name
+        else
+            sourceBasename(effective_location, is_git);
+        try validateSourceName(inferred_name);
+
+        var reference: ?GitReference = null;
+        errdefer if (reference) |value| value.deinit(allocator);
+        if (fragment_start) |index| {
+            if (!is_git) return error.UnsupportedSourceFragment;
+            const fragment = raw_location[index + 1 ..];
+            const equals = std.mem.indexOfScalar(u8, fragment, '=') orelse return error.UnsupportedSourceFragment;
+            const key = fragment[0..equals];
+            const value = fragment[equals + 1 ..];
+            if (value.len == 0) return error.InvalidSourceReference;
+            const reference_kind: GitReferenceKind = if (std.ascii.eqlIgnoreCase(key, "branch"))
+                .branch
+            else if (std.ascii.eqlIgnoreCase(key, "tag"))
+                .tag
+            else if (std.ascii.eqlIgnoreCase(key, "commit"))
+                .commit
+            else
+                return error.UnsupportedSourceFragment;
+            reference = .{ .kind = reference_kind, .value = try allocator.dupe(u8, value) };
+        }
+
+        const name = try allocator.dupe(u8, inferred_name);
+        errdefer allocator.free(name);
+        const location = try allocator.dupe(u8, effective_location);
+        errdefer allocator.free(location);
+        return .{
+            .name = name,
+            .location = location,
+            .kind = kind,
+            .reference = reference,
+        };
+    }
+
+    fn deinit(self: *ParsedSource, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.location);
+        if (self.reference) |reference| reference.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+fn sourceBasename(location: []const u8, strip_git_suffix: bool) []const u8 {
+    const query_start = std.mem.indexOfScalar(u8, location, '?') orelse location.len;
+    const without_query = std.mem.trimEnd(u8, location[0..query_start], "/");
+    const basename = std.fs.path.basename(without_query);
+    if (strip_git_suffix and std.mem.endsWith(u8, basename, ".git")) return basename[0 .. basename.len - ".git".len];
+    return basename;
+}
+
+fn validateSourceName(name: []const u8) !void {
+    if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..") or
+        std.fs.path.isAbsolute(name) or std.mem.indexOfAny(u8, name, "/\\\r\n\x00") != null)
+        return error.InvalidSourceName;
+}
+
+fn validateChecksumCount(source_count: usize, sums: ?[][]const u8) !void {
+    if (sums) |values| if (values.len != 0 and values.len != source_count) return error.SourceChecksumCountMismatch;
+}
+
+fn hasSourceChecksums(package_build: *const PackageBuild) bool {
+    if (package_build.sha_512_sums) |sums| if (sums.len > 0) return true;
+    if (package_build.sha_256_sums) |sums| if (sums.len > 0) return true;
+    if (package_build.md_5_sums) |sums| if (sums.len > 0) return true;
+    return false;
+}
+
+fn requireSkippedVcsChecksums(package_build: *const PackageBuild, index: usize) !void {
+    if (package_build.sha_512_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+    if (package_build.sha_256_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+    if (package_build.md_5_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+}
+
+fn verifyFileHash(comptime Hash: type, io: std.Io, path: []const u8, expected: []const u8) !void {
+    if (std.ascii.eqlIgnoreCase(expected, "SKIP")) return;
+    if (expected.len != Hash.digest_length * 2) return error.InvalidSourceChecksum;
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const stat = try file.stat(io);
+    var hasher = Hash.init(.{});
+    var buffer: [64 * 1024]u8 = undefined;
+    var offset: u64 = 0;
+    while (offset < stat.size) {
+        const remaining: usize = @intCast(@min(stat.size - offset, buffer.len));
+        const amount = try file.readPositionalAll(io, buffer[0..remaining], offset);
+        if (amount == 0) return error.SourceReadFailed;
+        hasher.update(buffer[0..amount]);
+        offset += amount;
+    }
+    var digest: [Hash.digest_length]u8 = undefined;
+    hasher.final(&digest);
+    const actual = std.fmt.bytesToHex(digest, .lower);
+    if (!std.ascii.eqlIgnoreCase(&actual, expected)) return error.SourceChecksumMismatch;
+}
+
+fn isExtractableArchive(name: []const u8) bool {
+    const suffixes = [_][]const u8{
+        ".tar", ".tar.gz", ".tgz", ".tar.zst", ".tar.xz", ".txz", ".tar.bz2", ".tbz", ".tbz2", ".zip",
+    };
+    for (suffixes) |suffix| if (std.ascii.endsWithIgnoreCase(name, suffix)) return true;
+    return false;
+}
+
+fn containsSignatureSource(sources: []const []const u8) bool {
+    for (sources) |source| {
+        const location = if (std.mem.indexOf(u8, source, "::")) |separator| source[0..separator] else source;
+        if (std.ascii.endsWithIgnoreCase(location, ".sig") or std.ascii.endsWithIgnoreCase(location, ".asc")) return true;
+    }
+    return false;
+}
+
+fn validateArchiveLink(target: []const u8) !void {
+    if (target.len == 0 or std.fs.path.isAbsolute(target) or std.mem.indexOfScalar(u8, target, '\\') != null)
+        return error.UnsafeSourceArchiveLink;
+    var components = std.mem.splitScalar(u8, target, '/');
+    while (components.next()) |component|
+        if (std.mem.eql(u8, component, "..")) return error.UnsafeSourceArchiveLink;
+}
+
+fn rejectSymlinkDestination(io: std.Io, path: []const u8) !void {
+    const stat = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    if (stat.kind == .sym_link or stat.kind == .directory) return error.UnsafeSourceArchivePath;
+}
+
+fn rejectExistingDestination(io: std.Io, path: []const u8) !void {
+    _ = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    return error.UnsafeSourceArchivePath;
+}
 
 const StepStreamContext = struct {
     builder: *PackageBuilder,

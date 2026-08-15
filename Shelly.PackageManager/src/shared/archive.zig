@@ -253,16 +253,31 @@ pub const Reader = struct {
     path_z: [:0]u8,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8) !Reader {
+        return initWithSupport(allocator, path, false);
+    }
+
+    /// Opens a source archive using every filter and format supported by the
+    /// installed libarchive. Package readers use init() and remain tar-only.
+    pub fn initAll(allocator: std.mem.Allocator, path: []const u8) !Reader {
+        return initWithSupport(allocator, path, true);
+    }
+
+    fn initWithSupport(allocator: std.mem.Allocator, path: []const u8, support_all: bool) !Reader {
         const path_z = try allocator.dupeZ(u8, path);
         errdefer allocator.free(path_z);
 
         const handle = c.archive_read_new() orelse return Error.ArchiveCreateFailed;
         errdefer _ = c.archive_read_free(handle);
 
-        try requireStatus(c.archive_read_support_filter_none(handle));
-        try requireStatus(c.archive_read_support_filter_gzip(handle));
-        try requireStatus(c.archive_read_support_filter_zstd(handle));
-        try requireStatus(c.archive_read_support_format_tar(handle));
+        if (support_all) {
+            try requireStatus(c.archive_read_support_filter_all(handle));
+            try requireStatus(c.archive_read_support_format_all(handle));
+        } else {
+            try requireStatus(c.archive_read_support_filter_none(handle));
+            try requireStatus(c.archive_read_support_filter_gzip(handle));
+            try requireStatus(c.archive_read_support_filter_zstd(handle));
+            try requireStatus(c.archive_read_support_format_tar(handle));
+        }
 
         if (c.archive_read_open_filename(handle, path_z.ptr, 64 * 1024) < c.ARCHIVE_WARN)
             return Error.ArchiveOpenFailed;

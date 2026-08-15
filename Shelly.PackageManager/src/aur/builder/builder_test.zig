@@ -21,6 +21,7 @@ const testing = std.testing;
 
 const builder_mod = @import("builder.zig");
 const PackageBuilder = builder_mod.PackageBuilder;
+const process_runner = @import("../builder.zig");
 const pkgbuild_mod = @import("../../pkgbuild/pkgbuild_parser.zig");
 const events = @import("../events.zig");
 const op_context = @import("operation_context");
@@ -132,6 +133,7 @@ const Fixture = struct {
                 .clean_after_success = false,
                 .skip_source_pgp_verification = true,
                 .build_directory = build_dir,
+                .sources_prepared = true,
             },
             testing.environ,
             io,
@@ -205,6 +207,7 @@ const Fixture = struct {
                 .clean_after_success = false,
                 .skip_source_pgp_verification = true,
                 .build_directory = build_dir,
+                .sources_prepared = true,
             },
             testing.environ,
             io,
@@ -256,6 +259,20 @@ fn printPackageTree(
             "[builder-test]   {s: <13} {o:0>4} {s}\n",
             .{ @tagName(entry.kind), mode, entry.path },
         );
+    }
+}
+
+fn runTestCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    argv: []const []const u8,
+    working_directory: ?[]const u8,
+) !void {
+    var result = try process_runner.run(allocator, io, argv, working_directory, null);
+    defer result.deinit(allocator);
+    if (result.exit_code != 0) {
+        std.debug.print("builder fixture command failed ({d}): {s}\n", .{ result.exit_code, result.stderr });
+        return error.FixtureCommandFailed;
     }
 }
 
@@ -314,6 +331,212 @@ test "PackageBuilder runs execution steps in the configured build directory" {
 
     // The operation completed successfully.
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
+}
+
+test "PackageBuilder stages and verifies local sources before build steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('helper.sh')
+        \\sha256sums=('a9f2d25d1f71f8065e2119e538bde8846570fcdad320388236e99d9e225c290d')
+        \\build() {
+        \\  test "$(cat "$srcdir/helper.sh")" = reviewed
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/helper.sh" "$pkgdir/usr/share/demo/helper.sh"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "helper.sh", .data = "reviewed\n" });
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/helper.sh", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/helper.sh", .{});
+}
+
+test "PackageBuilder rejects a source checksum mismatch without committing srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('helper.sh')
+        \\sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "helper.sh", .data = "reviewed\n" });
+    fixture.builder.options.sources_prepared = false;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
+test "PackageBuilder extracts source archives into srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.tar.gz')
+        \\sha256sums=('SKIP')
+        \\build() {
+        \\  test "$(cat "$srcdir/demo/source.txt")" = extracted
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/demo/source.txt" "$pkgdir/usr/share/demo/source.txt"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.tar.gz" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "demo/source.txt", .contents = "extracted\n" },
+    });
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/payload.tar.gz", .{});
+    try fixture.temporary.dir.access(io, "src/demo/source.txt", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
+}
+
+test "PackageBuilder downloads renamed file sources before build steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var remote = std.testing.tmpDir(.{});
+    defer remote.cleanup();
+    try remote.dir.writeFile(io, .{ .sub_path = "source.txt", .data = "reviewed\n" });
+    const remote_path = try remote.dir.realPathFileAlloc(io, "source.txt", allocator);
+    defer allocator.free(remote_path);
+    const pkgbuild = try std.fmt.allocPrint(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('downloaded.txt::file://{s}')
+        \\sha256sums=('a9f2d25d1f71f8065e2119e538bde8846570fcdad320388236e99d9e225c290d')
+        \\package() {{
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/downloaded.txt" "$pkgdir/usr/share/demo/downloaded.txt"
+        \\}}
+    , .{remote_path});
+    defer allocator.free(pkgbuild);
+    var fixture = try Fixture.create(allocator, pkgbuild, null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/downloaded.txt", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/downloaded.txt", .{});
+}
+
+test "PackageBuilder rejects unsupported source protocols" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('hg+https://example.invalid/demo')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
+test "PackageBuilder cancels source preparation without committing srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('helper.sh')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.operation_context.cancel();
+
+    try testing.expectError(error.Cancelled, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
+test "PackageBuilder clones renamed git sources into srcdir before pkgver" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var remote = std.testing.tmpDir(.{});
+    defer remote.cleanup();
+    const remote_path = try remote.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(remote_path);
+    try remote.dir.writeFile(io, .{ .sub_path = "source-marker", .data = "checked out\n" });
+    try runTestCommand(allocator, io, &.{ "git", "init", "-b", "development" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "config", "user.email", "shelly-tests@example.invalid" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "config", "user.name", "Shelly Tests" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "add", "source-marker" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "commit", "-m", "fixture" }, remote_path);
+
+    const pkgbuild = try std.fmt.allocPrint(allocator,
+        \\pkgname=shelly-git
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('shelly-git::git+file://{s}#branch=development')
+        \\sha256sums=('SKIP')
+        \\pkgver() {{
+        \\  cd "$srcdir/$pkgname"
+        \\  test -f source-marker
+        \\}}
+        \\package() {{
+        \\  mkdir -p "$pkgdir/usr/share/shelly"
+        \\  cp "$srcdir/$pkgname/source-marker" "$pkgdir/usr/share/shelly/source-marker"
+        \\}}
+    , .{remote_path});
+    defer allocator.free(pkgbuild);
+    var fixture = try Fixture.create(allocator, pkgbuild, null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/shelly-git/.git", .{});
+    try fixture.temporary.dir.access(io, "src/shelly-git/source-marker", .{});
+    try fixture.temporary.dir.access(io, "pkg/shelly-git/usr/share/shelly/source-marker", .{});
 }
 
 test "PackageBuilder reports failure when a step exits non-zero" {
