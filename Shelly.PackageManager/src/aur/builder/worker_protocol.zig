@@ -41,6 +41,8 @@ pub const ResponseArtifact = struct {
 pub const Response = struct {
     version: u8 = protocol_version,
     error_name: ?[]const u8 = null,
+    package_name: ?[]const u8 = null,
+    step_name: ?[]const u8 = null,
     artifacts: []const ResponseArtifact = &.{},
 };
 

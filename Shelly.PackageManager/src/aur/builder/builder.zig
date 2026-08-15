@@ -79,6 +79,9 @@ pub const PackageBuilder = struct {
     options: BuildOptions,
     environ: std.process.Environ,
     io: std.Io,
+    last_package_name: ?[]const u8 = null,
+    last_step_name: ?[]const u8 = null,
+    worker_failure_context: ?[]u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -113,27 +116,21 @@ pub const PackageBuilder = struct {
     }
 
     pub fn deinit(self: *PackageBuilder) void {
+        if (self.worker_failure_context) |context| self.allocator.free(context);
         self.allocator.destroy(self);
     }
 
     pub fn BuildPackage(self: *PackageBuilder) BuilderErrors![]BuildArtifact {
-        var operation = self.operation_context.begin(op_context.OperationDescriptor{ .backend = .aur, .kind = .build, .subject = "Package Build" });
-        defer operation.finish(.cancelled);
-        const artifacts = self.dispatchBuild(&operation) catch |err| {
-            const message = std.fmt.allocPrint(
-                self.allocator,
-                "Failed to build package: {s}",
-                .{@errorName(err)},
-            ) catch return BuilderErrors.OutOfMemory;
+        const artifacts = self.BuildPackageDetailed() catch |err| {
+            const message = if (self.worker_failure_context) |context|
+                std.fmt.allocPrint(self.allocator, "Failed to build package ({s}): {s}", .{ context, @errorName(err) }) catch return BuilderErrors.OutOfMemory
+            else
+                std.fmt.allocPrint(self.allocator, "Failed to build package: {s}", .{@errorName(err)}) catch return BuilderErrors.OutOfMemory;
             defer self.allocator.free(message);
             self.dispatcher.raiseError(.{ .message = message });
-            if (err == error.Cancelled) {
-                operation.finish(.cancelled);
-                return BuilderErrors.Cancelled;
-            }
-            operation.finish(.failed);
             return switch (err) {
                 error.OutOfMemory => BuilderErrors.OutOfMemory,
+                error.Cancelled => BuilderErrors.Cancelled,
                 error.AlreadyBuilt => BuilderErrors.AlreadyBuilt,
                 error.BuilderMustNotRunAsRoot => BuilderErrors.BuilderMustNotRunAsRoot,
                 error.BuilderDeescalationFailed, error.InvokingUserUnavailable => BuilderErrors.BuilderDeescalationFailed,
@@ -144,6 +141,22 @@ pub const PackageBuilder = struct {
                 error.PrivilegedPackageOperationUnsupported => BuilderErrors.PrivilegedPackageOperationUnsupported,
                 else => BuilderErrors.BuildFailed,
             };
+        };
+        return artifacts;
+    }
+
+    /// Worker entry point that preserves the original builder error instead
+    /// of narrowing it to the public API's BuildFailed error.
+    pub fn BuildPackageDetailed(self: *PackageBuilder) ![]BuildArtifact {
+        var operation = self.operation_context.begin(op_context.OperationDescriptor{ .backend = .aur, .kind = .build, .subject = "Package Build" });
+        defer operation.finish(.cancelled);
+        const artifacts = self.dispatchBuild(&operation) catch |err| {
+            if (err == error.Cancelled) {
+                operation.finish(.cancelled);
+                return err;
+            }
+            operation.finish(.failed);
+            return err;
         };
         operation.finish(.success);
         return artifacts;
@@ -165,7 +178,13 @@ pub const PackageBuilder = struct {
         for (shared_steps) |step| {
             if (isPackageStep(step.name)) continue;
             if (std.mem.eql(u8, step.name, "check") and !self.options.run_check) continue;
-            try self.runStep(operation, self.requested_names[0], step.name, step.expanded_body);
+            try self.runStep(
+                operation,
+                self.requested_names[0],
+                step.name,
+                step.helper_definitions,
+                step.expanded_body,
+            );
         }
 
         var artifacts: std.ArrayList(BuildArtifact) = .empty;
@@ -181,7 +200,13 @@ pub const PackageBuilder = struct {
             try self.preparePackageDirectory(package_build);
             const package_step = findPackageStep(package_build.execution_steps orelse
                 return error.MissingExecutionSteps) orelse return error.MissingPackageStep;
-            try self.runStep(operation, requested_name, package_step.name, package_step.expanded_body);
+            try self.runStep(
+                operation,
+                requested_name,
+                package_step.name,
+                package_step.helper_definitions,
+                package_step.expanded_body,
+            );
             const artifact = try self.assemblePackage(package_build);
             artifacts.append(self.allocator, artifact) catch |err| {
                 std.Io.Dir.cwd().deleteFile(self.io, artifact.path) catch {};
@@ -265,7 +290,19 @@ pub const PackageBuilder = struct {
         });
         defer parsed.deinit();
         if (parsed.value.version != worker_protocol.protocol_version) return error.BuilderDeescalationFailed;
-        if (parsed.value.error_name) |name| return workerError(name);
+        if (parsed.value.error_name) |name| {
+            if (self.worker_failure_context) |old| self.allocator.free(old);
+            self.worker_failure_context = if (parsed.value.package_name) |package_name|
+                if (parsed.value.step_name) |step_name|
+                    try std.fmt.allocPrint(self.allocator, "{s}, step {s}", .{ package_name, step_name })
+                else
+                    try self.allocator.dupe(u8, package_name)
+            else if (parsed.value.step_name) |step_name|
+                try std.fmt.allocPrint(self.allocator, "step {s}", .{step_name})
+            else
+                null;
+            return workerError(name);
+        }
         if (exit_code != 0) return error.BuilderDeescalationFailed;
 
         const artifacts = try self.allocator.alloc(BuildArtifact, parsed.value.artifacts.len);
@@ -306,11 +343,17 @@ pub const PackageBuilder = struct {
     fn prepareSources(self: *PackageBuilder, operation: *op_context.Operation) !void {
         try operation.checkCancelled();
         const package_build = &self.package_builds[0];
+        self.last_package_name = package_build.pkg_name;
+        self.last_step_name = "sources";
         const sources = package_build.source orelse &.{};
 
         try validateChecksumCount(sources.len, package_build.sha_512_sums);
+        try validateChecksumCount(sources.len, package_build.sha_384_sums);
         try validateChecksumCount(sources.len, package_build.sha_256_sums);
+        try validateChecksumCount(sources.len, package_build.sha_224_sums);
+        try validateChecksumCount(sources.len, package_build.sha_1_sums);
         try validateChecksumCount(sources.len, package_build.md_5_sums);
+        try validateChecksumCount(sources.len, package_build.b_2_sums);
         if (sources.len > 0 and !hasSourceChecksums(package_build))
             return error.MissingSourceChecksums;
 
@@ -342,7 +385,8 @@ pub const PackageBuilder = struct {
 
             if (source.kind != .git) {
                 try self.verifySourceChecksums(package_build, index, destination);
-                if (isExtractableArchive(source.name))
+                if (isExtractableArchive(source.name) and
+                    !containsString(package_build.no_extract orelse &.{}, source.name))
                     try self.extractSourceArchive(operation, destination, staging);
             } else try requireSkippedVcsChecksums(package_build, index);
         }
@@ -452,10 +496,18 @@ pub const PackageBuilder = struct {
     ) !void {
         if (package_build.sha_512_sums) |sums| if (sums.len > 0)
             try verifyFileHash(std.crypto.hash.sha2.Sha512, self.io, path, sums[index]);
+        if (package_build.sha_384_sums) |sums| if (sums.len > 0)
+            try verifyFileHash(std.crypto.hash.sha2.Sha384, self.io, path, sums[index]);
         if (package_build.sha_256_sums) |sums| if (sums.len > 0)
             try verifyFileHash(std.crypto.hash.sha2.Sha256, self.io, path, sums[index]);
+        if (package_build.sha_224_sums) |sums| if (sums.len > 0)
+            try verifyFileHash(std.crypto.hash.sha2.Sha224, self.io, path, sums[index]);
+        if (package_build.sha_1_sums) |sums| if (sums.len > 0)
+            try verifyFileHash(std.crypto.hash.Sha1, self.io, path, sums[index]);
         if (package_build.md_5_sums) |sums| if (sums.len > 0)
             try verifyFileHash(std.crypto.hash.Md5, self.io, path, sums[index]);
+        if (package_build.b_2_sums) |sums| if (sums.len > 0)
+            try verifyFileHash(std.crypto.hash.blake2.Blake2b512, self.io, path, sums[index]);
     }
 
     fn extractSourceArchive(
@@ -629,17 +681,24 @@ pub const PackageBuilder = struct {
         operation: *op_context.Operation,
         package_name: []const u8,
         step_name: []const u8,
+        helper_definitions: []const u8,
         body: []const u8,
     ) !void {
+        self.last_package_name = package_name;
+        self.last_step_name = step_name;
         const active_operation = self.dispatcher.operation orelse operation;
         try active_operation.checkCancelled();
         const package_step = isPackageStep(step_name);
-        if (package_step) try rejectPrivilegedPackageOperations(body);
-        const executable_body = if (package_step)
-            try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ virtualMetadataShellPrelude, body })
-        else
-            body;
-        defer if (package_step) self.allocator.free(executable_body);
+        if (package_step) {
+            try rejectPrivilegedPackageOperations(helper_definitions);
+            try rejectPrivilegedPackageOperations(body);
+        }
+        const executable_body = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}\n{s}\n__shelly_step() {{\n{s}\n}}\n__shelly_step",
+            .{ if (package_step) virtualMetadataShellPrelude else "", helper_definitions, body },
+        );
+        defer self.allocator.free(executable_body);
 
         var stream_context: StepStreamContext = .{ .builder = self, .package_name = package_name };
         const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
@@ -1077,15 +1136,28 @@ fn validateChecksumCount(source_count: usize, sums: ?[][]const u8) !void {
 
 fn hasSourceChecksums(package_build: *const PackageBuild) bool {
     if (package_build.sha_512_sums) |sums| if (sums.len > 0) return true;
+    if (package_build.sha_384_sums) |sums| if (sums.len > 0) return true;
     if (package_build.sha_256_sums) |sums| if (sums.len > 0) return true;
+    if (package_build.sha_224_sums) |sums| if (sums.len > 0) return true;
+    if (package_build.sha_1_sums) |sums| if (sums.len > 0) return true;
     if (package_build.md_5_sums) |sums| if (sums.len > 0) return true;
+    if (package_build.b_2_sums) |sums| if (sums.len > 0) return true;
     return false;
 }
 
 fn requireSkippedVcsChecksums(package_build: *const PackageBuild, index: usize) !void {
     if (package_build.sha_512_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+    if (package_build.sha_384_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
     if (package_build.sha_256_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+    if (package_build.sha_224_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+    if (package_build.sha_1_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
     if (package_build.md_5_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+    if (package_build.b_2_sums) |sums| if (sums.len > 0 and !std.ascii.eqlIgnoreCase(sums[index], "SKIP")) return error.UnsupportedVcsChecksum;
+}
+
+fn containsString(values: []const []const u8, needle: []const u8) bool {
+    for (values) |value| if (std.mem.eql(u8, value, needle)) return true;
+    return false;
 }
 
 fn verifyFileHash(comptime Hash: type, io: std.Io, path: []const u8, expected: []const u8) !void {
@@ -1188,6 +1260,14 @@ fn workerError(name: []const u8) anyerror {
     if (std.mem.eql(u8, name, "PrivilegedPackageOperationUnsupported")) return error.PrivilegedPackageOperationUnsupported;
     if (std.mem.eql(u8, name, "BuilderMustNotRunAsRoot")) return error.BuilderMustNotRunAsRoot;
     if (std.mem.eql(u8, name, "ReviewedPkgbuildChanged")) return error.ReviewedPkgbuildChanged;
+    if (std.mem.eql(u8, name, "MissingSourceChecksums")) return error.MissingSourceChecksums;
+    if (std.mem.eql(u8, name, "SourceChecksumCountMismatch")) return error.SourceChecksumCountMismatch;
+    if (std.mem.eql(u8, name, "InvalidSourceChecksum")) return error.InvalidSourceChecksum;
+    if (std.mem.eql(u8, name, "SourceChecksumMismatch")) return error.SourceChecksumMismatch;
+    if (std.mem.eql(u8, name, "UnsupportedVcsChecksum")) return error.UnsupportedVcsChecksum;
+    if (std.mem.eql(u8, name, "MissingExecutionSteps")) return error.MissingExecutionSteps;
+    if (std.mem.eql(u8, name, "MissingPackageStep")) return error.MissingPackageStep;
+    if (std.mem.eql(u8, name, "StepFailed")) return error.StepFailed;
     return error.BuildFailed;
 }
 

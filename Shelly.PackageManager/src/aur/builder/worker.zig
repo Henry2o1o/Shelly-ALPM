@@ -48,6 +48,7 @@ pub fn run(
             .allocator = allocator,
             .io = io,
             .selected_package_name = name,
+            .package_carch = request.makepkg.package_carch,
         }).parser_content(content, request.build_directory);
         parsed_count += 1;
     }
@@ -96,7 +97,14 @@ pub fn run(
         io,
     );
     defer builder.deinit();
-    const artifacts = try builder.BuildPackage();
+    const artifacts = builder.BuildPackageDetailed() catch |err| {
+        try writeResponse(allocator, .{
+            .error_name = @errorName(err),
+            .package_name = builder.last_package_name,
+            .step_name = builder.last_step_name,
+        });
+        return;
+    };
     defer builder_mod.deinitArtifacts(allocator, artifacts);
 
     const response_artifacts = try allocator.alloc(protocol.ResponseArtifact, artifacts.len);

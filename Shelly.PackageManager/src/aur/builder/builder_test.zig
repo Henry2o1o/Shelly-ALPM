@@ -477,6 +477,66 @@ test "PackageBuilder runs execution steps in the configured build directory" {
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
 }
 
+test "PackageBuilder runs local declarations and reviewed helper functions inside package steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=qwen-code-bin
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\_target_name() {
+        \\  local suffix=cli
+        \\  printf '%s-%s' "$pkgname" "$suffix"
+        \\}
+        \\package() {
+        \\  local appdir="$pkgdir/usr/lib/$pkgname"
+        \\  mkdir -p "$appdir"
+        \\  _target_name > "$appdir/target"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const target = try fixture.temporary.dir.readFileAlloc(
+        io,
+        "pkg/qwen-code-bin/usr/lib/qwen-code-bin/target",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(target);
+    try testing.expectEqualStrings("qwen-code-bin-cli", target);
+}
+
+test "PackageBuilder accepts b2 checksums and honors noextract" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=cline-cli
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.tar.gz')
+        \\noextract=('payload.tar.gz')
+        \\b2sums=('3571ea965605821dbb49046a8de67321531bcefe1bb1d68282eed4ebdaff4f7feb63f710cede300638d3e44f825e3f3e436059d290f4d2749784bf01020f684e')
+        \\package() {
+        \\  install -Dm644 "$srcdir/payload.tar.gz" "$pkgdir/usr/share/cline-cli/payload.tar.gz"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "payload.tar.gz",
+        .data = "opaque archive payload",
+    });
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/payload.tar.gz", .{});
+    try fixture.temporary.dir.access(io, "pkg/cline-cli/usr/share/cline-cli/payload.tar.gz", .{});
+}
+
 test "PackageBuilder stages and verifies local sources before build steps" {
     const allocator = testing.allocator;
     const io = testing.io;
@@ -796,6 +856,39 @@ test "PackageBuilder builds all requested split members after shared steps run o
         if (std.mem.eql(u8, entry.path, "usr/share/doc/demo/readme")) saw_docs = true;
     }
     try testing.expect(saw_docs);
+}
+
+test "PackageBuilder keeps shared split builds under the global pkgname" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const content =
+        \\pkgbase=shelly-git
+        \\pkgname=('shelly-git' 'shelly-flatpak-backend-git')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\build() {
+        \\  mkdir -p "$srcdir/$pkgname/out/bin"
+        \\  printf ui > "$srcdir/$pkgname/out/bin/Shelly_Ui_Gtk"
+        \\  mkdir -p "$srcdir/$pkgbase/out-flatpak-backend"
+        \\  printf backend > "$srcdir/$pkgbase/out-flatpak-backend/backend"
+        \\}
+        \\package_shelly-git() {
+        \\  install -Dm755 "$srcdir/$pkgbase/out/bin/Shelly_Ui_Gtk" "$pkgdir/usr/bin/shelly-ui"
+        \\}
+        \\package_shelly-flatpak-backend-git() {
+        \\  install -Dm755 "$srcdir/$pkgbase/out-flatpak-backend/backend" "$pkgdir/usr/bin/backend"
+        \\}
+    ;
+    const requested = [_][]const u8{ "shelly-flatpak-backend-git", "shelly-git" };
+    var fixture = try Fixture.createMany(allocator, content, &requested, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/shelly-git/out/bin/Shelly_Ui_Gtk", .{});
+    try fixture.temporary.dir.access(io, "pkg/shelly-git/usr/bin/shelly-ui", .{});
+    try fixture.temporary.dir.access(io, "pkg/shelly-flatpak-backend-git/usr/bin/backend", .{});
 }
 
 test "PackageBuilder honors check and overwrite policies" {

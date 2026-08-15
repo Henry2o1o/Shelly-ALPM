@@ -1345,6 +1345,7 @@ pub const Manager = struct {
             .allocator = self.allocator,
             .io = self.io(),
             .selected_package_name = package_name,
+            .package_carch = self.makepkg_config.package_carch,
         }).parser(pkgbuild_path);
         errdefer info.deinit(self.allocator);
         try requireReviewInputs(self.allocator, self.io(), cache_path, &info);
@@ -1523,6 +1524,7 @@ pub const Manager = struct {
                 .allocator = self.allocator,
                 .io = self.io(),
                 .selected_package_name = requested_name,
+                .package_carch = self.makepkg_config.package_carch,
             }).parser(prepared.pkgbuild_path);
             parsed_count += 1;
         }
