@@ -87,6 +87,7 @@ pub const ShellyConfig = struct {
     UseSymbolicTray: bool = true,
     TrayIconPath: []const u8 = "",
     TrayUpdatesIconPath: []const u8 = "",
+    UseUiForUpdate: bool = false,
 
     // Scheduled Operations
     UseWeeklySchedule: bool = false,

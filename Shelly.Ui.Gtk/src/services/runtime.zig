@@ -6,6 +6,7 @@ const xdg_paths = @import("xdg_paths.zig");
 pub var io: std.Io = undefined;
 pub var environ_map: *std.process.Environ.Map = undefined;
 pub var data_home: []const u8 = "";
+pub var pending_navigate_updates: bool = false;
 
 pub var config: ?*ConfigResolver = null;
 
