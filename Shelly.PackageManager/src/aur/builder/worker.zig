@@ -11,7 +11,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     run(allocator, init.io, init.minimal.environ, args) catch |err| {
-        try writeResponse(allocator, .{ .error_name = @errorName(err) });
+        try writeResponse(allocator, .{ .failure = .{ .code = .fromError(err) } });
     };
 }
 
@@ -21,8 +21,7 @@ pub fn run(
     environ: std.process.Environ,
     args: []const []const u8,
 ) !void {
-    if (@import("builtin").os.tag == .linux)
-        try builder_mod.requireNonRootEffectiveUid(@intCast(std.os.linux.geteuid()));
+    try builder_mod.secureBuilderProcess();
     if (args.len != 2) return error.InvalidBuilderWorkerRequest;
 
     var parsed_request = try std.json.parseFromSlice(protocol.Request, allocator, args[1], .{
@@ -91,18 +90,17 @@ pub fn run(
             .sources_prepared = request.options.sources_prepared,
             .build_directory = request.build_directory,
             .reviewed_pkgbuild_digest = request.reviewed_pkgbuild_digest,
-            .virtual_ownership_overrides = request.virtual_ownership_overrides,
         },
         environ,
         io,
     );
     defer builder.deinit();
-    const artifacts = builder.BuildPackageDetailed() catch |err| {
-        try writeResponse(allocator, .{
-            .error_name = @errorName(err),
-            .package_name = builder.last_package_name,
-            .step_name = builder.last_step_name,
-        });
+    const artifacts = builder.run() catch |err| {
+        try writeResponse(allocator, .{ .failure = .{
+            .code = .fromError(err),
+            .package_name = builder.failure_location.package_name,
+            .step_name = builder.failure_location.step_name,
+        } });
         return;
     };
     defer builder_mod.deinitArtifacts(allocator, artifacts);
@@ -114,6 +112,18 @@ pub fn run(
         .package_name = artifact.package_name,
     };
     try writeResponse(allocator, .{ .artifacts = response_artifacts });
+}
+
+test "builder worker prevents child privilege gains" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    try builder_mod.secureBuilderProcess();
+    const enabled = try std.posix.prctl(.GET_NO_NEW_PRIVS, .{
+        @as(usize, 0),
+        @as(usize, 0),
+        @as(usize, 0),
+        @as(usize, 0),
+    });
+    try std.testing.expectEqual(@as(u31, 1), enabled);
 }
 
 fn writeResponse(allocator: std.mem.Allocator, response: protocol.Response) !void {

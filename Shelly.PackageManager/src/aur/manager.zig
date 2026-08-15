@@ -819,7 +819,8 @@ pub const Manager = struct {
             self.installSelectedOptionalDependencies(package_name, selected_optional) catch |err|
                 self.raiseBestEffortFailure(package_name, "Failed to install some optional dependencies", err);
             self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), current, plans.items.len);
-            self.cleanBuildArtifacts(prepared.cache_path);
+            if (self.use_chroot or self.makepkg_command != null)
+                self.cleanBuildArtifacts(prepared.cache_path);
             for (requested_names) |requested_name|
                 self.raisePackageProgress(.aur_package_completed, requested_name, current, plans.items.len, "");
         }
@@ -1513,27 +1514,10 @@ pub const Manager = struct {
             return artifactsFromPaths(self.allocator, paths, requested_names);
         }
 
-        const package_builds = try self.allocator.alloc(PkgbuildInfo, requested_names.len);
-        var parsed_count: usize = 0;
-        defer {
-            for (package_builds[0..parsed_count]) |*package_build| package_build.deinit(self.allocator);
-            self.allocator.free(package_builds);
-        }
-        for (requested_names, package_builds) |requested_name, *package_build| {
-            package_build.* = try (pkgbuild_parser.PkgbuildParser{
-                .allocator = self.allocator,
-                .io = self.io(),
-                .selected_package_name = requested_name,
-                .package_carch = self.makepkg_config.package_carch,
-            }).parser(prepared.pkgbuild_path);
-            parsed_count += 1;
-        }
-
         var build_context = operation_api.OperationContext.init(self.allocator, self.io());
         defer build_context.deinit();
-        var custom_builder = try package_builder.PackageBuilder.init(
+        return package_builder.buildPackageWithWorker(
             self.allocator,
-            package_builds,
             self.dispatcher,
             build_context,
             self.makepkg_config.*,
@@ -1549,8 +1533,6 @@ pub const Manager = struct {
             self.environ,
             self.io(),
         );
-        defer custom_builder.deinit();
-        return custom_builder.BuildPackage();
     }
 
     fn readCachedPkgbuild(self: *Self, package_name: []const u8) !?[]u8 {
@@ -1654,7 +1636,6 @@ pub const Manager = struct {
             }
         } else |_| {}
         if (clone_needed) {
-            self.cleanBuildArtifacts(cache_path);
             if (!(try self.removeCacheDirectory(cache_path))) return false;
             var clone = try self.runAsInvokingUser(&.{ "git", "clone", expected_remote, cache_path }, null, null);
             defer clone.deinit(self.allocator);
@@ -1782,17 +1763,7 @@ pub const Manager = struct {
             defer result.deinit(self.allocator);
             if (result.exit_code == 0) return true;
         } else |_| {}
-
-        var fallback = try builder.runWithEnvironment(
-            self.allocator,
-            self.io(),
-            self.environ,
-            &.{ "rm", "-rf", path },
-            null,
-            null,
-        );
-        defer fallback.deinit(self.allocator);
-        return fallback.exit_code == 0;
+        return false;
     }
 
     fn buildExternalPackage(self: *Self, package_name: []const u8, cache_path: []const u8) !bool {

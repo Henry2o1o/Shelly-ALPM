@@ -41,6 +41,21 @@ pub const OwnedCommand = struct {
     }
 };
 
+pub fn directCommand(
+    allocator: std.mem.Allocator,
+    command: []const u8,
+    arguments: []const []const u8,
+) !OwnedCommand {
+    var argv: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (argv.items) |argument| allocator.free(argument);
+        argv.deinit(allocator);
+    }
+    try appendOwned(allocator, &argv, &.{command});
+    try appendOwned(allocator, &argv, arguments);
+    return .{ .argv = try argv.toOwnedSlice(allocator) };
+}
+
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -528,14 +543,6 @@ pub fn isPackageArchiveArtifact(file_name: []const u8) bool {
 pub fn deinitPaths(allocator: std.mem.Allocator, paths: []const []u8) void {
     for (paths) |path| allocator.free(path);
     allocator.free(paths);
-}
-
-pub fn cleanBuildArtifacts(io: std.Io, temp_path: []const u8) void {
-    for ([_][]const u8{ "src", "pkg" }) |name| {
-        var buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const path = std.fmt.bufPrint(&buffer, "{s}/{s}", .{ temp_path, name }) catch continue;
-        std.Io.Dir.cwd().deleteTree(io, path) catch {};
-    }
 }
 
 test "build progress parser recognizes makepkg percentage lines" {

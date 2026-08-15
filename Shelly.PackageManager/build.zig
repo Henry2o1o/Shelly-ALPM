@@ -512,6 +512,27 @@ pub fn build(b: *std.Build) void {
     flatpak_test_step.dependOn(&run_backend_integration_tests.step);
     test_step.dependOn(&run_backend_integration_tests.step);
 
+    const test_builder_worker_module = b.createModule(.{
+        .root_source_file = b.path("src/builder_worker_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    test_builder_worker_module.addImport("alpm_c", alpm_c);
+    test_builder_worker_module.addImport("archive", archive_mod);
+    test_builder_worker_module.addImport("operation_context", operation_context_mod);
+    test_builder_worker_module.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
+    const test_builder_worker = b.addExecutable(.{
+        .name = "shelly-builder-test",
+        .root_module = test_builder_worker_module,
+    });
+    const install_test_builder_worker = b.addInstallArtifact(test_builder_worker, .{});
+    run_mod_tests.setEnvironmentVariable(
+        "SHELLY_BUILDER_WORKER",
+        b.getInstallPath(.bin, "shelly-builder-test"),
+    );
+    run_mod_tests.step.dependOn(&install_test_builder_worker.step);
+
     const aur_tests = b.addTest(.{
         .name = "aur-test",
         .root_module = mod,
@@ -528,10 +549,6 @@ pub fn build(b: *std.Build) void {
             "AUR git remote and VCS suffix parsing mirror the C# manager",
             "VCS source parser replicates git source filtering and variable expansion",
             "parser_content:",
-            "parser_content: architecture sources and b2 sums follow makepkg ordering",
-            "parser_content: selected split package isolates package-scoped dependencies",
-            "parser_content: selected package must belong to pkgname",
-            "parser_content: split sources retain the first global pkgname",
             "VCS store round trips the C# compatible JSON shape and cleans orphans",
             "VCS package checks execute concurrently and retain per-package results",
             "VCS checks retry and baseline transiently failed sources",
@@ -544,13 +561,13 @@ pub fn build(b: *std.Build) void {
             "non-root worker guard rejects root effective uid",
             "root effective uid selects the de-escalated worker boundary",
             "de-escalated builder command uses process-isolated runuser",
-            "worker protocol preserves reviewed request and virtual ownership",
+            "worker protocol preserves reviewed build request",
+            "builder worker prevents child privilege gains",
             "non-root worker executes a reviewed build request",
             "PackageBuilder rejects a legacy unwritable package tree",
-            "PackageBuilder rejects privileged package filesystem operations",
+            "PackageBuilder cannot perform privileged package filesystem operations",
             "PackageBuilder simulates root ownership without host chown",
             "PackageBuilder rejects unsupported virtual ownership",
-            "PackageBuilder applies explicit virtual ownership to the archive",
             "PackageBuilder runs execution steps in the configured build directory",
             "PackageBuilder runs local declarations and reviewed helper functions inside package steps",
             "PackageBuilder accepts b2 checksums and honors noextract",
@@ -580,6 +597,11 @@ pub fn build(b: *std.Build) void {
         },
     });
     const run_aur_tests = b.addRunArtifact(aur_tests);
+    run_aur_tests.setEnvironmentVariable(
+        "SHELLY_BUILDER_WORKER",
+        b.getInstallPath(.bin, "shelly-builder-test"),
+    );
+    run_aur_tests.step.dependOn(&install_test_builder_worker.step);
     const aur_test_step = b.step("aur-test", "Run safe AUR manager and event tests");
     aur_test_step.dependOn(&run_aur_tests.step);
 

@@ -336,7 +336,7 @@ test "PackageBuilder rejects a legacy unwritable package tree" {
     try testing.expectError(error.BuildDirectoryNotWritable, fixture.builder.BuildPackage());
 }
 
-test "PackageBuilder rejects privileged package filesystem operations" {
+test "PackageBuilder cannot perform privileged package filesystem operations" {
     const allocator = testing.allocator;
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
@@ -349,7 +349,7 @@ test "PackageBuilder rejects privileged package filesystem operations" {
     defer fixture.destroy();
 
     try testing.expectError(
-        error.PrivilegedPackageOperationUnsupported,
+        error.BuildFailed,
         fixture.builder.BuildPackage(),
     );
 }
@@ -413,39 +413,6 @@ test "PackageBuilder rejects unsupported virtual ownership" {
         error.PrivilegedPackageOperationUnsupported,
         fixture.builder.BuildPackage(),
     );
-}
-
-test "PackageBuilder applies explicit virtual ownership to the archive" {
-    const allocator = testing.allocator;
-    var fixture = try Fixture.create(allocator,
-        \\pkgname=demo
-        \\pkgver=1
-        \\arch=('any')
-        \\package() {
-        \\  mkdir -p "$pkgdir/usr/share/demo"
-        \\  printf payload > "$pkgdir/usr/share/demo/data"
-        \\}
-    , null, null);
-    defer fixture.destroy();
-
-    const overrides = [_]archive.OwnershipOverride{.{
-        .path = "usr/share/demo/data",
-        .ownership = .{ .uid = 42, .gid = 84 },
-    }};
-    fixture.builder.options.virtual_ownership_overrides = &overrides;
-
-    const artifacts = try fixture.builder.BuildPackage();
-    defer builder_mod.deinitArtifacts(allocator, artifacts);
-    var reader = try archive.Reader.init(allocator, artifacts[0].path);
-    defer reader.deinit();
-    var saw_data = false;
-    while (try reader.next()) |entry| {
-        if (!std.mem.eql(u8, entry.path, "usr/share/demo/data")) continue;
-        saw_data = true;
-        try testing.expectEqual(@as(i64, 42), entry.uid);
-        try testing.expectEqual(@as(i64, 84), entry.gid);
-    }
-    try testing.expect(saw_data);
 }
 
 test "PackageBuilder runs execution steps in the configured build directory" {
