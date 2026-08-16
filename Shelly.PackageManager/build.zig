@@ -277,6 +277,7 @@ pub fn build(b: *std.Build) void {
             "fixture checkout cannot invoke fake makepkg before review and integrity gates pass",
             "embedded whitespace does not bypass homograph analysis",
             "risky tool in local_source_contents produces finding",
+            "aggregate split-package review includes member-specific files and detects changes",
         },
     });
     const run_pkgbuild_review_tests = b.addRunArtifact(pkgbuild_review_tests);
@@ -512,27 +513,6 @@ pub fn build(b: *std.Build) void {
     flatpak_test_step.dependOn(&run_backend_integration_tests.step);
     test_step.dependOn(&run_backend_integration_tests.step);
 
-    const test_builder_worker_module = b.createModule(.{
-        .root_source_file = b.path("src/builder_worker_main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    test_builder_worker_module.addImport("alpm_c", alpm_c);
-    test_builder_worker_module.addImport("archive", archive_mod);
-    test_builder_worker_module.addImport("operation_context", operation_context_mod);
-    test_builder_worker_module.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
-    const test_builder_worker = b.addExecutable(.{
-        .name = "shelly-builder-test",
-        .root_module = test_builder_worker_module,
-    });
-    const install_test_builder_worker = b.addInstallArtifact(test_builder_worker, .{});
-    run_mod_tests.setEnvironmentVariable(
-        "SHELLY_BUILDER_WORKER",
-        b.getInstallPath(.bin, "shelly-builder-test"),
-    );
-    run_mod_tests.step.dependOn(&install_test_builder_worker.step);
-
     const aur_tests = b.addTest(.{
         .name = "aur-test",
         .root_module = mod,
@@ -558,12 +538,8 @@ pub fn build(b: *std.Build) void {
             "AUR package failures are emitted after all builds and fail the operation",
             "build-only dependencies are removed after a failed build",
             "PackageBuilder init keeps the provided collaborators",
-            "non-root worker guard rejects root effective uid",
-            "root effective uid selects the de-escalated worker boundary",
-            "de-escalated builder command uses process-isolated runuser",
-            "worker protocol preserves reviewed build request",
-            "builder worker prevents child privilege gains",
-            "non-root worker executes a reviewed build request",
+            "non-root builder guard rejects root effective uid",
+            "PackageBuilder rejects a PKGBUILD changed after review",
             "PackageBuilder rejects a legacy unwritable package tree",
             "PackageBuilder cannot perform privileged package filesystem operations",
             "PackageBuilder simulates root ownership without host chown",
@@ -597,11 +573,6 @@ pub fn build(b: *std.Build) void {
         },
     });
     const run_aur_tests = b.addRunArtifact(aur_tests);
-    run_aur_tests.setEnvironmentVariable(
-        "SHELLY_BUILDER_WORKER",
-        b.getInstallPath(.bin, "shelly-builder-test"),
-    );
-    run_aur_tests.step.dependOn(&install_test_builder_worker.step);
     const aur_test_step = b.step("aur-test", "Run safe AUR manager and event tests");
     aur_test_step.dependOn(&run_aur_tests.step);
 

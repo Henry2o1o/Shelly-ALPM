@@ -126,7 +126,6 @@ package_shelly() {
   install -Dm755 out-notifications/bin/shelly-notifications "$pkgdir/usr/bin/shelly-notifications"
   install -Dm755 out/bin/Shelly_Ui_Gtk "$pkgdir/usr/bin/shelly-ui"
   install -Dm755 out-cli/bin/shelly "$pkgdir/usr/bin/shelly"
-  install -Dm755 out-cli/bin/shelly-builder "$pkgdir/usr/bin/shelly-builder"
   install -Dm755 out-key/bin/shelly-key "$pkgdir/usr/bin/shelly-key"
 
   # Install desktop entry

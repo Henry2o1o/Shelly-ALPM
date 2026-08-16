@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
+pub const MakePackageConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
+const MakePkgConfiguration = MakePackageConfiguration;
 const pkgbuild_parser = @import("../../pkgbuild/pkgbuild_parser.zig");
 const PackageBuild = pkgbuild_parser.Pkgbuild;
 const ExecutionStep = pkgbuild_parser.execution_step;
@@ -9,10 +10,12 @@ const op_context = @import("operation_context");
 const archive = @import("archive");
 const process_runner = @import("../builder.zig");
 const downloader = @import("../../shared/downloader.zig");
-const worker_protocol = @import("worker_protocol.zig");
 
 pub const pkgbuild_validation = @import("pkgbuild_validation.zig");
 pub const PkgbuildValidation = pkgbuild_validation.PkgbuildValidation;
+pub const pkgbuild_review = @import("pkgbuild_review.zig");
+pub const PreparedPkgbuildReview = pkgbuild_review.PreparedPkgbuildReview;
+pub const preparePkgbuildReview = pkgbuild_review.preparePkgbuildReview;
 
 pub const BuildArtifact = struct {
     path: [:0]u8,
@@ -35,12 +38,15 @@ pub const BuildOptions = struct {
     clean_after_success: bool,
     skip_source_pgp_verification: bool,
     build_directory: []const u8,
+    /// Exact PKGBUILD path used for the final in-process integrity check.
+    /// It may be omitted only by unit-test fixtures.
+    pkgbuild_path: ?[]const u8 = null,
     /// Allows callers with an already-verified source tree to use the custom
     /// packaging machinery without reacquiring sources. Normal AUR builds must
     /// leave this false so PackageBuilder creates $srcdir itself.
     sources_prepared: bool = false,
-    /// Digest of the PKGBUILD and its reviewed local/install files. Production
-    /// callers must provide it so the worker can reject review/build races.
+    /// Digest of the PKGBUILD and its reviewed local/install files. Every
+    /// caller must prepare and verify this snapshot before execution.
     reviewed_pkgbuild_digest: ?[std.crypto.hash.sha2.Sha256.digest_length]u8 = null,
 };
 
@@ -50,8 +56,6 @@ pub const BuilderErrors = error{
     Cancelled,
     AlreadyBuilt,
     BuilderMustNotRunAsRoot,
-    BuilderDeescalationFailed,
-    BuilderWorkerUnavailable,
     UnreviewedBuilderRequest,
     ReviewedPkgbuildChanged,
     BuildDirectoryNotWritable,
@@ -80,228 +84,12 @@ pub fn secureBuilderProcess() !void {
     });
 }
 
-pub fn requiresDeescalatedWorker(effective_uid: u32) bool {
-    return effective_uid == 0;
-}
-
-/// Production entry point for the custom builder. Every build crosses the
-/// worker boundary; a root caller may only launch that worker as the invoking
-/// non-root user and never executes PackageBuilder itself.
-pub fn buildPackageWithWorker(
-    allocator: std.mem.Allocator,
-    dispatcher: events.Dispatcher,
-    operation_context: op_context.OperationContext,
-    makepkg_config: MakePkgConfiguration,
-    requested_names: []const []const u8,
-    options: BuildOptions,
-    environ: std.process.Environ,
-    io: std.Io,
-) BuilderErrors![]BuildArtifact {
-    if (requested_names.len == 0) return BuilderErrors.BuildFailed;
-    var client: WorkerClient = .{
-        .allocator = allocator,
-        .dispatcher = dispatcher,
-        .makepkg_config = makepkg_config,
-        .requested_names = requested_names,
-        .options = options,
-        .environ = environ,
-        .io = io,
-    };
-    defer client.deinit();
-
-    var active_context = operation_context;
-    var operation = active_context.begin(.{
-        .backend = .aur,
-        .kind = .build,
-        .subject = "Package Build",
-    });
-    defer operation.finish(.cancelled);
-    const artifacts = client.run(&operation) catch |err| {
-        operation.finish(if (err == error.Cancelled) .cancelled else .failed);
-        return reportBuildFailure(allocator, dispatcher, client.failure_context, err);
-    };
-    operation.finish(.success);
-    return artifacts;
-}
-
-const WorkerClient = struct {
-    allocator: std.mem.Allocator,
-    dispatcher: events.Dispatcher,
-    makepkg_config: MakePkgConfiguration,
-    requested_names: []const []const u8,
-    options: BuildOptions,
-    environ: std.process.Environ,
-    io: std.Io,
-    failure_context: ?[]u8 = null,
-
-    fn deinit(self: *WorkerClient) void {
-        if (self.failure_context) |context| self.allocator.free(context);
-    }
-
-    fn run(self: *WorkerClient, operation: *op_context.Operation) ![]BuildArtifact {
-        const digest = self.options.reviewed_pkgbuild_digest orelse
-            return error.UnreviewedBuilderRequest;
-        const worker_path = try resolveWorkerPath(self.allocator, self.io, self.environ);
-        defer self.allocator.free(worker_path);
-
-        const request: worker_protocol.Request = .{
-            .build_directory = self.options.build_directory,
-            .requested_names = self.requested_names,
-            .options = .{
-                .run_check = self.options.run_check,
-                .overwrite = self.options.overwrite,
-                .clean_after_success = self.options.clean_after_success,
-                .skip_source_pgp_verification = self.options.skip_source_pgp_verification,
-                .sources_prepared = self.options.sources_prepared,
-            },
-            .makepkg = .{
-                .package_extension = self.makepkg_config.package_extension,
-                .package_carch = self.makepkg_config.package_carch,
-                .packager = self.makepkg_config.packager,
-                .build_environment = self.makepkg_config.build_environment,
-                .options = self.makepkg_config.options,
-            },
-            .reviewed_pkgbuild_digest = digest,
-        };
-        const request_json = try std.json.Stringify.valueAlloc(self.allocator, request, .{});
-        defer self.allocator.free(request_json);
-
-        var command = if (builtin.os.tag == .linux and
-            requiresDeescalatedWorker(@intCast(std.os.linux.geteuid())))
-            process_runner.deescalatedInvokingUserCommand(
-                self.allocator,
-                self.io,
-                self.environ,
-                worker_path,
-                &.{request_json},
-            ) catch |err| switch (err) {
-                error.InvokingUserUnavailable => return err,
-                else => return error.BuilderDeescalationFailed,
-            }
-        else
-            try process_runner.directCommand(self.allocator, worker_path, &.{request_json});
-        defer command.deinit(self.allocator);
-
-        var stream_context: WorkerStreamContext = .{
-            .allocator = self.allocator,
-            .dispatcher = self.dispatcher,
-            .package_name = self.requested_names[0],
-        };
-        defer if (stream_context.response_json) |json| self.allocator.free(json);
-        const exit_code = process_runner.runStreamingWithEnvironmentOperation(
-            self.allocator,
-            self.io,
-            self.environ,
-            command.asConst(),
-            null,
-            null,
-            .{ .function = forwardWorkerLine, .data = &stream_context },
-            operation,
-        ) catch |err| switch (err) {
-            error.FileNotFound => return error.BuilderWorkerUnavailable,
-            else => return err,
-        };
-        const response_json = stream_context.response_json orelse {
-            if (exit_code == 127) return error.BuilderWorkerUnavailable;
-            return error.BuilderDeescalationFailed;
-        };
-        var parsed = try std.json.parseFromSlice(worker_protocol.Response, self.allocator, response_json, .{
-            .ignore_unknown_fields = true,
-        });
-        defer parsed.deinit();
-        if (parsed.value.version != worker_protocol.protocol_version)
-            return error.BuilderDeescalationFailed;
-        if (parsed.value.failure) |failure| {
-            self.failure_context = try formatFailureContext(
-                self.allocator,
-                failure.package_name,
-                failure.step_name,
-            );
-            return failure.code.toError();
-        }
-        if (exit_code != 0) return error.BuilderDeescalationFailed;
-
-        const artifacts = try self.allocator.alloc(BuildArtifact, parsed.value.artifacts.len);
-        var initialized: usize = 0;
-        errdefer {
-            for (artifacts[0..initialized]) |artifact| artifact.deinit(self.allocator);
-            self.allocator.free(artifacts);
-        }
-        for (parsed.value.artifacts, artifacts) |source, *destination| {
-            destination.* = .{
-                .path = try self.allocator.dupeZ(u8, source.path),
-                .package_name = self.allocator.dupe(u8, source.package_name) catch |err| {
-                    self.allocator.free(destination.path);
-                    return err;
-                },
-            };
-            initialized += 1;
-        }
-        return artifacts;
-    }
-};
-
-fn resolveWorkerPath(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    environ: std.process.Environ,
-) ![]u8 {
-    if (environ.getPosix("SHELLY_BUILDER_WORKER")) |path| {
-        if (path.len == 0) return error.BuilderWorkerUnavailable;
-        return allocator.dupe(u8, path);
-    }
-    const executable_directory = std.process.executableDirPathAlloc(io, allocator) catch
-        return allocator.dupe(u8, "/usr/bin/shelly-builder");
-    defer allocator.free(executable_directory);
-    const sibling = try std.fs.path.join(allocator, &.{ executable_directory, "shelly-builder" });
-    std.Io.Dir.cwd().access(io, sibling, .{ .execute = true }) catch {
-        allocator.free(sibling);
-        return allocator.dupe(u8, "/usr/bin/shelly-builder");
-    };
-    return sibling;
-}
-
-fn formatFailureContext(
-    allocator: std.mem.Allocator,
-    package_name: ?[]const u8,
-    step_name: ?[]const u8,
-) !?[]u8 {
-    if (package_name) |package| {
-        if (step_name) |step|
-            return try std.fmt.allocPrint(allocator, "{s}, step {s}", .{ package, step });
-        return try allocator.dupe(u8, package);
-    }
-    if (step_name) |step|
-        return try std.fmt.allocPrint(allocator, "step {s}", .{step});
-    return null;
-}
-
-fn reportBuildFailure(
-    allocator: std.mem.Allocator,
-    dispatcher: events.Dispatcher,
-    context: ?[]const u8,
-    err: anyerror,
-) BuilderErrors {
-    const message = if (context) |value|
-        std.fmt.allocPrint(allocator, "Failed to build package ({s}): {s}", .{ value, @errorName(err) }) catch
-            return BuilderErrors.OutOfMemory
-    else
-        std.fmt.allocPrint(allocator, "Failed to build package: {s}", .{@errorName(err)}) catch
-            return BuilderErrors.OutOfMemory;
-    defer allocator.free(message);
-    var active_dispatcher = dispatcher;
-    active_dispatcher.raiseError(.{ .message = message });
-    return narrowBuilderError(err);
-}
-
 fn narrowBuilderError(err: anyerror) BuilderErrors {
     return switch (err) {
         error.OutOfMemory => BuilderErrors.OutOfMemory,
         error.Cancelled => BuilderErrors.Cancelled,
         error.AlreadyBuilt => BuilderErrors.AlreadyBuilt,
         error.BuilderMustNotRunAsRoot => BuilderErrors.BuilderMustNotRunAsRoot,
-        error.BuilderDeescalationFailed, error.InvokingUserUnavailable => BuilderErrors.BuilderDeescalationFailed,
-        error.BuilderWorkerUnavailable => BuilderErrors.BuilderWorkerUnavailable,
         error.UnreviewedBuilderRequest => BuilderErrors.UnreviewedBuilderRequest,
         error.ReviewedPkgbuildChanged => BuilderErrors.ReviewedPkgbuildChanged,
         error.BuildDirectoryNotWritable => BuilderErrors.BuildDirectoryNotWritable,
@@ -310,25 +98,23 @@ fn narrowBuilderError(err: anyerror) BuilderErrors {
     };
 }
 
-/// Non-root build engine used by the worker. Tests may invoke it directly,
-/// but production callers must use buildPackageWithWorker.
+/// Non-root standalone package build engine.
 pub const PackageBuilder = struct {
     allocator: std.mem.Allocator,
     package_builds: []const PackageBuild,
-    dispatcher: events.Dispatcher,
-    operation_context: op_context.OperationContext,
+    operation_context: *op_context.OperationContext,
     makepkg_config: MakePkgConfiguration,
     requested_names: []const []const u8,
     options: BuildOptions,
     environ: std.process.Environ,
     io: std.Io,
     failure_location: FailureLocation = .{},
+    active_operation: ?*op_context.Operation = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
         package_builds: []const PackageBuild,
-        dispatcher: events.Dispatcher,
-        operation_context: op_context.OperationContext,
+        operation_context: *op_context.OperationContext,
         makepackage_configuration: MakePkgConfiguration,
         requested_names: []const []const u8,
         options: BuildOptions,
@@ -344,7 +130,6 @@ pub const PackageBuilder = struct {
         self.* = PackageBuilder{
             .allocator = allocator,
             .package_builds = package_builds,
-            .dispatcher = dispatcher,
             .operation_context = operation_context,
             .makepkg_config = makepackage_configuration,
             .requested_names = requested_names,
@@ -362,24 +147,58 @@ pub const PackageBuilder = struct {
 
     pub fn BuildPackage(self: *PackageBuilder) BuilderErrors![]BuildArtifact {
         const artifacts = self.run() catch |err|
-            return reportBuildFailure(self.allocator, self.dispatcher, null, err);
+            return narrowBuilderError(err);
         return artifacts;
     }
 
-    /// Worker-core entry point that preserves the original builder error.
+    /// Compatibility entry point that owns its operation lifecycle. Commands
+    /// with an existing operation should call `runWithOperation` instead.
     pub fn run(self: *PackageBuilder) ![]BuildArtifact {
         var operation = self.operation_context.begin(op_context.OperationDescriptor{ .backend = .aur, .kind = .build, .subject = "Package Build" });
-        defer operation.finish(.cancelled);
-        const artifacts = self.buildPackage(&operation) catch |err| {
+        var completion: op_context.CompletionStatus = .failed;
+        defer operation.finish(completion);
+        const artifacts = self.runWithOperation(&operation) catch |err| {
             if (err == error.Cancelled) {
-                operation.finish(.cancelled);
+                completion = .cancelled;
                 return err;
             }
-            operation.finish(.failed);
+            operation.reportError(err, "Failed to build package", "build", null, false);
             return err;
         };
-        operation.finish(.success);
+        completion = .success;
         return artifacts;
+    }
+
+    /// Runs the standalone build core inside a caller-owned operation.
+    pub fn runWithOperation(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+    ) ![]BuildArtifact {
+        const reviewed_digest = self.options.reviewed_pkgbuild_digest orelse
+            return error.UnreviewedBuilderRequest;
+        if (self.options.pkgbuild_path) |pkgbuild_path| {
+            const current_pkgbuild = try std.Io.Dir.cwd().readFileAlloc(
+                self.io,
+                pkgbuild_path,
+                self.allocator,
+                .limited(32 * 1024 * 1024),
+            );
+            defer self.allocator.free(current_pkgbuild);
+            var current_review = try preparePkgbuildReview(
+                self.allocator,
+                self.io,
+                self.options.build_directory,
+                current_pkgbuild,
+                self.package_builds,
+            );
+            defer current_review.deinit();
+            if (!std.mem.eql(u8, &reviewed_digest, &current_review.digest))
+                return error.ReviewedPkgbuildChanged;
+        } else if (!builtin.is_test) return error.UnreviewedBuilderRequest;
+        if (self.active_operation != null) return error.BuildAlreadyRunning;
+        self.active_operation = operation;
+        defer self.active_operation = null;
+        return self.buildPackage(operation);
     }
 
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
@@ -570,7 +389,7 @@ pub const PackageBuilder = struct {
         try command.append(self.allocator, "git");
         try command.appendSlice(self.allocator, args);
         var stream_context: StepStreamContext = .{
-            .builder = self,
+            .operation = operation,
             .package_name = self.requested_names[0],
         };
         const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
@@ -687,10 +506,11 @@ pub const PackageBuilder = struct {
     }
 
     fn raiseSourceMessage(self: *PackageBuilder, package_build: *const PackageBuild, message: []const u8) void {
-        self.dispatcher.raiseInformational(.{
-            .event_type = .aur_build_output,
-            .message = message,
-            .package_name = package_build.pkg_name,
+        const operation = self.active_operation orelse return;
+        operation.status(.information, message, "aur_build_output", @intFromEnum(events.EventType.aur_build_output));
+        operation.progress(.{
+            .stage = "sources",
+            .message = package_build.pkg_name orelse message,
         });
     }
 
@@ -742,7 +562,8 @@ pub const PackageBuilder = struct {
             .{path},
         ) catch return;
         defer self.allocator.free(message);
-        self.dispatcher.raiseError(.{ .message = message });
+        if (self.active_operation) |operation|
+            operation.reportError(error.BuildDirectoryNotWritable, message, "build", null, false);
     }
 
     fn runStep(
@@ -757,8 +578,7 @@ pub const PackageBuilder = struct {
             .package_name = package_name,
             .step_name = step_name,
         };
-        const active_operation = self.dispatcher.operation orelse operation;
-        try active_operation.checkCancelled();
+        try operation.checkCancelled();
         const package_step = isPackageStep(step_name);
         const executable_body = try std.fmt.allocPrint(
             self.allocator,
@@ -767,7 +587,7 @@ pub const PackageBuilder = struct {
         );
         defer self.allocator.free(executable_body);
 
-        var stream_context: StepStreamContext = .{ .builder = self, .package_name = package_name };
+        var stream_context: StepStreamContext = .{ .operation = operation, .package_name = package_name };
         const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
             self.allocator,
             self.io,
@@ -776,16 +596,12 @@ pub const PackageBuilder = struct {
             self.options.build_directory,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
-            active_operation,
+            operation,
         );
         if (package_step and exit_code == virtual_metadata_rejected_exit_code)
             return error.PrivilegedPackageOperationUnsupported;
         if (exit_code != 0) return error.StepFailed;
-        self.dispatcher.raiseInformational(.{
-            .event_type = .aur_build_output,
-            .message = step_name,
-            .package_name = package_name,
-        });
+        operation.status(.information, step_name, "aur_build_output", @intFromEnum(events.EventType.aur_build_output));
     }
 
     fn preparePackageDirectory(self: *PackageBuilder, package_build: *const PackageBuild) !void {
@@ -1216,47 +1032,25 @@ fn rejectExistingDestination(io: std.Io, path: []const u8) !void {
 }
 
 const StepStreamContext = struct {
-    builder: *PackageBuilder,
+    operation: *op_context.Operation,
     package_name: []const u8,
 };
-
-const WorkerStreamContext = struct {
-    allocator: std.mem.Allocator,
-    dispatcher: events.Dispatcher,
-    package_name: []const u8,
-    response_json: ?[]u8 = null,
-};
-
-fn forwardWorkerLine(data: ?*anyopaque, stream: process_runner.StreamKind, line: []const u8) void {
-    const context: *WorkerStreamContext = @ptrCast(@alignCast(data.?));
-    if (std.mem.startsWith(u8, line, worker_protocol.result_prefix)) {
-        if (context.response_json) |old| context.allocator.free(old);
-        context.response_json = context.allocator.dupe(
-            u8,
-            line[worker_protocol.result_prefix.len..],
-        ) catch null;
-        return;
-    }
-    context.dispatcher.raiseInformational(.{
-        .event_type = if (stream == .stderr) .aur_build_error else .aur_build_output,
-        .message = line,
-        .package_name = context.package_name,
-    });
-}
 
 fn forwardStepLine(data: ?*anyopaque, stream: process_runner.StreamKind, line: []const u8) void {
     const context: *StepStreamContext = @ptrCast(@alignCast(data.?));
-    context.builder.dispatcher.raiseInformational(.{
-        .event_type = if (stream == .stderr) .aur_build_error else .aur_build_output,
-        .message = line,
-        .package_name = context.package_name,
-    });
+    const event_type: events.EventType = if (stream == .stderr) .aur_build_error else .aur_build_output;
+    context.operation.status(
+        if (stream == .stderr) .warning else .information,
+        line,
+        @tagName(event_type),
+        @intFromEnum(event_type),
+    );
     if (stream == .stdout) if (process_runner.parseBuildProgress(line)) |progress| {
-        context.builder.dispatcher.raiseProgress(.{
-            .progress_type = .makepkg_build,
-            .package_name = context.package_name,
-            .percent = progress.percent,
+        context.operation.progress(.{
+            .stage = "makepkg_build",
+            .percentage = @floatFromInt(progress.percent),
             .message = progress.message,
+            .native_code = @intFromEnum(events.ProgressType.makepkg_build),
         });
     };
 }

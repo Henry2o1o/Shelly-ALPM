@@ -346,42 +346,6 @@ pub fn invokingUserCommand(
     return .{ .argv = try argv.toOwnedSlice(allocator) };
 }
 
-/// Constructs a process-isolated, non-root command. Unlike
-/// `invokingUserCommand`, this has no direct-execution fallback: callers use it
-/// specifically at a privilege boundary and must fail closed when the original
-/// user cannot be identified.
-pub fn deescalatedInvokingUserCommand(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    environ: std.process.Environ,
-    command: []const u8,
-    arguments: []const []const u8,
-) !OwnedCommand {
-    const username = try invokingUsername(allocator, io, environ);
-    defer allocator.free(username);
-
-    return deescalatedCommandForUsername(allocator, username, command, arguments);
-}
-
-pub fn deescalatedCommandForUsername(
-    allocator: std.mem.Allocator,
-    username: []const u8,
-    command: []const u8,
-    arguments: []const []const u8,
-) !OwnedCommand {
-    if (username.len == 0 or std.mem.eql(u8, username, "root") or std.mem.eql(u8, username, "0"))
-        return error.InvokingUserUnavailable;
-
-    var argv: std.ArrayList([]u8) = .empty;
-    errdefer {
-        for (argv.items) |argument| allocator.free(argument);
-        argv.deinit(allocator);
-    }
-    try appendOwned(allocator, &argv, &.{ "/usr/bin/runuser", "-u", username, "-w", "PATH", "--", command });
-    try appendOwned(allocator, &argv, arguments);
-    return .{ .argv = try argv.toOwnedSlice(allocator) };
-}
-
 pub fn invokingUsername(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -587,24 +551,6 @@ test "UID lookup and VCS build commands replicate invoking-user behavior" {
     try std.testing.expectEqualStrings("-c", command.argv[index + 1]);
     try std.testing.expectEqualStrings("-r", command.argv[index + 2]);
     try std.testing.expectEqualStrings("/var/lib/shelly/chroot", command.argv[index + 3]);
-}
-
-test "de-escalated builder command uses process-isolated runuser" {
-    var command = try deescalatedCommandForUsername(
-        std.testing.allocator,
-        "zoey",
-        "/usr/bin/shelly-builder",
-        &.{"request-json"},
-    );
-    defer command.deinit(std.testing.allocator);
-    try std.testing.expectEqualDeep(
-        &[_][]const u8{ "/usr/bin/runuser", "-u", "zoey", "-w", "PATH", "--", "/usr/bin/shelly-builder", "request-json" },
-        command.asConst(),
-    );
-    try std.testing.expectError(
-        error.InvokingUserUnavailable,
-        deescalatedCommandForUsername(std.testing.allocator, "root", "/bin/false", &.{}),
-    );
 }
 
 test "built package selection mirrors split-package and stale-output safeguards" {

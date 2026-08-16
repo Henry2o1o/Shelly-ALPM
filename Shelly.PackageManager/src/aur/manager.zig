@@ -4,9 +4,6 @@ const alpm_module = @import("../alpm/manager.zig");
 const alpm_bindings = @import("../alpm/bindings.zig");
 const alpm_events = @import("../alpm/events.zig");
 const pkgbuild_parser = @import("../pkgbuild/pkgbuild_parser.zig");
-const homograph_validator = @import("../pkgbuild/homograph_validator.zig");
-const post_install_validator = @import("../pkgbuild/post_install_validator.zig");
-const local_source_validator = @import("../pkgbuild/local_source_validator.zig");
 const pkgbuild_validation = @import("builder/pkgbuild_validation.zig");
 const operation_api = @import("operation_context");
 const MakePackageConfiguration = @import("makepackage.zig").MakePackageConfiguration;
@@ -19,7 +16,6 @@ pub const vcs = @import("vcs.zig");
 pub const srcinfo = @import("srcinfo.zig");
 pub const events = @import("events.zig");
 pub const builder = @import("builder.zig");
-pub const builder_worker = @import("builder/worker.zig");
 pub const dependency_resolver = @import("dependency_resolver.zig");
 pub const version = @import("version.zig");
 pub const native_events = alpm_events;
@@ -31,6 +27,8 @@ const PkgbuildInfo = pkgbuild_parser.Pkgbuild;
 const ParsedDependency = pkgbuild_parser.parsed_dep;
 const ValidationFinding = pkgbuild_validation.ValidationFinding;
 pub const PkgbuildValidation = pkgbuild_validation.PkgbuildValidation;
+pub const validatePkgbuild = pkgbuild_validation.validatePkgbuild;
+pub const validatePkgbuildInfo = pkgbuild_validation.validatePkgbuildInfo;
 const max_file_size = 32 * 1024 * 1024;
 const requireReviewInputs = review_integrity.requireReviewInputs;
 const requireReviewedFile = review_integrity.requireReviewedFile;
@@ -64,37 +62,6 @@ pub const PkgbuildApprovalHandler = struct {
     function: *const fn (data: ?*anyopaque, request: PkgbuildDiffRequest) bool,
     data: ?*anyopaque = null,
 };
-
-pub fn validatePkgbuild(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    content: []const u8,
-    base_directory: ?[]const u8,
-) !PkgbuildValidation {
-    const parser = pkgbuild_parser.PkgbuildParser{ .allocator = allocator, .io = io };
-    var info = try parser.parser_content(content, base_directory);
-    defer info.deinit(allocator);
-
-    return validatePkgbuildInfo(allocator, io, &info, base_directory, content);
-}
-
-pub fn validatePkgbuildInfo(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    info: *const PkgbuildInfo,
-    base_directory: ?[]const u8,
-    content: ?[]const u8,
-) !PkgbuildValidation {
-    var post_install = try (post_install_validator.PostInstallValidator{ .allocator = allocator }).validateWithContent(info.*, content);
-    errdefer post_install.deinit(allocator);
-    var homograph = try (homograph_validator.HomographValidator{ .allocator = allocator }).validate(info.*);
-    errdefer homograph.deinit(allocator);
-    return .{
-        .post_install = post_install,
-        .homograph = homograph,
-        .local_source = try (local_source_validator.LocalSourceValidator{ .allocator = allocator, .io = io }).validate(info.*, base_directory),
-    };
-}
 
 const PreparedPackage = struct {
     package_name: []u8,
@@ -1487,12 +1454,48 @@ pub const Manager = struct {
             return artifactsFromPaths(self.allocator, paths, requested_names);
         }
 
-        var build_context = operation_api.OperationContext.init(self.allocator, self.io());
-        defer build_context.deinit();
-        return package_builder.buildPackageWithWorker(
+        var standalone_context = operation_api.OperationContext.init(self.allocator, self.io());
+        defer standalone_context.deinit();
+        var standalone_operation: ?operation_api.Operation = null;
+        var standalone_completion: operation_api.CompletionStatus = .failed;
+        defer if (standalone_operation) |*active| active.finish(standalone_completion);
+        const operation = self.dispatcher.operation orelse blk: {
+            standalone_operation = standalone_context.begin(.{
+                .backend = .aur,
+                .kind = .build,
+                .subject = prepared.package_name,
+            });
+            break :blk &standalone_operation.?;
+        };
+        const package_builds = try self.allocator.alloc(PkgbuildInfo, requested_names.len);
+        var parsed_count: usize = 0;
+        defer {
+            for (package_builds[0..parsed_count]) |*package_build| package_build.deinit(self.allocator);
+            self.allocator.free(package_builds);
+        }
+        for (requested_names, package_builds) |requested_name, *package_build| {
+            package_build.* = try (pkgbuild_parser.PkgbuildParser{
+                .allocator = self.allocator,
+                .io = self.io(),
+                .selected_package_name = requested_name,
+                .package_carch = self.makepkg_config.package_carch,
+            }).parser_content(prepared.new_pkgbuild, prepared.cache_path);
+            parsed_count += 1;
+        }
+        var build_review = try package_builder.preparePkgbuildReview(
             self.allocator,
-            self.dispatcher,
-            build_context,
+            self.io(),
+            prepared.cache_path,
+            prepared.new_pkgbuild,
+            package_builds,
+        );
+        defer build_review.deinit();
+
+        const active_context = self.operation_context orelse operation.context;
+        const package_build = try package_builder.PackageBuilder.init(
+            self.allocator,
+            package_builds,
+            active_context,
             self.makepkg_config.*,
             requested_names,
             .{
@@ -1501,11 +1504,16 @@ pub const Manager = struct {
                 .clean_after_success = !historical,
                 .skip_source_pgp_verification = !historical,
                 .build_directory = prepared.cache_path,
-                .reviewed_pkgbuild_digest = prepared.digest,
+                .pkgbuild_path = prepared.pkgbuild_path,
+                .reviewed_pkgbuild_digest = build_review.digest,
             },
             self.environ,
             self.io(),
         );
+        defer package_build.deinit();
+        const artifacts = try package_build.runWithOperation(operation);
+        standalone_completion = .success;
+        return artifacts;
     }
 
     fn readCachedPkgbuild(self: *Self, package_name: []const u8) !?[]u8 {

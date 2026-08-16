@@ -4,17 +4,9 @@
 //! wired into the module test block in src/root.zig and the aur-test filter
 //! list in build.zig.
 //!
-//! Two implementation details of the fixture are worth knowing:
-//!
-//! * `PackageBuilder.init` receives the `OperationContext` **by value**, so
-//!   the builder operates on its own copy. Operations emit events through
-//!   that copy. Subscriptions must therefore be registered *before* the
-//!   context is copied into the builder (done in `create`), otherwise the
-//!   builder's copy dispatches into an empty subscription list and the test
-//!   captures never fire.
-//! * `PackageBuilder.deinit` releases only the builder container. Its parsed
-//!   PKGBUILDs, requested names, dispatcher, and operation context are borrowed
-//!   from the caller and remain fixture-owned.
+//! `PackageBuilder.deinit` releases only the builder container. Its parsed
+//! PKGBUILDs, requested names, and operation context are borrowed from the
+//! caller and remain fixture-owned.
 
 const std = @import("std");
 const testing = std.testing;
@@ -23,7 +15,6 @@ const builder_mod = @import("builder.zig");
 const PackageBuilder = builder_mod.PackageBuilder;
 const process_runner = @import("../builder.zig");
 const pkgbuild_mod = @import("../../pkgbuild/pkgbuild_parser.zig");
-const events = @import("../events.zig");
 const op_context = @import("operation_context");
 const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
 const archive = @import("archive");
@@ -32,9 +23,12 @@ const raw_alpm = @import("../../alpm/bindings.zig").libalpm.alpm;
 const ErrorCapture = struct {
     count: usize = 0,
 
-    fn handle(data: ?*anyopaque, _: events.ErrorArgs) void {
+    fn handle(data: ?*anyopaque, event: op_context.Event) void {
         const self: *@This() = @ptrCast(@alignCast(data.?));
-        self.count += 1;
+        switch (event) {
+            .failure => self.count += 1,
+            else => {},
+        }
     }
 };
 
@@ -54,7 +48,7 @@ const Fixture = struct {
     builder: *PackageBuilder,
     package_builds: []pkgbuild_mod.Pkgbuild,
     requested_names: [][]const u8,
-    operation_context: op_context.OperationContext,
+    operation_context: *op_context.OperationContext,
     config: *MakePkgConfiguration,
     // Sentinel-terminated: realPathFileAlloc allocates len+1 for the 0 byte,
     // and free() only releases the full allocation when the slice type still
@@ -95,15 +89,14 @@ const Fixture = struct {
         var info = try parser.parser_content(pkgbuild_content, build_dir);
         errdefer info.deinit(allocator);
 
-        var operation_context = op_context.OperationContext.init(allocator, io);
+        const operation_context = try allocator.create(op_context.OperationContext);
+        errdefer allocator.destroy(operation_context);
+        operation_context.* = op_context.OperationContext.init(allocator, io);
         errdefer operation_context.deinit();
 
         if (event_handler) |handler| {
             _ = try operation_context.subscribe(handler);
         }
-
-        var dispatcher = events.Dispatcher.init(allocator);
-        errdefer dispatcher.deinit();
 
         const config_content = try std.fmt.allocPrint(
             allocator,
@@ -123,7 +116,6 @@ const Fixture = struct {
         const builder = try PackageBuilder.init(
             allocator,
             package_builds,
-            dispatcher,
             operation_context,
             config.*,
             requested_names,
@@ -134,6 +126,7 @@ const Fixture = struct {
                 .skip_source_pgp_verification = true,
                 .build_directory = build_dir,
                 .sources_prepared = true,
+                .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
             },
             testing.environ,
             io,
@@ -178,12 +171,11 @@ const Fixture = struct {
             parsed_count += 1;
         }
 
-        var operation_context = op_context.OperationContext.init(allocator, io);
+        const operation_context = try allocator.create(op_context.OperationContext);
+        errdefer allocator.destroy(operation_context);
+        operation_context.* = op_context.OperationContext.init(allocator, io);
         errdefer operation_context.deinit();
         if (event_handler) |handler| _ = try operation_context.subscribe(handler);
-        var dispatcher = events.Dispatcher.init(allocator);
-        errdefer dispatcher.deinit();
-
         const config_content = try std.fmt.allocPrint(
             allocator,
             "builddir={s}\npkgdest={s}\n",
@@ -197,7 +189,6 @@ const Fixture = struct {
         const builder = try PackageBuilder.init(
             allocator,
             package_builds,
-            dispatcher,
             operation_context,
             config.*,
             requested_names,
@@ -208,6 +199,7 @@ const Fixture = struct {
                 .skip_source_pgp_verification = true,
                 .build_directory = build_dir,
                 .sources_prepared = true,
+                .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
             },
             testing.environ,
             io,
@@ -226,15 +218,15 @@ const Fixture = struct {
     }
 
     fn destroy(self: *Fixture) void {
-        // Release borrowed inputs and the copied dispatcher before destroying
-        // the builder container. The testing allocator catches omissions.
+        // Release borrowed inputs before destroying the builder container.
+        // The testing allocator catches omissions.
         for (self.package_builds) |*package_build| package_build.deinit(self.allocator);
         self.allocator.free(self.package_builds);
         self.allocator.free(self.requested_names);
-        self.builder.dispatcher.deinit();
         self.builder.deinit();
         self.config.deinit();
         self.operation_context.deinit();
+        self.allocator.destroy(self.operation_context);
         self.allocator.free(self.build_dir);
         self.temporary.cleanup();
     }
@@ -304,7 +296,7 @@ test "PackageBuilder init keeps the provided collaborators" {
     try testing.expectEqualStrings("demo", fixture.builder.package_builds[0].pkg_name.?);
 }
 
-test "non-root worker guard rejects root effective uid" {
+test "non-root builder guard rejects root effective uid" {
     try testing.expectError(
         error.BuilderMustNotRunAsRoot,
         builder_mod.requireNonRootEffectiveUid(0),
@@ -312,9 +304,45 @@ test "non-root worker guard rejects root effective uid" {
     try builder_mod.requireNonRootEffectiveUid(1000);
 }
 
-test "root effective uid selects the de-escalated worker boundary" {
-    try testing.expect(builder_mod.requiresDeescalatedWorker(0));
-    try testing.expect(!builder_mod.requiresDeescalatedWorker(1000));
+test "PackageBuilder rejects a PKGBUILD changed after review" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "PKGBUILD",
+        .data = pkgbuild_content,
+    });
+    const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
+    defer allocator.free(pkgbuild_path);
+    var review = try builder_mod.preparePkgbuildReview(
+        allocator,
+        io,
+        fixture.build_dir,
+        pkgbuild_content,
+        fixture.package_builds,
+    );
+    defer review.deinit();
+    fixture.builder.options.pkgbuild_path = pkgbuild_path;
+    fixture.builder.options.reviewed_pkgbuild_digest = review.digest;
+
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "PKGBUILD",
+        .data = "pkgname=changed\npkgver=1\npkgrel=1\narch=('any')\n",
+    });
+    try testing.expectError(
+        error.ReviewedPkgbuildChanged,
+        fixture.builder.BuildPackage(),
+    );
 }
 
 test "PackageBuilder rejects a legacy unwritable package tree" {
@@ -736,7 +764,7 @@ test "PackageBuilder reports failure when a step exits non-zero" {
     defer fixture.destroy();
 
     var errors: ErrorCapture = .{};
-    _ = try fixture.builder.dispatcher.addErrorHandler(.{
+    _ = try fixture.operation_context.subscribe(.{
         .function = ErrorCapture.handle,
         .data = &errors,
     });
@@ -1088,7 +1116,6 @@ const shelly_bin_pkgbuild =
     \\
     \\  # Install Shelly.Cli binary
     \\  install -Dm755 "$srcdir/shelly" "$pkgdir/usr/bin/shelly"
-    \\  install -Dm755 "$srcdir/shelly-builder" "$pkgdir/usr/bin/shelly-builder"
     \\
     \\  # Install Shelly.Key binary
     \\  install -Dm755 "$srcdir/shelly-key" "$pkgdir/usr/bin/shelly-key"
@@ -1259,7 +1286,7 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     // Populate $srcdir the way makepkg would after extracting the release
     // tarballs referenced by the PKGBUILD's source array.
     try fixture.temporary.dir.createDir(io, "src", .default_dir);
-    for ([_][]const u8{ "shelly-ui", "shelly-notifications", "shelly", "shelly-builder", "shelly-key" }) |binary| {
+    for ([_][]const u8{ "shelly-ui", "shelly-notifications", "shelly", "shelly-key" }) |binary| {
         const sub_path = try std.fmt.allocPrint(allocator, "src/{s}", .{binary});
         defer allocator.free(sub_path);
         try fixture.temporary.dir.writeFile(io, .{ .sub_path = sub_path, .data = "#!/bin/sh\nexit 0\n" });
@@ -1291,7 +1318,6 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
         "usr/bin/shelly-ui",
         "usr/bin/shelly-notifications",
         "usr/bin/shelly",
-        "usr/bin/shelly-builder",
         "usr/bin/shelly-key",
         "usr/bin/shelly-flatpak-integrate",
     }) |file| {
