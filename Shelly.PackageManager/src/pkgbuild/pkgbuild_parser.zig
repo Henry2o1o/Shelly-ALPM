@@ -168,6 +168,19 @@ pub const Pkgbuild = struct {
     }
 };
 
+/// The package members declared by a PKGBUILD's `pkgname` value. A scalar
+/// declaration contains one item, while a split-package array contains every
+/// member in declaration order.
+pub const PackageNames = struct {
+    items: [][]const u8,
+
+    pub fn deinit(self: *PackageNames, allocator: std.mem.Allocator) void {
+        for (self.items) |item| allocator.free(item);
+        allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
 pub const parsed_dep = struct {
     name: []const u8,
     operator: []const u8,
@@ -262,6 +275,37 @@ pub const PkgbuildParser = struct {
 
         const base_dir = std.fs.path.dirname(path);
         return self.parser_content(content, base_dir);
+    }
+
+    /// Reads a PKGBUILD and returns every package named by its top-level
+    /// `pkgname` declaration without executing the PKGBUILD.
+    pub fn package_names(self: PkgbuildParser, path: []const u8) !PackageNames {
+        const content = try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .unlimited);
+        defer self.allocator.free(content);
+        return self.package_names_content(content);
+    }
+
+    /// Returns every package named by a PKGBUILD's top-level `pkgname`
+    /// declaration. Variable references that the static parser understands
+    /// are resolved with the same environment used by `parser_content`.
+    pub fn package_names_content(self: PkgbuildParser, content: []const u8) !PackageNames {
+        var vars = try self.build_var_hashmap(content);
+        defer free_vars(self.allocator, &vars);
+
+        const names = try self.resolve_array_field(content, &vars, "pkgname");
+        if (names.len > 0) {
+            errdefer freeStringSlice(self.allocator, names);
+            try validate_package_names(names);
+            return .{ .items = names };
+        }
+        self.allocator.free(names);
+
+        const scalar = vars.get("pkgname") orelse return error.MissingPackageName;
+        if (scalar.len == 0) return error.MissingPackageName;
+        const items = try self.allocator.alloc([]const u8, 1);
+        errdefer self.allocator.free(items);
+        items[0] = try self.allocator.dupe(u8, scalar);
+        return .{ .items = items };
     }
 
     pub fn parser_content(self: PkgbuildParser, content: []const u8, base_dir: ?[]const u8) !Pkgbuild {
@@ -649,6 +693,14 @@ pub const PkgbuildParser = struct {
         if (vars.get("pkgname")) |name|
             if (std.mem.eql(u8, name, selected)) return;
         return error.SelectedPackageNotFound;
+    }
+
+    fn validate_package_names(names: [][]const u8) !void {
+        for (names, 0..) |name, index| {
+            if (name.len == 0) return error.MissingPackageName;
+            for (names[0..index]) |earlier|
+                if (std.mem.eql(u8, earlier, name)) return error.DuplicatePackageName;
+        }
     }
 
     fn package_scoped_vars(
@@ -5560,6 +5612,74 @@ test "parse_array: conditional block is skipped" {
     }
 
     try std.testing.expectEqual(@as(usize, 0), items.len);
+}
+
+test "package_names_content discovers and resolves every split package member" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\_pkgbase=demo
+        \\pkgname=("$_pkgbase" "${_pkgbase}-docs" "${_pkgbase}-debug")
+    ;
+    var names = try parser.package_names_content(content);
+    defer names.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), names.items.len);
+    try std.testing.expectEqualStrings("demo", names.items[0]);
+    try std.testing.expectEqualStrings("demo-docs", names.items[1]);
+    try std.testing.expectEqualStrings("demo-debug", names.items[2]);
+
+    for (names.items) |name| {
+        var info = try (PkgbuildParser{
+            .allocator = std.testing.allocator,
+            .io = std.testing.io,
+            .selected_package_name = name,
+        }).parser_content(content, null);
+        defer info.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(name, info.pkg_name.?);
+    }
+}
+
+test "package_names_content discovers a resolved scalar package name" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var names = try parser.package_names_content(
+        \\_pkgbase=demo
+        \\pkgname="${_pkgbase}-cli"
+    );
+    defer names.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), names.items.len);
+    try std.testing.expectEqualStrings("demo-cli", names.items[0]);
+}
+
+test "package_names reads a PKGBUILD file" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "PKGBUILD",
+        .data = "pkgname=(demo demo-docs)\n",
+    });
+    const path = try temporary.dir.realPathFileAlloc(std.testing.io, "PKGBUILD", std.testing.allocator);
+    defer std.testing.allocator.free(path);
+
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var names = try parser.package_names(path);
+    defer names.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), names.items.len);
+    try std.testing.expectEqualStrings("demo", names.items[0]);
+    try std.testing.expectEqualStrings("demo-docs", names.items[1]);
+}
+
+test "package_names_content rejects missing and duplicate package names" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    try std.testing.expectError(
+        error.MissingPackageName,
+        parser.package_names_content("pkgver=1\n"),
+    );
+    try std.testing.expectError(
+        error.DuplicatePackageName,
+        parser.package_names_content("pkgname=(demo demo)\n"),
+    );
 }
 
 test "parser_content: scalar fields and raw arrays" {

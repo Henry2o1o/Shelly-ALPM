@@ -11,6 +11,9 @@ const process_runner = @import("../builder.zig");
 const downloader = @import("../../shared/downloader.zig");
 const worker_protocol = @import("worker_protocol.zig");
 
+pub const pkgbuild_validation = @import("pkgbuild_validation.zig");
+pub const PkgbuildValidation = pkgbuild_validation.PkgbuildValidation;
+
 pub const BuildArtifact = struct {
     path: [:0]u8,
     package_name: []const u8,

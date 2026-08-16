@@ -7,7 +7,7 @@ const pkgbuild_parser = @import("../pkgbuild/pkgbuild_parser.zig");
 const homograph_validator = @import("../pkgbuild/homograph_validator.zig");
 const post_install_validator = @import("../pkgbuild/post_install_validator.zig");
 const local_source_validator = @import("../pkgbuild/local_source_validator.zig");
-const validation = @import("../pkgbuild/shared_validtor.zig");
+const pkgbuild_validation = @import("builder/pkgbuild_validation.zig");
 const operation_api = @import("operation_context");
 const MakePackageConfiguration = @import("makepackage.zig").MakePackageConfiguration;
 const package_builder = @import("builder/builder.zig");
@@ -29,7 +29,8 @@ pub const ReverseDependencyOptions = alpm_module.ReverseDependencyOptions;
 const TransFlag = alpm_bindings.libalpm.TransFlag;
 const PkgbuildInfo = pkgbuild_parser.Pkgbuild;
 const ParsedDependency = pkgbuild_parser.parsed_dep;
-const ValidationFinding = validation.ValidationFinding;
+const ValidationFinding = pkgbuild_validation.ValidationFinding;
+pub const PkgbuildValidation = pkgbuild_validation.PkgbuildValidation;
 const max_file_size = 32 * 1024 * 1024;
 const requireReviewInputs = review_integrity.requireReviewInputs;
 const requireReviewedFile = review_integrity.requireReviewedFile;
@@ -62,34 +63,6 @@ pub const PkgbuildDiffRequest = struct {
 pub const PkgbuildApprovalHandler = struct {
     function: *const fn (data: ?*anyopaque, request: PkgbuildDiffRequest) bool,
     data: ?*anyopaque = null,
-};
-
-pub const PkgbuildValidation = struct {
-    post_install: validation.ValidationResult,
-    homograph: validation.ValidationResult,
-    local_source: validation.ValidationResult,
-
-    pub fn deinit(self: *PkgbuildValidation, allocator: std.mem.Allocator) void {
-        self.post_install.deinit(allocator);
-        self.homograph.deinit(allocator);
-        self.local_source.deinit(allocator);
-        self.* = undefined;
-    }
-
-    pub fn hasFindings(self: *const PkgbuildValidation) bool {
-        return self.post_install.has_findings or self.homograph.has_findings or self.local_source.has_findings;
-    }
-
-    pub fn flatten(self: *const PkgbuildValidation, allocator: std.mem.Allocator) ![]ValidationFinding {
-        const post = self.post_install.findings.items;
-        const homograph = self.homograph.findings.items;
-        const local_source = self.local_source.findings.items;
-        const findings = try allocator.alloc(ValidationFinding, post.len + homograph.len + local_source.len);
-        @memcpy(findings[0..post.len], post);
-        @memcpy(findings[post.len .. post.len + homograph.len], homograph);
-        @memcpy(findings[post.len + homograph.len ..], local_source);
-        return findings;
-    }
 };
 
 pub fn validatePkgbuild(
