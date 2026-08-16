@@ -64,6 +64,8 @@ pub const alpm = struct {
 
 pub const aur = @import("aur/manager.zig");
 
+pub const builder = @import("aur/builder/builder.zig");
+
 pub const flatpak = struct {
     pub const manager = @import("flatpak/manager.zig");
     pub const remote_manager = @import("flatpak/remote_manager.zig");
