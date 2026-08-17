@@ -107,7 +107,7 @@ fn narrowBuilderError(err: anyerror) BuilderErrors {
 /// Non-root standalone package build engine.
 pub const PackageBuilder = struct {
     allocator: std.mem.Allocator,
-    package_builds: []const PackageBuild,
+    package_builds: []PackageBuild,
     operation_context: *op_context.OperationContext,
     makepkg_config: MakePkgConfiguration,
     requested_names: []const []const u8,
@@ -119,7 +119,7 @@ pub const PackageBuilder = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        package_builds: []const PackageBuild,
+        package_builds: []PackageBuild,
         operation_context: *op_context.OperationContext,
         makepackage_configuration: MakePkgConfiguration,
         requested_names: []const []const u8,
@@ -220,8 +220,9 @@ pub const PackageBuilder = struct {
                 operation,
                 self.requested_names[0],
                 step.name,
+                shared_execution.shared_prelude,
                 shared_execution.shared_helpers,
-                step.expanded_body,
+                step.body,
             );
         }
 
@@ -244,8 +245,9 @@ pub const PackageBuilder = struct {
                 operation,
                 requested_name,
                 package_step.name,
+                package_execution.package_prelude,
                 package_execution.package_helpers,
-                package_step.expanded_body,
+                package_step.body,
             );
             const artifact = try self.assemblePackage(package_build);
             artifacts.append(self.allocator, artifact) catch |err| {
@@ -582,6 +584,7 @@ pub const PackageBuilder = struct {
         operation: *op_context.Operation,
         package_name: []const u8,
         step_name: []const u8,
+        execution_prelude: []const u8,
         helper_definitions: []const u8,
         body: []const u8,
     ) !void {
@@ -591,12 +594,27 @@ pub const PackageBuilder = struct {
         };
         try operation.checkCancelled();
         const package_step = isPackageStep(step_name);
+        const capture_pkgver = std.mem.eql(u8, step_name, "pkgver");
+        const capture_metadata = package_step;
         const executable_body = try std.fmt.allocPrint(
             self.allocator,
-            "{s}\n{s}\n__shelly_step() {{\n{s}\n}}\n__shelly_step",
-            .{ if (package_step) virtualMetadataShellPrelude else "", helper_definitions, body },
+            "{s}\n{s}\n{s}\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
+            .{
+                if (package_step) virtualMetadataShellPrelude else "",
+                if (package_step) packageMetadataCaptureShellPrelude else "",
+                execution_prelude,
+                helper_definitions,
+                body,
+                if (capture_pkgver) "__shelly_step > \"$2\"" else "__shelly_step",
+            },
         );
         defer self.allocator.free(executable_body);
+
+        const command_body = if (capture_metadata)
+            try std.fmt.allocPrint(self.allocator, "{s}\n__shelly_capture_metadata > \"$3\"", .{executable_body})
+        else
+            try self.allocator.dupe(u8, executable_body);
+        defer self.allocator.free(command_body);
 
         const srcdir = try std.fs.path.join(
             self.allocator,
@@ -604,12 +622,41 @@ pub const PackageBuilder = struct {
         );
         defer self.allocator.free(srcdir);
 
+        const pkgver_result_path = try std.fs.path.join(
+            self.allocator,
+            &.{ self.options.build_directory, ".shelly-pkgver" },
+        );
+        defer self.allocator.free(pkgver_result_path);
+        const metadata_result_path = try std.fs.path.join(
+            self.allocator,
+            &.{ self.options.build_directory, ".shelly-package-metadata" },
+        );
+        defer self.allocator.free(metadata_result_path);
+        if (capture_pkgver) {
+            std.Io.Dir.cwd().deleteFile(self.io, pkgver_result_path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
+        }
+        defer if (capture_pkgver)
+            std.Io.Dir.cwd().deleteFile(self.io, pkgver_result_path) catch {};
+        if (capture_metadata) {
+            std.Io.Dir.cwd().deleteFile(self.io, metadata_result_path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
+        }
+        defer if (capture_metadata)
+            std.Io.Dir.cwd().deleteFile(self.io, metadata_result_path) catch {};
+
+        const current_pkgver = self.package_builds[0].pkg_version orelse "";
+
         var stream_context: StepStreamContext = .{ .operation = operation, .package_name = package_name };
         const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
             self.allocator,
             self.io,
             self.environ,
-            &.{ "/bin/bash", "-e", "-c", executable_body },
+            &.{ "/bin/bash", "-e", "-c", command_body, "shelly-step", current_pkgver, pkgver_result_path, metadata_result_path },
             srcdir,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
@@ -618,7 +665,116 @@ pub const PackageBuilder = struct {
         if (package_step and exit_code == virtual_metadata_rejected_exit_code)
             return error.PrivilegedPackageOperationUnsupported;
         if (exit_code != 0) return error.StepFailed;
+        if (capture_pkgver) {
+            const output = try std.Io.Dir.cwd().readFileAlloc(
+                self.io,
+                pkgver_result_path,
+                self.allocator,
+                .limited(64 * 1024),
+            );
+            defer self.allocator.free(output);
+            try self.applyDynamicPkgver(output);
+        }
+        if (capture_metadata) {
+            const output = try std.Io.Dir.cwd().readFileAlloc(
+                self.io,
+                metadata_result_path,
+                self.allocator,
+                .limited(1024 * 1024),
+            );
+            defer self.allocator.free(output);
+            try self.applyPackageMetadata(package_name, output);
+        }
         operation.status(.information, step_name, "aur_build_output", @intFromEnum(events.EventType.aur_build_output));
+    }
+
+    fn applyDynamicPkgver(self: *PackageBuilder, output: []const u8) !void {
+        const version = std.mem.trimEnd(u8, output, "\r\n");
+        try validatePkgver(version);
+
+        for (self.package_builds) |*package_build| {
+            const owned_version = try self.allocator.dupe(u8, version);
+            if (package_build.pkg_version) |old| self.allocator.free(old);
+            package_build.pkg_version = owned_version;
+
+            const map_value = try self.allocator.dupe(u8, version);
+            if (package_build.variables.fetchRemove("pkgver")) |old| {
+                self.allocator.free(old.value);
+                package_build.variables.put(old.key, map_value) catch |err| {
+                    self.allocator.free(old.key);
+                    self.allocator.free(map_value);
+                    return err;
+                };
+            } else {
+                const map_key = try self.allocator.dupe(u8, "pkgver");
+                package_build.variables.put(map_key, map_value) catch |err| {
+                    self.allocator.free(map_key);
+                    self.allocator.free(map_value);
+                    return err;
+                };
+            }
+        }
+    }
+
+    fn applyPackageMetadata(
+        self: *PackageBuilder,
+        package_name: []const u8,
+        encoded: []const u8,
+    ) !void {
+        const package_build = for (self.package_builds) |*candidate| {
+            const name = candidate.pkg_name orelse continue;
+            if (std.mem.eql(u8, name, package_name)) break candidate;
+        } else return error.MissingPackageName;
+
+        var cursor: usize = 0;
+        while (cursor < encoded.len) {
+            const kind = try nextMetadataField(encoded, &cursor);
+            const name = try nextMetadataField(encoded, &cursor);
+            if (std.mem.eql(u8, kind, "S")) {
+                const value = try nextMetadataField(encoded, &cursor);
+                if (std.mem.eql(u8, name, "pkgdesc"))
+                    try replaceOptionalString(self.allocator, &package_build.pkg_desc, value)
+                else if (std.mem.eql(u8, name, "url"))
+                    try replaceOptionalString(self.allocator, &package_build.url, value)
+                else
+                    return error.InvalidPackageMetadata;
+                continue;
+            }
+            if (!std.mem.eql(u8, kind, "A")) return error.InvalidPackageMetadata;
+            const count_text = try nextMetadataField(encoded, &cursor);
+            const count = std.fmt.parseInt(usize, count_text, 10) catch
+                return error.InvalidPackageMetadata;
+            const values = try self.allocator.alloc([]const u8, count);
+            var populated: usize = 0;
+            errdefer {
+                for (values[0..populated]) |value| self.allocator.free(value);
+                self.allocator.free(values);
+            }
+            while (populated < count) : (populated += 1)
+                values[populated] = try self.allocator.dupe(u8, try nextMetadataField(encoded, &cursor));
+
+            if (std.mem.eql(u8, name, "license"))
+                replaceOptionalStrings(self.allocator, &package_build.license, values)
+            else if (std.mem.eql(u8, name, "arch"))
+                replaceOptionalStrings(self.allocator, &package_build.arch, values)
+            else if (std.mem.eql(u8, name, "depends")) {
+                replaceOptionalStrings(self.allocator, &package_build.depends, values);
+                if (package_build.parsed_depends) |dependencies| {
+                    for (dependencies) |dependency| dependency.deinit(self.allocator);
+                    self.allocator.free(dependencies);
+                }
+                package_build.parsed_depends = null;
+            } else if (std.mem.eql(u8, name, "optdepends"))
+                replaceOptionalStrings(self.allocator, &package_build.opt_depends, values)
+            else if (std.mem.eql(u8, name, "provides"))
+                replaceOptionalStrings(self.allocator, &package_build.provides, values)
+            else if (std.mem.eql(u8, name, "conflicts"))
+                replaceOptionalStrings(self.allocator, &package_build.conflicts, values)
+            else if (std.mem.eql(u8, name, "replaces"))
+                replaceOptionalStrings(self.allocator, &package_build.replaces, values)
+            else
+                return error.InvalidPackageMetadata;
+        }
     }
 
     fn preparePackageDirectory(self: *PackageBuilder, package_build: *const PackageBuild) !void {
@@ -781,6 +937,75 @@ pub const PackageBuilder = struct {
 };
 
 const virtual_metadata_rejected_exit_code: u8 = 97;
+
+/// Mirrors makepkg's pkgver restrictions: the value must be non-empty ASCII
+/// and cannot contain colons, slashes, hyphens, or whitespace.
+fn validatePkgver(version: []const u8) !void {
+    if (version.len == 0) return error.InvalidPackageVersion;
+    for (version) |byte| {
+        if (byte == 0 or !std.ascii.isAscii(byte) or std.ascii.isWhitespace(byte) or
+            byte == ':' or byte == '/' or byte == '-')
+        {
+            return error.InvalidPackageVersion;
+        }
+    }
+}
+
+fn nextMetadataField(encoded: []const u8, cursor: *usize) ![]const u8 {
+    if (cursor.* >= encoded.len) return error.InvalidPackageMetadata;
+    const end = std.mem.indexOfScalarPos(u8, encoded, cursor.*, 0) orelse
+        return error.InvalidPackageMetadata;
+    const field = encoded[cursor.*..end];
+    cursor.* = end + 1;
+    return field;
+}
+
+fn replaceOptionalString(
+    allocator: std.mem.Allocator,
+    destination: *?[]const u8,
+    value: []const u8,
+) !void {
+    const owned = try allocator.dupe(u8, value);
+    if (destination.*) |old| allocator.free(old);
+    destination.* = owned;
+}
+
+fn replaceOptionalStrings(
+    allocator: std.mem.Allocator,
+    destination: *?[][]const u8,
+    values: [][]const u8,
+) void {
+    if (destination.*) |old| {
+        for (old) |value| allocator.free(value);
+        allocator.free(old);
+    }
+    destination.* = values;
+}
+
+/// Writes supported package-scoped metadata through a NUL-delimited channel.
+/// The package function may print arbitrary output without corrupting it.
+const packageMetadataCaptureShellPrelude =
+    \\__shelly_capture_scalar() {
+    \\  local name="$1"
+    \\  declare -p "$name" >/dev/null 2>&1 || return 0
+    \\  local -n value="$name"
+    \\  printf 'S\0%s\0%s\0' "$name" "$value"
+    \\}
+    \\__shelly_capture_array() {
+    \\  local name="$1"
+    \\  declare -p "$name" >/dev/null 2>&1 || return 0
+    \\  local -n values="$name"
+    \\  printf 'A\0%s\0%s\0' "$name" "${#values[@]}"
+    \\  if ((${#values[@]})); then printf '%s\0' "${values[@]}"; fi
+    \\}
+    \\__shelly_capture_metadata() {
+    \\  local name
+    \\  for name in pkgdesc url; do __shelly_capture_scalar "$name"; done
+    \\  for name in license arch depends optdepends provides conflicts replaces; do
+    \\    __shelly_capture_array "$name"
+    \\  done
+    \\}
+;
 
 /// Bash functions used only for package() and package_<name>(). They simulate
 /// the common fakeroot ownership operations without changing host ownership.

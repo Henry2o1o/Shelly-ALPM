@@ -206,6 +206,7 @@ pub const split_entry = struct {
 pub const kvp = struct {
     key: []const u8,
     value: []const u8,
+    append: bool = false,
 
     pub fn deinit(self: kvp, allocator: std.mem.Allocator) void {
         allocator.free(self.key);
@@ -238,12 +239,20 @@ pub const execution_step = struct {
 /// Helpers are stored once instead of being duplicated into every step.
 pub const execution_plan = struct {
     steps: []execution_step,
+    /// Safely quoted declarations that reconstruct the PKGBUILD's supported
+    /// top-level scalar and indexed-array state for shared lifecycle steps.
+    shared_prelude: []const u8,
+    /// The same environment with the selected split-package name overlaid for
+    /// package()/package_<name>().
+    package_prelude: []const u8,
     shared_helpers: []const u8,
     package_helpers: []const u8,
 
     pub fn deinit(self: execution_plan, allocator: std.mem.Allocator) void {
         for (self.steps) |step| step.deinit(allocator);
         allocator.free(self.steps);
+        allocator.free(self.shared_prelude);
+        allocator.free(self.package_prelude);
         allocator.free(self.shared_helpers);
         allocator.free(self.package_helpers);
     }
@@ -318,6 +327,7 @@ pub const PkgbuildParser = struct {
             }
             vars.deinit();
         }
+        try self.validate_execution_assignments(content);
         try self.validate_selected_package(content, &vars);
 
         const install_assignment = try self.resolve_install_assignment(content, &vars);
@@ -402,11 +412,20 @@ pub const PkgbuildParser = struct {
         var package_vars = try self.build_step_env(content, vars, base_dir, self.selected_package_name);
         defer free_vars(self.allocator, &package_vars);
 
+        const shared_prelude = try self.build_execution_prelude(content, &step_vars, null);
+        errdefer self.allocator.free(shared_prelude);
+        const package_prelude = try self.build_execution_prelude(
+            content,
+            &package_vars,
+            self.selected_package_name,
+        );
+        errdefer self.allocator.free(package_prelude);
+
         const raw_helpers = try self.extract_helper_definitions(content);
         defer self.allocator.free(raw_helpers);
-        const shared_helpers = try self.resolve_step_string(raw_helpers, &step_vars);
+        const shared_helpers = try self.allocator.dupe(u8, raw_helpers);
         errdefer self.allocator.free(shared_helpers);
-        const package_helpers = try self.resolve_step_string(raw_helpers, &package_vars);
+        const package_helpers = try self.allocator.dupe(u8, raw_helpers);
         errdefer self.allocator.free(package_helpers);
 
         for (execution_step_functions) |function_name| {
@@ -440,15 +459,257 @@ pub const PkgbuildParser = struct {
 
         if (steps.items.len == 0) {
             steps.deinit(self.allocator);
+            self.allocator.free(shared_prelude);
+            self.allocator.free(package_prelude);
             self.allocator.free(shared_helpers);
             self.allocator.free(package_helpers);
             return null;
         }
         return .{
             .steps = try steps.toOwnedSlice(self.allocator),
+            .shared_prelude = shared_prelude,
+            .package_prelude = package_prelude,
             .shared_helpers = shared_helpers,
             .package_helpers = package_helpers,
         };
+    }
+
+    const execution_value = union(enum) {
+        scalar: []const u8,
+        indexed_array: [][]const u8,
+    };
+
+    /// Reconstructs the statically supported part of PKGBUILD initialization
+    /// for Bash. Every value is emitted as data, never executable shell text.
+    fn build_execution_prelude(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+        selected_package: ?[]const u8,
+    ) ![]u8 {
+        var output: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer output.deinit();
+        const writer = &output.writer;
+
+        var array_names = try self.collect_top_level_array_names(content);
+        defer {
+            for (array_names.items) |name| self.allocator.free(name);
+            array_names.deinit(self.allocator);
+        }
+        std.mem.sort([]const u8, array_names.items, {}, string_before);
+
+        for (array_names.items) |name| {
+            if (try self.array_uses_command_substitution(content, name))
+                return error.UnsupportedDynamicAssignment;
+            const resolved = try self.resolve_execution_array(content, vars, name, 0);
+            defer freeStringSlice(self.allocator, resolved);
+            try write_execution_declaration(writer, name, .{ .indexed_array = resolved });
+        }
+
+        var scalar_names: std.ArrayList([]const u8) = .empty;
+        defer scalar_names.deinit(self.allocator);
+        var iterator = vars.keyIterator();
+        while (iterator.next()) |name| try scalar_names.append(self.allocator, name.*);
+        std.mem.sort([]const u8, scalar_names.items, {}, string_before);
+
+        for (scalar_names.items) |name| {
+            // An array declaration owns the name in shared functions. For a
+            // split-package function, makepkg overlays scalar $pkgname.
+            if (contains_string(array_names.items, name) and
+                !(selected_package != null and std.mem.eql(u8, name, "pkgname")))
+            {
+                continue;
+            }
+            try write_execution_declaration(writer, name, .{ .scalar = vars.get(name).? });
+        }
+
+        return output.toOwnedSlice();
+    }
+
+    fn resolve_execution_array(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+        name: []const u8,
+        depth: usize,
+    ) ![][]const u8 {
+        if (depth >= 32) return error.ArrayExpansionTooDeep;
+        const raw_items = try self.parse_array(content, name);
+        defer freeStringSlice(self.allocator, raw_items);
+
+        var resolved: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (resolved.items) |item| self.allocator.free(item);
+            resolved.deinit(self.allocator);
+        }
+        for (raw_items) |item| {
+            if (match_array_ref(item)) |referenced_name| {
+                const referenced = try self.resolve_execution_array(
+                    content,
+                    vars,
+                    referenced_name,
+                    depth + 1,
+                );
+                defer freeStringSlice(self.allocator, referenced);
+                for (referenced) |value|
+                    try resolved.append(self.allocator, try self.allocator.dupe(u8, value));
+                continue;
+            }
+            if (std.mem.indexOf(u8, item, "[@]") != null)
+                return error.UnsupportedArrayExpansion;
+            const value = if (contains_command_substitution(item))
+                try self.allocator.dupe(u8, item)
+            else
+                try self.resolve_string(item, vars);
+            try resolved.append(self.allocator, value);
+        }
+        return resolved.toOwnedSlice(self.allocator);
+    }
+
+    fn collect_top_level_array_names(
+        self: PkgbuildParser,
+        content: []const u8,
+    ) !std.ArrayList([]const u8) {
+        var names: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (names.items) |name| self.allocator.free(name);
+            names.deinit(self.allocator);
+        }
+        var seen = std.StringHashMap(void).init(self.allocator);
+        defer seen.deinit();
+
+        var offset: usize = 0;
+        while (offset < content.len) {
+            const line_end = std.mem.indexOfScalarPos(u8, content, offset, '\n') orelse content.len;
+            const line = std.mem.trimEnd(u8, content[offset..line_end], "\r");
+            if (array_assignment_name(line)) |name| {
+                if (!is_inside_conditional_block(content, offset) and !seen.contains(name)) {
+                    const owned = try self.allocator.dupe(u8, name);
+                    names.append(self.allocator, owned) catch |err| {
+                        self.allocator.free(owned);
+                        return err;
+                    };
+                    try seen.put(owned, {});
+                }
+            }
+            if (line_end == content.len) break;
+            offset = line_end + 1;
+        }
+        return names;
+    }
+
+    fn validate_execution_assignments(self: PkgbuildParser, content: []const u8) !void {
+        var names = try self.collect_top_level_array_names(content);
+        defer {
+            for (names.items) |name| self.allocator.free(name);
+            names.deinit(self.allocator);
+        }
+        for (names.items) |name| {
+            if (try self.array_uses_command_substitution(content, name))
+                return error.UnsupportedDynamicAssignment;
+        }
+    }
+
+    fn array_uses_command_substitution(
+        self: PkgbuildParser,
+        content: []const u8,
+        name: []const u8,
+    ) !bool {
+        var search_from: usize = 0;
+        while (find_next_array_start(content, name, search_from)) |assignment| {
+            const scanned = try scan_array_body(self.allocator, content, assignment.after_paren);
+            defer self.allocator.free(scanned.body);
+            if (contains_command_substitution(scanned.body)) return true;
+            search_from = scanned.end;
+        }
+        return false;
+    }
+
+    fn contains_command_substitution(value: []const u8) bool {
+        var index: usize = 0;
+        var in_single = false;
+        var in_double = false;
+        while (index + 1 < value.len) : (index += 1) {
+            if (value[index] == '\\' and !in_single) {
+                index += 1;
+                continue;
+            }
+            if (value[index] == '\'' and !in_double) {
+                in_single = !in_single;
+                continue;
+            }
+            if (value[index] == '"' and !in_single) {
+                in_double = !in_double;
+                continue;
+            }
+            if (in_single) continue;
+            if (value[index] == '#' and !in_double) {
+                index = std.mem.indexOfScalarPos(u8, value, index, '\n') orelse value.len;
+                continue;
+            }
+            if (value[index] == '`') return true;
+            if (value[index] != '$' or value[index + 1] != '(') continue;
+            if (index + 2 < value.len and value[index + 2] == '(') continue;
+            return true;
+        }
+        return false;
+    }
+
+    fn array_assignment_name(line: []const u8) ?[]const u8 {
+        var pos: usize = 0;
+        while (pos < line.len and is_word(line[pos])) : (pos += 1) {}
+        if (pos == 0) return null;
+        const name = line[0..pos];
+        if (pos < line.len and line[pos] == '+') pos += 1;
+        if (pos >= line.len or line[pos] != '=') return null;
+        pos += 1;
+        if (pos >= line.len or line[pos] != '(') return null;
+        return name;
+    }
+
+    fn contains_string(items: []const []const u8, needle: []const u8) bool {
+        for (items) |item| if (std.mem.eql(u8, item, needle)) return true;
+        return false;
+    }
+
+    fn string_before(_: void, lhs: []const u8, rhs: []const u8) bool {
+        return std.mem.order(u8, lhs, rhs) == .lt;
+    }
+
+    fn write_execution_declaration(
+        writer: *std.Io.Writer,
+        name: []const u8,
+        value: execution_value,
+    ) !void {
+        try writer.print("unset -v {s}\n", .{name});
+        switch (value) {
+            .scalar => |scalar| {
+                try writer.print("declare -- {s}=", .{name});
+                try write_shell_word(writer, scalar);
+                try writer.writeAll("\n");
+            },
+            .indexed_array => |items| {
+                try writer.print("declare -a {s}=(", .{name});
+                for (items, 0..) |item, index| {
+                    if (index != 0) try writer.writeAll(" ");
+                    try write_shell_word(writer, item);
+                }
+                try writer.writeAll(")\n");
+            },
+        }
+    }
+
+    fn write_shell_word(writer: *std.Io.Writer, value: []const u8) !void {
+        try writer.writeAll("'");
+        var start: usize = 0;
+        for (value, 0..) |byte, index| {
+            if (byte != '\'') continue;
+            try writer.writeAll(value[start..index]);
+            try writer.writeAll("'\\''");
+            start = index + 1;
+        }
+        try writer.writeAll(value[start..]);
+        try writer.writeAll("'");
     }
 
     fn append_execution_step(
@@ -2093,6 +2354,8 @@ pub const PkgbuildParser = struct {
         if (pos == 0) return null;
         const key = line[0..pos];
 
+        const append = pos < line.len and line[pos] == '+';
+        if (append) pos += 1;
         if (pos >= line.len or line[pos] != '=') return null;
         pos += 1;
         if (pos >= line.len) return null;
@@ -2100,39 +2363,41 @@ pub const PkgbuildParser = struct {
         if (line[pos] == '"') {
             const start = pos + 1;
             const end = std.mem.indexOfScalarPos(u8, line, start, '"') orelse return null;
-            return kvp{ .key = key, .value = line[start..end] };
+            return kvp{ .key = key, .value = line[start..end], .append = append };
         }
 
         if (line[pos] == '\'') {
             const start = pos + 1;
             const end = std.mem.indexOfScalarPos(u8, line, start, '\'') orelse return null;
-            return kvp{ .key = key, .value = line[start..end] };
+            return kvp{ .key = key, .value = line[start..end], .append = append };
         }
 
         const start = pos;
         while (pos < line.len and !std.ascii.isWhitespace(line[pos])) : (pos += 1) {}
         if (pos == start) return null;
-        return kvp{ .key = key, .value = line[start..pos] };
+        return kvp{ .key = key, .value = line[start..pos], .append = append };
     }
 
     fn build_var_hashmap(self: PkgbuildParser, content: []const u8) !std.StringHashMap([]const u8) {
         var vars = std.StringHashMap([]const u8).init(self.allocator);
-        errdefer vars.deinit();
+        errdefer free_vars(self.allocator, &vars);
 
         var line_itr = std.mem.splitScalar(u8, content, '\n');
         while (line_itr.next()) |full_line| {
             const line = std.mem.trimEnd(u8, full_line, "\r");
-            const parsed = parse_kvp(line) orelse continue;
+            const executable_line = try strip_comment(line);
+            const parsed = parse_kvp(executable_line) orelse continue;
 
-            if (std.mem.startsWith(u8, parsed.value, "(") or
-                (std.mem.startsWith(u8, parsed.value, "$(") and !std.mem.startsWith(u8, parsed.value, "$((")))
-            {
-                continue;
-            }
+            if (std.mem.startsWith(u8, parsed.value, "(")) continue;
+            if (contains_command_substitution(executable_line))
+                return error.UnsupportedDynamicAssignment;
 
             const key_owned = try self.allocator.dupe(u8, parsed.key);
             errdefer self.allocator.free(key_owned);
-            const value_owned = try self.allocator.dupe(u8, parsed.value);
+            const value_owned = if (parsed.append and vars.get(parsed.key) != null)
+                try std.mem.concat(self.allocator, u8, &.{ vars.get(parsed.key).?, parsed.value })
+            else
+                try self.allocator.dupe(u8, parsed.value);
             errdefer self.allocator.free(value_owned);
 
             if (vars.fetchRemove(key_owned)) |old| {
@@ -2327,6 +2592,11 @@ pub const PkgbuildParser = struct {
             const scanned = try scan_array_body(self.allocator, content, m.after_paren);
             defer self.allocator.free(scanned.body);
 
+            if (!m.append) {
+                for (result.items) |item| self.allocator.free(item);
+                result.clearRetainingCapacity();
+            }
+
             var cleaned: std.ArrayList(u8) = .empty;
             defer cleaned.deinit(self.allocator);
 
@@ -2349,7 +2619,7 @@ pub const PkgbuildParser = struct {
         return result.toOwnedSlice(self.allocator);
     }
 
-    fn find_next_array_start(content: []const u8, variable_name: []const u8, search_from: usize) ?struct { start: usize, after_paren: usize } {
+    fn find_next_array_start(content: []const u8, variable_name: []const u8, search_from: usize) ?struct { start: usize, after_paren: usize, append: bool } {
         var i = search_from;
         while (i < content.len) : (i += 1) {
             const at_line_start = (i == 0) or (content[i - 1] == '\n');
@@ -2357,13 +2627,14 @@ pub const PkgbuildParser = struct {
             if (!std.mem.startsWith(u8, content[i..], variable_name)) continue;
 
             var cursor = i + variable_name.len;
-            if (cursor < content.len and content[cursor] == '+') cursor += 1;
+            const append = cursor < content.len and content[cursor] == '+';
+            if (append) cursor += 1;
             if (cursor >= content.len or content[cursor] != '=') continue;
             cursor += 1;
             if (cursor >= content.len or content[cursor] != '(') continue;
             cursor += 1;
 
-            return .{ .start = i, .after_paren = cursor };
+            return .{ .start = i, .after_paren = cursor, .append = append };
         }
         return null;
     }
@@ -5551,6 +5822,21 @@ test "parse_array: += appends to an existing declaration across matches" {
     try std.testing.expectEqualStrings("bar", items[1]);
 }
 
+test "parse_array: a later plain assignment replaces the earlier array" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const items = try parser.parse_array(
+        "depends=(one two)\ndepends=(three)\ndepends+=(four)\n",
+        "depends",
+    );
+    defer {
+        for (items) |item| std.testing.allocator.free(item);
+        std.testing.allocator.free(items);
+    }
+    try std.testing.expectEqual(@as(usize, 2), items.len);
+    try std.testing.expectEqualStrings("three", items[0]);
+    try std.testing.expectEqualStrings("four", items[1]);
+}
+
 test "parse_array: empty array returns no items" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const items = try parser.parse_array("depends=()\n", "depends");
@@ -6529,6 +6815,68 @@ test "parser_content: execution step bodies preserve nested blocks" {
         \\    make test
         \\  fi
     , steps[0].body);
+}
+
+test "parser_content: execution prelude preserves generic scalars arrays and appends" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\pkgver=1
+        \\_gitname=scx
+        \\_label=can
+        \\_label+="'t"
+        \\_backports=(first "second value")
+        \\_backports+=(third)
+        \\_combined=("${_backports[@]}" tail)
+        \\_literal=('$(not-executed)')
+        \\_reverts=()
+        \\prepare() {
+        \\  for commit in "${_backports[@]}"; do echo "$commit"; done
+        \\}
+    ;
+    var info = try parser.parser_content(content, "/build/demo");
+    defer info.deinit(std.testing.allocator);
+
+    const prelude = info.execution.?.shared_prelude;
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        prelude,
+        "declare -a _backports=('first' 'second value' 'third')",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, prelude, "declare -a _reverts=()") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        prelude,
+        "declare -a _combined=('first' 'second value' 'third' 'tail')",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        prelude,
+        "declare -a _literal=('$(not-executed)')",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, prelude, "declare -- _gitname='scx'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prelude, "declare -- _label='can'\\''t'") != null);
+}
+
+test "parser_content: execution prelude rejects command substitutions" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    try std.testing.expectError(
+        error.UnsupportedDynamicAssignment,
+        parser.parser_content(
+            \\pkgname=demo
+            \\pkgver=$(git describe)
+            \\package() { :; }
+        , null),
+    );
+    try std.testing.expectError(
+        error.UnsupportedDynamicAssignment,
+        parser.parser_content(
+            \\pkgname=demo
+            \\pkgver=1
+            \\_items=($(generate_items))
+            \\package() { :; }
+        , null),
+    );
 }
 
 test "parser_content: execution step expanded bodies resolve PKGBUILD and makepkg variables" {

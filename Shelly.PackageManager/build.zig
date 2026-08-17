@@ -554,6 +554,8 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder rejects unsupported source protocols",
             "PackageBuilder cancels source preparation without committing srcdir",
             "PackageBuilder runs relative VCS paths from srcdir before pkgver",
+            "PackageBuilder applies generic patch arrays and propagates dynamic pkgver",
+            "PackageBuilder rejects invalid dynamic pkgver output",
             "PackageBuilder reports failure when a step exits non-zero",
             "PackageBuilder reports failure instead of crashing without execution steps",
             "PackageBuilder builds all requested split members after shared steps run once",

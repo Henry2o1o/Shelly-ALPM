@@ -742,6 +742,7 @@ test "PackageBuilder runs relative VCS paths from srcdir before pkgver" {
         \\pkgver() {{
         \\  cd "$pkgname"
         \\  test -f source-marker
+        \\  printf '1.r1.gfixture\n'
         \\}}
         \\package() {{
         \\  cd "$pkgname"
@@ -761,6 +762,108 @@ test "PackageBuilder runs relative VCS paths from srcdir before pkgver" {
     try fixture.temporary.dir.access(io, "src/shelly-git/.git", .{});
     try fixture.temporary.dir.access(io, "src/shelly-git/source-marker", .{});
     try fixture.temporary.dir.access(io, "pkg/shelly-git/usr/share/shelly/source-marker", .{});
+}
+
+test "PackageBuilder applies generic patch arrays and propagates dynamic pkgver" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=scx-scheds-git
+        \\_gitname=scx
+        \\pkgver=1.0.r1.gold
+        \\pkgrel=2
+        \\arch=('any')
+        \\_backports=(first "second'; false; '")
+        \\_backports+=(third)
+        \\_reverts=()
+        \\_check_dynamic_version() {
+        \\  test "$pkgver" = 1.2.3.r45.gabcdef
+        \\}
+        \\prepare() {
+        \\  cd "$_gitname"
+        \\  : > applied
+        \\  local commit
+        \\  for commit in "${_backports[@]}"; do
+        \\    printf '%s\n' "$commit" >> applied
+        \\  done
+        \\  for commit in "${_reverts[@]}"; do
+        \\    printf 'revert:%s\n' "$commit" >> applied
+        \\  done
+        \\}
+        \\pkgver() {
+        \\  cd "$_gitname"
+        \\  test -f applied
+        \\  printf '1.2.3.r45.gabcdef\n'
+        \\}
+        \\build() {
+        \\  cd "$_gitname"
+        \\  _check_dynamic_version
+        \\}
+        \\package() {
+        \\  cd "$_gitname"
+        \\  pkgdesc="dynamic scx package"
+        \\  depends=("runtime=$pkgver")
+        \\  provides+=("scx-scheds=$pkgver")
+        \\  install -Dm644 applied "$pkgdir/usr/share/scx/applied"
+        \\  printf '%s\n' "$pkgver" > "$pkgdir/usr/share/scx/version"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.createDirPath(io, "src/scx");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try testing.expect(std.mem.endsWith(
+        u8,
+        artifacts[0].path,
+        "scx-scheds-git-1.2.3.r45.gabcdef-2-any.pkg.tar.zst",
+    ));
+
+    const applied = try fixture.temporary.dir.readFileAlloc(
+        io,
+        "pkg/scx-scheds-git/usr/share/scx/applied",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(applied);
+    try testing.expectEqualStrings("first\nsecond'; false; '\nthird\n", applied);
+
+    const version = try fixture.temporary.dir.readFileAlloc(
+        io,
+        "pkg/scx-scheds-git/usr/share/scx/version",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(version);
+    try testing.expectEqualStrings("1.2.3.r45.gabcdef\n", version);
+
+    const pkginfo = try fixture.temporary.dir.readFileAlloc(
+        io,
+        "pkg/scx-scheds-git/.PKGINFO",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(pkginfo);
+    try testing.expect(std.mem.indexOf(u8, pkginfo, "pkgver = 1.2.3.r45.gabcdef-2\n") != null);
+    try testing.expect(std.mem.indexOf(u8, pkginfo, "pkgdesc = dynamic scx package\n") != null);
+    try testing.expect(std.mem.indexOf(u8, pkginfo, "depend = runtime=1.2.3.r45.gabcdef\n") != null);
+    try testing.expect(std.mem.indexOf(u8, pkginfo, "provides = scx-scheds=1.2.3.r45.gabcdef\n") != null);
+}
+
+test "PackageBuilder rejects invalid dynamic pkgver output" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\pkgver() { printf 'invalid-version\n'; }
+        \\package() { :; }
+    , null, null);
+    defer fixture.destroy();
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
 }
 
 test "PackageBuilder reports failure when a step exits non-zero" {
@@ -823,18 +926,26 @@ test "PackageBuilder builds all requested split members after shared steps run o
         \\prepare() {
         \\  echo prepare >> shared-steps
         \\}
+        \\pkgver() {
+        \\  printf '2.0.r3.gsplit\n'
+        \\}
         \\build() {
+        \\  test "$pkgver" = 2.0.r3.gsplit
         \\  echo build >> shared-steps
         \\}
         \\check() {
         \\  echo check >> shared-steps
         \\}
         \\package_demo() {
+        \\  test "${#pkgname[@]}" -eq 1
+        \\  test "$pkgname" = demo
         \\  mkdir -p "$pkgdir/usr/bin"
         \\  echo executable > "$pkgdir/usr/bin/demo"
         \\  chmod 755 "$pkgdir/usr/bin/demo"
         \\}
         \\package_demo-docs() {
+        \\  test "${#pkgname[@]}" -eq 1
+        \\  test "$pkgname" = demo-docs
         \\  mkdir -p "$pkgdir/usr/share/doc/demo"
         \\  echo documentation > "$pkgdir/usr/share/doc/demo/readme"
         \\}
@@ -851,8 +962,8 @@ test "PackageBuilder builds all requested split members after shared steps run o
     try testing.expectEqual(@as(usize, 2), artifacts.len);
     try testing.expectEqualStrings("demo", artifacts[0].package_name);
     try testing.expectEqualStrings("demo-docs", artifacts[1].package_name);
-    try testing.expect(std.mem.endsWith(u8, artifacts[0].path, "demo-1.0-1-any.pkg.tar.zst"));
-    try testing.expect(std.mem.endsWith(u8, artifacts[1].path, "demo-docs-1.0-1-any.pkg.tar.zst"));
+    try testing.expect(std.mem.endsWith(u8, artifacts[0].path, "demo-2.0.r3.gsplit-1-any.pkg.tar.zst"));
+    try testing.expect(std.mem.endsWith(u8, artifacts[1].path, "demo-docs-2.0.r3.gsplit-1-any.pkg.tar.zst"));
 
     const shared = try fixture.temporary.dir.readFileAlloc(io, "src/shared-steps", allocator, .unlimited);
     defer allocator.free(shared);
@@ -923,6 +1034,9 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
         \\arch=('x86_64')
         \\license=('GPL-3.0-only')
         \\makedepends=('zig')
+        \\pkgver() {
+        \\  printf '1.1.r4.gsplit\n'
+        \\}
         \\package_shelly-git() {
         \\  pkgdesc='Shelly git package'
         \\  provides=('shelly')
@@ -960,7 +1074,7 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
     const backend_info = try readPkgInfo(allocator, artifacts[1].path);
     defer allocator.free(backend_info);
     try testing.expect(std.mem.indexOf(u8, backend_info, "pkgdesc = Shelly Flatpak backend\n") != null);
-    try testing.expect(std.mem.indexOf(u8, backend_info, "depend = shelly-git=1-2\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "depend = shelly-git=1.1.r4.gsplit-2\n") != null);
     try testing.expect(std.mem.indexOf(u8, backend_info, "depend = flatpak\n") != null);
     try testing.expect(std.mem.indexOf(u8, backend_info, "provides = shelly\n") == null);
 
