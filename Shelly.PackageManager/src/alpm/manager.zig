@@ -2740,7 +2740,7 @@ pub const Manager = struct {
                     &message_buffer,
                     "Retrieving package: {s}",
                     .{std.fs.path.basename(path)},
-                ) catch return;
+                ) catch "Retrieving package...";
                             
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_start,
@@ -2766,7 +2766,7 @@ pub const Manager = struct {
                     &message_buffer,
                     "Package retrieval completed: {s}",
                     .{std.fs.path.basename(path)},
-                ) catch return;
+                ) catch "Package retrieval completed";
                         
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_done,
@@ -2829,7 +2829,7 @@ pub const Manager = struct {
                             &message_buffer,
                             "Installing package: {s}-{s}",
                             .{ name, version },
-                        ) catch return;
+                        ) catch "Installing package...";
                     },
             
                     rawLibalpm.ALPM_PACKAGE_UPGRADE => blk: {
@@ -2844,7 +2844,7 @@ pub const Manager = struct {
                             &message_buffer,
                             "Upgrading package: {s} {s} -> {s}",
                             .{ name, old_version, new_version },
-                        ) catch return;
+                        ) catch "Upgrading package...";
                     },
             
                     rawLibalpm.ALPM_PACKAGE_REINSTALL => blk: {
@@ -2856,7 +2856,7 @@ pub const Manager = struct {
                             &message_buffer,
                             "Reinstalling package: {s}-{s}",
                             .{ name, version },
-                        ) catch return;
+                        ) catch "Reinstalling package...";
                     },
             
                     rawLibalpm.ALPM_PACKAGE_DOWNGRADE => blk: {
@@ -2871,7 +2871,7 @@ pub const Manager = struct {
                             &message_buffer,
                             "Downgrading package: {s} {s} -> {s}",
                             .{ name, old_version, new_version },
-                        ) catch return;
+                        ) catch "Downgrading package...";
                     },
             
                     rawLibalpm.ALPM_PACKAGE_REMOVE => blk: {
@@ -2883,7 +2883,7 @@ pub const Manager = struct {
                             &message_buffer,
                             "Removing package: {s}-{s}",
                             .{ name, version },
-                        ) catch return;
+                        ) catch "Removing package...";
                     },
                     else => return
                 };
