@@ -544,6 +544,7 @@ pub fn build(b: *std.Build) void {
             "package metadata decoder preserves empty and multiline values",
             "package metadata decoder rejects type mismatch records",
             "signed Git source parser accepts query before or after fragment",
+            "bare Git protocol source parser preserves location and supports metadata",
             "detached source pairing handles exact renamed and compressed payload names",
             "source PGP status",
             "source PGP pin validation",

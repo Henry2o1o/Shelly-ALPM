@@ -1809,7 +1809,8 @@ const ParsedSource = struct {
         const first_suffix = @min(fragment_start orelse raw_location.len, query_start orelse raw_location.len);
         const git_location = raw_location[0..first_suffix];
         const location_without_fragment = if (fragment_start) |index| raw_location[0..index] else raw_location;
-        const is_git = std.ascii.startsWithIgnoreCase(git_location, "git+");
+        const has_git_prefix = std.ascii.startsWithIgnoreCase(git_location, "git+");
+        const is_git = has_git_prefix or std.ascii.startsWithIgnoreCase(git_location, "git://");
         const kind: SourceKind = if (is_git)
             .git
         else if (std.ascii.startsWithIgnoreCase(location_without_fragment, "https://") or
@@ -1821,8 +1822,10 @@ const ParsedSource = struct {
         else
             .local;
 
-        const effective_location = if (is_git)
+        const effective_location = if (has_git_prefix)
             git_location["git+".len..]
+        else if (is_git)
+            git_location
         else if (kind == .http)
             location_without_fragment
         else
@@ -2182,6 +2185,28 @@ test "signed Git source parser accepts query before or after fragment" {
         try std.testing.expectEqual(GitReferenceKind.tag, source.reference.?.kind);
         try std.testing.expectEqualStrings("v1", source.reference.?.value);
     }
+}
+
+test "bare Git protocol source parser preserves location and supports metadata" {
+    var plain = try ParsedSource.parse(std.testing.allocator, "git://example.invalid/demo.git");
+    defer plain.deinit(std.testing.allocator);
+    try std.testing.expectEqual(SourceKind.git, plain.kind);
+    try std.testing.expectEqualStrings("git://example.invalid/demo.git", plain.location);
+    try std.testing.expectEqualStrings("demo", plain.name);
+    try std.testing.expectEqual(@as(?GitReference, null), plain.reference);
+    try std.testing.expect(!plain.signed);
+
+    var annotated = try ParsedSource.parse(
+        std.testing.allocator,
+        "renamed::git://example.invalid/demo.git?signed#commit=0123456789abcdef",
+    );
+    defer annotated.deinit(std.testing.allocator);
+    try std.testing.expectEqual(SourceKind.git, annotated.kind);
+    try std.testing.expectEqualStrings("git://example.invalid/demo.git", annotated.location);
+    try std.testing.expectEqualStrings("renamed", annotated.name);
+    try std.testing.expectEqual(GitReferenceKind.commit, annotated.reference.?.kind);
+    try std.testing.expectEqualStrings("0123456789abcdef", annotated.reference.?.value);
+    try std.testing.expect(annotated.signed);
 }
 
 test "detached source pairing handles exact renamed and compressed payload names" {
