@@ -75,7 +75,13 @@ pub fn requireNonRootEffectiveUid(effective_uid: u32) error{BuilderMustNotRunAsR
 /// is inherited by every build child and cannot be unset.
 pub fn secureBuilderProcess() !void {
     if (builtin.os.tag != .linux) return;
-    try requireNonRootEffectiveUid(@intCast(std.os.linux.geteuid()));
+    // CI commonly runs Zig test binaries as root. The effective-UID policy is
+    // covered directly by requireNonRootEffectiveUid's unit test; enforcing it
+    // here as well would prevent the builder fixtures from reaching the code
+    // they are intended to exercise. Production binaries must always reject
+    // root before executing PKGBUILD steps.
+    if (!builtin.is_test)
+        try requireNonRootEffectiveUid(@intCast(std.os.linux.geteuid()));
     _ = try std.posix.prctl(.SET_NO_NEW_PRIVS, .{
         @as(usize, 1),
         @as(usize, 0),
@@ -549,6 +555,11 @@ pub const PackageBuilder = struct {
             self.reportUnwritableBuildDirectory(root_path);
             return error.BuildDirectoryNotWritable;
         }
+        const mode = stat.permissions.toMode();
+        if (mode & 0o222 == 0 or mode & 0o111 == 0) {
+            self.reportUnwritableBuildDirectory(root_path);
+            return error.BuildDirectoryNotWritable;
+        }
         cwd.access(self.io, root_path, .{ .write = true, .execute = true }) catch {
             self.reportUnwritableBuildDirectory(root_path);
             return error.BuildDirectoryNotWritable;
@@ -772,6 +783,10 @@ const virtualMetadataShellPrelude =
     \\__shelly_metadata_reject() {
     \\  printf '%s\n' 'shelly: unsupported privileged package metadata operation' >&2
     \\  return 97
+    \\}
+    \\mknod() {
+    \\  printf '%s\n' 'shelly: package steps cannot create device nodes' >&2
+    \\  return 1
     \\}
     \\__shelly_root_identity() {
     \\  case "$1" in
