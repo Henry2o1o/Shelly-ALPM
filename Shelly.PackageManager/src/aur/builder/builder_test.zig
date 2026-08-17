@@ -4,25 +4,17 @@
 //! wired into the module test block in src/root.zig and the aur-test filter
 //! list in build.zig.
 //!
-//! Two implementation details of the fixture are worth knowing:
-//!
-//! * `PackageBuilder.init` receives the `OperationContext` **by value**, so
-//!   the builder operates on its own copy. Operations emit events through
-//!   that copy. Subscriptions must therefore be registered *before* the
-//!   context is copied into the builder (done in `create`), otherwise the
-//!   builder's copy dispatches into an empty subscription list and the test
-//!   captures never fire.
-//! * `PackageBuilder.deinit` releases only the builder container. Its parsed
-//!   PKGBUILDs, requested names, dispatcher, and operation context are borrowed
-//!   from the caller and remain fixture-owned.
+//! `PackageBuilder.deinit` releases only the builder container. Its parsed
+//! PKGBUILDs, requested names, and operation context are borrowed from the
+//! caller and remain fixture-owned.
 
 const std = @import("std");
 const testing = std.testing;
 
 const builder_mod = @import("builder.zig");
 const PackageBuilder = builder_mod.PackageBuilder;
+const process_runner = @import("../builder.zig");
 const pkgbuild_mod = @import("../../pkgbuild/pkgbuild_parser.zig");
-const events = @import("../events.zig");
 const op_context = @import("operation_context");
 const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
 const archive = @import("archive");
@@ -31,9 +23,12 @@ const raw_alpm = @import("../../alpm/bindings.zig").libalpm.alpm;
 const ErrorCapture = struct {
     count: usize = 0,
 
-    fn handle(data: ?*anyopaque, _: events.ErrorArgs) void {
+    fn handle(data: ?*anyopaque, event: op_context.Event) void {
         const self: *@This() = @ptrCast(@alignCast(data.?));
-        self.count += 1;
+        switch (event) {
+            .failure => self.count += 1,
+            else => {},
+        }
     }
 };
 
@@ -53,7 +48,7 @@ const Fixture = struct {
     builder: *PackageBuilder,
     package_builds: []pkgbuild_mod.Pkgbuild,
     requested_names: [][]const u8,
-    operation_context: op_context.OperationContext,
+    operation_context: *op_context.OperationContext,
     config: *MakePkgConfiguration,
     // Sentinel-terminated: realPathFileAlloc allocates len+1 for the 0 byte,
     // and free() only releases the full allocation when the slice type still
@@ -94,15 +89,14 @@ const Fixture = struct {
         var info = try parser.parser_content(pkgbuild_content, build_dir);
         errdefer info.deinit(allocator);
 
-        var operation_context = op_context.OperationContext.init(allocator, io);
+        const operation_context = try allocator.create(op_context.OperationContext);
+        errdefer allocator.destroy(operation_context);
+        operation_context.* = op_context.OperationContext.init(allocator, io);
         errdefer operation_context.deinit();
 
         if (event_handler) |handler| {
             _ = try operation_context.subscribe(handler);
         }
-
-        var dispatcher = events.Dispatcher.init(allocator);
-        errdefer dispatcher.deinit();
 
         const config_content = try std.fmt.allocPrint(
             allocator,
@@ -122,7 +116,6 @@ const Fixture = struct {
         const builder = try PackageBuilder.init(
             allocator,
             package_builds,
-            dispatcher,
             operation_context,
             config.*,
             requested_names,
@@ -132,6 +125,8 @@ const Fixture = struct {
                 .clean_after_success = false,
                 .skip_source_pgp_verification = true,
                 .build_directory = build_dir,
+                .sources_prepared = true,
+                .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
             },
             testing.environ,
             io,
@@ -176,12 +171,11 @@ const Fixture = struct {
             parsed_count += 1;
         }
 
-        var operation_context = op_context.OperationContext.init(allocator, io);
+        const operation_context = try allocator.create(op_context.OperationContext);
+        errdefer allocator.destroy(operation_context);
+        operation_context.* = op_context.OperationContext.init(allocator, io);
         errdefer operation_context.deinit();
         if (event_handler) |handler| _ = try operation_context.subscribe(handler);
-        var dispatcher = events.Dispatcher.init(allocator);
-        errdefer dispatcher.deinit();
-
         const config_content = try std.fmt.allocPrint(
             allocator,
             "builddir={s}\npkgdest={s}\n",
@@ -195,7 +189,6 @@ const Fixture = struct {
         const builder = try PackageBuilder.init(
             allocator,
             package_builds,
-            dispatcher,
             operation_context,
             config.*,
             requested_names,
@@ -205,6 +198,8 @@ const Fixture = struct {
                 .clean_after_success = false,
                 .skip_source_pgp_verification = true,
                 .build_directory = build_dir,
+                .sources_prepared = true,
+                .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
             },
             testing.environ,
             io,
@@ -223,15 +218,15 @@ const Fixture = struct {
     }
 
     fn destroy(self: *Fixture) void {
-        // Release borrowed inputs and the copied dispatcher before destroying
-        // the builder container. The testing allocator catches omissions.
+        // Release borrowed inputs before destroying the builder container.
+        // The testing allocator catches omissions.
         for (self.package_builds) |*package_build| package_build.deinit(self.allocator);
         self.allocator.free(self.package_builds);
         self.allocator.free(self.requested_names);
-        self.builder.dispatcher.deinit();
         self.builder.deinit();
         self.config.deinit();
         self.operation_context.deinit();
+        self.allocator.destroy(self.operation_context);
         self.allocator.free(self.build_dir);
         self.temporary.cleanup();
     }
@@ -259,6 +254,32 @@ fn printPackageTree(
     }
 }
 
+fn readPkgInfo(allocator: std.mem.Allocator, package_path: []const u8) ![]u8 {
+    var reader = try archive.Reader.init(allocator, package_path);
+    defer reader.deinit();
+    while (try reader.next()) |entry| {
+        if (!std.mem.eql(u8, entry.path, ".PKGINFO")) continue;
+        var buffer: [32 * 1024]u8 = undefined;
+        const amount = try reader.readPrefix(&buffer);
+        return allocator.dupe(u8, buffer[0..amount]);
+    }
+    return error.MissingPkgInfo;
+}
+
+fn runTestCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    argv: []const []const u8,
+    working_directory: ?[]const u8,
+) !void {
+    var result = try process_runner.run(allocator, io, argv, working_directory, null);
+    defer result.deinit(allocator);
+    if (result.exit_code != 0) {
+        std.debug.print("builder fixture command failed ({d}): {s}\n", .{ result.exit_code, result.stderr });
+        return error.FixtureCommandFailed;
+    }
+}
+
 test "PackageBuilder init keeps the provided collaborators" {
     const allocator = testing.allocator;
 
@@ -273,6 +294,153 @@ test "PackageBuilder init keeps the provided collaborators" {
 
     try testing.expectEqual(fixture.allocator, fixture.builder.allocator);
     try testing.expectEqualStrings("demo", fixture.builder.package_builds[0].pkg_name.?);
+}
+
+test "non-root builder guard rejects root effective uid" {
+    try testing.expectError(
+        error.BuilderMustNotRunAsRoot,
+        builder_mod.requireNonRootEffectiveUid(0),
+    );
+    try builder_mod.requireNonRootEffectiveUid(1000);
+}
+
+test "PackageBuilder rejects a PKGBUILD changed after review" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "PKGBUILD",
+        .data = pkgbuild_content,
+    });
+    const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
+    defer allocator.free(pkgbuild_path);
+    var review = try builder_mod.preparePkgbuildReview(
+        allocator,
+        io,
+        fixture.build_dir,
+        pkgbuild_content,
+        fixture.package_builds,
+    );
+    defer review.deinit();
+    fixture.builder.options.pkgbuild_path = pkgbuild_path;
+    fixture.builder.options.reviewed_pkgbuild_digest = review.digest;
+
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "PKGBUILD",
+        .data = "pkgname=changed\npkgver=1\npkgrel=1\narch=('any')\n",
+    });
+    try testing.expectError(
+        error.ReviewedPkgbuildChanged,
+        fixture.builder.BuildPackage(),
+    );
+}
+
+test "PackageBuilder rejects a legacy unwritable package tree" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try fixture.temporary.dir.createDirPath(io, "pkg/demo");
+    try fixture.temporary.dir.setFilePermissions(io, "pkg", .fromMode(0o555), .{});
+    defer fixture.temporary.dir.setFilePermissions(io, "pkg", .fromMode(0o755), .{}) catch {};
+
+    try testing.expectError(error.BuildDirectoryNotWritable, fixture.builder.BuildPackage());
+}
+
+test "PackageBuilder cannot perform privileged package filesystem operations" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  mknod "$pkgdir/usr/share/demo/device" c 1 3
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try testing.expectError(
+        error.BuildFailed,
+        fixture.builder.BuildPackage(),
+    );
+}
+
+test "PackageBuilder simulates root ownership without host chown" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  printf payload > "$pkgdir/usr/share/demo/data"
+        \\  chown root:root "$pkgdir/usr/share/demo/data"
+        \\  install -o root -g root -m 0644 /dev/null "$pkgdir/usr/share/demo/installed"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+
+    const staged_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "pkg/demo/usr/share/demo/data" });
+    defer allocator.free(staged_path);
+    var stat_result = try process_runner.run(allocator, io, &.{ "stat", "-c", "%u", staged_path }, null, null);
+    defer stat_result.deinit(allocator);
+    try testing.expectEqual(@as(u8, 0), stat_result.exit_code);
+    var expected_uid_buffer: [32]u8 = undefined;
+    const expected_uid = try std.fmt.bufPrint(&expected_uid_buffer, "{d}", .{std.os.linux.geteuid()});
+    try testing.expectEqualStrings(expected_uid, std.mem.trim(u8, stat_result.stdout, " \t\r\n"));
+
+    var reader = try archive.Reader.init(allocator, artifacts[0].path);
+    defer reader.deinit();
+    var saw_data = false;
+    var saw_installed = false;
+    while (try reader.next()) |entry| {
+        if (std.mem.eql(u8, entry.path, "usr/share/demo/data")) saw_data = true;
+        if (std.mem.eql(u8, entry.path, "usr/share/demo/installed")) saw_installed = true;
+        try testing.expectEqual(@as(i64, 0), entry.uid);
+        try testing.expectEqual(@as(i64, 0), entry.gid);
+    }
+    try testing.expect(saw_data);
+    try testing.expect(saw_installed);
+}
+
+test "PackageBuilder rejects unsupported virtual ownership" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  touch "$pkgdir/usr/share/demo/data"
+        \\  chown 42:84 "$pkgdir/usr/share/demo/data"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try testing.expectError(
+        error.PrivilegedPackageOperationUnsupported,
+        fixture.builder.BuildPackage(),
+    );
 }
 
 test "PackageBuilder runs execution steps in the configured build directory" {
@@ -316,6 +484,272 @@ test "PackageBuilder runs execution steps in the configured build directory" {
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
 }
 
+test "PackageBuilder runs local declarations and reviewed helper functions inside package steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=qwen-code-bin
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\_target_name() {
+        \\  local suffix=cli
+        \\  printf '%s-%s' "$pkgname" "$suffix"
+        \\}
+        \\package() {
+        \\  local appdir="$pkgdir/usr/lib/$pkgname"
+        \\  mkdir -p "$appdir"
+        \\  _target_name > "$appdir/target"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const target = try fixture.temporary.dir.readFileAlloc(
+        io,
+        "pkg/qwen-code-bin/usr/lib/qwen-code-bin/target",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(target);
+    try testing.expectEqualStrings("qwen-code-bin-cli", target);
+}
+
+test "PackageBuilder accepts b2 checksums and honors noextract" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=cline-cli
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.tar.gz')
+        \\noextract=('payload.tar.gz')
+        \\b2sums=('3571ea965605821dbb49046a8de67321531bcefe1bb1d68282eed4ebdaff4f7feb63f710cede300638d3e44f825e3f3e436059d290f4d2749784bf01020f684e')
+        \\package() {
+        \\  install -Dm644 "$srcdir/payload.tar.gz" "$pkgdir/usr/share/cline-cli/payload.tar.gz"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "payload.tar.gz",
+        .data = "opaque archive payload",
+    });
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/payload.tar.gz", .{});
+    try fixture.temporary.dir.access(io, "pkg/cline-cli/usr/share/cline-cli/payload.tar.gz", .{});
+}
+
+test "PackageBuilder stages and verifies local sources before build steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('helper.sh')
+        \\sha256sums=('a9f2d25d1f71f8065e2119e538bde8846570fcdad320388236e99d9e225c290d')
+        \\build() {
+        \\  test "$(cat "$srcdir/helper.sh")" = reviewed
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/helper.sh" "$pkgdir/usr/share/demo/helper.sh"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "helper.sh", .data = "reviewed\n" });
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/helper.sh", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/helper.sh", .{});
+}
+
+test "PackageBuilder rejects a source checksum mismatch without committing srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('helper.sh')
+        \\sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "helper.sh", .data = "reviewed\n" });
+    fixture.builder.options.sources_prepared = false;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
+test "PackageBuilder extracts source archives into srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.tar.gz')
+        \\sha256sums=('SKIP')
+        \\build() {
+        \\  test "$(cat "$srcdir/demo/source.txt")" = extracted
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/demo/source.txt" "$pkgdir/usr/share/demo/source.txt"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.tar.gz" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "demo/source.txt", .contents = "extracted\n" },
+    });
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/payload.tar.gz", .{});
+    try fixture.temporary.dir.access(io, "src/demo/source.txt", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
+}
+
+test "PackageBuilder downloads renamed file sources before build steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var remote = std.testing.tmpDir(.{});
+    defer remote.cleanup();
+    try remote.dir.writeFile(io, .{ .sub_path = "source.txt", .data = "reviewed\n" });
+    const remote_path = try remote.dir.realPathFileAlloc(io, "source.txt", allocator);
+    defer allocator.free(remote_path);
+    const pkgbuild = try std.fmt.allocPrint(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('downloaded.txt::file://{s}')
+        \\sha256sums=('a9f2d25d1f71f8065e2119e538bde8846570fcdad320388236e99d9e225c290d')
+        \\package() {{
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/downloaded.txt" "$pkgdir/usr/share/demo/downloaded.txt"
+        \\}}
+    , .{remote_path});
+    defer allocator.free(pkgbuild);
+    var fixture = try Fixture.create(allocator, pkgbuild, null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/downloaded.txt", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/downloaded.txt", .{});
+}
+
+test "PackageBuilder rejects unsupported source protocols" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('hg+https://example.invalid/demo')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
+test "PackageBuilder cancels source preparation without committing srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('helper.sh')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.operation_context.cancel();
+
+    try testing.expectError(error.Cancelled, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
+test "PackageBuilder clones renamed git sources into srcdir before pkgver" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var remote = std.testing.tmpDir(.{});
+    defer remote.cleanup();
+    const remote_path = try remote.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(remote_path);
+    try remote.dir.writeFile(io, .{ .sub_path = "source-marker", .data = "checked out\n" });
+    try runTestCommand(allocator, io, &.{ "git", "init", "-b", "development" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "config", "user.email", "shelly-tests@example.invalid" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "config", "user.name", "Shelly Tests" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "add", "source-marker" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "commit", "-m", "fixture" }, remote_path);
+
+    const pkgbuild = try std.fmt.allocPrint(allocator,
+        \\pkgname=shelly-git
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('shelly-git::git+file://{s}#branch=development')
+        \\sha256sums=('SKIP')
+        \\pkgver() {{
+        \\  cd "$srcdir/$pkgname"
+        \\  test -f source-marker
+        \\}}
+        \\package() {{
+        \\  mkdir -p "$pkgdir/usr/share/shelly"
+        \\  cp "$srcdir/$pkgname/source-marker" "$pkgdir/usr/share/shelly/source-marker"
+        \\}}
+    , .{remote_path});
+    defer allocator.free(pkgbuild);
+    var fixture = try Fixture.create(allocator, pkgbuild, null, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/shelly-git/.git", .{});
+    try fixture.temporary.dir.access(io, "src/shelly-git/source-marker", .{});
+    try fixture.temporary.dir.access(io, "pkg/shelly-git/usr/share/shelly/source-marker", .{});
+}
+
 test "PackageBuilder reports failure when a step exits non-zero" {
     const allocator = testing.allocator;
 
@@ -330,7 +764,7 @@ test "PackageBuilder reports failure when a step exits non-zero" {
     defer fixture.destroy();
 
     var errors: ErrorCapture = .{};
-    _ = try fixture.builder.dispatcher.addErrorHandler(.{
+    _ = try fixture.operation_context.subscribe(.{
         .function = ErrorCapture.handle,
         .data = &errors,
     });
@@ -429,6 +863,112 @@ test "PackageBuilder builds all requested split members after shared steps run o
         if (std.mem.eql(u8, entry.path, "usr/share/doc/demo/readme")) saw_docs = true;
     }
     try testing.expect(saw_docs);
+}
+
+test "PackageBuilder keeps shared split builds under the global pkgname" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const content =
+        \\pkgbase=shelly-git
+        \\pkgname=('shelly-git' 'shelly-flatpak-backend-git')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\build() {
+        \\  mkdir -p "$srcdir/$pkgname/out/bin"
+        \\  printf ui > "$srcdir/$pkgname/out/bin/Shelly_Ui_Gtk"
+        \\  mkdir -p "$srcdir/$pkgbase/out-flatpak-backend"
+        \\  printf backend > "$srcdir/$pkgbase/out-flatpak-backend/backend"
+        \\}
+        \\package_shelly-git() {
+        \\  install -Dm755 "$srcdir/$pkgbase/out/bin/Shelly_Ui_Gtk" "$pkgdir/usr/bin/shelly-ui"
+        \\}
+        \\package_shelly-flatpak-backend-git() {
+        \\  install -Dm755 "$srcdir/$pkgbase/out-flatpak-backend/backend" "$pkgdir/usr/bin/backend"
+        \\}
+    ;
+    const requested = [_][]const u8{ "shelly-flatpak-backend-git", "shelly-git" };
+    var fixture = try Fixture.createMany(allocator, content, &requested, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/shelly-git/out/bin/Shelly_Ui_Gtk", .{});
+    try fixture.temporary.dir.access(io, "pkg/shelly-git/usr/bin/shelly-ui", .{});
+    try fixture.temporary.dir.access(io, "pkg/shelly-flatpak-backend-git/usr/bin/backend", .{});
+}
+
+test "PackageBuilder preserves selected split metadata in PKGINFO" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const content =
+        \\pkgbase=shelly-git
+        \\pkgname=('shelly-git' 'shelly-flatpak-backend-git')
+        \\pkgver=1
+        \\pkgrel=2
+        \\pkgdesc='Shared description'
+        \\arch=('x86_64')
+        \\license=('GPL-3.0-only')
+        \\makedepends=('zig')
+        \\package_shelly-git() {
+        \\  pkgdesc='Shelly git package'
+        \\  provides=('shelly')
+        \\  conflicts=('shelly' 'shelly-bin')
+        \\  replaces=('old-shelly')
+        \\  depends=('pacman' 'gtk4')
+        \\  optdepends=('libstarfish: dependency viewer')
+        \\  mkdir -p "$pkgdir/usr/bin"
+        \\  printf main > "$pkgdir/usr/bin/shelly"
+        \\}
+        \\package_shelly-flatpak-backend-git() {
+        \\  pkgdesc='Shelly Flatpak backend'
+        \\  depends=("shelly-git=${pkgver}-${pkgrel}" 'flatpak')
+        \\  mkdir -p "$pkgdir/usr/lib"
+        \\  printf backend > "$pkgdir/usr/lib/backend"
+        \\}
+    ;
+    const requested = [_][]const u8{ "shelly-git", "shelly-flatpak-backend-git" };
+    var fixture = try Fixture.createMany(allocator, content, &requested, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const main_info = try readPkgInfo(allocator, artifacts[0].path);
+    defer allocator.free(main_info);
+    try testing.expect(std.mem.indexOf(u8, main_info, "pkgdesc = Shelly git package\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "provides = shelly\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "conflict = shelly\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "conflict = shelly-bin\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "replaces = old-shelly\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "depend = pacman\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "depend = gtk4\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "optdepend = libstarfish: dependency viewer\n") != null);
+
+    const backend_info = try readPkgInfo(allocator, artifacts[1].path);
+    defer allocator.free(backend_info);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "pkgdesc = Shelly Flatpak backend\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "depend = shelly-git=1-2\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "depend = flatpak\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "provides = shelly\n") == null);
+
+    try fixture.temporary.dir.createDir(io, "metadata-alpm-root", .default_dir);
+    try fixture.temporary.dir.createDir(io, "metadata-alpm-db", .default_dir);
+    const alpm_root = try std.fs.path.joinZ(allocator, &.{ fixture.build_dir, "metadata-alpm-root" });
+    defer allocator.free(alpm_root);
+    const alpm_db = try std.fs.path.joinZ(allocator, &.{ fixture.build_dir, "metadata-alpm-db" });
+    defer allocator.free(alpm_db);
+    var alpm_error: raw_alpm.alpm_errno_t = 0;
+    const handle = raw_alpm.alpm_initialize(alpm_root.ptr, alpm_db.ptr, &alpm_error) orelse
+        return error.AlpmInitializeFailed;
+    defer _ = raw_alpm.alpm_release(handle);
+    var loaded: ?*raw_alpm.alpm_pkg_t = null;
+    try testing.expectEqual(@as(c_int, 0), raw_alpm.alpm_pkg_load(handle, artifacts[0].path.ptr, 1, 0, &loaded));
+    defer _ = raw_alpm.alpm_pkg_free(loaded.?);
+    const candidates = raw_alpm.alpm_list_add(null, @ptrCast(loaded.?)) orelse return error.OutOfMemory;
+    defer raw_alpm.alpm_list_free(candidates);
+    const virtual_dependency = try allocator.dupeZ(u8, "shelly");
+    defer allocator.free(virtual_dependency);
+    try testing.expectEqual(loaded.?, raw_alpm.alpm_find_satisfier(candidates, virtual_dependency.ptr).?);
 }
 
 test "PackageBuilder honors check and overwrite policies" {
