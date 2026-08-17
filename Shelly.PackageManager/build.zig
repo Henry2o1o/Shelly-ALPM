@@ -566,6 +566,8 @@ pub fn build(b: *std.Build) void {
             "archive writer preserves tree modes and symlinks while forcing root ownership",
             "archive virtual ownership is shared by package and mtree writers",
             "AUR operation-hooked public APIs compile",
+            "coordinator child build arguments bind review package set and policies",
+            "clean invoking-user build command drops the elevated environment",
             "build progress parser recognizes makepkg percentage lines",
             "streaming process execution forwards stdout stderr and a final unterminated line",
             "streaming process execution delivers output before the child exits",

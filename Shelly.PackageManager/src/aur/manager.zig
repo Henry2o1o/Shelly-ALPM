@@ -47,6 +47,9 @@ pub const InitOptions = struct {
     cache_root: ?[]const u8 = null,
     aur_git_base_url: []const u8 = "https://aur.archlinux.org",
     makepkg_command: ?[]const u8 = null,
+    /// Path to the Shelly CLI used to execute reviewed builds as the original
+    /// non-root caller of an elevated install or upgrade operation.
+    build_command: ?[]const u8 = null,
     operation_context: ?*operation_api.OperationContext = null,
 };
 
@@ -164,6 +167,7 @@ pub const Manager = struct {
     cache_root: []u8,
     aur_git_base_url: []u8,
     makepkg_command: ?[]u8,
+    build_command: ?[]u8,
     makepkg_config: *MakePackageConfiguration,
     vcs_store_path: []u8,
     chroot_path: []u8,
@@ -202,6 +206,11 @@ pub const Manager = struct {
         else
             null;
         errdefer if (makepkg_command) |command| allocator.free(command);
+        const build_command = if (options.build_command) |command|
+            try allocator.dupe(u8, command)
+        else
+            null;
+        errdefer if (build_command) |command| allocator.free(command);
         const vcs_store_path = try std.fs.path.join(allocator, &.{ data_home, "Shelly", "vcs.json" });
         errdefer allocator.free(vcs_store_path);
         const chroot_path = try allocator.dupe(u8, options.chroot_path);
@@ -226,6 +235,7 @@ pub const Manager = struct {
             .cache_root = cache_root,
             .aur_git_base_url = aur_git_base_url,
             .makepkg_command = makepkg_command,
+            .build_command = build_command,
             .makepkg_config = makepkg_config,
             .vcs_store_path = vcs_store_path,
             .chroot_path = chroot_path,
@@ -270,6 +280,7 @@ pub const Manager = struct {
         allocator.free(self.cache_root);
         allocator.free(self.aur_git_base_url);
         if (self.makepkg_command) |command| allocator.free(command);
+        if (self.build_command) |command| allocator.free(command);
         allocator.free(self.vcs_store_path);
         allocator.free(self.chroot_path);
         allocator.destroy(self);
@@ -718,14 +729,14 @@ pub const Manager = struct {
             try self.prepareBuildDirectory(prepared.cache_path);
             self.raisePackageProgress(.aur_build_start, package_name, current, plans.items.len, "Building package");
             const requested_names: []const []const u8 = @ptrCast(plan.requested_names.items);
-            const artifacts = self.buildPreparedPackage(prepared, requested_names, false) catch {
+            const artifacts = self.buildPreparedPackage(prepared, requested_names, false) catch |err| {
                 const owned_name = try self.allocator.dupe(u8, package_name);
                 failures.append(self.allocator, .{
                     .package_name = owned_name,
-                    .reason = "Failed to build package",
-                }) catch |err| {
+                    .reason = buildFailureReason(err),
+                }) catch |append_err| {
                     self.allocator.free(owned_name);
-                    return err;
+                    return append_err;
                 };
                 self.removeBuildOnlyDependencies(package_name, @ptrCast(build_only), current, plans.items.len);
                 continue;
@@ -1487,6 +1498,15 @@ pub const Manager = struct {
         );
         defer build_review.deinit();
 
+        if (self.build_command) |command|
+            return self.buildPreparedPackageWithCommand(
+                command,
+                prepared,
+                requested_names,
+                historical,
+                build_review.digest,
+            );
+
         const active_context = self.operation_context orelse operation.context;
         const package_build = try package_builder.PackageBuilder.init(
             self.allocator,
@@ -1510,6 +1530,56 @@ pub const Manager = struct {
         const artifacts = try package_build.runWithOperation(operation);
         standalone_completion = .success;
         return artifacts;
+    }
+
+    fn buildPreparedPackageWithCommand(
+        self: *Self,
+        command_path: []const u8,
+        prepared: *const PreparedPackage,
+        requested_names: []const []const u8,
+        historical: bool,
+        reviewed_digest: package_builder.pkgbuild_review.Digest,
+    ) ![]package_builder.BuildArtifact {
+        const digest_hex = std.fmt.bytesToHex(reviewed_digest, .lower);
+        var arguments: std.ArrayList([]const u8) = .empty;
+        defer arguments.deinit(self.allocator);
+        try appendShellyBuildArguments(
+            self.allocator,
+            &arguments,
+            prepared.pkgbuild_path,
+            requested_names,
+            &digest_hex,
+            self.no_check,
+            historical,
+        );
+
+        var command = try builder.invokingUserCleanCommand(
+            self.allocator,
+            self.io(),
+            self.environ,
+            command_path,
+            arguments.items,
+        );
+        defer command.deinit(self.allocator);
+        var stream_context = BuildStreamContext{
+            .manager = self,
+            .package_name = prepared.package_name,
+        };
+        const exit_code = try builder.runStreamingWithEnvironmentOperation(
+            self.allocator,
+            self.io(),
+            self.environ,
+            command.asConst(),
+            prepared.cache_path,
+            null,
+            .{ .function = forwardBuildLine, .data = &stream_context },
+            self.dispatcher.operation,
+        );
+        if (exit_code != 0) return error.BuildFailed;
+
+        const paths = try self.selectBuiltPackageFiles(prepared.cache_path, requested_names);
+        defer builder.deinitPaths(self.allocator, paths);
+        return artifactsFromPaths(self.allocator, paths, requested_names);
     }
 
     fn readCachedPkgbuild(self: *Self, package_name: []const u8) !?[]u8 {
@@ -2226,6 +2296,43 @@ const BuildStreamContext = struct {
     package_name: []const u8,
 };
 
+fn appendShellyBuildArguments(
+    allocator: std.mem.Allocator,
+    arguments: *std.ArrayList([]const u8),
+    pkgbuild_path: []const u8,
+    requested_names: []const []const u8,
+    digest_hex: []const u8,
+    no_check: bool,
+    historical: bool,
+) !void {
+    try arguments.appendSlice(allocator, &.{
+        "build",
+        "--coordinator-child",
+        "--review-digest",
+        digest_hex,
+        "--no-confirm",
+    });
+    for (requested_names) |requested_name|
+        try arguments.appendSlice(allocator, &.{ "--package", requested_name });
+    if (!no_check) try arguments.append(allocator, "--check");
+    if (historical) {
+        try arguments.append(allocator, "--no-overwrite");
+        try arguments.append(allocator, "--keep-workdirs");
+    } else {
+        try arguments.append(allocator, "--skip-source-pgp-verification");
+    }
+    try arguments.append(allocator, pkgbuild_path);
+}
+
+fn buildFailureReason(err: anyerror) []const u8 {
+    return switch (err) {
+        error.InvokingUserUnavailable => "Cannot build safely: the elevated process has no non-root invoking user",
+        error.ReviewedPkgbuildChanged => "Reviewed PKGBUILD inputs changed before the build subprocess started",
+        error.Cancelled => "Package build was cancelled",
+        else => "Failed to build package",
+    };
+}
+
 fn artifactPaths(
     allocator: std.mem.Allocator,
     artifacts: []const package_builder.BuildArtifact,
@@ -2284,6 +2391,58 @@ fn forwardBuildLine(data: ?*anyopaque, stream: builder.StreamKind, line: []const
             .message = progress.message,
         });
     };
+}
+
+test "coordinator child build arguments bind review package set and policies" {
+    const digest = "5a" ** std.crypto.hash.sha2.Sha256.digest_length;
+    var upgrade: std.ArrayList([]const u8) = .empty;
+    defer upgrade.deinit(std.testing.allocator);
+    try appendShellyBuildArguments(
+        std.testing.allocator,
+        &upgrade,
+        "/cache/demo/PKGBUILD",
+        &.{ "demo", "demo-docs" },
+        digest,
+        false,
+        false,
+    );
+    const expected_upgrade = [_][]const u8{
+        "build",
+        "--coordinator-child",
+        "--review-digest",
+        digest,
+        "--no-confirm",
+        "--package",
+        "demo",
+        "--package",
+        "demo-docs",
+        "--check",
+        "--skip-source-pgp-verification",
+        "/cache/demo/PKGBUILD",
+    };
+    try std.testing.expectEqual(expected_upgrade.len, upgrade.items.len);
+    for (expected_upgrade, upgrade.items) |wanted, actual|
+        try std.testing.expectEqualStrings(wanted, actual);
+
+    var historical: std.ArrayList([]const u8) = .empty;
+    defer historical.deinit(std.testing.allocator);
+    try appendShellyBuildArguments(
+        std.testing.allocator,
+        &historical,
+        "/cache/demo/PKGBUILD",
+        &.{"demo"},
+        digest,
+        true,
+        true,
+    );
+    try std.testing.expect(containsConst(historical.items, "--no-overwrite"));
+    try std.testing.expect(containsConst(historical.items, "--keep-workdirs"));
+    try std.testing.expect(!containsConst(historical.items, "--check"));
+    try std.testing.expect(!containsConst(historical.items, "--skip-source-pgp-verification"));
+    try std.testing.expectEqualStrings(
+        "Cannot build safely: the elevated process has no non-root invoking user",
+        buildFailureReason(error.InvokingUserUnavailable),
+    );
 }
 
 const PreparedInstall = struct {
