@@ -57,7 +57,6 @@ jobs:
           (cd Shelly.Cli.Zig && zig build --prefix ../publish/build-cli -Dcpu=baseline -Doptimize=ReleaseSmall)
           (cd Shelly.Cli.Zig && zig build test)
           install -Dm755 publish/build-cli/bin/shelly publish/shelly-cli/shelly
-          install -Dm755 publish/build-cli/bin/shelly-builder publish/shelly-cli/shelly-builder
           # Generate completion scripts from the freshly built binary.
           publish/shelly-cli/shelly utility --completions fish > publish/shelly-cli/shelly.fish
           publish/shelly-cli/shelly utility --completions zsh  > publish/shelly-cli/_shelly
@@ -85,7 +84,6 @@ jobs:
           install -m644 assets/shellylogo-update.png publish/shelly-ui/
           # Also bundle the CLI binary for convenience.
           install -m755 publish/shelly-cli/shelly publish/shelly-ui/
-          install -m755 publish/shelly-cli/shelly-builder publish/shelly-ui/
 
       - name: Compile and bundle translations
         run: |
