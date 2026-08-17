@@ -2766,7 +2766,7 @@ pub const Manager = struct {
                     &message_buffer,
                     "Package retrieval completed: {s}",
                     .{std.fs.path.basename(path)},
-                ) catch "Package retrieval completed";
+                ) catch "Package retrieval completed.";
                         
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_done,
@@ -4910,6 +4910,42 @@ test "handleErrorMessage formats populated file conflict details" {
         cap.text(),
         "target-package in file /usr/bin/example\n",
     ) != null);
+}
+
+test "onDownloadEvent uses fallback message when formatted message exceeds buffer" {
+    var mgr: Manager = undefined;
+    mgr.allocator = testing.allocator;
+    mgr.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer mgr.dispatcher.deinit();
+
+    var info_cap = InfoCapture{};
+    defer info_cap.deinit(testing.allocator);
+
+    _ = try mgr.dispatcher.addInformationalHandler(.{
+        .function = captureInfo,
+        .data = @ptrCast(&info_cap),
+    });
+
+    var long_path: [600]u8 = undefined;
+    @memset(long_path[0..], 'a');
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Start,
+        .destination_path = long_path[0..],
+    });
+
+    var info = info_cap.args orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.EventType.pkg_retrieve_start,info.event_type,);
+    try testing.expectEqualStrings("Retrieving package...",info.message,);
+
+    Manager.onDownloadEvent(@ptrCast(&mgr), .{
+        .event_type = .Complete,
+        .destination_path = long_path[0..],
+    });
+
+    info = info_cap.args orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.EventType.pkg_retrieve_done, info.event_type,);
+    try testing.expectEqualStrings("Package retrieval completed.", info.message,);
 }
 
 test "handleErrorMessage emits descriptions for every scalar libalpm error" {
