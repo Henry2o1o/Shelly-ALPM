@@ -40,7 +40,7 @@ pub const Resolution = struct {
 
 pub fn resolve(
     allocator: std.mem.Allocator,
-    info: *const pkgbuild.pkgbuild_info,
+    info: *const pkgbuild.Pkgbuild,
     no_check: bool,
     backend: Backend,
 ) !Resolution {
@@ -118,7 +118,7 @@ fn strongerRole(lhs: Role, rhs: Role) Role {
 
 pub fn collectBuildOnlyDependencies(
     allocator: std.mem.Allocator,
-    info: *const pkgbuild.pkgbuild_info,
+    info: *const pkgbuild.Pkgbuild,
     no_check: bool,
     backend: Backend,
 ) ![][]u8 {

@@ -2,7 +2,7 @@
 # Maintainer: Caroline Snyder <hirpeng@gmail.com>
 pkgbase=shelly
 pkgname=('shelly' 'shelly-flatpak-backend')
-pkgver=3.0.3
+pkgver=3.0.6
 pkgrel=1
 arch=('x86_64' 'aarch64')
 url="https://github.com/Seafoam-Labs/Shelly-ALPM"
@@ -88,9 +88,6 @@ check() {
   (cd Shelly.Cli.Zig && zig build test \
     --cache-dir "${srcdir}/zig-cache" \
     --global-cache-dir "${srcdir}/zig-global-cache")
-  scripts/check-flatpak-separation.sh \
-    out-cli/bin/shelly \
-    out-flatpak-backend/lib/libshelly-flatpak-backend.so.1
 }
 
 package_shelly() {

@@ -66,11 +66,11 @@ pub const PostInstallValidator = struct {
         "prepare", "pkgver", "build", "check", "package",
     };
 
-    pub fn validate(self: PostInstallValidator, pkg_build: pkgbuild.pkgbuild_info) !shared_validator.ValidationResult {
+    pub fn validate(self: PostInstallValidator, pkg_build: pkgbuild.Pkgbuild) !shared_validator.ValidationResult {
         return self.validateWithContent(pkg_build, null);
     }
 
-    pub fn validateWithContent(self: PostInstallValidator, pkg_build: pkgbuild.pkgbuild_info, content: ?[]const u8) !shared_validator.ValidationResult {
+    pub fn validateWithContent(self: PostInstallValidator, pkg_build: pkgbuild.Pkgbuild, content: ?[]const u8) !shared_validator.ValidationResult {
         var result = shared_validator.ValidationResult{
             .has_findings = false,
             .findings = std.ArrayList(shared_validator.ValidationFinding).empty,
@@ -651,16 +651,16 @@ test "scan_hook delegates to scan_dynamic_execution for eval-only lines" {
 fn make_test_pkgbuild(
     allocator: std.mem.Allocator,
     post_install: ?[]const u8,
-) !pkgbuild.pkgbuild_info {
+) !pkgbuild.Pkgbuild {
     const lsc = std.StringHashMap([]const u8).init(allocator);
-    return pkgbuild.pkgbuild_info{
+    return pkgbuild.Pkgbuild{
         .variables = std.StringHashMap([]const u8).init(allocator),
         .post_install = post_install,
         .local_source_contents = lsc,
     };
 }
 
-fn deinit_test_pkgbuild(pkg: *pkgbuild.pkgbuild_info, allocator: std.mem.Allocator) void {
+fn deinit_test_pkgbuild(pkg: *pkgbuild.Pkgbuild, allocator: std.mem.Allocator) void {
     if (pkg.post_install) |v| allocator.free(v);
 
     var lsc_it = pkg.local_source_contents.iterator();
