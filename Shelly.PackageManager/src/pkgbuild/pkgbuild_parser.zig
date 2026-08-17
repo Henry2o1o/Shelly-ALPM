@@ -19,6 +19,7 @@ pub const Pkgbuild = struct {
     replaces: ?[][]const u8 = null,
     options: ?[][]const u8 = null,
     source: ?[][]const u8 = null,
+    valid_pgp_keys: ?[][]const u8 = null,
     no_extract: ?[][]const u8 = null,
     sha_1_sums: ?[][]const u8 = null,
     sha_224_sums: ?[][]const u8 = null,
@@ -86,6 +87,10 @@ pub const Pkgbuild = struct {
             allocator.free(a);
         }
         if (self.source) |a| {
+            for (a) |item| allocator.free(item);
+            allocator.free(a);
+        }
+        if (self.valid_pgp_keys) |a| {
             for (a) |item| allocator.free(item);
             allocator.free(a);
         }
@@ -370,6 +375,7 @@ pub const PkgbuildParser = struct {
             .replaces = try self.resolve_package_array_field(content, &vars, "replaces"),
             .options = try self.resolve_package_array_field(content, &vars, "options"),
             .source = source,
+            .valid_pgp_keys = try self.resolve_array_field(content, &vars, "validpgpkeys"),
             .no_extract = try self.resolve_array_field(content, &vars, "noextract"),
             .sha_1_sums = try self.resolve_arch_array_field(content, &vars, "sha1sums"),
             .sha_224_sums = try self.resolve_arch_array_field(content, &vars, "sha224sums"),
@@ -7118,4 +7124,22 @@ test "parser_content: architecture sources and b2 sums follow makepkg ordering" 
     try std.testing.expectEqualStrings("SKIP", info.b_2_sums.?[0]);
     try std.testing.expectEqualStrings("SKIP", info.b_2_sums.?[1]);
     try std.testing.expectEqualStrings("arm.tar.gz", info.no_extract.?[0]);
+}
+
+test "parser_content: resolves validpgpkeys as a global array" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=signed-demo
+        \\validpgpkeys=(
+        \\  '0123456789ABCDEF0123456789ABCDEF01234567'
+        \\  '89ABCDEF0123456789ABCDEF0123456789ABCDEF'
+        \\)
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), info.valid_pgp_keys.?.len);
+    try std.testing.expectEqualStrings(
+        "0123456789ABCDEF0123456789ABCDEF01234567",
+        info.valid_pgp_keys.?[0],
+    );
 }

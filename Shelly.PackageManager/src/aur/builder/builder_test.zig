@@ -21,6 +21,12 @@ const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfigurat
 const archive = @import("archive");
 const raw_alpm = @import("../../alpm/bindings.zig").libalpm.alpm;
 
+const source_pgp_fingerprint = "2E37DFCC9287C8A2F84B2519241A5B24548FAC70";
+const source_pgp_public_key_base64 = "LS0tLS1CRUdJTiBQR1AgUFVCTElDIEtFWSBCTE9DSy0tLS0tCgptRE1FYW9OTXZ4WUpLd1lCQkFIYVJ3OEJBUWRBM0RFdFI5MXZLRU4zcXVsTmJBWVh2Z2EvRWl5K1VoQTMxeVBKCjcwZGlvbzIwTUZOb1pXeHNlU0JUYjNWeVkyVWdWR1Z6ZENBOGMyOTFjbU5sTFhSbGMzUkFaWGhoYlhCc1pTNXAKYm5aaGJHbGtQb2lRQkJNV0NnQTRGaUVFTGpmZnpKS0h5S0w0U3lVWkpCcGJKRlNQckhBRkFtcURUTDhDR3dNRgpDd2tJQndJR0ZRb0pDQXNDQkJZQ0F3RUNIZ0VDRjRBQUNna1FKQnBiSkZTUHJIQnJnUUVBbVFEdkNMNHZoc01CClgya3Y2V3ZFN1pMVzgyaUZQbkJaR2U1SXpDYWVvdUlCQVBMRC80M2RmbGlxZkVFTzFFZktJQVQ5SjV3cXdldmUKdFRBdXFvVGFRUXNLCj1jbzViCi0tLS0tRU5EIFBHUCBQVUJMSUMgS0VZIEJMT0NLLS0tLS0K";
+const source_pgp_signature_base64 = "iHUEABYKAB0WIQQuN9/MkofIovhLJRkkGlskVI+scAUCaoNNkwAKCRAkGlskVI+scBdcAP91A7dSPdze1V9Nmg8WM8/fQ1ok2OdwBK5tSxyvKX4OeQEA16pbB6X6y/DarBoa3OaU5Up21xdPZL1g+3o2i1xztgM=";
+const source_pgp_payload_gzip_base64 = "H4sIAAAAAAAAA0ssLclIzSvJTE4sSU1RKEiszMlPTOECACsbVvAWAAAA";
+const signed_git_bundle_base64 = "IyB2MiBnaXQgYnVuZGxlCjljYWUwYTE2NWExZGQ2NjdjZWMxN2Y2ODQ4NjAxYWU5Y2EwZGQyMzIgcmVmcy9oZWFkcy9tYWluCgpQQUNLAAAAAgAAAAOdG3icrY/NboJAGEX38xTf3ljHgjAktekoE6RYKr+mSxgHpIAoDIo+fVObdNVl7+6exUmObIWAx0wnhCs8ybJUJSlXVEF2mGt4ync6T2ealvJEUwhKerlvWgj2oqquEDR9ywWEopPw1N3PWIpOvoghqY+VeCgO56Qqds8w1YlmGBgrBMZYxRjxpq4LKcV/uPJj3hU5jL+3YJbtwsbaQGBbLg0jn905AgTFKmJ08eHQBd7ante7xuStbDK7Oe/Xr35ZWlVXxvao4zRaJo3rTnPqLH36yxFw59ZSz1RHhuFvsa2YVlwPnIomji5X3XGWnwrzWX7AOulXtxV/z02D9b13wmtcTeIYQXY5qs4p3AaKFrYzm1nDlRheUF+iiS8onyOYY/+Wo58a5pp/taCsGGTfCvQFaluI2KMCeJwzNDAwMzFRKEiszMlPTGEoCGu5+pP98hNt39nJAtc8/aclPLsLAN9wDr22AXicSywtyUjNK8lMTixJTVEoSKzMyU9M4QIAZowIeN5X7vtMSMeGSu5llThgA/cTIihw";
+
 const ErrorCapture = struct {
     count: usize = 0,
 
@@ -299,6 +305,47 @@ fn runTestCommand(
         std.debug.print("builder fixture command failed ({d}): {s}\n", .{ result.exit_code, result.stderr });
         return error.FixtureCommandFailed;
     }
+}
+
+fn writeBase64Fixture(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    directory: std.Io.Dir,
+    sub_path: []const u8,
+    encoded: []const u8,
+) !void {
+    const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(encoded);
+    const decoded = try allocator.alloc(u8, decoded_size);
+    defer allocator.free(decoded);
+    try std.base64.standard.Decoder.decode(decoded, encoded);
+    try directory.writeFile(io, .{ .sub_path = sub_path, .data = decoded });
+}
+
+fn prepareSourcePgpHome(fixture: *Fixture) ![:0]u8 {
+    const allocator = fixture.allocator;
+    const io = testing.io;
+    try fixture.temporary.dir.createDir(io, "gnupg", .fromMode(0o700));
+    try writeBase64Fixture(
+        allocator,
+        io,
+        fixture.temporary.dir,
+        "source-test-public.asc",
+        source_pgp_public_key_base64,
+    );
+    const home = try fixture.temporary.dir.realPathFileAlloc(io, "gnupg", allocator);
+    errdefer allocator.free(home);
+    const public_key = try fixture.temporary.dir.realPathFileAlloc(io, "source-test-public.asc", allocator);
+    defer allocator.free(public_key);
+    try runTestCommand(allocator, io, &.{
+        "/usr/bin/gpg",
+        "--homedir",
+        home,
+        "--batch",
+        "--no-autostart",
+        "--import",
+        public_key,
+    }, null);
+    return home;
 }
 
 test "PackageBuilder init keeps the provided collaborators" {
@@ -775,6 +822,181 @@ test "PackageBuilder stages and verifies local sources before build steps" {
     try testing.expectEqual(@as(usize, 1), artifacts.len);
     try fixture.temporary.dir.access(io, "src/helper.sh", .{});
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/helper.sh", .{});
+}
+
+test "PackageBuilder verifies pinned detached signatures from the user keyring" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('renamed.txt::payload' 'renamed.txt.sig::payload.sig')
+        \\sha256sums=('SKIP' 'SKIP')
+        \\validpgpkeys=('2E37DFCC9287C8A2F84B2519241A5B24548FAC70')
+        \\package() {
+        \\  install -Dm644 "$srcdir/renamed.txt" "$pkgdir/usr/share/demo/payload"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const gnupg_home = try prepareSourcePgpHome(&fixture);
+    defer allocator.free(gnupg_home);
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "payload",
+        .data = "authenticated payload\n",
+    });
+    try writeBase64Fixture(
+        allocator,
+        io,
+        fixture.temporary.dir,
+        "payload.sig",
+        source_pgp_signature_base64,
+    );
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.options.skip_source_pgp_verification = false;
+    fixture.builder.options.source_pgp_gnupg_home = gnupg_home;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/renamed.txt", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/payload", .{});
+}
+
+test "PackageBuilder rejects bad signatures atomically unless explicitly skipped" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload' 'payload.sig')
+        \\sha256sums=('SKIP' 'SKIP')
+        \\validpgpkeys=('2E37DFCC9287C8A2F84B2519241A5B24548FAC70')
+        \\package() {
+        \\  install -Dm644 "$srcdir/payload" "$pkgdir/usr/share/demo/payload"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const gnupg_home = try prepareSourcePgpHome(&fixture);
+    defer allocator.free(gnupg_home);
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "payload", .data = "tampered payload\n" });
+    try writeBase64Fixture(
+        allocator,
+        io,
+        fixture.temporary.dir,
+        "payload.sig",
+        source_pgp_signature_base64,
+    );
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "src/retained", .data = "old tree\n" });
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.options.skip_source_pgp_verification = false;
+    fixture.builder.options.source_pgp_gnupg_home = gnupg_home;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try fixture.temporary.dir.access(io, "src/retained", .{});
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+
+    fixture.builder.options.skip_source_pgp_verification = true;
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src/retained", .{}));
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/payload", .{});
+}
+
+test "PackageBuilder verifies signatures over compressed payload contents" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.gz' 'payload.sign')
+        \\noextract=('payload.gz')
+        \\sha256sums=('SKIP' 'SKIP')
+        \\validpgpkeys=('2E37DFCC9287C8A2F84B2519241A5B24548FAC70')
+        \\package() {
+        \\  install -Dm644 "$srcdir/payload.gz" "$pkgdir/usr/share/demo/payload.gz"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const gnupg_home = try prepareSourcePgpHome(&fixture);
+    defer allocator.free(gnupg_home);
+    try writeBase64Fixture(
+        allocator,
+        io,
+        fixture.temporary.dir,
+        "payload.gz",
+        source_pgp_payload_gzip_base64,
+    );
+    try writeBase64Fixture(
+        allocator,
+        io,
+        fixture.temporary.dir,
+        "payload.sign",
+        source_pgp_signature_base64,
+    );
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.options.skip_source_pgp_verification = false;
+    fixture.builder.options.source_pgp_gnupg_home = gnupg_home;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/payload.gz", .{});
+}
+
+test "PackageBuilder verifies signed Git sources requested with signed" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var remote = std.testing.tmpDir(.{});
+    defer remote.cleanup();
+    try writeBase64Fixture(allocator, io, remote.dir, "signed.bundle", signed_git_bundle_base64);
+    const bundle_path = try remote.dir.realPathFileAlloc(io, "signed.bundle", allocator);
+    defer allocator.free(bundle_path);
+    const remote_root = try remote.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(remote_root);
+    const repository_path = try std.fs.path.join(allocator, &.{ remote_root, "repository" });
+    defer allocator.free(repository_path);
+    try runTestCommand(
+        allocator,
+        io,
+        &.{ "/usr/bin/git", "clone", "--branch", "main", "--", bundle_path, repository_path },
+        null,
+    );
+    const pkgbuild = try std.fmt.allocPrint(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('repo::git+file://{s}#branch=main?signed')
+        \\sha256sums=('SKIP')
+        \\validpgpkeys=('2E37DFCC9287C8A2F84B2519241A5B24548FAC70')
+        \\package() {{
+        \\  install -Dm644 "$srcdir/repo/payload" "$pkgdir/usr/share/demo/payload"
+        \\}}
+    , .{repository_path});
+    defer allocator.free(pkgbuild);
+    var fixture = try Fixture.create(allocator, pkgbuild, null, null);
+    defer fixture.destroy();
+    const gnupg_home = try prepareSourcePgpHome(&fixture);
+    defer allocator.free(gnupg_home);
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.options.skip_source_pgp_verification = false;
+    fixture.builder.options.source_pgp_gnupg_home = gnupg_home;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/repo/.git", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/payload", .{});
 }
 
 test "PackageBuilder rejects a source checksum mismatch without committing srcdir" {

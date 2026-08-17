@@ -1518,7 +1518,7 @@ pub const Manager = struct {
                 .run_check = !self.no_check,
                 .overwrite = !historical,
                 .clean_after_success = !historical,
-                .skip_source_pgp_verification = !historical,
+                .skip_source_pgp_verification = false,
                 .build_directory = prepared.cache_path,
                 .pkgbuild_path = prepared.pkgbuild_path,
                 .reviewed_pkgbuild_digest = build_review.digest,
@@ -2319,8 +2319,6 @@ fn appendShellyBuildArguments(
     if (historical) {
         try arguments.append(allocator, "--no-overwrite");
         try arguments.append(allocator, "--keep-workdirs");
-    } else {
-        try arguments.append(allocator, "--skip-source-pgp-verification");
     }
     try arguments.append(allocator, pkgbuild_path);
 }
@@ -2418,7 +2416,6 @@ test "coordinator child build arguments bind review package set and policies" {
         "--package",
         "demo-docs",
         "--check",
-        "--skip-source-pgp-verification",
         "/cache/demo/PKGBUILD",
     };
     try std.testing.expectEqual(expected_upgrade.len, upgrade.items.len);
@@ -2439,6 +2436,7 @@ test "coordinator child build arguments bind review package set and policies" {
     try std.testing.expect(containsConst(historical.items, "--no-overwrite"));
     try std.testing.expect(containsConst(historical.items, "--keep-workdirs"));
     try std.testing.expect(!containsConst(historical.items, "--check"));
+    try std.testing.expect(!containsConst(upgrade.items, "--skip-source-pgp-verification"));
     try std.testing.expect(!containsConst(historical.items, "--skip-source-pgp-verification"));
     try std.testing.expectEqualStrings(
         "Cannot build safely: the elevated process has no non-root invoking user",

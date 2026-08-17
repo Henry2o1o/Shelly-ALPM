@@ -12,6 +12,7 @@ const process_runner = @import("../builder.zig");
 const downloader = @import("../../shared/downloader.zig");
 const package_options = @import("package_options");
 const install_script = @import("../../pkgbuild/install_script.zig");
+const source_pgp_verifier = @import("../../shared/source_pgp_verifier.zig");
 const alpm_bindings = @import("../../alpm/bindings.zig").libalpm;
 const raw_alpm = alpm_bindings.alpm;
 
@@ -40,7 +41,11 @@ pub const BuildOptions = struct {
     run_check: bool,
     overwrite: bool,
     clean_after_success: bool,
-    skip_source_pgp_verification: bool,
+    skip_source_pgp_verification: bool = false,
+    /// Optional keyring override for isolated builds and tests. Production
+    /// callers normally leave this null so GnuPG uses the invoking user's
+    /// keyring through the builder's sanitized environment.
+    source_pgp_gnupg_home: ?[]const u8 = null,
     build_directory: []const u8,
     /// Exact PKGBUILD path used for the final in-process integrity check.
     /// It may be omitted only by unit-test fixtures.
@@ -290,6 +295,8 @@ pub const PackageBuilder = struct {
             .step_name = "sources",
         };
         const sources = package_build.source orelse &.{};
+        const valid_pgp_keys = package_build.valid_pgp_keys orelse &.{};
+        try source_pgp_verifier.validatePinnedKeys(valid_pgp_keys);
 
         for (checksumSets(package_build)) |set|
             try validateChecksumCount(sources.len, set.sums);
@@ -312,12 +319,25 @@ pub const PackageBuilder = struct {
         errdefer std.Io.Dir.cwd().deleteTree(self.io, staging) catch {};
 
         self.raiseSourceMessage(package_build, "Preparing package sources");
+        const prepared = try self.allocator.alloc(PreparedSource, sources.len);
+        var prepared_count: usize = 0;
+        defer {
+            for (prepared[0..prepared_count]) |*source| source.deinit(self.allocator);
+            self.allocator.free(prepared);
+        }
         for (sources, 0..) |raw_source, index| {
             try operation.checkCancelled();
             var source = try ParsedSource.parse(self.allocator, raw_source);
-            defer source.deinit(self.allocator);
-            const destination = try std.fs.path.join(self.allocator, &.{ staging, source.name });
-            defer self.allocator.free(destination);
+            const destination = std.fs.path.join(self.allocator, &.{ staging, source.name }) catch |err| {
+                source.deinit(self.allocator);
+                return err;
+            };
+            prepared[prepared_count] = .{
+                .source = source,
+                .destination = destination,
+                .index = index,
+            };
+            prepared_count += 1;
 
             self.raiseSourceMessage(package_build, source.name);
             switch (source.kind) {
@@ -325,17 +345,30 @@ pub const PackageBuilder = struct {
                 .http => try self.downloadSource(operation, source.location, destination),
                 .git => try self.cloneGitSource(operation, source, destination),
             }
-
-            if (source.kind != .git) {
-                try self.verifySourceChecksums(package_build, index, destination);
-                if (isExtractableArchive(source.name) and
-                    !containsString(package_build.no_extract orelse &.{}, source.name))
-                    try self.extractSourceArchive(operation, destination, staging);
-            } else try requireSkippedVcsChecksums(package_build, index);
         }
 
-        if (!self.options.skip_source_pgp_verification and containsSignatureSource(sources))
-            return error.SourcePgpVerificationUnsupported;
+        // Match makepkg's integrity ordering: acquire every source, then check
+        // hashes and signatures, and only then extract anything.
+        for (prepared) |*source| {
+            try operation.checkCancelled();
+            if (source.source.kind == .git) {
+                try requireSkippedVcsChecksums(package_build, source.index);
+            } else {
+                try self.verifySourceChecksums(package_build, source.index, source.destination);
+            }
+        }
+
+        if (!self.options.skip_source_pgp_verification)
+            try self.verifyPreparedSourceSignatures(operation, package_build, prepared, staging);
+
+        for (prepared) |*source| {
+            try operation.checkCancelled();
+            if (source.source.kind != .git) {
+                if (isExtractableArchive(source.source.name) and
+                    !containsString(package_build.no_extract orelse &.{}, source.source.name))
+                    try self.extractSourceArchive(operation, source.destination, staging);
+            }
+        }
         // Only a fully prepared staging tree is committed. Sources are
         // reproducible, so retaining a second backup tree adds state without
         // improving recovery.
@@ -446,6 +479,155 @@ pub const PackageBuilder = struct {
                 .b2 => try verifyFileHash(std.crypto.hash.blake2.Blake2b512, self.io, path, sums[index]),
             }
         }
+    }
+
+    fn verifyPreparedSourceSignatures(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        package_build: *const PackageBuild,
+        prepared: []const PreparedSource,
+        staging: []const u8,
+    ) !void {
+        const valid_pgp_keys = package_build.valid_pgp_keys orelse &.{};
+        const verifier = source_pgp_verifier.Verifier{
+            .allocator = self.allocator,
+            .io = self.io,
+            .environ = self.environ,
+            .gnupg_home = self.options.source_pgp_gnupg_home,
+        };
+
+        for (prepared) |*signature| {
+            try operation.checkCancelled();
+            if (!isDetachedSignatureName(signature.source.name)) continue;
+            const pairing = try findDetachedPayload(prepared, signature);
+            var temporary_payload: ?[]u8 = null;
+            defer if (temporary_payload) |path| {
+                std.Io.Dir.cwd().deleteFile(self.io, path) catch {};
+                self.allocator.free(path);
+            };
+            const payload_path = if (pairing.compression) |compression| blk: {
+                const path = try std.fmt.allocPrint(
+                    self.allocator,
+                    "{s}/.shelly-pgp-payload-{d}",
+                    .{ staging, signature.index },
+                );
+                errdefer self.allocator.free(path);
+                try self.decompressSignedPayload(operation, pairing.source.destination, compression, path);
+                temporary_payload = path;
+                break :blk path;
+            } else pairing.source.destination;
+
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "Verifying source signature: {s}",
+                .{pairing.source.source.name},
+            );
+            defer self.allocator.free(message);
+            self.raiseSourceMessage(package_build, message);
+            var verification = try verifier.verifyDetached(
+                signature.destination,
+                payload_path,
+                valid_pgp_keys,
+            );
+            defer verification.deinit(self.allocator);
+            if (verification.warning != .none) self.raisePgpWarning(
+                package_build,
+                pairing.source.source.name,
+                verification.warning,
+            );
+        }
+
+        for (prepared) |*source| {
+            try operation.checkCancelled();
+            if (source.source.kind != .git or !source.source.signed) continue;
+            const object: source_pgp_verifier.GitObject = if (source.source.reference) |reference|
+                if (reference.kind == .tag) .tag else .commit
+            else
+                .commit;
+            const reference = if (source.source.reference) |value| value.value else "HEAD";
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "Verifying Git signature: {s}",
+                .{source.source.name},
+            );
+            defer self.allocator.free(message);
+            self.raiseSourceMessage(package_build, message);
+            var verification = try verifier.verifyGit(
+                source.destination,
+                object,
+                reference,
+                valid_pgp_keys,
+            );
+            defer verification.deinit(self.allocator);
+            if (verification.warning != .none) self.raisePgpWarning(
+                package_build,
+                source.source.name,
+                verification.warning,
+            );
+        }
+    }
+
+    fn raisePgpWarning(
+        self: *PackageBuilder,
+        package_build: *const PackageBuild,
+        source_name: []const u8,
+        warning: source_pgp_verifier.Warning,
+    ) void {
+        var buffer: [512]u8 = undefined;
+        const message = std.fmt.bufPrint(
+            &buffer,
+            "PGP warning for {s}: {s}",
+            .{ source_name, @tagName(warning) },
+        ) catch return;
+        self.raiseSourceMessage(package_build, message);
+    }
+
+    fn decompressSignedPayload(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        source_path: []const u8,
+        compression: SignatureCompression,
+        destination: []const u8,
+    ) !void {
+        const argv: []const []const u8 = switch (compression) {
+            .gz, .compress => &.{ "/usr/bin/gzip", "-cdf", "--", source_path },
+            .bz2 => &.{ "/usr/bin/bzip2", "-cdf", "--", source_path },
+            .xz => &.{ "/usr/bin/xz", "-cdf", "--", source_path },
+            .zst => &.{ "/usr/bin/zstd", "-d", "-q", "-c", "--", source_path },
+            .lzo => &.{ "/usr/bin/lzop", "-d", "-q", "-c", "--", source_path },
+            .lrz => &.{ "/usr/bin/lrzip", "-q", "-d", "-o", "-", source_path },
+        };
+        var child = try std.process.spawn(self.io, .{
+            .argv = argv,
+            .environ_map = null,
+            .stdin = .ignore,
+            .stdout = .pipe,
+            .stderr = .ignore,
+        });
+        defer child.kill(self.io);
+        var output = try std.Io.Dir.cwd().createFile(self.io, destination, .{
+            .truncate = true,
+            .permissions = .fromMode(0o600),
+        });
+        defer output.close(self.io);
+        var reader_buffer: [64 * 1024]u8 = undefined;
+        var chunk: [64 * 1024]u8 = undefined;
+        var output_buffer: [64 * 1024]u8 = undefined;
+        var reader = child.stdout.?.reader(self.io, &reader_buffer);
+        var writer = output.writer(self.io, &output_buffer);
+        var total: u64 = 0;
+        while (true) {
+            try operation.checkCancelled();
+            const amount = try reader.interface.readSliceShort(&chunk);
+            if (amount == 0) break;
+            total += amount;
+            if (total > 4 * 1024 * 1024 * 1024) return error.SourcePayloadTooLarge;
+            try writer.interface.writeAll(chunk[0..amount]);
+        }
+        try writer.interface.flush();
+        try output.sync(self.io);
+        const term = try child.wait(self.io);
+        if (term != .exited or term.exited != 0) return error.SourceDecompressionFailed;
     }
 
     fn extractSourceArchive(
@@ -1355,6 +1537,7 @@ const ParsedSource = struct {
     location: []u8,
     kind: SourceKind,
     reference: ?GitReference = null,
+    signed: bool = false,
 
     fn parse(allocator: std.mem.Allocator, raw: []const u8) !ParsedSource {
         const trimmed = std.mem.trim(u8, raw, " \t\r\n");
@@ -1365,8 +1548,11 @@ const ParsedSource = struct {
         if (raw_location.len == 0) return error.InvalidSource;
 
         const fragment_start = std.mem.indexOfScalar(u8, raw_location, '#');
+        const query_start = std.mem.indexOfScalar(u8, raw_location, '?');
+        const first_suffix = @min(fragment_start orelse raw_location.len, query_start orelse raw_location.len);
+        const git_location = raw_location[0..first_suffix];
         const location_without_fragment = if (fragment_start) |index| raw_location[0..index] else raw_location;
-        const is_git = std.ascii.startsWithIgnoreCase(location_without_fragment, "git+");
+        const is_git = std.ascii.startsWithIgnoreCase(git_location, "git+");
         const kind: SourceKind = if (is_git)
             .git
         else if (std.ascii.startsWithIgnoreCase(location_without_fragment, "https://") or
@@ -1379,7 +1565,7 @@ const ParsedSource = struct {
             .local;
 
         const effective_location = if (is_git)
-            location_without_fragment["git+".len..]
+            git_location["git+".len..]
         else if (kind == .http)
             location_without_fragment
         else
@@ -1396,7 +1582,8 @@ const ParsedSource = struct {
         errdefer if (reference) |value| value.deinit(allocator);
         if (fragment_start) |index| {
             if (!is_git) return error.UnsupportedSourceFragment;
-            const fragment = raw_location[index + 1 ..];
+            const fragment_end = if (query_start) |query| if (query > index) query else raw_location.len else raw_location.len;
+            const fragment = raw_location[index + 1 .. fragment_end];
             const equals = std.mem.indexOfScalar(u8, fragment, '=') orelse return error.UnsupportedSourceFragment;
             const key = fragment[0..equals];
             const value = fragment[equals + 1 ..];
@@ -1412,6 +1599,18 @@ const ParsedSource = struct {
             reference = .{ .kind = reference_kind, .value = try allocator.dupe(u8, value) };
         }
 
+        var signed = false;
+        if (query_start) |index| {
+            if (!is_git) {
+                if (fragment_start != null and index > fragment_start.?) return error.UnsupportedSourceFragment;
+            } else {
+                const query_end = if (fragment_start) |fragment| if (fragment > index) fragment else raw_location.len else raw_location.len;
+                const query = raw_location[index + 1 .. query_end];
+                if (!std.mem.eql(u8, query, "signed")) return error.UnsupportedSourceQuery;
+                signed = true;
+            }
+        }
+
         const name = try allocator.dupe(u8, inferred_name);
         errdefer allocator.free(name);
         const location = try allocator.dupe(u8, effective_location);
@@ -1421,6 +1620,7 @@ const ParsedSource = struct {
             .location = location,
             .kind = kind,
             .reference = reference,
+            .signed = signed,
         };
     }
 
@@ -1431,6 +1631,87 @@ const ParsedSource = struct {
         self.* = undefined;
     }
 };
+
+const PreparedSource = struct {
+    source: ParsedSource,
+    destination: []u8,
+    index: usize,
+
+    fn deinit(self: *PreparedSource, allocator: std.mem.Allocator) void {
+        self.source.deinit(allocator);
+        allocator.free(self.destination);
+        self.* = undefined;
+    }
+};
+
+const SignatureCompression = enum {
+    gz,
+    bz2,
+    xz,
+    lrz,
+    lzo,
+    compress,
+    zst,
+
+    fn suffix(self: SignatureCompression) []const u8 {
+        return switch (self) {
+            .gz => ".gz",
+            .bz2 => ".bz2",
+            .xz => ".xz",
+            .lrz => ".lrz",
+            .lzo => ".lzo",
+            .compress => ".Z",
+            .zst => ".zst",
+        };
+    }
+};
+
+const DetachedPayload = struct {
+    source: *const PreparedSource,
+    compression: ?SignatureCompression,
+};
+
+fn detachedSignatureBase(name: []const u8) ?[]const u8 {
+    for ([_][]const u8{ ".sig", ".sign", ".asc" }) |extension| {
+        if (std.mem.endsWith(u8, name, extension)) return name[0 .. name.len - extension.len];
+    }
+    return null;
+}
+
+fn isDetachedSignatureName(name: []const u8) bool {
+    return detachedSignatureBase(name) != null;
+}
+
+fn findDetachedPayload(
+    prepared: []const PreparedSource,
+    signature: *const PreparedSource,
+) !DetachedPayload {
+    const base = detachedSignatureBase(signature.source.name) orelse return error.InvalidSignatureSource;
+    var exact: ?*const PreparedSource = null;
+    for (prepared) |*candidate| {
+        if (candidate.index == signature.index or isDetachedSignatureName(candidate.source.name)) continue;
+        if (!std.mem.eql(u8, candidate.source.name, base)) continue;
+        if (exact != null) return error.AmbiguousSignedSource;
+        exact = candidate;
+    }
+    if (exact) |source| return .{ .source = source, .compression = null };
+
+    // makepkg tries compressed variants in this fixed order and stops at the
+    // first one it finds. An uncompressed source above always wins.
+    for (std.meta.tags(SignatureCompression)) |kind| {
+        var match: ?*const PreparedSource = null;
+        for (prepared) |*candidate| {
+            if (candidate.index == signature.index or isDetachedSignatureName(candidate.source.name)) continue;
+            if (candidate.source.name.len != base.len + kind.suffix().len or
+                !std.mem.startsWith(u8, candidate.source.name, base) or
+                !std.mem.endsWith(u8, candidate.source.name, kind.suffix())) continue;
+            if (match != null) return error.AmbiguousSignedSource;
+            match = candidate;
+        }
+        if (match) |source| return .{ .source = source, .compression = kind };
+    }
+    return error.MissingSignedSource;
+}
 
 fn sourceBasename(location: []const u8, strip_git_suffix: bool) []const u8 {
     const query_start = std.mem.indexOfScalar(u8, location, '?') orelse location.len;
@@ -1515,14 +1796,6 @@ fn isExtractableArchive(name: []const u8) bool {
         ".tar", ".tar.gz", ".tgz", ".tar.zst", ".tar.xz", ".txz", ".tar.bz2", ".tbz", ".tbz2", ".zip",
     };
     for (suffixes) |suffix| if (std.ascii.endsWithIgnoreCase(name, suffix)) return true;
-    return false;
-}
-
-fn containsSignatureSource(sources: []const []const u8) bool {
-    for (sources) |source| {
-        const location = if (std.mem.indexOf(u8, source, "::")) |separator| source[0..separator] else source;
-        if (std.ascii.endsWithIgnoreCase(location, ".sig") or std.ascii.endsWithIgnoreCase(location, ".asc")) return true;
-    }
     return false;
 }
 
@@ -1637,4 +1910,60 @@ fn writeKeyValues(
     values: ?[][]const u8,
 ) !void {
     for (values orelse return) |value| try writeKeyValue(writer, key, value);
+}
+
+test "signed Git source parser accepts query before or after fragment" {
+    for ([_][]const u8{
+        "git+https://example.invalid/demo.git?signed#tag=v1",
+        "git+https://example.invalid/demo.git#tag=v1?signed",
+    }) |raw| {
+        var source = try ParsedSource.parse(std.testing.allocator, raw);
+        defer source.deinit(std.testing.allocator);
+        try std.testing.expect(source.signed);
+        try std.testing.expectEqual(SourceKind.git, source.kind);
+        try std.testing.expectEqualStrings("https://example.invalid/demo.git", source.location);
+        try std.testing.expectEqual(GitReferenceKind.tag, source.reference.?.kind);
+        try std.testing.expectEqualStrings("v1", source.reference.?.value);
+    }
+}
+
+test "detached source pairing handles exact renamed and compressed payload names" {
+    const names = [_][]const u8{ "release.tar.xz", "release.tar.sign" };
+    var prepared: [2]PreparedSource = undefined;
+    var initialized: usize = 0;
+    defer for (prepared[0..initialized]) |*source| source.deinit(std.testing.allocator);
+    for (names, &prepared, 0..) |name, *source, index| {
+        source.* = .{
+            .source = .{
+                .name = try std.testing.allocator.dupe(u8, name),
+                .location = try std.testing.allocator.dupe(u8, name),
+                .kind = .local,
+            },
+            .destination = try std.testing.allocator.dupe(u8, name),
+            .index = index,
+        };
+        initialized += 1;
+    }
+    const pairing = try findDetachedPayload(&prepared, &prepared[1]);
+    try std.testing.expectEqual(@as(usize, 0), pairing.source.index);
+    try std.testing.expectEqual(SignatureCompression.xz, pairing.compression.?);
+
+    const exact_source: PreparedSource = blk: {
+        const name = try std.testing.allocator.dupe(u8, "release.tar");
+        errdefer std.testing.allocator.free(name);
+        const location = try std.testing.allocator.dupe(u8, "release.tar");
+        errdefer std.testing.allocator.free(location);
+        const destination = try std.testing.allocator.dupe(u8, "release.tar");
+        errdefer std.testing.allocator.free(destination);
+        break :blk .{
+            .source = .{ .name = name, .location = location, .kind = .local },
+            .destination = destination,
+            .index = 2,
+        };
+    };
+    var with_exact = [_]PreparedSource{ prepared[0], prepared[1], exact_source };
+    defer with_exact[2].deinit(std.testing.allocator);
+    const exact_pairing = try findDetachedPayload(&with_exact, &with_exact[1]);
+    try std.testing.expectEqual(@as(usize, 2), exact_pairing.source.index);
+    try std.testing.expectEqual(@as(?SignatureCompression, null), exact_pairing.compression);
 }
