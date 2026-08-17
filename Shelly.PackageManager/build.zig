@@ -1,4 +1,5 @@
 const std = @import("std");
+const package_manifest = @import("build.zig.zon");
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -76,6 +77,12 @@ pub fn build(b: *std.Build) void {
     mod.addImport("archive", archive_mod);
     mod.addImport("operation_context", operation_context_mod);
     mod.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
+    const package_options = b.addOptions();
+    package_options.addOption([]const u8, "version", package_manifest.version);
+    // Keep this generated module distinct from consumers that independently
+    // expose an identically-valued `version` option.
+    package_options.addOption(bool, "is_package_manager", true);
+    mod.addOptions("package_options", package_options);
 
     // PackageManager imports only the backend's data-only protocol module.
     // The native implementation is discovered with dlopen at runtime and is
@@ -545,6 +552,8 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder simulates root ownership without host chown",
             "PackageBuilder rejects unsupported virtual ownership",
             "PackageBuilder runs source-less execution steps inside srcdir",
+            "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata",
+            "PackageBuilder strips ELF debug sections unless PKGBUILD disables strip",
             "PackageBuilder runs local declarations and reviewed helper functions inside package steps",
             "PackageBuilder accepts b2 checksums and honors noextract",
             "PackageBuilder stages and verifies local sources before build steps",

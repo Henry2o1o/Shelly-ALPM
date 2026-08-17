@@ -10,6 +10,9 @@ const op_context = @import("operation_context");
 const archive = @import("archive");
 const process_runner = @import("../builder.zig");
 const downloader = @import("../../shared/downloader.zig");
+const package_options = @import("package_options");
+const alpm_bindings = @import("../../alpm/bindings.zig").libalpm;
+const raw_alpm = alpm_bindings.alpm;
 
 pub const pkgbuild_validation = @import("pkgbuild_validation.zig");
 pub const PkgbuildValidation = pkgbuild_validation.PkgbuildValidation;
@@ -48,6 +51,11 @@ pub const BuildOptions = struct {
     /// Digest of the PKGBUILD and its reviewed local/install files. Every
     /// caller must prepare and verify this snapshot before execution.
     reviewed_pkgbuild_digest: ?[std.crypto.hash.sha2.Sha256.digest_length]u8 = null,
+    /// SHA-256 of only the PKGBUILD, for BUILDINFO v2.
+    pkgbuild_sha256sum: ?[std.crypto.hash.sha2.Sha256.digest_length]u8 = null,
+    /// Optional deterministic build-environment snapshot. Production callers
+    /// leave this null and the builder reads libalpm's local database.
+    installed_packages: ?[]const []const u8 = null,
 };
 
 pub const BuilderErrors = error{
@@ -200,6 +208,7 @@ pub const PackageBuilder = struct {
             defer current_review.deinit();
             if (!std.mem.eql(u8, &reviewed_digest, &current_review.digest))
                 return error.ReviewedPkgbuildChanged;
+            self.options.pkgbuild_sha256sum = current_review.pkgbuild_digest;
         } else if (!builtin.is_test) return error.UnreviewedBuilderRequest;
         if (self.active_operation != null) return error.BuildAlreadyRunning;
         self.active_operation = operation;
@@ -772,6 +781,8 @@ pub const PackageBuilder = struct {
                 replaceOptionalStrings(self.allocator, &package_build.conflicts, values)
             else if (std.mem.eql(u8, name, "replaces"))
                 replaceOptionalStrings(self.allocator, &package_build.replaces, values)
+            else if (std.mem.eql(u8, name, "options"))
+                replaceOptionalStrings(self.allocator, &package_build.options, values)
             else
                 return error.InvalidPackageMetadata;
         }
@@ -794,6 +805,56 @@ pub const PackageBuilder = struct {
         };
     }
 
+    /// Applies the small, content-affecting subset of makepkg's tidy phase
+    /// currently modeled by Shelly. PKGBUILD options override makepkg.conf
+    /// options using the same `option`/`!option` convention as makepkg.
+    fn tidyPackage(self: *PackageBuilder, package_build: *const PackageBuild, pkgdir: []const u8) !void {
+        const effective = try effectivePackageOptions(
+            self.allocator,
+            self.makepkg_config.options,
+            package_build.options orelse &.{},
+        );
+        defer freeOwnedStrings(self.allocator, effective);
+        if (!optionEnabled(effective, "strip")) return;
+
+        var directory = try std.Io.Dir.cwd().openDir(self.io, pkgdir, .{ .iterate = true });
+        defer directory.close(self.io);
+        var walker = try directory.walk(self.allocator);
+        defer walker.deinit();
+        while (try walker.next(self.io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (self.active_operation) |operation| try operation.checkCancelled();
+            const stat = try entry.dir.statFile(self.io, entry.basename, .{ .follow_symlinks = false });
+            if (stat.permissions.toMode() & 0o200 == 0) continue;
+
+            const path = try std.fs.path.join(self.allocator, &.{ pkgdir, entry.path });
+            defer self.allocator.free(path);
+            const kind = try stripKind(self.io, path);
+            const raw_flags = switch (kind orelse continue) {
+                .binary => self.makepkg_config.strip_binaries,
+                .shared => self.makepkg_config.strip_shared,
+                .static => self.makepkg_config.strip_static,
+            };
+            const flags = try parseConfigurationWords(self.allocator, raw_flags);
+            defer freeOwnedStrings(self.allocator, flags);
+            var command: std.ArrayList([]const u8) = .empty;
+            defer command.deinit(self.allocator);
+            try command.append(self.allocator, "strip");
+            for (flags) |flag| try command.append(self.allocator, flag);
+            try command.append(self.allocator, path);
+            var result = try process_runner.runWithEnvironment(
+                self.allocator,
+                self.io,
+                self.environ,
+                command.items,
+                null,
+                60,
+            );
+            defer result.deinit(self.allocator);
+            if (result.exit_code != 0) return error.StripFailed;
+        }
+    }
+
     fn assemblePackage(self: *PackageBuilder, package_build: *const PackageBuild) !BuildArtifact {
         const package_name = package_build.pkg_name orelse return error.MissingPackageName;
         const full_version = try package_build.get_full_version(self.allocator);
@@ -806,6 +867,8 @@ pub const PackageBuilder = struct {
             &.{ self.options.build_directory, "pkg", package_name },
         );
         defer self.allocator.free(pkgdir);
+
+        try self.tidyPackage(package_build, pkgdir);
 
         var pkgdir_handle = try std.Io.Dir.cwd().openDir(self.io, pkgdir, .{ .iterate = true });
         defer pkgdir_handle.close(self.io);
@@ -925,13 +988,46 @@ pub const PackageBuilder = struct {
         try writeKeyValue(writer, "pkgbase", package_base);
         try writeKeyValue(writer, "pkgver", full_version);
         try writeKeyValue(writer, "pkgarch", package_arch);
+        const pkgbuild_digest = self.options.pkgbuild_sha256sum orelse
+            return error.MissingPkgbuildDigest;
+        const pkgbuild_digest_hex = std.fmt.bytesToHex(pkgbuild_digest, .lower);
+        try writeKeyValue(writer, "pkgbuild_sha256sum", &pkgbuild_digest_hex);
         try writeKeyValue(writer, "packager", self.makepkg_config.packager);
         try writer.print("builddate = {d}\n", .{build_date});
         try writeKeyValue(writer, "builddir", self.options.build_directory);
+        try writeKeyValue(
+            writer,
+            "startdir",
+            if (self.options.pkgbuild_path) |path|
+                std.fs.path.dirname(path) orelse self.options.build_directory
+            else
+                self.options.build_directory,
+        );
         try writeKeyValue(writer, "buildtool", "shelly");
-        try writeKeyValue(writer, "buildtoolver", "1");
-        try writeKeyValue(writer, "buildenv", self.makepkg_config.build_environment);
-        try writeKeyValue(writer, "options", self.makepkg_config.options);
+        try writeKeyValue(writer, "buildtoolver", package_options.version);
+
+        const build_environment = try parseConfigurationWords(
+            self.allocator,
+            self.makepkg_config.build_environment,
+        );
+        defer freeOwnedStrings(self.allocator, build_environment);
+        for (build_environment) |value| try writeKeyValue(writer, "buildenv", value);
+
+        const effective_options = try effectivePackageOptions(
+            self.allocator,
+            self.makepkg_config.options,
+            package_build.options orelse &.{},
+        );
+        defer freeOwnedStrings(self.allocator, effective_options);
+        for (effective_options) |value| try writeKeyValue(writer, "options", value);
+
+        if (self.options.installed_packages) |installed| {
+            for (installed) |value| try writeKeyValue(writer, "installed", value);
+        } else {
+            const installed = try collectInstalledPackages(self.allocator);
+            defer freeOwnedStrings(self.allocator, installed);
+            for (installed) |value| try writeKeyValue(writer, "installed", value);
+        }
         try writeMetadataFile(pkgdir, self.io, ".BUILDINFO", output.written());
     }
 };
@@ -982,6 +1078,159 @@ fn replaceOptionalStrings(
     destination.* = values;
 }
 
+const StripKind = enum { binary, shared, static };
+
+fn stripKind(io: std.Io, path: []const u8) !?StripKind {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var header: [20]u8 = undefined;
+    const amount = try file.readPositionalAll(io, &header, 0);
+    if (amount >= 8 and std.mem.eql(u8, header[0..8], "!<arch>\n")) return .static;
+    if (amount < header.len or !std.mem.eql(u8, header[0..4], "\x7fELF")) return null;
+    const elf_type: u16 = switch (header[5]) {
+        1 => std.mem.readInt(u16, header[16..18], .little),
+        2 => std.mem.readInt(u16, header[16..18], .big),
+        else => return null,
+    };
+    return switch (elf_type) {
+        1 => if (std.mem.endsWith(u8, path, ".o")) .static else if (std.mem.endsWith(u8, path, ".ko")) .shared else null,
+        2 => .binary,
+        3 => .shared,
+        else => null,
+    };
+}
+
+fn freeOwnedStrings(allocator: std.mem.Allocator, values: [][]u8) void {
+    for (values) |value| allocator.free(value);
+    allocator.free(values);
+}
+
+/// Parses the shell-like array syntax used for makepkg.conf option and flag
+/// values. It deliberately supports data syntax only; no substitutions or
+/// commands are evaluated.
+fn parseConfigurationWords(allocator: std.mem.Allocator, raw: []const u8) ![][]u8 {
+    var text = std.mem.trim(u8, raw, " \t\r\n");
+    if (text.len >= 2 and text[0] == '(' and text[text.len - 1] == ')')
+        text = text[1 .. text.len - 1];
+
+    var words: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (words.items) |word| allocator.free(word);
+        words.deinit(allocator);
+    }
+    var index: usize = 0;
+    while (index < text.len) {
+        while (index < text.len and std.ascii.isWhitespace(text[index])) index += 1;
+        if (index >= text.len or text[index] == '#') break;
+        var word: std.ArrayList(u8) = .empty;
+        defer word.deinit(allocator);
+        var quote: ?u8 = null;
+        var started = false;
+        while (index < text.len) {
+            const byte = text[index];
+            if (quote == null and (std.ascii.isWhitespace(byte) or byte == '#')) break;
+            started = true;
+            if (byte == '\\' and quote != '\'') {
+                index += 1;
+                if (index >= text.len) return error.InvalidConfigurationArray;
+                try word.append(allocator, text[index]);
+                index += 1;
+                continue;
+            }
+            if (byte == '\'' or byte == '"') {
+                if (quote == null) {
+                    quote = byte;
+                    index += 1;
+                    continue;
+                }
+                if (quote.? == byte) {
+                    quote = null;
+                    index += 1;
+                    continue;
+                }
+            }
+            try word.append(allocator, byte);
+            index += 1;
+        }
+        if (quote != null) return error.InvalidConfigurationArray;
+        if (started) try words.append(allocator, try allocator.dupe(u8, word.items));
+        if (index < text.len and text[index] == '#') break;
+    }
+    return words.toOwnedSlice(allocator);
+}
+
+fn optionName(value: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, value, "!")) value[1..] else value;
+}
+
+fn optionEnabled(options: []const []u8, name: []const u8) bool {
+    for (options) |option| {
+        if (!std.mem.eql(u8, optionName(option), name)) continue;
+        return !std.mem.startsWith(u8, option, "!");
+    }
+    return false;
+}
+
+fn effectivePackageOptions(
+    allocator: std.mem.Allocator,
+    configured: []const u8,
+    overrides: []const []const u8,
+) ![][]u8 {
+    var options = try parseConfigurationWords(allocator, configured);
+    errdefer freeOwnedStrings(allocator, options);
+    for (overrides) |override| {
+        if (override.len == 0 or std.mem.eql(u8, override, "!")) continue;
+        var replaced = false;
+        for (options) |*current| {
+            if (!std.mem.eql(u8, optionName(current.*), optionName(override))) continue;
+            const owned = try allocator.dupe(u8, override);
+            allocator.free(current.*);
+            current.* = owned;
+            replaced = true;
+            break;
+        }
+        if (!replaced) {
+            const owned = try allocator.dupe(u8, override);
+            errdefer allocator.free(owned);
+            const resized = try allocator.realloc(options, options.len + 1);
+            options = resized;
+            options[options.len - 1] = owned;
+        }
+    }
+    return options;
+}
+
+fn collectInstalledPackages(allocator: std.mem.Allocator) ![][]u8 {
+    var alpm_error: raw_alpm.alpm_errno_t = 0;
+    const handle = raw_alpm.alpm_initialize("/", "/var/lib/pacman", &alpm_error) orelse
+        return error.LocalDatabaseOpenFailed;
+    defer _ = raw_alpm.alpm_release(handle);
+    const database = raw_alpm.alpm_get_localdb(handle) orelse
+        return error.LocalDatabaseOpenFailed;
+    var packages = raw_alpm.alpm_db_get_pkgcache(database);
+    var installed: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (installed.items) |value| allocator.free(value);
+        installed.deinit(allocator);
+    }
+    while (packages != null) : (packages = packages.?.*.next) {
+        const package = packages.?.*.data orelse continue;
+        const name = alpm_bindings.str(raw_alpm.alpm_pkg_get_name(@ptrCast(package))) orelse continue;
+        const version = alpm_bindings.str(raw_alpm.alpm_pkg_get_version(@ptrCast(package))) orelse continue;
+        const architecture = alpm_bindings.str(raw_alpm.alpm_pkg_get_arch(@ptrCast(package))) orelse continue;
+        try installed.append(
+            allocator,
+            try std.fmt.allocPrint(allocator, "{s}-{s}-{s}", .{ name, version, architecture }),
+        );
+    }
+    std.mem.sort([]u8, installed.items, {}, struct {
+        fn before(_: void, left: []u8, right: []u8) bool {
+            return std.mem.order(u8, left, right) == .lt;
+        }
+    }.before);
+    return installed.toOwnedSlice(allocator);
+}
+
 /// Writes supported package-scoped metadata through a NUL-delimited channel.
 /// The package function may print arbitrary output without corrupting it.
 const packageMetadataCaptureShellPrelude =
@@ -1001,7 +1250,7 @@ const packageMetadataCaptureShellPrelude =
     \\__shelly_capture_metadata() {
     \\  local name
     \\  for name in pkgdesc url; do __shelly_capture_scalar "$name"; done
-    \\  for name in license arch depends optdepends provides conflicts replaces; do
+    \\  for name in license arch depends optdepends provides conflicts replaces options; do
     \\    __shelly_capture_array "$name"
     \\  done
     \\}

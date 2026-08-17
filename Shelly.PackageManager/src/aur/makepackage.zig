@@ -78,7 +78,7 @@ pub const MakePackageConfiguration = struct {
     // Log files: specify a fixed directory where all log files will be placed
     log_destination: []const u8 = "/home/makepkglogs",
     // Packager: name/email of the person or organization building packages
-    packager: []const u8 = "Jane Doe <jane@doe.com>",
+    packager: []const u8 = "Unknown Packager",
     // Specific gpg key to use for package signing
     gpg_key: []const u8 = "",
     // Compression defaults
@@ -392,6 +392,27 @@ test "makepkg parser retains parenthesized option values" {
     };
     try TestParser(&Assert.value).run(
         "OPTIONS=(!strip docs !libtool staticlibs)\n",
+    );
+}
+
+test "makepkg packager uses a neutral fallback and honors configuration" {
+    const fallback = try MakePackageConfiguration.initFromBuffer(
+        std.testing.io,
+        std.testing.allocator,
+        "",
+    );
+    defer fallback.deinit();
+    try std.testing.expectEqualStrings("Unknown Packager", fallback.packager);
+
+    const configured = try MakePackageConfiguration.initFromBuffer(
+        std.testing.io,
+        std.testing.allocator,
+        "PACKAGER='Builder Name <builder@example.test>'\n",
+    );
+    defer configured.deinit();
+    try std.testing.expectEqualStrings(
+        "Builder Name <builder@example.test>",
+        configured.packager,
     );
 }
 

@@ -164,6 +164,9 @@ pub fn writeMtreeWithMetadata(
 
     try requireWriteStatus(c.archive_write_add_filter_gzip(handle));
     try requireWriteStatus(c.archive_write_set_format_mtree(handle));
+    // BUILDINFO/PKGINFO consumers expect makepkg-style MTREE file hashes.
+    // libarchive calculates these from the regular-file data written below.
+    try requireWriteStatus(c.archive_write_set_options(handle, "mtree:sha256"));
     try requireWriteStatus(c.archive_write_open_filename(handle, output_path_z.ptr));
 
     try writeDirectory(allocator, io, handle, source_directory, ".MTREE", virtual_metadata);

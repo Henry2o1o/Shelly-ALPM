@@ -15,6 +15,9 @@ pub const PreparedPkgbuildReview = struct {
     findings: []operation_api.ReviewFinding,
     related_files: []operation_api.QuestionAttachment,
     reviewed_file_names: []const []const u8,
+    /// SHA-256 of the PKGBUILD itself, as required by BUILDINFO v2.
+    pkgbuild_digest: Digest,
+    /// Integrity digest covering the PKGBUILD and every reviewed related file.
     digest: Digest,
 
     pub fn deinit(self: *PreparedPkgbuildReview) void {
@@ -122,12 +125,15 @@ pub fn preparePkgbuildReview(
         pkgbuild_content,
         file_names,
     );
+    var pkgbuild_digest: Digest = undefined;
+    std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
     return .{
         .arena = arena,
         .validations = validations[0..validation_count],
         .findings = owned_findings,
         .related_files = related_files,
         .reviewed_file_names = file_names,
+        .pkgbuild_digest = pkgbuild_digest,
         .digest = digest,
     };
 }

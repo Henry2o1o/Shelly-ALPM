@@ -17,6 +17,7 @@ pub const Pkgbuild = struct {
     provides: ?[][]const u8 = null,
     conflicts: ?[][]const u8 = null,
     replaces: ?[][]const u8 = null,
+    options: ?[][]const u8 = null,
     source: ?[][]const u8 = null,
     no_extract: ?[][]const u8 = null,
     sha_1_sums: ?[][]const u8 = null,
@@ -78,6 +79,10 @@ pub const Pkgbuild = struct {
             allocator.free(a);
         }
         if (self.replaces) |a| {
+            for (a) |item| allocator.free(item);
+            allocator.free(a);
+        }
+        if (self.options) |a| {
             for (a) |item| allocator.free(item);
             allocator.free(a);
         }
@@ -371,6 +376,7 @@ pub const PkgbuildParser = struct {
             .provides = try self.resolve_package_array_field(content, &vars, "provides"),
             .conflicts = try self.resolve_package_array_field(content, &vars, "conflicts"),
             .replaces = try self.resolve_package_array_field(content, &vars, "replaces"),
+            .options = try self.resolve_package_array_field(content, &vars, "options"),
             .source = source,
             .no_extract = try self.resolve_array_field(content, &vars, "noextract"),
             .sha_1_sums = try self.resolve_arch_array_field(content, &vars, "sha1sums"),
@@ -5122,14 +5128,15 @@ test "build_var_hashmap: skips array declarations" {
     try std.testing.expectEqualStrings("app", vars.get("pkgname").?);
 }
 
-test "build_var_hashmap: skips command substitution but keeps arithmetic" {
+test "build_var_hashmap: rejects command substitution but keeps arithmetic" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    var vars = try parser.build_var_hashmap(
-        "gitrev=$(git rev-parse HEAD)\ncount=$((1+2))\n",
+    try std.testing.expectError(
+        error.UnsupportedDynamicAssignment,
+        parser.build_var_hashmap("gitrev=$(git rev-parse HEAD)\n"),
     );
-    defer PkgbuildParser.free_vars(std.testing.allocator, &vars);
 
-    try std.testing.expect(vars.get("gitrev") == null);
+    var vars = try parser.build_var_hashmap("count=$((1+2))\n");
+    defer PkgbuildParser.free_vars(std.testing.allocator, &vars);
     try std.testing.expect(vars.get("count") != null);
 }
 
@@ -6288,6 +6295,10 @@ test "parser_content: pkgname resolves when pkgbase is also present" {
     try std.testing.expectEqualStrings("gtk3", info.depends.?[0]);
     try std.testing.expectEqualStrings("xdotool", info.depends.?[1]);
     try std.testing.expectEqualStrings("libxcb", info.depends.?[2]);
+    try std.testing.expectEqual(@as(usize, 3), info.options.?.len);
+    try std.testing.expectEqualStrings("!strip", info.options.?[0]);
+    try std.testing.expectEqualStrings("!lto", info.options.?[1]);
+    try std.testing.expectEqualStrings("!debug", info.options.?[2]);
 }
 
 test "parser_content: split sources retain the first global pkgname" {

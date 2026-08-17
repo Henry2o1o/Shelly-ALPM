@@ -115,6 +115,8 @@ const Fixture = struct {
         const requested_names = try allocator.alloc([]const u8, 1);
         errdefer allocator.free(requested_names);
         requested_names[0] = info.pkg_name orelse "";
+        var pkgbuild_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
         const builder = try PackageBuilder.init(
             allocator,
             package_builds,
@@ -129,6 +131,8 @@ const Fixture = struct {
                 .build_directory = build_dir,
                 .sources_prepared = true,
                 .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
+                .pkgbuild_sha256sum = pkgbuild_digest,
+                .installed_packages = &.{"base-1-1-any"},
             },
             testing.environ,
             io,
@@ -190,6 +194,8 @@ const Fixture = struct {
         errdefer config.deinit();
         const requested_names = try allocator.dupe([]const u8, requested);
         errdefer allocator.free(requested_names);
+        var pkgbuild_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
         const builder = try PackageBuilder.init(
             allocator,
             package_builds,
@@ -204,6 +210,8 @@ const Fixture = struct {
                 .build_directory = build_dir,
                 .sources_prepared = true,
                 .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
+                .pkgbuild_sha256sum = pkgbuild_digest,
+                .installed_packages = &.{"base-1-1-any"},
             },
             testing.environ,
             io,
@@ -258,16 +266,24 @@ fn printPackageTree(
     }
 }
 
-fn readPkgInfo(allocator: std.mem.Allocator, package_path: []const u8) ![]u8 {
+fn readPackageEntry(
+    allocator: std.mem.Allocator,
+    package_path: []const u8,
+    entry_name: []const u8,
+) ![]u8 {
     var reader = try archive.Reader.init(allocator, package_path);
     defer reader.deinit();
     while (try reader.next()) |entry| {
-        if (!std.mem.eql(u8, entry.path, ".PKGINFO")) continue;
-        var buffer: [32 * 1024]u8 = undefined;
+        if (!std.mem.eql(u8, entry.path, entry_name)) continue;
+        var buffer: [256 * 1024]u8 = undefined;
         const amount = try reader.readPrefix(&buffer);
         return allocator.dupe(u8, buffer[0..amount]);
     }
-    return error.MissingPkgInfo;
+    return error.MissingPackageEntry;
+}
+
+fn readPkgInfo(allocator: std.mem.Allocator, package_path: []const u8) ![]u8 {
+    return readPackageEntry(allocator, package_path, ".PKGINFO");
 }
 
 fn runTestCommand(
@@ -486,6 +502,110 @@ test "PackageBuilder runs source-less execution steps inside srcdir" {
 
     // The operation completed successfully.
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
+}
+
+test "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=metadata-demo
+        \\pkgver=2
+        \\pkgrel=3
+        \\arch=('any')
+        \\options=('!lto' '!debug')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/metadata-demo"
+        \\  printf 'artifact payload\n' > "$pkgdir/usr/share/metadata-demo/data"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const build_info = try readPackageEntry(allocator, artifacts[0].path, ".BUILDINFO");
+    defer allocator.free(build_info);
+    var pkgbuild_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
+    const digest_hex = std.fmt.bytesToHex(pkgbuild_digest, .lower);
+    const digest_line = try std.fmt.allocPrint(allocator, "pkgbuild_sha256sum = {s}\n", .{digest_hex});
+    defer allocator.free(digest_line);
+    try testing.expect(std.mem.indexOf(u8, build_info, digest_line) != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, "buildtoolver = 3.0.6\n") != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, "buildenv = !distcc\n") != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, "buildenv = (!distcc") == null);
+    try testing.expect(std.mem.indexOf(u8, build_info, "options = strip\n") != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, "options = !lto\n") != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, "installed = base-1-1-any\n") != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, "startdir = ") != null);
+
+    const pkg_info = try readPkgInfo(allocator, artifacts[0].path);
+    defer allocator.free(pkg_info);
+    try testing.expect(std.mem.indexOf(u8, pkg_info, "packager = Unknown Packager\n") != null);
+
+    const mtree_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "pkg/metadata-demo/.MTREE" });
+    defer allocator.free(mtree_path);
+    var gzip = try process_runner.run(allocator, io, &.{ "gzip", "-dc", mtree_path }, null, null);
+    defer gzip.deinit(allocator);
+    try testing.expectEqual(@as(u8, 0), gzip.exit_code);
+    var payload_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("artifact payload\n", &payload_digest, .{});
+    const payload_hex = std.fmt.bytesToHex(payload_digest, .lower);
+    try testing.expect(std.mem.indexOf(u8, gzip.stdout, &payload_hex) != null);
+    try testing.expect(std.mem.indexOf(u8, gzip.stdout, "sha256digest=") != null);
+}
+
+test "PackageBuilder strips ELF debug sections unless PKGBUILD disables strip" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const common =
+        \\pkgname=strip-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\build() {
+        \\  printf 'int main(void) { return 0; }\n' > demo.c
+        \\  cc -g -o demo demo.c
+        \\}
+        \\package() {
+        \\  install -Dm755 demo "$pkgdir/usr/bin/strip-demo"
+        \\}
+    ;
+    var stripped_fixture = try Fixture.create(allocator, common, null, null);
+    defer stripped_fixture.destroy();
+    const stripped_artifacts = try stripped_fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, stripped_artifacts);
+    const stripped_path = try std.fs.path.join(allocator, &.{ stripped_fixture.build_dir, "pkg/strip-demo/usr/bin/strip-demo" });
+    defer allocator.free(stripped_path);
+    var stripped_sections = try process_runner.run(allocator, io, &.{ "readelf", "-S", stripped_path }, null, null);
+    defer stripped_sections.deinit(allocator);
+    try testing.expectEqual(@as(u8, 0), stripped_sections.exit_code);
+    try testing.expect(std.mem.indexOf(u8, stripped_sections.stdout, ".debug_info") == null);
+
+    const no_strip =
+        \\pkgname=strip-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\build() {
+        \\  printf 'int main(void) { return 0; }\n' > demo.c
+        \\  cc -g -o demo demo.c
+        \\}
+        \\package() {
+        \\  options=('!strip')
+        \\  install -Dm755 demo "$pkgdir/usr/bin/strip-demo"
+        \\}
+    ;
+    var unstripped_fixture = try Fixture.create(allocator, no_strip, null, null);
+    defer unstripped_fixture.destroy();
+    const unstripped_artifacts = try unstripped_fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, unstripped_artifacts);
+    const unstripped_path = try std.fs.path.join(allocator, &.{ unstripped_fixture.build_dir, "pkg/strip-demo/usr/bin/strip-demo" });
+    defer allocator.free(unstripped_path);
+    var unstripped_sections = try process_runner.run(allocator, io, &.{ "readelf", "-S", unstripped_path }, null, null);
+    defer unstripped_sections.deinit(allocator);
+    try testing.expectEqual(@as(u8, 0), unstripped_sections.exit_code);
+    try testing.expect(std.mem.indexOf(u8, unstripped_sections.stdout, ".debug_info") != null);
 }
 
 test "PackageBuilder runs local declarations and reviewed helper functions inside package steps" {
