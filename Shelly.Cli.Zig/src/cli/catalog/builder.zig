@@ -8,6 +8,9 @@ pub const variants = [_]types.Variant{.{
     .name = "build",
     .default_for_action = true,
     .description = "Builds a PKGBUILD into an installable package",
-    .options = &.{ flag("--reviewed", &.{"-r"}, "Marks the package as reviewed"), flag("--sync-deps", &.{}, "") },
+    .options = &.{
+        flag("--reviewed", &.{"-r"}, "Marks the package as reviewed"),
+        flag("--sync-deps", &.{"-s"}, "Installs missing dependencies"),
+    },
     .arguments = &.{types.optionalArgument("pkgbuild", "File path of PKGBUILD. If left empty will look in executed directory for file named PKGBUILD.")},
 }};
