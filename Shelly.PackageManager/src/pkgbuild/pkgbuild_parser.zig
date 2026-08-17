@@ -222,8 +222,9 @@ pub const kvp = struct {
     }
 };
 
-/// One makepkg execution step of a PKGBUILD: a well-known function
-/// (prepare, pkgver, build, check, package/package_<name>) and its body.
+/// One makepkg execution step of a PKGBUILD: verify, prepare, pkgver, build,
+/// check, package/package_<name>, and its body. verify is stored separately in
+/// execution_plan because it runs before source extraction.
 pub const execution_step = struct {
     name: []const u8,
     /// The function body exactly as written in the PKGBUILD.
@@ -246,6 +247,8 @@ pub const execution_step = struct {
 /// Extracted lifecycle steps and the two helper environments they share.
 /// Helpers are stored once instead of being duplicated into every step.
 pub const execution_plan = struct {
+    /// Global source-authentication function, executed before extraction.
+    verify_step: ?execution_step,
     steps: []execution_step,
     /// Safely quoted declarations that reconstruct the PKGBUILD's supported
     /// top-level scalar and indexed-array state for shared lifecycle steps.
@@ -257,6 +260,7 @@ pub const execution_plan = struct {
     package_helpers: []const u8,
 
     pub fn deinit(self: execution_plan, allocator: std.mem.Allocator) void {
+        if (self.verify_step) |step| step.deinit(allocator);
         for (self.steps) |step| step.deinit(allocator);
         allocator.free(self.steps);
         allocator.free(self.shared_prelude);
@@ -431,6 +435,11 @@ pub const PkgbuildParser = struct {
         const package_helpers = try self.allocator.dupe(u8, raw_helpers);
         errdefer self.allocator.free(package_helpers);
 
+        var verify_step: ?execution_step = null;
+        errdefer if (verify_step) |step| step.deinit(self.allocator);
+        if (try extract_function_body(content, "verify")) |body|
+            verify_step = try self.create_execution_step("verify", body, &step_vars);
+
         for (execution_step_functions) |function_name| {
             // For split packages the packaging step is the package-scoped
             // function; fall back to the shared package() when absent.
@@ -460,7 +469,7 @@ pub const PkgbuildParser = struct {
             );
         }
 
-        if (steps.items.len == 0) {
+        if (steps.items.len == 0 and verify_step == null) {
             steps.deinit(self.allocator);
             self.allocator.free(shared_prelude);
             self.allocator.free(package_prelude);
@@ -469,6 +478,7 @@ pub const PkgbuildParser = struct {
             return null;
         }
         return .{
+            .verify_step = verify_step,
             .steps = try steps.toOwnedSlice(self.allocator),
             .shared_prelude = shared_prelude,
             .package_prelude = package_prelude,
@@ -722,17 +732,28 @@ pub const PkgbuildParser = struct {
         body: []const u8,
         vars: *std.StringHashMap([]const u8),
     ) !void {
+        const step = try self.create_execution_step(name, body, vars);
+        errdefer step.deinit(self.allocator);
+        try steps.append(self.allocator, step);
+    }
+
+    fn create_execution_step(
+        self: PkgbuildParser,
+        name: []const u8,
+        body: []const u8,
+        vars: *std.StringHashMap([]const u8),
+    ) !execution_step {
         const name_owned = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(name_owned);
         const body_owned = try self.allocator.dupe(u8, body);
         errdefer self.allocator.free(body_owned);
         const expanded_owned = try self.resolve_step_string(body, vars);
         errdefer self.allocator.free(expanded_owned);
-        try steps.append(self.allocator, .{
+        return .{
             .name = name_owned,
             .body = body_owned,
             .expanded_body = expanded_owned,
-        });
+        };
     }
 
     fn extract_helper_definitions(self: PkgbuildParser, content: []const u8) ![]u8 {
@@ -767,6 +788,7 @@ pub const PkgbuildParser = struct {
     }
 
     fn isExecutionFunction(name: []const u8) bool {
+        if (std.mem.eql(u8, name, "verify")) return true;
         for (execution_step_functions) |known|
             if (std.mem.eql(u8, name, known)) return true;
         return std.mem.startsWith(u8, name, "package_");
@@ -6570,6 +6592,10 @@ test "parser_content: execution steps follow makepkg execution order" {
     const content =
         \\pkgname=demo
         \\
+        \\verify() {
+        \\  test -f upstream.tar.gz
+        \\}
+        \\
         \\package() {
         \\  make install
         \\}
@@ -6595,6 +6621,12 @@ test "parser_content: execution steps follow makepkg execution order" {
 
     const steps = info.execution.?.steps;
     try std.testing.expectEqual(@as(usize, 5), steps.len);
+    try std.testing.expectEqualStrings("verify", info.execution.?.verify_step.?.name);
+    try std.testing.expectEqualStrings(
+        "test -f upstream.tar.gz",
+        info.execution.?.verify_step.?.body,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, info.execution.?.shared_helpers, "verify()") == null);
 
     try std.testing.expectEqualStrings("prepare", steps[0].name);
     try std.testing.expectEqualStrings("patch -p1 < fix.patch", steps[0].body);
@@ -6649,6 +6681,29 @@ test "parser_content: execution steps is null when no known functions are define
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expect(info.execution == null);
+}
+
+test "parser_content: verify-only execution remains separate from extracted lifecycle steps" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\verify() {
+        \\  _authenticate source.tar.gz
+        \\}
+        \\_authenticate() {
+        \\  test -f "$1"
+        \\}
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), info.execution.?.steps.len);
+    try std.testing.expectEqualStrings("verify", info.execution.?.verify_step.?.name);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        info.execution.?.shared_helpers,
+        "_authenticate()",
+    ) != null);
 }
 
 test "parser_content: execution steps resolve package-scoped function for selected split package" {

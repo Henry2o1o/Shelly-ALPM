@@ -39,6 +39,7 @@ pub fn deinitArtifacts(allocator: std.mem.Allocator, artifacts: []BuildArtifact)
 
 pub const BuildOptions = struct {
     run_check: bool,
+    run_verify: bool = true,
     overwrite: bool,
     clean_after_success: bool,
     skip_source_pgp_verification: bool = false,
@@ -242,6 +243,7 @@ pub const PackageBuilder = struct {
                 shared_execution.shared_prelude,
                 shared_execution.shared_helpers,
                 step.body,
+                null,
             );
         }
 
@@ -267,6 +269,7 @@ pub const PackageBuilder = struct {
                 package_execution.package_prelude,
                 package_execution.package_helpers,
                 package_step.body,
+                null,
             );
             const artifact = try self.assemblePackage(package_build);
             artifacts.append(self.allocator, artifact) catch |err| {
@@ -305,18 +308,25 @@ pub const PackageBuilder = struct {
 
         const srcdir = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, "src" });
         defer self.allocator.free(srcdir);
-        const staging = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, ".src.shelly-staging" });
-        defer self.allocator.free(staging);
+        const source_staging = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, ".sources.shelly-staging" });
+        defer self.allocator.free(source_staging);
+        const extraction_staging = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, ".src.shelly-staging" });
+        defer self.allocator.free(extraction_staging);
 
-        std.Io.Dir.cwd().deleteTree(self.io, staging) catch {
-            self.reportUnwritableBuildDirectory(staging);
+        std.Io.Dir.cwd().deleteTree(self.io, source_staging) catch {
+            self.reportUnwritableBuildDirectory(source_staging);
             return error.BuildDirectoryNotWritable;
         };
-        std.Io.Dir.cwd().createDirPath(self.io, staging) catch {
-            self.reportUnwritableBuildDirectory(staging);
+        std.Io.Dir.cwd().deleteTree(self.io, extraction_staging) catch {
+            self.reportUnwritableBuildDirectory(extraction_staging);
             return error.BuildDirectoryNotWritable;
         };
-        errdefer std.Io.Dir.cwd().deleteTree(self.io, staging) catch {};
+        std.Io.Dir.cwd().createDirPath(self.io, source_staging) catch {
+            self.reportUnwritableBuildDirectory(source_staging);
+            return error.BuildDirectoryNotWritable;
+        };
+        defer std.Io.Dir.cwd().deleteTree(self.io, source_staging) catch {};
+        errdefer std.Io.Dir.cwd().deleteTree(self.io, extraction_staging) catch {};
 
         self.raiseSourceMessage(package_build, "Preparing package sources");
         const prepared = try self.allocator.alloc(PreparedSource, sources.len);
@@ -328,7 +338,7 @@ pub const PackageBuilder = struct {
         for (sources, 0..) |raw_source, index| {
             try operation.checkCancelled();
             var source = try ParsedSource.parse(self.allocator, raw_source);
-            const destination = std.fs.path.join(self.allocator, &.{ staging, source.name }) catch |err| {
+            const destination = std.fs.path.join(self.allocator, &.{ source_staging, source.name }) catch |err| {
                 source.deinit(self.allocator);
                 return err;
             };
@@ -359,14 +369,61 @@ pub const PackageBuilder = struct {
         }
 
         if (!self.options.skip_source_pgp_verification)
-            try self.verifyPreparedSourceSignatures(operation, package_build, prepared, staging);
+            try self.verifyPreparedSourceSignatures(operation, package_build, prepared, source_staging);
 
+        // makepkg runs the optional verify() function in $startdir after
+        // built-in integrity checks and before extracting any source. Expose
+        // staged remote/renamed sources there through temporary symlinks;
+        // existing direct local sources are already visible in $startdir.
+        if (self.options.run_verify and !self.options.skip_source_pgp_verification) {
+            const execution = package_build.execution orelse return error.MissingExecutionSteps;
+            if (execution.verify_step) |step| {
+                const links = try self.exposeSourcesForVerify(prepared);
+                defer {
+                    for (links) |path| {
+                        std.Io.Dir.cwd().deleteFile(self.io, path) catch {};
+                        self.allocator.free(path);
+                    }
+                    self.allocator.free(links);
+                }
+                try self.runStep(
+                    operation,
+                    self.requested_names[0],
+                    step.name,
+                    execution.shared_prelude,
+                    execution.shared_helpers,
+                    step.body,
+                    self.options.build_directory,
+                );
+                // Direct local sources are the real files in $startdir rather
+                // than temporary links. Carry any intentional verify()
+                // mutation forward into extraction, as makepkg does.
+                for (prepared) |*source| if (source.source.kind == .local and
+                    std.mem.eql(u8, source.source.location, source.source.name))
+                {
+                    try self.copyLocalSource(source.source.location, source.destination);
+                };
+            }
+        }
+
+        std.Io.Dir.cwd().createDirPath(self.io, extraction_staging) catch {
+            self.reportUnwritableBuildDirectory(extraction_staging);
+            return error.BuildDirectoryNotWritable;
+        };
         for (prepared) |*source| {
             try operation.checkCancelled();
-            if (source.source.kind != .git) {
+            const materialized = try std.fs.path.join(
+                self.allocator,
+                &.{ extraction_staging, source.source.name },
+            );
+            defer self.allocator.free(materialized);
+            if (source.source.kind == .git) {
+                try self.materializeGitSource(operation, source.source, source.destination, materialized);
+            } else {
+                try std.Io.Dir.copyFile(.cwd(), source.destination, .cwd(), materialized, self.io, .{});
                 if (isExtractableArchive(source.source.name) and
                     !containsString(package_build.no_extract orelse &.{}, source.source.name))
-                    try self.extractSourceArchive(operation, source.destination, staging);
+                    try self.extractSourceArchive(operation, source.destination, extraction_staging);
             }
         }
         // Only a fully prepared staging tree is committed. Sources are
@@ -376,7 +433,7 @@ pub const PackageBuilder = struct {
             self.reportUnwritableBuildDirectory(srcdir);
             return error.BuildDirectoryNotWritable;
         };
-        std.Io.Dir.rename(.cwd(), staging, .cwd(), srcdir, self.io) catch {
+        std.Io.Dir.rename(.cwd(), extraction_staging, .cwd(), srcdir, self.io) catch {
             self.reportUnwritableBuildDirectory(srcdir);
             return error.BuildDirectoryNotWritable;
         };
@@ -390,6 +447,53 @@ pub const PackageBuilder = struct {
         const stat = try std.Io.Dir.cwd().statFile(self.io, source_path, .{ .follow_symlinks = false });
         if (stat.kind != .file) return error.InvalidLocalSource;
         try std.Io.Dir.copyFile(.cwd(), source_path, .cwd(), destination, self.io, .{});
+    }
+
+    fn exposeSourcesForVerify(self: *PackageBuilder, prepared: []const PreparedSource) ![][]u8 {
+        var links: std.ArrayList([]u8) = .empty;
+        errdefer {
+            for (links.items) |path| {
+                std.Io.Dir.cwd().deleteFile(self.io, path) catch {};
+                self.allocator.free(path);
+            }
+            links.deinit(self.allocator);
+        }
+        for (prepared) |*source| {
+            const visible_path = try std.fs.path.join(
+                self.allocator,
+                &.{ self.options.build_directory, source.source.name },
+            );
+            errdefer self.allocator.free(visible_path);
+            const exists = if (std.Io.Dir.cwd().statFile(
+                self.io,
+                visible_path,
+                .{ .follow_symlinks = false },
+            )) |_| true else |err| switch (err) {
+                error.FileNotFound => false,
+                else => return err,
+            };
+            if (exists) {
+                // A direct local source already occupies its makepkg-visible
+                // path. Never replace an unrelated user path for a renamed,
+                // downloaded, or VCS source.
+                if (source.source.kind == .local and
+                    std.mem.eql(u8, source.source.location, source.source.name))
+                {
+                    self.allocator.free(visible_path);
+                    continue;
+                }
+                return error.SourceVerificationViewConflict;
+            }
+            try std.Io.Dir.cwd().symLink(
+                self.io,
+                source.destination,
+                visible_path,
+                .{ .is_directory = source.source.kind == .git },
+            );
+            errdefer std.Io.Dir.cwd().deleteFile(self.io, visible_path) catch {};
+            try links.append(self.allocator, visible_path);
+        }
+        return links.toOwnedSlice(self.allocator);
     }
 
     fn downloadSource(
@@ -431,6 +535,39 @@ pub const PackageBuilder = struct {
         try self.runSourceCommand(operation, clone_args.items);
         if (source.reference) |reference| if (reference.kind == .commit)
             try self.runSourceCommand(operation, &.{ "-C", destination, "checkout", "--detach", reference.value });
+    }
+
+    fn materializeGitSource(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        source: ParsedSource,
+        acquired_repository: []const u8,
+        destination: []const u8,
+    ) !void {
+        try self.runSourceCommand(operation, &.{
+            "clone",
+            "--local",
+            "--no-hardlinks",
+            "--",
+            acquired_repository,
+            destination,
+        });
+        if (source.reference) |reference| switch (reference.kind) {
+            .branch => try self.runSourceCommand(operation, &.{
+                "-C",
+                destination,
+                "checkout",
+                "--force",
+                reference.value,
+            }),
+            .tag, .commit => try self.runSourceCommand(operation, &.{
+                "-C",
+                destination,
+                "checkout",
+                "--detach",
+                reference.value,
+            }),
+        };
     }
 
     fn runSourceCommand(
@@ -783,6 +920,7 @@ pub const PackageBuilder = struct {
         execution_prelude: []const u8,
         helper_definitions: []const u8,
         body: []const u8,
+        working_directory: ?[]const u8,
     ) !void {
         self.failure_location = .{
             .package_name = package_name,
@@ -794,7 +932,7 @@ pub const PackageBuilder = struct {
         const capture_metadata = package_step;
         const executable_body = try std.fmt.allocPrint(
             self.allocator,
-            "{s}\n{s}\n{s}\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
+            "{s}\n{s}\n{s}\ndeclare -- startdir=\"$4\"\ndeclare -- srcdir=\"$5\"\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
             .{
                 if (package_step) virtualMetadataShellPrelude else "",
                 if (package_step) packageMetadataCaptureShellPrelude else "",
@@ -846,14 +984,16 @@ pub const PackageBuilder = struct {
             std.Io.Dir.cwd().deleteFile(self.io, metadata_result_path) catch {};
 
         const current_pkgver = self.package_builds[0].pkg_version orelse "";
+        const runtime_startdir = working_directory orelse self.options.build_directory;
+        const runtime_working_directory = working_directory orelse srcdir;
 
         var stream_context: StepStreamContext = .{ .operation = operation, .package_name = package_name };
         const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
             self.allocator,
             self.io,
             self.environ,
-            &.{ "/bin/bash", "-e", "-c", command_body, "shelly-step", current_pkgver, pkgver_result_path, metadata_result_path },
-            srcdir,
+            &.{ "/bin/bash", "-e", "-c", command_body, "shelly-step", current_pkgver, pkgver_result_path, metadata_result_path, runtime_startdir, srcdir },
+            runtime_working_directory,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
             operation,

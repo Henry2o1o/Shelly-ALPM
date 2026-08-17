@@ -197,6 +197,7 @@ const Real = struct {
                 .clean_after_success = !optionEnabled(invocation, "--keep-workdirs"),
                 .overwrite = !optionEnabled(invocation, "--no-overwrite"),
                 .run_check = optionEnabled(invocation, "--check"),
+                .run_verify = !optionEnabled(invocation, "--noverify"),
                 .skip_source_pgp_verification = optionEnabled(invocation, "--skip-source-pgp-verification"),
                 .reviewed_pkgbuild_digest = expected_digest,
                 .install_scripts = review.install_scripts,
@@ -358,10 +359,12 @@ test "coordinator build options preserve selected packages and reviewed digest" 
         "--package",
         "demo-docs",
         "--check",
+        "--noverify",
         "/tmp/PKGBUILD",
     });
     try std.testing.expect(optionEnabled(&outcome.dispatch, "--coordinator-child"));
     try std.testing.expect(optionEnabled(&outcome.dispatch, "--check"));
+    try std.testing.expect(optionEnabled(&outcome.dispatch, "--noverify"));
     try std.testing.expectEqualStrings(encoded, optionValue(&outcome.dispatch, "--review-digest").?);
     var selected: usize = 0;
     for (outcome.dispatch.options) |option| {

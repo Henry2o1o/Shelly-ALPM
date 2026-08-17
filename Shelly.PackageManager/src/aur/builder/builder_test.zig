@@ -824,6 +824,179 @@ test "PackageBuilder stages and verifies local sources before build steps" {
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/helper.sh", .{});
 }
 
+test "PackageBuilder runs verify after integrity checks and before extraction" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=verify-order
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('verified-input.tar.gz::payload.tar.gz')
+        \\sha256sums=('SKIP')
+        \\_verify_tokens=(alpha beta)
+        \\_verify_helper() {
+        \\  test "${_verify_tokens[*]}" = "alpha beta"
+        \\}
+        \\verify() {
+        \\  test "$PWD" = "$startdir"
+        \\  test -L "$startdir/verified-input.tar.gz"
+        \\  test ! -e "$startdir/demo/source.txt"
+        \\  test "$pkgver" = 1
+        \\  _verify_helper
+        \\  printf 'verified\n' > verify-marker
+        \\}
+        \\prepare() {
+        \\  test "$(cat "$startdir/verify-marker")" = verified
+        \\  test "$(cat demo/source.txt)" = extracted
+        \\  printf 'prepared\n' > prepare-marker
+        \\}
+        \\pkgver() {
+        \\  test "$(cat prepare-marker)" = prepared
+        \\  printf '1.1\n'
+        \\}
+        \\package() {
+        \\  install -Dm644 demo/source.txt "$pkgdir/usr/share/verify-order/source.txt"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.tar.gz" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "demo/source.txt", .contents = "extracted\n" },
+    });
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.options.skip_source_pgp_verification = false;
+    fixture.builder.options.run_verify = true;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try testing.expect(std.mem.indexOf(u8, artifacts[0].path, "verify-order-1.1-1-any") != null);
+    try fixture.temporary.dir.access(io, "verify-marker", .{});
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "verified-input.tar.gz", .{}));
+    try fixture.temporary.dir.access(io, "src/verified-input.tar.gz", .{});
+    try fixture.temporary.dir.access(io, "src/prepare-marker", .{});
+    try fixture.temporary.dir.access(io, "pkg/verify-order/usr/share/verify-order/source.txt", .{});
+}
+
+test "PackageBuilder verify failure preserves the committed src tree" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=verify-failure
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload')
+        \\sha256sums=('SKIP')
+        \\verify() {
+        \\  printf 'ran\n' > verify-ran
+        \\  return 23
+        \\}
+        \\prepare() {
+        \\  printf 'bad\n' > prepare-ran
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "payload", .data = "payload\n" });
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "src/retained", .data = "old tree\n" });
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.options.skip_source_pgp_verification = false;
+    fixture.builder.options.run_verify = true;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try fixture.temporary.dir.access(io, "src/retained", .{});
+    try fixture.temporary.dir.access(io, "verify-ran", .{});
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src/verify-ran", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src/prepare-ran", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".sources.shelly-staging", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "pkg/verify-failure", .{}));
+}
+
+test "PackageBuilder supports noverify and PGP-skip verify policies" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild =
+        \\pkgname=verify-policy
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=()
+        \\verify() {
+        \\  return 1
+        \\}
+        \\package() {
+        \\  install -d "$pkgdir/usr/share/verify-policy"
+        \\}
+    ;
+
+    var noverify = try Fixture.create(allocator, pkgbuild, null, null);
+    defer noverify.destroy();
+    noverify.builder.options.sources_prepared = false;
+    noverify.builder.options.skip_source_pgp_verification = false;
+    noverify.builder.options.run_verify = false;
+    try noverify.temporary.dir.deleteTree(io, "src");
+    const noverify_artifacts = try noverify.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, noverify_artifacts);
+
+    var pgp_skip = try Fixture.create(allocator, pkgbuild, null, null);
+    defer pgp_skip.destroy();
+    pgp_skip.builder.options.sources_prepared = false;
+    pgp_skip.builder.options.skip_source_pgp_verification = true;
+    pgp_skip.builder.options.run_verify = true;
+    try pgp_skip.temporary.dir.deleteTree(io, "src");
+    const pgp_skip_artifacts = try pgp_skip.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, pgp_skip_artifacts);
+
+    var already_prepared = try Fixture.create(allocator, pkgbuild, null, null);
+    defer already_prepared.destroy();
+    already_prepared.builder.options.sources_prepared = true;
+    already_prepared.builder.options.skip_source_pgp_verification = false;
+    already_prepared.builder.options.run_verify = true;
+    const prepared_artifacts = try already_prepared.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, prepared_artifacts);
+}
+
+test "PackageBuilder runs verify once for all split package members" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.createMany(allocator,
+        \\pkgbase=verify-split
+        \\pkgname=('verify-one' 'verify-two')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=()
+        \\verify() {
+        \\  printf 'verified\n' >> verify-count
+        \\}
+        \\package_verify-one() {
+        \\  install -Dm644 "$startdir/verify-count" "$pkgdir/usr/share/verify-one/count"
+        \\}
+        \\package_verify-two() {
+        \\  install -Dm644 "$startdir/verify-count" "$pkgdir/usr/share/verify-two/count"
+        \\}
+    , &.{ "verify-one", "verify-two" }, null);
+    defer fixture.destroy();
+    fixture.builder.options.sources_prepared = false;
+    fixture.builder.options.skip_source_pgp_verification = false;
+    fixture.builder.options.run_verify = true;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 2), artifacts.len);
+    const count = try fixture.temporary.dir.readFileAlloc(io, "verify-count", allocator, .unlimited);
+    defer allocator.free(count);
+    try testing.expectEqualStrings("verified\n", count);
+}
+
 test "PackageBuilder verifies pinned detached signatures from the user keyring" {
     const allocator = testing.allocator;
     const io = testing.io;
