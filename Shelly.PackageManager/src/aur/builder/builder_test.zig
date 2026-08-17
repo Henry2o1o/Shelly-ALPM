@@ -80,6 +80,8 @@ const Fixture = struct {
         errdefer temporary.cleanup();
         const build_dir = try temporary.dir.realPathFileAlloc(io, ".", allocator);
         errdefer allocator.free(build_dir);
+        // sources_prepared means the caller supplies makepkg's $srcdir.
+        try temporary.dir.createDirPath(io, "src");
 
         var parser = pkgbuild_mod.PkgbuildParser{
             .allocator = allocator,
@@ -155,6 +157,8 @@ const Fixture = struct {
         errdefer temporary.cleanup();
         const build_dir = try temporary.dir.realPathFileAlloc(io, ".", allocator);
         errdefer allocator.free(build_dir);
+        // sources_prepared means the caller supplies makepkg's $srcdir.
+        try temporary.dir.createDirPath(io, "src");
 
         const package_builds = try allocator.alloc(pkgbuild_mod.Pkgbuild, requested.len);
         var parsed_count: usize = 0;
@@ -443,7 +447,7 @@ test "PackageBuilder rejects unsupported virtual ownership" {
     );
 }
 
-test "PackageBuilder runs execution steps in the configured build directory" {
+test "PackageBuilder runs source-less execution steps inside srcdir" {
     const allocator = testing.allocator;
     const io = testing.io;
 
@@ -468,9 +472,9 @@ test "PackageBuilder runs execution steps in the configured build directory" {
     try testing.expectEqual(@as(usize, 1), artifacts.len);
     const artifact = artifacts[0];
 
-    // Both steps ran, in makepkg order, inside the configured build
-    // directory (the markers only exist when cwd is the build directory).
-    try fixture.temporary.dir.access(io, "build-marker", .{});
+    // makepkg enters $srcdir even when the PKGBUILD has no sources.
+    try fixture.temporary.dir.access(io, "src/build-marker", .{});
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "build-marker", .{}));
     try fixture.temporary.dir.access(io, "pkg/demo/package-marker", .{});
 
     // The artifact identifies the built package and owns its storage
@@ -533,6 +537,7 @@ test "PackageBuilder accepts b2 checksums and honors noextract" {
     , null, null);
     defer fixture.destroy();
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
     try fixture.temporary.dir.writeFile(io, .{
         .sub_path = "payload.tar.gz",
         .data = "opaque archive payload",
@@ -565,6 +570,7 @@ test "PackageBuilder stages and verifies local sources before build steps" {
     defer fixture.destroy();
     try fixture.temporary.dir.writeFile(io, .{ .sub_path = "helper.sh", .data = "reviewed\n" });
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
 
     const artifacts = try fixture.builder.BuildPackage();
     defer builder_mod.deinitArtifacts(allocator, artifacts);
@@ -590,6 +596,7 @@ test "PackageBuilder rejects a source checksum mismatch without committing srcdi
     defer fixture.destroy();
     try fixture.temporary.dir.writeFile(io, .{ .sub_path = "helper.sh", .data = "reviewed\n" });
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
 
     try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
     try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
@@ -621,6 +628,7 @@ test "PackageBuilder extracts source archives into srcdir" {
         .{ .path = "demo/source.txt", .contents = "extracted\n" },
     });
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
 
     const artifacts = try fixture.builder.BuildPackage();
     defer builder_mod.deinitArtifacts(allocator, artifacts);
@@ -654,6 +662,7 @@ test "PackageBuilder downloads renamed file sources before build steps" {
     var fixture = try Fixture.create(allocator, pkgbuild, null, null);
     defer fixture.destroy();
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
 
     const artifacts = try fixture.builder.BuildPackage();
     defer builder_mod.deinitArtifacts(allocator, artifacts);
@@ -678,6 +687,7 @@ test "PackageBuilder rejects unsupported source protocols" {
     , null, null);
     defer fixture.destroy();
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
 
     try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
     try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
@@ -700,6 +710,7 @@ test "PackageBuilder cancels source preparation without committing srcdir" {
     , null, null);
     defer fixture.destroy();
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
     fixture.builder.operation_context.cancel();
 
     try testing.expectError(error.Cancelled, fixture.builder.BuildPackage());
@@ -707,7 +718,7 @@ test "PackageBuilder cancels source preparation without committing srcdir" {
     try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
 }
 
-test "PackageBuilder clones renamed git sources into srcdir before pkgver" {
+test "PackageBuilder runs relative VCS paths from srcdir before pkgver" {
     const allocator = testing.allocator;
     const io = testing.io;
     var remote = std.testing.tmpDir(.{});
@@ -729,18 +740,20 @@ test "PackageBuilder clones renamed git sources into srcdir before pkgver" {
         \\source=('shelly-git::git+file://{s}#branch=development')
         \\sha256sums=('SKIP')
         \\pkgver() {{
-        \\  cd "$srcdir/$pkgname"
+        \\  cd "$pkgname"
         \\  test -f source-marker
         \\}}
         \\package() {{
+        \\  cd "$pkgname"
         \\  mkdir -p "$pkgdir/usr/share/shelly"
-        \\  cp "$srcdir/$pkgname/source-marker" "$pkgdir/usr/share/shelly/source-marker"
+        \\  cp source-marker "$pkgdir/usr/share/shelly/source-marker"
         \\}}
     , .{remote_path});
     defer allocator.free(pkgbuild);
     var fixture = try Fixture.create(allocator, pkgbuild, null, null);
     defer fixture.destroy();
     fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
 
     const artifacts = try fixture.builder.BuildPackage();
     defer builder_mod.deinitArtifacts(allocator, artifacts);
@@ -841,7 +854,7 @@ test "PackageBuilder builds all requested split members after shared steps run o
     try testing.expect(std.mem.endsWith(u8, artifacts[0].path, "demo-1.0-1-any.pkg.tar.zst"));
     try testing.expect(std.mem.endsWith(u8, artifacts[1].path, "demo-docs-1.0-1-any.pkg.tar.zst"));
 
-    const shared = try fixture.temporary.dir.readFileAlloc(io, "shared-steps", allocator, .unlimited);
+    const shared = try fixture.temporary.dir.readFileAlloc(io, "src/shared-steps", allocator, .unlimited);
     defer allocator.free(shared);
     try testing.expectEqualStrings("prepare\nbuild\ncheck\n", shared);
 
@@ -1285,7 +1298,6 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
 
     // Populate $srcdir the way makepkg would after extracting the release
     // tarballs referenced by the PKGBUILD's source array.
-    try fixture.temporary.dir.createDir(io, "src", .default_dir);
     for ([_][]const u8{ "shelly-ui", "shelly-notifications", "shelly", "shelly-key" }) |binary| {
         const sub_path = try std.fmt.allocPrint(allocator, "src/{s}", .{binary});
         defer allocator.free(sub_path);

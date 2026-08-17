@@ -598,13 +598,19 @@ pub const PackageBuilder = struct {
         );
         defer self.allocator.free(executable_body);
 
+        const srcdir = try std.fs.path.join(
+            self.allocator,
+            &.{ self.options.build_directory, "src" },
+        );
+        defer self.allocator.free(srcdir);
+
         var stream_context: StepStreamContext = .{ .operation = operation, .package_name = package_name };
         const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
             self.allocator,
             self.io,
             self.environ,
             &.{ "/bin/bash", "-e", "-c", executable_body },
-            self.options.build_directory,
+            srcdir,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
             operation,
