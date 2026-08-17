@@ -7,6 +7,11 @@ const install_script = @import("../../pkgbuild/install_script.zig");
 
 pub const Digest = [std.crypto.hash.sha2.Sha256.digest_length]u8;
 
+pub const ReviewedFile = struct {
+    name: []const u8,
+    contents: []const u8,
+};
+
 const binary_review_message =
     "Binary file (content is not displayed). Review the file's source and checksum before proceeding.";
 
@@ -16,6 +21,10 @@ pub const PreparedPkgbuildReview = struct {
     findings: []operation_api.ReviewFinding,
     related_files: []operation_api.QuestionAttachment,
     reviewed_file_names: []const []const u8,
+    /// Byte-exact snapshots for every reviewed local, install, and changelog
+    /// file. Packaging consumes these bytes rather than reopening paths after
+    /// approval.
+    reviewed_files: []const ReviewedFile,
     /// Exact reviewed bytes for every distinct package install script.
     install_scripts: []install_script.Script,
     /// SHA-256 of the PKGBUILD itself, as required by BUILDINFO v2.
@@ -85,6 +94,8 @@ pub fn preparePkgbuildReview(
             try reviewed_names.put(install_file, {});
             try install_names.put(install_file, {});
         }
+        if (package_build.changelog_file) |changelog_file|
+            try reviewed_names.put(changelog_file, {});
         if (package_build.local_source_files) |files| for (files) |file_name|
             try reviewed_names.put(file_name, {});
     }
@@ -96,7 +107,6 @@ pub fn preparePkgbuildReview(
         file_names[name_index] = try allocator.dupe(u8, name.*);
     std.mem.sort([]const u8, file_names, {}, stringBefore);
 
-    const ReviewedFile = struct { name: []const u8, contents: []const u8 };
     const reviewed_files = try allocator.alloc(ReviewedFile, file_names.len);
     const related_files = try allocator.alloc(operation_api.QuestionAttachment, file_names.len);
     const scripts = try allocator.alloc(install_script.Script, install_names.count());
@@ -146,6 +156,7 @@ pub fn preparePkgbuildReview(
         .findings = owned_findings,
         .related_files = related_files,
         .reviewed_file_names = file_names,
+        .reviewed_files = reviewed_files,
         .install_scripts = scripts[0..script_count],
         .pkgbuild_digest = pkgbuild_digest,
         .digest = digest,
@@ -246,6 +257,7 @@ test "aggregate split-package review includes member-specific files and detects 
     const build_directory = try temporary.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(build_directory);
     try temporary.dir.writeFile(io, .{ .sub_path = "one.patch", .data = "one\n" });
+    try temporary.dir.writeFile(io, .{ .sub_path = "one.changelog", .data = "release one\n" });
     const install_contents =
         "helper() { true; }\n" ++
         "pre_install() { helper \"$1\"; }\n" ++
@@ -257,7 +269,9 @@ test "aggregate split-package review includes member-specific files and detects 
         \\pkgver=1
         \\pkgrel=1
         \\source=('one.patch')
-        \\package_review-one() { true; }
+        \\package_review-one() {
+        \\  changelog=one.changelog
+        \\}
         \\package_review-two() {
         \\  install=two.install
         \\}
@@ -277,7 +291,8 @@ test "aggregate split-package review includes member-specific files and detects 
 
     var review = try preparePkgbuildReview(allocator, io, build_directory, content, &builds);
     defer review.deinit();
-    try std.testing.expectEqual(@as(usize, 2), review.related_files.len);
+    try std.testing.expectEqual(@as(usize, 3), review.related_files.len);
+    try std.testing.expectEqual(@as(usize, 3), review.reviewed_files.len);
     try std.testing.expectEqual(@as(usize, 1), review.install_scripts.len);
     try std.testing.expectEqualStrings("two.install", review.install_scripts[0].file_name);
     try std.testing.expectEqualStrings(install_contents, review.install_scripts[0].contents);

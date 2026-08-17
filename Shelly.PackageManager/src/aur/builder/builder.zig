@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 pub const MakePackageConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
 const MakePkgConfiguration = MakePackageConfiguration;
 const pkgbuild_parser = @import("../../pkgbuild/pkgbuild_parser.zig");
+const package_metadata = @import("../../pkgbuild/package_metadata.zig");
 const PackageBuild = pkgbuild_parser.Pkgbuild;
 const ExecutionStep = pkgbuild_parser.execution_step;
 const events = @import("../events.zig");
@@ -65,6 +66,8 @@ pub const BuildOptions = struct {
     installed_packages: ?[]const []const u8 = null,
     /// Byte-exact install scripts retained by the approved package review.
     install_scripts: []const install_script.Script = &.{},
+    /// Byte-exact local and auxiliary files retained by package review.
+    reviewed_files: []const pkgbuild_review.ReviewedFile = &.{},
 };
 
 pub const BuilderErrors = error{
@@ -219,6 +222,8 @@ pub const PackageBuilder = struct {
                 return error.ReviewedPkgbuildChanged;
             if (!self.installScriptsMatch(current_review.install_scripts))
                 return error.ReviewedPkgbuildChanged;
+            if (!self.reviewedFilesMatch(current_review.reviewed_files))
+                return error.ReviewedPkgbuildChanged;
             self.options.pkgbuild_sha256sum = current_review.pkgbuild_digest;
         } else if (!builtin.is_test) return error.UnreviewedBuilderRequest;
         if (self.active_operation != null) return error.BuildAlreadyRunning;
@@ -230,6 +235,7 @@ pub const PackageBuilder = struct {
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
         try secureBuilderProcess();
         try self.validateBuildDirectories();
+        try self.validatePackageFunctions();
         if (!self.options.sources_prepared) try self.prepareSources(operation);
         const shared_execution = self.package_builds[0].execution orelse
             return error.MissingExecutionSteps;
@@ -257,7 +263,18 @@ pub const PackageBuilder = struct {
         }
 
         for (self.package_builds, self.requested_names) |*package_build, requested_name| {
+            if (!self.packageSupportsArchitecture(package_build)) continue;
             try self.preparePackageDirectory(package_build);
+            const approved_install = if (package_build.install_file) |value|
+                try self.allocator.dupe(u8, value)
+            else
+                null;
+            defer if (approved_install) |value| self.allocator.free(value);
+            const approved_changelog = if (package_build.changelog_file) |value|
+                try self.allocator.dupe(u8, value)
+            else
+                null;
+            defer if (approved_changelog) |value| self.allocator.free(value);
             const package_execution = package_build.execution orelse
                 return error.MissingExecutionSteps;
             const package_step = findPackageStep(package_execution.steps) orelse
@@ -271,6 +288,9 @@ pub const PackageBuilder = struct {
                 package_step.body,
                 null,
             );
+            if (!reviewedAuxiliarySelectionMatches(approved_install, package_build.install_file) or
+                !reviewedAuxiliarySelectionMatches(approved_changelog, package_build.changelog_file))
+                return error.ReviewedPkgbuildChanged;
             const artifact = try self.assemblePackage(package_build);
             artifacts.append(self.allocator, artifact) catch |err| {
                 std.Io.Dir.cwd().deleteFile(self.io, artifact.path) catch {};
@@ -288,6 +308,28 @@ pub const PackageBuilder = struct {
         }
 
         return artifacts.toOwnedSlice(self.allocator);
+    }
+
+    fn validatePackageFunctions(self: *const PackageBuilder) !void {
+        for (self.package_builds) |package_build| {
+            if (package_build.has_invalid_package_assignment)
+                return error.InvalidPackageFunctionVariable;
+            if (package_build.is_split) {
+                if (package_build.has_generic_package_function)
+                    return error.ExtraSplitPackageFunction;
+                if (!package_build.has_complete_split_functions or
+                    !package_build.has_selected_package_function)
+                    return error.MissingSplitPackageFunction;
+                continue;
+            }
+            if (package_build.has_generic_package_function and
+                package_build.has_selected_package_function)
+                return error.ConflictingPackageFunctions;
+            if (package_build.has_build_function and
+                !package_build.has_generic_package_function and
+                !package_build.has_selected_package_function)
+                return error.MissingPackageFunction;
+        }
     }
 
     fn prepareSources(self: *PackageBuilder, operation: *op_context.Operation) !void {
@@ -935,7 +977,7 @@ pub const PackageBuilder = struct {
             "{s}\n{s}\n{s}\ndeclare -- startdir=\"$4\"\ndeclare -- srcdir=\"$5\"\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
             .{
                 if (package_step) virtualMetadataShellPrelude else "",
-                if (package_step) packageMetadataCaptureShellPrelude else "",
+                if (package_step) package_metadata.shell_capture_prelude else "",
                 execution_prelude,
                 helper_definitions,
                 body,
@@ -1062,57 +1104,84 @@ pub const PackageBuilder = struct {
             if (std.mem.eql(u8, name, package_name)) break candidate;
         } else return error.MissingPackageName;
 
-        var cursor: usize = 0;
-        while (cursor < encoded.len) {
-            const kind = try nextMetadataField(encoded, &cursor);
-            const name = try nextMetadataField(encoded, &cursor);
-            if (std.mem.eql(u8, kind, "S")) {
-                const value = try nextMetadataField(encoded, &cursor);
-                if (std.mem.eql(u8, name, "pkgdesc"))
-                    try replaceOptionalString(self.allocator, &package_build.pkg_desc, value)
-                else if (std.mem.eql(u8, name, "url"))
-                    try replaceOptionalString(self.allocator, &package_build.url, value)
-                else
-                    return error.InvalidPackageMetadata;
-                continue;
-            }
-            if (!std.mem.eql(u8, kind, "A")) return error.InvalidPackageMetadata;
-            const count_text = try nextMetadataField(encoded, &cursor);
-            const count = std.fmt.parseInt(usize, count_text, 10) catch
-                return error.InvalidPackageMetadata;
-            const values = try self.allocator.alloc([]const u8, count);
-            var populated: usize = 0;
-            errdefer {
-                for (values[0..populated]) |value| self.allocator.free(value);
-                self.allocator.free(values);
-            }
-            while (populated < count) : (populated += 1)
-                values[populated] = try self.allocator.dupe(u8, try nextMetadataField(encoded, &cursor));
+        const entries = try package_metadata.decode(self.allocator, encoded);
+        defer package_metadata.deinitEntries(self.allocator, entries);
+        if (entries.len != package_metadata.captured_field_count)
+            return error.InvalidPackageMetadata;
 
-            if (std.mem.eql(u8, name, "license"))
-                replaceOptionalStrings(self.allocator, &package_build.license, values)
-            else if (std.mem.eql(u8, name, "arch"))
-                replaceOptionalStrings(self.allocator, &package_build.arch, values)
-            else if (std.mem.eql(u8, name, "depends")) {
-                replaceOptionalStrings(self.allocator, &package_build.depends, values);
-                if (package_build.parsed_depends) |dependencies| {
-                    for (dependencies) |dependency| dependency.deinit(self.allocator);
-                    self.allocator.free(dependencies);
-                }
-                package_build.parsed_depends = null;
-            } else if (std.mem.eql(u8, name, "optdepends"))
-                replaceOptionalStrings(self.allocator, &package_build.opt_depends, values)
-            else if (std.mem.eql(u8, name, "provides"))
-                replaceOptionalStrings(self.allocator, &package_build.provides, values)
-            else if (std.mem.eql(u8, name, "conflicts"))
-                replaceOptionalStrings(self.allocator, &package_build.conflicts, values)
-            else if (std.mem.eql(u8, name, "replaces"))
-                replaceOptionalStrings(self.allocator, &package_build.replaces, values)
-            else if (std.mem.eql(u8, name, "options"))
-                replaceOptionalStrings(self.allocator, &package_build.options, values)
+        // Base values are authoritative first. Architecture-specific values
+        // are appended in a second pass, matching makepkg's merge_arch_attrs.
+        for (entries) |entry| {
+            if (package_metadata.architectureBase(entry.name, self.makepkg_config.package_carch) != null)
+                continue;
+            try self.applyPackageMetadataEntry(package_build, entry, false);
+        }
+        for (entries) |entry| {
+            const base = package_metadata.architectureBase(entry.name, self.makepkg_config.package_carch) orelse
+                continue;
+            var effective = entry;
+            effective.name = base;
+            try self.applyPackageMetadataEntry(package_build, effective, true);
+        }
+    }
+
+    fn applyPackageMetadataEntry(
+        self: *PackageBuilder,
+        package_build: *PackageBuild,
+        entry: package_metadata.Entry,
+        append: bool,
+    ) !void {
+        if (package_metadata.isScalarField(entry.name)) {
+            if (append) return error.InvalidPackageMetadata;
+            const value = switch (entry.value) {
+                .scalar => |scalar| scalar,
+                .array => return error.InvalidPackageMetadata,
+            };
+            if (std.mem.eql(u8, entry.name, "pkgdesc"))
+                try replaceOptionalString(self.allocator, &package_build.pkg_desc, value)
+            else if (std.mem.eql(u8, entry.name, "url"))
+                try replaceOptionalString(self.allocator, &package_build.url, value)
+            else if (std.mem.eql(u8, entry.name, "install"))
+                try replaceOptionalFileName(self.allocator, &package_build.install_file, value)
+            else if (std.mem.eql(u8, entry.name, "changelog"))
+                try replaceOptionalFileName(self.allocator, &package_build.changelog_file, value)
             else
                 return error.InvalidPackageMetadata;
+            return;
         }
+
+        if (!package_metadata.isArrayField(entry.name)) return error.InvalidPackageMetadata;
+        const values = switch (entry.value) {
+            .array => |array| array,
+            .scalar => return error.InvalidPackageMetadata,
+        };
+        if (std.mem.eql(u8, entry.name, "license"))
+            try updateOptionalStrings(self.allocator, &package_build.license, values, append)
+        else if (std.mem.eql(u8, entry.name, "groups"))
+            try updateOptionalStrings(self.allocator, &package_build.groups, values, append)
+        else if (std.mem.eql(u8, entry.name, "arch"))
+            try updateOptionalStrings(self.allocator, &package_build.arch, values, append)
+        else if (std.mem.eql(u8, entry.name, "depends")) {
+            try updateOptionalStrings(self.allocator, &package_build.depends, values, append);
+            if (package_build.parsed_depends) |dependencies| {
+                for (dependencies) |dependency| dependency.deinit(self.allocator);
+                self.allocator.free(dependencies);
+            }
+            package_build.parsed_depends = null;
+        } else if (std.mem.eql(u8, entry.name, "optdepends"))
+            try updateOptionalStrings(self.allocator, &package_build.opt_depends, values, append)
+        else if (std.mem.eql(u8, entry.name, "provides"))
+            try updateOptionalStrings(self.allocator, &package_build.provides, values, append)
+        else if (std.mem.eql(u8, entry.name, "conflicts"))
+            try updateOptionalStrings(self.allocator, &package_build.conflicts, values, append)
+        else if (std.mem.eql(u8, entry.name, "replaces"))
+            try updateOptionalStrings(self.allocator, &package_build.replaces, values, append)
+        else if (std.mem.eql(u8, entry.name, "backup"))
+            try updateOptionalStrings(self.allocator, &package_build.backup, values, append)
+        else if (std.mem.eql(u8, entry.name, "options"))
+            try updateOptionalStrings(self.allocator, &package_build.options, values, append)
+        else
+            return error.InvalidPackageMetadata;
     }
 
     fn preparePackageDirectory(self: *PackageBuilder, package_build: *const PackageBuild) !void {
@@ -1210,6 +1279,12 @@ pub const PackageBuilder = struct {
         } else {
             try deleteFileIgnoreMissing(pkgdir_handle, self.io, ".INSTALL");
         }
+        if (package_build.changelog_file) |changelog_file| {
+            const reviewed_file = self.findReviewedFile(changelog_file) orelse return error.MissingChangelogFile;
+            try writeMetadataFile(pkgdir_handle, self.io, ".CHANGELOG", reviewed_file.contents);
+        } else {
+            try deleteFileIgnoreMissing(pkgdir_handle, self.io, ".CHANGELOG");
+        }
 
         const mtree_path = try std.fs.path.join(self.allocator, &.{ pkgdir, ".MTREE" });
         defer self.allocator.free(mtree_path);
@@ -1270,6 +1345,28 @@ pub const PackageBuilder = struct {
         return true;
     }
 
+    fn findReviewedFile(
+        self: *const PackageBuilder,
+        file_name: []const u8,
+    ) ?*const pkgbuild_review.ReviewedFile {
+        for (self.options.reviewed_files) |*file| {
+            if (std.mem.eql(u8, file.name, file_name)) return file;
+        }
+        return null;
+    }
+
+    fn reviewedFilesMatch(
+        self: *const PackageBuilder,
+        current_files: []const pkgbuild_review.ReviewedFile,
+    ) bool {
+        if (self.options.reviewed_files.len != current_files.len) return false;
+        for (current_files) |current| {
+            const reviewed = self.findReviewedFile(current.name) orelse return false;
+            if (!std.mem.eql(u8, reviewed.contents, current.contents)) return false;
+        }
+        return true;
+    }
+
     fn packageArchitecture(self: *const PackageBuilder, package_build: *const PackageBuild) []const u8 {
         if (package_build.arch) |architectures| {
             for (architectures) |architecture| {
@@ -1277,6 +1374,19 @@ pub const PackageBuilder = struct {
             }
         }
         return self.makepkg_config.package_carch;
+    }
+
+    fn packageSupportsArchitecture(
+        self: *const PackageBuilder,
+        package_build: *const PackageBuild,
+    ) bool {
+        const architectures = package_build.arch orelse return true;
+        if (architectures.len == 0) return true;
+        for (architectures) |architecture| {
+            if (std.mem.eql(u8, architecture, "any") or
+                std.mem.eql(u8, architecture, self.makepkg_config.package_carch)) return true;
+        }
+        return false;
     }
 
     fn writePackageInfo(
@@ -1296,7 +1406,8 @@ pub const PackageBuilder = struct {
         const writer = &output.writer;
         try writeKeyValue(writer, "pkgname", package_name);
         try writeKeyValue(writer, "pkgbase", package_base);
-        try writeKeyValue(writer, "xdata", "pkgtype=pkg");
+        try writeKeyValue(writer, "xdata", if (package_build.is_split) "pkgtype=split" else "pkgtype=pkg");
+        try writeKeyValues(writer, "xdata", package_build.xdata);
         try writeKeyValue(writer, "pkgver", full_version);
         if (package_build.pkg_desc) |value| try writeKeyValue(writer, "pkgdesc", value);
         if (package_build.url) |value| try writeKeyValue(writer, "url", value);
@@ -1306,8 +1417,10 @@ pub const PackageBuilder = struct {
         try writeKeyValue(writer, "arch", package_arch);
         try writeKeyValues(writer, "license", package_build.license);
         try writeKeyValues(writer, "replaces", package_build.replaces);
+        try writeKeyValues(writer, "group", package_build.groups);
         try writeKeyValues(writer, "conflict", package_build.conflicts);
         try writeKeyValues(writer, "provides", package_build.provides);
+        try writeKeyValues(writer, "backup", package_build.backup);
         try writeKeyValues(writer, "depend", package_build.depends);
         try writeKeyValues(writer, "optdepend", package_build.opt_depends);
         try writeKeyValues(writer, "makedepend", package_build.make_depends);
@@ -1393,15 +1506,6 @@ fn validatePkgver(version: []const u8) !void {
     }
 }
 
-fn nextMetadataField(encoded: []const u8, cursor: *usize) ![]const u8 {
-    if (cursor.* >= encoded.len) return error.InvalidPackageMetadata;
-    const end = std.mem.indexOfScalarPos(u8, encoded, cursor.*, 0) orelse
-        return error.InvalidPackageMetadata;
-    const field = encoded[cursor.*..end];
-    cursor.* = end + 1;
-    return field;
-}
-
 fn replaceOptionalString(
     allocator: std.mem.Allocator,
     destination: *?[]const u8,
@@ -1412,16 +1516,54 @@ fn replaceOptionalString(
     destination.* = owned;
 }
 
-fn replaceOptionalStrings(
+fn replaceOptionalFileName(
+    allocator: std.mem.Allocator,
+    destination: *?[]const u8,
+    value: []const u8,
+) !void {
+    if (value.len == 0) {
+        if (destination.*) |old| allocator.free(old);
+        destination.* = null;
+        return;
+    }
+    try replaceOptionalString(allocator, destination, value);
+}
+
+fn reviewedAuxiliarySelectionMatches(
+    approved: ?[]const u8,
+    runtime: ?[]const u8,
+) bool {
+    const selected = runtime orelse return true;
+    const expected = approved orelse return false;
+    return std.mem.eql(u8, expected, selected);
+}
+
+fn updateOptionalStrings(
     allocator: std.mem.Allocator,
     destination: *?[][]const u8,
-    values: [][]const u8,
-) void {
-    if (destination.*) |old| {
-        for (old) |value| allocator.free(value);
-        allocator.free(old);
+    values: []const []const u8,
+    append: bool,
+) !void {
+    const old = if (append) destination.* orelse &.{} else &.{};
+    const combined = try allocator.alloc([]const u8, old.len + values.len);
+    var populated: usize = 0;
+    errdefer {
+        for (combined[0..populated]) |value| allocator.free(value);
+        allocator.free(combined);
     }
-    destination.* = values;
+    for (old) |value| {
+        combined[populated] = try allocator.dupe(u8, value);
+        populated += 1;
+    }
+    for (values) |value| {
+        combined[populated] = try allocator.dupe(u8, value);
+        populated += 1;
+    }
+    if (destination.*) |previous| {
+        for (previous) |value| allocator.free(value);
+        allocator.free(previous);
+    }
+    destination.* = combined;
 }
 
 const StripKind = enum { binary, shared, static };
@@ -1576,31 +1718,6 @@ fn collectInstalledPackages(allocator: std.mem.Allocator) ![][]u8 {
     }.before);
     return installed.toOwnedSlice(allocator);
 }
-
-/// Writes supported package-scoped metadata through a NUL-delimited channel.
-/// The package function may print arbitrary output without corrupting it.
-const packageMetadataCaptureShellPrelude =
-    \\__shelly_capture_scalar() {
-    \\  local name="$1"
-    \\  declare -p "$name" >/dev/null 2>&1 || return 0
-    \\  local -n value="$name"
-    \\  printf 'S\0%s\0%s\0' "$name" "$value"
-    \\}
-    \\__shelly_capture_array() {
-    \\  local name="$1"
-    \\  declare -p "$name" >/dev/null 2>&1 || return 0
-    \\  local -n values="$name"
-    \\  printf 'A\0%s\0%s\0' "$name" "${#values[@]}"
-    \\  if ((${#values[@]})); then printf '%s\0' "${values[@]}"; fi
-    \\}
-    \\__shelly_capture_metadata() {
-    \\  local name
-    \\  for name in pkgdesc url; do __shelly_capture_scalar "$name"; done
-    \\  for name in license arch depends optdepends provides conflicts replaces options; do
-    \\    __shelly_capture_array "$name"
-    \\  done
-    \\}
-;
 
 /// Bash functions used only for package() and package_<name>(). They simulate
 /// the common fakeroot ownership operations without changing host ownership.

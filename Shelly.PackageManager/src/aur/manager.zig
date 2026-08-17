@@ -1523,6 +1523,7 @@ pub const Manager = struct {
                 .pkgbuild_path = prepared.pkgbuild_path,
                 .reviewed_pkgbuild_digest = build_review.digest,
                 .install_scripts = build_review.install_scripts,
+                .reviewed_files = build_review.reviewed_files,
             },
             self.environ,
             self.io(),
@@ -2759,7 +2760,9 @@ fn createSplitAurFixtureRepository(
     defer pkgbuild.deinit();
     try pkgbuild.writer.writeAll("pkgname=(");
     for (package_names) |name| try pkgbuild.writer.print("'{s}' ", .{name});
-    try pkgbuild.writer.writeAll(")\npkgver=1\npkgrel=1\narch=('any')\npackage() { :; }\n");
+    try pkgbuild.writer.writeAll(")\npkgver=1\npkgrel=1\narch=('any')\n");
+    for (package_names) |name|
+        try pkgbuild.writer.print("package_{s}() {{ :; }}\n", .{name});
     const pkgbuild_path = try std.fs.path.join(allocator, &.{ remote, "PKGBUILD" });
     defer allocator.free(pkgbuild_path);
     try writeFixtureFile(io, pkgbuild_path, pkgbuild.writer.buffered(), false);

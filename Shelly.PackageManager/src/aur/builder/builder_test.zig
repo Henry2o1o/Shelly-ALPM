@@ -63,6 +63,7 @@ const Fixture = struct {
     build_dir: [:0]const u8,
     allocator: std.mem.Allocator,
     temporary: std.testing.TmpDir,
+    short_gnupg_home: ?[:0]u8 = null,
 
     /// Parses `pkgbuild_content`, creates a per-test build directory, and
     /// constructs a PackageBuilder around them. The builder borrows parsed
@@ -246,6 +247,10 @@ const Fixture = struct {
         self.config.deinit();
         self.operation_context.deinit();
         self.allocator.destroy(self.operation_context);
+        if (self.short_gnupg_home) |path| {
+            std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+            self.allocator.free(path);
+        }
         self.allocator.free(self.build_dir);
         self.temporary.cleanup();
     }
@@ -332,7 +337,19 @@ fn prepareSourcePgpHome(fixture: *Fixture) ![:0]u8 {
         "source-test-public.asc",
         source_pgp_public_key_base64,
     );
-    const home = try fixture.temporary.dir.realPathFileAlloc(io, "gnupg", allocator);
+    const actual_home = try fixture.temporary.dir.realPathFileAlloc(io, "gnupg", allocator);
+    defer allocator.free(actual_home);
+    const short_home_text = try std.fmt.allocPrint(
+        allocator,
+        "/tmp/sg-{s}",
+        .{std.fs.path.basename(fixture.build_dir)},
+    );
+    defer allocator.free(short_home_text);
+    const short_home = try allocator.dupeZ(u8, short_home_text);
+    errdefer allocator.free(short_home);
+    try std.Io.Dir.cwd().symLink(io, actual_home, short_home, .{});
+    fixture.short_gnupg_home = short_home;
+    const home = try allocator.dupeZ(u8, short_home);
     errdefer allocator.free(home);
     const public_key = try fixture.temporary.dir.realPathFileAlloc(io, "source-test-public.asc", allocator);
     defer allocator.free(public_key);
@@ -603,7 +620,7 @@ test "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata" {
     try testing.expect(std.mem.indexOf(u8, gzip.stdout, "sha256digest=") != null);
 }
 
-test "PackageBuilder packages the exact reviewed install script with metadata mode" {
+test "PackageBuilder packages exact reviewed install and changelog files" {
     const allocator = testing.allocator;
     const io = testing.io;
     const pkgbuild_content =
@@ -612,6 +629,7 @@ test "PackageBuilder packages the exact reviewed install script with metadata mo
         \\pkgrel=1
         \\arch=('any')
         \\install=install-demo.install
+        \\changelog=install-demo.changelog
         \\package() {
         \\  mkdir -p "$pkgdir/usr/share/install-demo"
         \\}
@@ -627,11 +645,13 @@ test "PackageBuilder packages the exact reviewed install script with metadata mo
         "post_upgrade() { true; }\n" ++
         "pre_remove() { true; }\n" ++
         "post_remove() { true; }\n";
+    const changelog_contents = "2026-08-17  Split metadata support\n";
 
     var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
     defer fixture.destroy();
     try fixture.temporary.dir.writeFile(io, .{ .sub_path = "PKGBUILD", .data = pkgbuild_content });
     try fixture.temporary.dir.writeFile(io, .{ .sub_path = "install-demo.install", .data = script_contents });
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "install-demo.changelog", .data = changelog_contents });
     const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
     defer allocator.free(pkgbuild_path);
     var review = try builder_mod.preparePkgbuildReview(
@@ -643,6 +663,7 @@ test "PackageBuilder packages the exact reviewed install script with metadata mo
     );
     defer review.deinit();
     try testing.expectEqual(@as(usize, 1), review.install_scripts.len);
+    try testing.expectEqual(@as(usize, 2), review.reviewed_files.len);
     inline for (std.meta.tags(install_script.Hook)) |hook|
         try testing.expect(review.install_scripts[0].effectiveHook(hook) != null);
 
@@ -658,6 +679,7 @@ test "PackageBuilder packages the exact reviewed install script with metadata mo
     fixture.builder.options.install_scripts = &substituted_scripts;
     try testing.expectError(error.ReviewedPkgbuildChanged, fixture.builder.BuildPackage());
     fixture.builder.options.install_scripts = review.install_scripts;
+    fixture.builder.options.reviewed_files = review.reviewed_files;
     const artifacts = try fixture.builder.BuildPackage();
     defer builder_mod.deinitArtifacts(allocator, artifacts);
     try testing.expectError(
@@ -668,16 +690,26 @@ test "PackageBuilder packages the exact reviewed install script with metadata mo
     const packaged_script = try readPackageEntry(allocator, artifacts[0].path, ".INSTALL");
     defer allocator.free(packaged_script);
     try testing.expectEqualStrings(script_contents, packaged_script);
+    const packaged_changelog = try readPackageEntry(allocator, artifacts[0].path, ".CHANGELOG");
+    defer allocator.free(packaged_changelog);
+    try testing.expectEqualStrings(changelog_contents, packaged_changelog);
 
     var reader = try archive.Reader.init(allocator, artifacts[0].path);
     defer reader.deinit();
     var saw_install = false;
+    var saw_changelog = false;
     while (try reader.next()) |entry| {
-        if (!std.mem.eql(u8, entry.path, ".INSTALL")) continue;
-        saw_install = true;
-        try testing.expectEqual(@as(u32, 0o644), entry.permissions);
+        if (std.mem.eql(u8, entry.path, ".INSTALL")) {
+            saw_install = true;
+            try testing.expectEqual(@as(u32, 0o644), entry.permissions);
+        }
+        if (std.mem.eql(u8, entry.path, ".CHANGELOG")) {
+            saw_changelog = true;
+            try testing.expectEqual(@as(u32, 0o644), entry.permissions);
+        }
     }
     try testing.expect(saw_install);
+    try testing.expect(saw_changelog);
 }
 
 test "PackageBuilder strips ELF debug sections unless PKGBUILD disables strip" {
@@ -1626,6 +1658,10 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
         \\pkgdesc='Shared description'
         \\arch=('x86_64')
         \\license=('GPL-3.0-only')
+        \\groups=('shared-suite')
+        \\backup=('etc/shared.conf')
+        \\xdata=('channel=stable')
+        \\depends_x86_64=('glibc')
         \\makedepends=('zig')
         \\pkgver() {
         \\  printf '1.1.r4.gsplit\n'
@@ -1636,15 +1672,20 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
         \\  conflicts=('shelly' 'shelly-bin')
         \\  replaces=('old-shelly')
         \\  depends=('pacman' 'gtk4')
+        \\  depends_x86_64=('libarch')
         \\  optdepends=('libstarfish: dependency viewer')
-        \\  mkdir -p "$pkgdir/usr/bin"
+        \\  groups=('shelly-tools')
+        \\  backup=('etc/shelly.conf')
+        \\  mkdir -p "$pkgdir/usr/bin" "$pkgdir/etc"
         \\  printf main > "$pkgdir/usr/bin/shelly"
+        \\  printf main > "$pkgdir/etc/shelly.conf"
         \\}
         \\package_shelly-flatpak-backend-git() {
         \\  pkgdesc='Shelly Flatpak backend'
         \\  depends=("shelly-git=${pkgver}-${pkgrel}" 'flatpak')
-        \\  mkdir -p "$pkgdir/usr/lib"
+        \\  mkdir -p "$pkgdir/usr/lib" "$pkgdir/etc"
         \\  printf backend > "$pkgdir/usr/lib/backend"
+        \\  printf backend > "$pkgdir/etc/shared.conf"
         \\}
     ;
     const requested = [_][]const u8{ "shelly-git", "shelly-flatpak-backend-git" };
@@ -1662,13 +1703,22 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
     try testing.expect(std.mem.indexOf(u8, main_info, "replaces = old-shelly\n") != null);
     try testing.expect(std.mem.indexOf(u8, main_info, "depend = pacman\n") != null);
     try testing.expect(std.mem.indexOf(u8, main_info, "depend = gtk4\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "depend = libarch\n") != null);
     try testing.expect(std.mem.indexOf(u8, main_info, "optdepend = libstarfish: dependency viewer\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "group = shelly-tools\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "backup = etc/shelly.conf\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "xdata = pkgtype=split\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "xdata = channel=stable\n") != null);
 
     const backend_info = try readPkgInfo(allocator, artifacts[1].path);
     defer allocator.free(backend_info);
     try testing.expect(std.mem.indexOf(u8, backend_info, "pkgdesc = Shelly Flatpak backend\n") != null);
     try testing.expect(std.mem.indexOf(u8, backend_info, "depend = shelly-git=1.1.r4.gsplit-2\n") != null);
     try testing.expect(std.mem.indexOf(u8, backend_info, "depend = flatpak\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "depend = glibc\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "group = shared-suite\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "backup = etc/shared.conf\n") != null);
+    try testing.expect(std.mem.indexOf(u8, backend_info, "xdata = pkgtype=split\n") != null);
     try testing.expect(std.mem.indexOf(u8, backend_info, "provides = shelly\n") == null);
 
     try fixture.temporary.dir.createDir(io, "metadata-alpm-root", .default_dir);
@@ -1689,6 +1739,162 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
     const virtual_dependency = try allocator.dupeZ(u8, "shelly");
     defer allocator.free(virtual_dependency);
     try testing.expectEqual(loaded.?, raw_alpm.alpm_find_satisfier(candidates, virtual_dependency.ptr).?);
+}
+
+test "PackageBuilder isolates unset metadata between split members" {
+    const allocator = testing.allocator;
+    const content =
+        \\pkgbase=metadata-unset
+        \\pkgname=('metadata-one' 'metadata-two')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\groups=('inherited-group')
+        \\provides=('inherited-provider')
+        \\package_metadata-one() {
+        \\  unset groups provides
+        \\  mkdir -p "$pkgdir/usr/share/metadata-one"
+        \\}
+        \\package_metadata-two() {
+        \\  mkdir -p "$pkgdir/usr/share/metadata-two"
+        \\}
+    ;
+    const requested = [_][]const u8{ "metadata-one", "metadata-two" };
+    var fixture = try Fixture.createMany(allocator, content, &requested, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const one = try readPkgInfo(allocator, artifacts[0].path);
+    defer allocator.free(one);
+    const two = try readPkgInfo(allocator, artifacts[1].path);
+    defer allocator.free(two);
+    try testing.expect(std.mem.indexOf(u8, one, "group = inherited-group\n") == null);
+    try testing.expect(std.mem.indexOf(u8, one, "provides = inherited-provider\n") == null);
+    try testing.expect(std.mem.indexOf(u8, two, "group = inherited-group\n") != null);
+    try testing.expect(std.mem.indexOf(u8, two, "provides = inherited-provider\n") != null);
+
+    const reversed = [_][]const u8{ "metadata-two", "metadata-one" };
+    var reversed_fixture = try Fixture.createMany(allocator, content, &reversed, null);
+    defer reversed_fixture.destroy();
+    const reversed_artifacts = try reversed_fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, reversed_artifacts);
+    const reversed_two = try readPkgInfo(allocator, reversed_artifacts[0].path);
+    defer allocator.free(reversed_two);
+    const reversed_one = try readPkgInfo(allocator, reversed_artifacts[1].path);
+    defer allocator.free(reversed_one);
+    try testing.expect(std.mem.indexOf(u8, reversed_two, "group = inherited-group\n") != null);
+    try testing.expect(std.mem.indexOf(u8, reversed_one, "group = inherited-group\n") == null);
+}
+
+test "PackageBuilder enforces makepkg package function contracts" {
+    const allocator = testing.allocator;
+    const requested = [_][]const u8{ "contract-one", "contract-two" };
+
+    var generic_split = try Fixture.createMany(allocator,
+        \\pkgname=('contract-one' 'contract-two')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() { :; }
+    , &requested, null);
+    defer generic_split.destroy();
+    try testing.expectError(error.BuildFailed, generic_split.builder.BuildPackage());
+
+    var missing_member = try Fixture.createMany(allocator,
+        \\pkgname=('contract-one' 'contract-two')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package_contract-one() { :; }
+    , &requested, null);
+    defer missing_member.destroy();
+    try testing.expectError(error.BuildFailed, missing_member.builder.BuildPackage());
+
+    var conflicting_single = try Fixture.create(allocator,
+        \\pkgname=contract-one
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() { :; }
+        \\package_contract-one() { :; }
+    , null, null);
+    defer conflicting_single.destroy();
+    try testing.expectError(error.BuildFailed, conflicting_single.builder.BuildPackage());
+
+    var forbidden_assignment = try Fixture.create(allocator,
+        \\pkgname=contract-one
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() { pkgver=2; }
+    , null, null);
+    defer forbidden_assignment.destroy();
+    try testing.expectError(error.BuildFailed, forbidden_assignment.builder.BuildPackage());
+
+    var auxiliary_substitution = try Fixture.create(allocator,
+        \\pkgname=contract-one
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  install=approved.install
+        \\  install=substituted.install
+        \\  mkdir -p "$pkgdir/usr/share/contract-one"
+        \\}
+    , null, null);
+    defer auxiliary_substitution.destroy();
+    try testing.expectError(
+        error.ReviewedPkgbuildChanged,
+        auxiliary_substitution.builder.BuildPackage(),
+    );
+}
+
+test "PackageBuilder rejects wrong metadata types and skips unsupported split architectures" {
+    const allocator = testing.allocator;
+    var wrong_type = try Fixture.create(allocator,
+        \\pkgname=wrong-type
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() { depends=glibc; }
+    , null, null);
+    defer wrong_type.destroy();
+    try testing.expectError(error.BuildFailed, wrong_type.builder.BuildPackage());
+
+    const content =
+        \\pkgbase=arch-split
+        \\pkgname=('arch-native' 'arch-foreign')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\package_arch-native() {
+        \\  mkdir -p "$pkgdir/usr/share/native"
+        \\}
+        \\package_arch-foreign() {
+        \\  arch=('aarch64')
+        \\  mkdir -p "$pkgdir/usr/share/foreign"
+        \\}
+    ;
+    const requested = [_][]const u8{ "arch-native", "arch-foreign" };
+    var arch_fixture = try Fixture.createMany(allocator, content, &requested, null);
+    defer arch_fixture.destroy();
+    const artifacts = try arch_fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try testing.expectEqualStrings("arch-native", artifacts[0].package_name);
+    const pkginfo = try readPkgInfo(allocator, artifacts[0].path);
+    defer allocator.free(pkginfo);
+    try testing.expect(std.mem.indexOf(u8, pkginfo, "xdata = pkgtype=split\n") != null);
+
+    const selected = [_][]const u8{"arch-native"};
+    var selected_fixture = try Fixture.createMany(allocator, content, &selected, null);
+    defer selected_fixture.destroy();
+    const selected_artifacts = try selected_fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, selected_artifacts);
+    const selected_info = try readPkgInfo(allocator, selected_artifacts[0].path);
+    defer allocator.free(selected_info);
+    try testing.expect(std.mem.indexOf(u8, selected_info, "xdata = pkgtype=split\n") != null);
 }
 
 test "PackageBuilder honors check and overwrite policies" {

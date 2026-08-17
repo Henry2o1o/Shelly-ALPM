@@ -1,6 +1,7 @@
 const std = @import("std");
 const file_inspector = @import("../local/file_inspector.zig");
 const listDictionary = @import("../shared/list_dictionary.zig").ListDictionary;
+const package_metadata = @import("package_metadata.zig");
 
 pub const Pkgbuild = struct {
     pkg_name: ?[]const u8 = null,
@@ -10,6 +11,7 @@ pub const Pkgbuild = struct {
     pkg_desc: ?[]const u8 = null,
     url: ?[]const u8 = null,
     license: ?[][]const u8 = null,
+    groups: ?[][]const u8 = null,
     arch: ?[][]const u8 = null,
     depends: ?[][]const u8 = null,
     make_depends: ?[][]const u8 = null,
@@ -17,7 +19,9 @@ pub const Pkgbuild = struct {
     provides: ?[][]const u8 = null,
     conflicts: ?[][]const u8 = null,
     replaces: ?[][]const u8 = null,
+    backup: ?[][]const u8 = null,
     options: ?[][]const u8 = null,
+    xdata: ?[][]const u8 = null,
     source: ?[][]const u8 = null,
     valid_pgp_keys: ?[][]const u8 = null,
     no_extract: ?[][]const u8 = null,
@@ -30,6 +34,13 @@ pub const Pkgbuild = struct {
     b_2_sums: ?[][]const u8 = null,
     variables: std.StringHashMap([]const u8),
     install_file: ?[]const u8 = null,
+    changelog_file: ?[]const u8 = null,
+    is_split: bool = false,
+    has_generic_package_function: bool = false,
+    has_selected_package_function: bool = false,
+    has_build_function: bool = false,
+    has_invalid_package_assignment: bool = false,
+    has_complete_split_functions: bool = true,
     local_source_files: ?[][]const u8 = null,
     local_source_contents: std.StringHashMap([]const u8),
     parsed_depends: ?[]parsed_dep = null,
@@ -47,6 +58,10 @@ pub const Pkgbuild = struct {
         if (self.url) |v| allocator.free(v);
 
         if (self.license) |a| {
+            for (a) |item| allocator.free(item);
+            allocator.free(a);
+        }
+        if (self.groups) |a| {
             for (a) |item| allocator.free(item);
             allocator.free(a);
         }
@@ -82,7 +97,15 @@ pub const Pkgbuild = struct {
             for (a) |item| allocator.free(item);
             allocator.free(a);
         }
+        if (self.backup) |a| {
+            for (a) |item| allocator.free(item);
+            allocator.free(a);
+        }
         if (self.options) |a| {
+            for (a) |item| allocator.free(item);
+            allocator.free(a);
+        }
+        if (self.xdata) |a| {
             for (a) |item| allocator.free(item);
             allocator.free(a);
         }
@@ -139,6 +162,7 @@ pub const Pkgbuild = struct {
         self.variables.deinit();
 
         if (self.install_file) |v| allocator.free(v);
+        if (self.changelog_file) |v| allocator.free(v);
 
         var lsc_it = self.local_source_contents.iterator();
         while (lsc_it.next()) |entry| {
@@ -285,7 +309,7 @@ pub const PkgbuildParser = struct {
     selected_package_name: ?[]const u8 = null,
     package_carch: []const u8 = "x86_64",
 
-    const InstallAssignment = struct {
+    const FileAssignment = struct {
         value: []u8,
         package_scoped: bool,
     };
@@ -341,11 +365,18 @@ pub const PkgbuildParser = struct {
         }
         try self.validate_execution_assignments(content);
         try self.validate_selected_package(content, &vars);
+        const package_functions = try self.inspect_package_functions(content, &vars);
 
-        const install_assignment = try self.resolve_install_assignment(content, &vars);
+        const install_assignment = try self.resolve_file_assignment(content, &vars, "install");
         defer if (install_assignment) |assignment| self.allocator.free(assignment.value);
         const install_file = if (install_assignment) |assignment|
-            try self.resolve_install_string(assignment, &vars)
+            try self.resolve_file_string(assignment, &vars)
+        else
+            null;
+        const changelog_assignment = try self.resolve_file_assignment(content, &vars, "changelog");
+        defer if (changelog_assignment) |assignment| self.allocator.free(assignment.value);
+        const changelog_file = if (changelog_assignment) |assignment|
+            try self.resolve_file_string(assignment, &vars)
         else
             null;
 
@@ -356,6 +387,9 @@ pub const PkgbuildParser = struct {
         const depends = try self.resolve_package_array_field(content, &vars, "depends");
         const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
         const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
+        const xdata = try self.resolve_array_field(content, &vars, "xdata");
+        errdefer freeStringSlice(self.allocator, xdata);
+        try validate_xdata(xdata);
 
         return Pkgbuild{
             .variables = vars,
@@ -369,6 +403,7 @@ pub const PkgbuildParser = struct {
             .pkg_desc = try self.resolve_package_string_field(content, &vars, "pkgdesc"),
             .url = try self.resolve_package_string_field(content, &vars, "url"),
             .license = try self.resolve_package_array_field(content, &vars, "license"),
+            .groups = try self.resolve_package_array_field(content, &vars, "groups"),
             .arch = try self.resolve_package_array_field(content, &vars, "arch"),
             .depends = depends,
             .make_depends = make_depends,
@@ -377,7 +412,9 @@ pub const PkgbuildParser = struct {
             .provides = try self.resolve_package_array_field(content, &vars, "provides"),
             .conflicts = try self.resolve_package_array_field(content, &vars, "conflicts"),
             .replaces = try self.resolve_package_array_field(content, &vars, "replaces"),
+            .backup = try self.resolve_package_array_field(content, &vars, "backup"),
             .options = try self.resolve_package_array_field(content, &vars, "options"),
+            .xdata = xdata,
             .source = source,
             .valid_pgp_keys = try self.resolve_array_field(content, &vars, "validpgpkeys"),
             .no_extract = try self.resolve_array_field(content, &vars, "noextract"),
@@ -389,6 +426,13 @@ pub const PkgbuildParser = struct {
             .md_5_sums = try self.resolve_arch_array_field(content, &vars, "md5sums"),
             .b_2_sums = try self.resolve_arch_array_field(content, &vars, "b2sums"),
             .install_file = install_file,
+            .changelog_file = changelog_file,
+            .is_split = package_functions.is_split,
+            .has_generic_package_function = package_functions.has_generic,
+            .has_selected_package_function = package_functions.has_selected,
+            .has_build_function = package_functions.has_build,
+            .has_invalid_package_assignment = try self.has_forbidden_package_assignment(content, &vars),
+            .has_complete_split_functions = package_functions.has_complete_split,
             .local_source_files = local_source_files,
             .local_source_contents = local_source_contents,
             .parsed_depends = try self.parse_dependencies(depends),
@@ -879,12 +923,54 @@ pub const PkgbuildParser = struct {
             try extract_function_body(content, "package");
     }
 
-    fn resolve_install_assignment(
+    fn has_forbidden_package_assignment(
         self: PkgbuildParser,
         content: []const u8,
         vars: *const std.StringHashMap([]const u8),
-    ) !?InstallAssignment {
-        var assignment: ?InstallAssignment = if (vars.get("install")) |value|
+    ) !bool {
+        const body = (try self.selected_package_body(content)) orelse blk: {
+            if (try extract_function_body(content, "package")) |generic| break :blk generic;
+            const package_name = vars.get("pkgname") orelse return false;
+            const function_name = try std.fmt.allocPrint(self.allocator, "package_{s}", .{package_name});
+            defer self.allocator.free(function_name);
+            break :blk (try extract_function_body(content, function_name)) orelse return false;
+        };
+        var lines = std.mem.splitScalar(u8, body, '\n');
+        while (lines.next()) |line| {
+            const name = direct_assignment_name(line) orelse continue;
+            if (package_metadata.isForbiddenPackageAssignment(name, self.package_carch))
+                return true;
+        }
+        return false;
+    }
+
+    fn direct_assignment_name(line: []const u8) ?[]const u8 {
+        var rest = std.mem.trimStart(u8, line, " \t\r");
+        if (std.mem.startsWith(u8, rest, "declare")) {
+            rest = rest["declare".len..];
+            if (rest.len == 0 or !std.ascii.isWhitespace(rest[0])) return null;
+            rest = std.mem.trimStart(u8, rest, " \t");
+            while (rest.len > 0 and rest[0] == '-') {
+                const end = std.mem.indexOfAny(u8, rest, " \t") orelse return null;
+                rest = std.mem.trimStart(u8, rest[end..], " \t");
+            }
+        }
+        var end: usize = 0;
+        while (end < rest.len and is_word(rest[end])) : (end += 1) {}
+        if (end == 0) return null;
+        const name = rest[0..end];
+        if (end < rest.len and rest[end] == '+') end += 1;
+        if (end >= rest.len or rest[end] != '=') return null;
+        return name;
+    }
+
+    fn resolve_file_assignment(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *const std.StringHashMap([]const u8),
+        field_name: []const u8,
+    ) !?FileAssignment {
+        var assignment: ?FileAssignment = if (vars.get(field_name)) |value|
             .{
                 .value = try self.allocator.dupe(u8, value),
                 .package_scoped = false,
@@ -894,7 +980,7 @@ pub const PkgbuildParser = struct {
         errdefer if (assignment) |current| self.allocator.free(current.value);
 
         if (try self.selected_package_body(content)) |body| {
-            if (try parse_variable(body, "install")) |value| {
+            if (try parse_variable(body, field_name)) |value| {
                 const owned_value = try self.allocator.dupe(u8, value);
                 if (assignment) |current| self.allocator.free(current.value);
                 assignment = .{
@@ -907,9 +993,9 @@ pub const PkgbuildParser = struct {
         return assignment;
     }
 
-    fn resolve_install_string(
+    fn resolve_file_string(
         self: PkgbuildParser,
-        assignment: InstallAssignment,
+        assignment: FileAssignment,
         vars: *std.StringHashMap([]const u8),
     ) ![]const u8 {
         const resolved = if (assignment.package_scoped) blk: {
@@ -981,11 +1067,79 @@ pub const PkgbuildParser = struct {
         return error.SelectedPackageNotFound;
     }
 
+    const PackageFunctionState = struct {
+        is_split: bool,
+        has_generic: bool,
+        has_selected: bool,
+        has_build: bool,
+        has_complete_split: bool,
+    };
+
+    /// Records the package-function shape without turning the data parser into
+    /// a linter. PackageBuilder enforces this state immediately before any
+    /// PKGBUILD code is executed.
+    fn inspect_package_functions(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+    ) !PackageFunctionState {
+        var names = try self.resolve_array_field(content, vars, "pkgname");
+        defer freeStringSlice(self.allocator, names);
+        if (names.len == 0) {
+            const scalar = vars.get("pkgname") orelse return .{
+                .is_split = false,
+                .has_generic = (try extract_function_body(content, "package")) != null,
+                .has_selected = false,
+                .has_build = (try extract_function_body(content, "build")) != null,
+                .has_complete_split = true,
+            };
+            const scalar_names = try self.allocator.alloc([]const u8, 1);
+            scalar_names[0] = self.allocator.dupe(u8, scalar) catch |err| {
+                self.allocator.free(scalar_names);
+                return err;
+            };
+            self.allocator.free(names);
+            names = scalar_names;
+        }
+        try validate_package_names(names);
+
+        const has_generic = (try extract_function_body(content, "package")) != null;
+        const selected_name = self.selected_package_name orelse names[0];
+        const function_name = try std.fmt.allocPrint(self.allocator, "package_{s}", .{selected_name});
+        defer self.allocator.free(function_name);
+        const has_scoped = (try extract_function_body(content, function_name)) != null;
+        var has_complete_split = true;
+        if (names.len > 1) for (names) |name| {
+            const member_function = try std.fmt.allocPrint(self.allocator, "package_{s}", .{name});
+            defer self.allocator.free(member_function);
+            if ((try extract_function_body(content, member_function)) == null)
+                has_complete_split = false;
+        };
+        return .{
+            .is_split = names.len > 1,
+            .has_generic = has_generic,
+            .has_selected = has_scoped,
+            .has_build = (try extract_function_body(content, "build")) != null,
+            .has_complete_split = has_complete_split,
+        };
+    }
+
     fn validate_package_names(names: [][]const u8) !void {
         for (names, 0..) |name, index| {
             if (name.len == 0) return error.MissingPackageName;
             for (names[0..index]) |earlier|
                 if (std.mem.eql(u8, earlier, name)) return error.DuplicatePackageName;
+        }
+    }
+
+    fn validate_xdata(values: []const []const u8) !void {
+        for (values) |value| {
+            const separator = std.mem.indexOfScalar(u8, value, '=') orelse
+                return error.InvalidPackageXdata;
+            if (separator == 0 or
+                std.mem.indexOfScalar(u8, value[separator + 1 ..], '=') != null or
+                std.mem.eql(u8, value[0..separator], "pkgtype"))
+                return error.InvalidPackageXdata;
         }
     }
 
@@ -6365,6 +6519,62 @@ test "parser_content: selected split package install overrides global and siblin
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("demo-two.install", info.install_file.?);
+}
+
+test "parser_content: records complete split metadata and function contract state" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-two",
+    };
+    var info = try parser.parser_content(
+        \\pkgbase=demo
+        \\pkgname=('demo-one' 'demo-two')
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\groups=('shared')
+        \\backup=('etc/shared.conf')
+        \\xdata=('channel=stable')
+        \\package_demo-one() { :; }
+        \\package_demo-two() {
+        \\  groups=('selected')
+        \\  changelog="$pkgname.changelog"
+        \\}
+    , null);
+    defer info.deinit(std.testing.allocator);
+    try std.testing.expect(info.is_split);
+    try std.testing.expect(!info.has_generic_package_function);
+    try std.testing.expect(info.has_selected_package_function);
+    try std.testing.expectEqualStrings("selected", info.groups.?[0]);
+    try std.testing.expectEqualStrings("etc/shared.conf", info.backup.?[0]);
+    try std.testing.expectEqualStrings("channel=stable", info.xdata.?[0]);
+    try std.testing.expectEqualStrings("demo-two.changelog", info.changelog_file.?);
+}
+
+test "parser_content: marks forbidden package assignments and rejects reserved xdata" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var info = try parser.parser_content(
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() { pkgrel=2; }
+    , null);
+    defer info.deinit(std.testing.allocator);
+    try std.testing.expect(info.has_invalid_package_assignment);
+
+    try std.testing.expectError(
+        error.InvalidPackageXdata,
+        parser.parser_content(
+            \\pkgname=demo
+            \\pkgver=1
+            \\pkgrel=1
+            \\arch=('any')
+            \\xdata=('pkgtype=debug')
+            \\package() { :; }
+        , null),
+    );
 }
 
 test "parser_content: unresolved install variable fails before filesystem validation" {

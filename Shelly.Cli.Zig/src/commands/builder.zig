@@ -201,6 +201,7 @@ const Real = struct {
                 .skip_source_pgp_verification = optionEnabled(invocation, "--skip-source-pgp-verification"),
                 .reviewed_pkgbuild_digest = expected_digest,
                 .install_scripts = review.install_scripts,
+                .reviewed_files = review.reviewed_files,
                 .sources_prepared = false,
             },
             context.environ,
