@@ -1522,6 +1522,7 @@ pub const Manager = struct {
                 .build_directory = prepared.cache_path,
                 .pkgbuild_path = prepared.pkgbuild_path,
                 .reviewed_pkgbuild_digest = build_review.digest,
+                .install_scripts = build_review.install_scripts,
             },
             self.environ,
             self.io(),
@@ -2784,14 +2785,22 @@ fn createSplitAurFixtureRepository(
 }
 
 test "PKGBUILD validation combines post-install and homograph findings" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "demo.install",
+        .data = "post_install() { eval echo bad; }\n",
+    });
+    const base_directory = try temporary.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(base_directory);
     var results = try validatePkgbuild(
         std.testing.allocator,
         std.testing.io,
-        "pkgname='dеmo'\npkgver=1\npkgrel=1\npost_install() { eval echo bad; }\n",
-        null,
+        "pkgname='dеmo'\npkgver=1\npkgrel=1\ninstall=demo.install\n",
+        base_directory,
     );
     defer results.deinit(std.testing.allocator);
-    try std.testing.expect(results.post_install.has_findings);
+    try std.testing.expect(results.scripts.has_findings);
     try std.testing.expect(results.homograph.has_findings);
     const flattened = try results.flatten(std.testing.allocator);
     defer std.testing.allocator.free(flattened);

@@ -29,7 +29,6 @@ pub const Pkgbuild = struct {
     b_2_sums: ?[][]const u8 = null,
     variables: std.StringHashMap([]const u8),
     install_file: ?[]const u8 = null,
-    post_install: ?[]const u8 = null,
     local_source_files: ?[][]const u8 = null,
     local_source_contents: std.StringHashMap([]const u8),
     parsed_depends: ?[]parsed_dep = null,
@@ -135,7 +134,6 @@ pub const Pkgbuild = struct {
         self.variables.deinit();
 
         if (self.install_file) |v| allocator.free(v);
-        if (self.post_install) |v| allocator.free(v);
 
         var lsc_it = self.local_source_contents.iterator();
         while (lsc_it.next()) |entry| {
@@ -346,12 +344,6 @@ pub const PkgbuildParser = struct {
         const local_source_files = try self.extract_local_source_files(source);
         const local_source_contents = try self.resolve_local_source_contents(local_source_files, base_dir);
 
-        const post_install = (try self.resolve_post_install(install_file, base_dir)) orelse
-            if (try extract_function_body(content, "post_install")) |body|
-                try self.allocator.dupe(u8, body)
-            else
-                null;
-
         const depends = try self.resolve_package_array_field(content, &vars, "depends");
         const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
         const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
@@ -387,7 +379,6 @@ pub const PkgbuildParser = struct {
             .md_5_sums = try self.resolve_arch_array_field(content, &vars, "md5sums"),
             .b_2_sums = try self.resolve_arch_array_field(content, &vars, "b2sums"),
             .install_file = install_file,
-            .post_install = post_install,
             .local_source_files = local_source_files,
             .local_source_contents = local_source_contents,
             .parsed_depends = try self.parse_dependencies(depends),
@@ -2259,34 +2250,6 @@ pub const PkgbuildParser = struct {
         return i;
     }
 
-    fn resolve_post_install(self: PkgbuildParser, install_file: ?[]const u8, base_dir: ?[]const u8) !?[]const u8 {
-        const file = install_file orelse return null;
-        for (file) |c| {
-            if (std.ascii.isWhitespace(c)) return null;
-        }
-
-        const path = if (base_dir) |dir|
-            try std.fs.path.join(self.allocator, &.{ dir, file })
-        else
-            file;
-        defer if (base_dir != null) self.allocator.free(path);
-
-        const exists = blk: {
-            std.Io.Dir.cwd().access(self.io, path, .{}) catch break :blk false;
-            break :blk true;
-        };
-        if (!exists) return null;
-
-        const install_content = try std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .unlimited);
-        defer self.allocator.free(install_content);
-
-        const body = try extract_function_body(install_content, "post_install");
-        if (body) |b| {
-            return try self.allocator.dupe(u8, b);
-        }
-        return null;
-    }
-
     fn resolve_local_file(self: PkgbuildParser, file_name: []const u8, base_dir: ?[]const u8) !?[]const u8 {
         for (file_name) |c| {
             if (std.ascii.isWhitespace(c)) return null;
@@ -3396,58 +3359,6 @@ test "extract_function_body: unclosed brace consumes to end of content" {
     const result = try PkgbuildParser.extract_function_body(content, "myFunction");
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("return 1;", result.?);
-}
-
-test "resolve_post_install: null install_file returns null" {
-    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const result = try parser.resolve_post_install(null, null);
-    try std.testing.expect(result == null);
-}
-
-test "resolve_post_install: install_file containing whitespace returns null" {
-    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const result = try parser.resolve_post_install("my install.sh", null);
-    try std.testing.expect(result == null);
-}
-
-test "resolve_post_install: nonexistent file returns null" {
-    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const result = try parser.resolve_post_install("definitely_does_not_exist.install", null);
-    try std.testing.expect(result == null);
-}
-
-test "resolve_post_install: existing file with no base_dir extracts body" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const content = "post_install() {\n  echo hello\n}";
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "test.install", .data = content });
-
-    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "test.install", std.testing.allocator);
-    defer std.testing.allocator.free(path);
-
-    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const result = try parser.resolve_post_install(path, null);
-    try std.testing.expect(result != null);
-    defer std.testing.allocator.free(result.?);
-    try std.testing.expectEqualStrings("echo hello", result.?);
-}
-
-test "resolve_post_install: joins base_dir and install_file correctly" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const content = "post_install() {\n  echo joined\n}";
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "myapp.install", .data = content });
-
-    const base_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(base_dir);
-
-    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const result = try parser.resolve_post_install("myapp.install", base_dir);
-    try std.testing.expect(result != null);
-    defer std.testing.allocator.free(result.?);
-    try std.testing.expectEqualStrings("echo joined", result.?);
 }
 
 test "resolve_local_file: file name containing whitespace returns null" {
@@ -6092,7 +6003,7 @@ test "parser_content: local source file content is read via base_dir" {
     try std.testing.expectEqualStrings("diff content here", info.local_source_contents.get("fix.patch").?);
 }
 
-test "parser_content: post_install falls back to extract_function_body when no install file" {
+test "parser_content: inline post_install is not treated as an install script" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content =
         \\pkgname=myapp
@@ -6101,15 +6012,11 @@ test "parser_content: post_install falls back to extract_function_body when no i
         \\}
     ;
     var info = try parser.parser_content(content, null);
-    // post_install here is a borrowed slice of `content` (extract_function_body
-    // fallback path, not resolve_post_install) -- pass false, do NOT free it.
     defer info.deinit(std.testing.allocator);
-
-    try std.testing.expect(info.post_install != null);
-    try std.testing.expectEqualStrings("echo \"installed\"", info.post_install.?);
+    try std.testing.expect(info.install_file == null);
 }
 
-test "parser_content: post_install resolved from install file" {
+test "parser_content: resolves install filename without reading hook bodies" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(std.testing.io, .{
@@ -6125,11 +6032,8 @@ test "parser_content: post_install resolved from install file" {
         \\install=myapp.install
     ;
     var info = try parser.parser_content(content, base_dir);
-    // post_install here IS owned (resolve_post_install succeeded) -- pass true.
     defer info.deinit(std.testing.allocator);
-
-    try std.testing.expect(info.post_install != null);
-    try std.testing.expectEqualStrings("echo \"from install file\"", info.post_install.?);
+    try std.testing.expectEqualStrings("myapp.install", info.install_file.?);
 }
 
 test "parser_content: flutter-3382-bin resolves dependencies declared in package" {
@@ -6230,7 +6134,6 @@ test "parser_content: selected split package resolves package-scoped install fil
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("dms-shell-git.install", info.install_file.?);
-    try std.testing.expectEqualStrings("echo \"installed\"", info.post_install.?);
 }
 
 test "parser_content: pkgname resolves when pkgbase is also present" {
@@ -6286,7 +6189,6 @@ test "parser_content: pkgname resolves when pkgbase is also present" {
     try std.testing.expectEqualStrings("1.4.9", info.pkg_version.?);
     try std.testing.expectEqualStrings("1", info.pkg_rel.?);
     try std.testing.expectEqualStrings("rustdesk-bin.install", info.install_file.?);
-    try std.testing.expectEqualStrings("echo \"installed\"", info.post_install.?);
 
     try std.testing.expectEqual(@as(usize, 1), info.provides.?.len);
     try std.testing.expectEqualStrings("rustdesk", info.provides.?[0]);
@@ -6390,7 +6292,6 @@ test "parser_content: split sources retain the first global pkgname" {
     try std.testing.expectEqualStrings("adwaita-qt", info_qt5.replaces.?[0]);
 
     try std.testing.expect(info_qt5.install_file == null);
-    try std.testing.expect(info_qt5.post_install == null);
 
     var info_qt6 = try (PkgbuildParser{
         .allocator = std.testing.allocator,
@@ -6570,7 +6471,6 @@ test "parser: full PKGBUILD exercises the whole pipeline" {
 
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var info = try parser.parser(pkgbuild_path);
-    // post_install came from resolve_post_install (install file existed) -> owned.
     defer info.deinit(std.testing.allocator);
 
     // --- Scalars ---
@@ -6643,12 +6543,8 @@ test "parser: full PKGBUILD exercises the whole pipeline" {
     try std.testing.expectEqualStrings("fix.patch", info.local_source_files.?[0]);
     try std.testing.expectEqualStrings("diff content here", info.local_source_contents.get("fix.patch").?);
 
-    // --- install file + post_install extracted from real file, unresolved literally ---
+    // --- install filename is selected; its contents belong to package review ---
     try std.testing.expectEqualStrings("myapp.install", info.install_file.?);
-    try std.testing.expect(info.post_install != null);
-    // $pkgname inside the install file body is NOT substituted (matches C# behavior:
-    // ResolvePostInstall/ExtractFunctionBody never runs variable resolution on file content).
-    try std.testing.expectEqualStrings("echo \"Enjoy $pkgname!\"", info.post_install.?);
 
     // --- execution steps: functions captured in makepkg execution order ---
     try std.testing.expectEqual(@as(usize, 3), info.execution.?.steps.len);

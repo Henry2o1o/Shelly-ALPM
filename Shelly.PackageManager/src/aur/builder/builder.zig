@@ -11,6 +11,7 @@ const archive = @import("archive");
 const process_runner = @import("../builder.zig");
 const downloader = @import("../../shared/downloader.zig");
 const package_options = @import("package_options");
+const install_script = @import("../../pkgbuild/install_script.zig");
 const alpm_bindings = @import("../../alpm/bindings.zig").libalpm;
 const raw_alpm = alpm_bindings.alpm;
 
@@ -56,6 +57,8 @@ pub const BuildOptions = struct {
     /// Optional deterministic build-environment snapshot. Production callers
     /// leave this null and the builder reads libalpm's local database.
     installed_packages: ?[]const []const u8 = null,
+    /// Byte-exact install scripts retained by the approved package review.
+    install_scripts: []const install_script.Script = &.{},
 };
 
 pub const BuilderErrors = error{
@@ -207,6 +210,8 @@ pub const PackageBuilder = struct {
             );
             defer current_review.deinit();
             if (!std.mem.eql(u8, &reviewed_digest, &current_review.digest))
+                return error.ReviewedPkgbuildChanged;
+            if (!self.installScriptsMatch(current_review.install_scripts))
                 return error.ReviewedPkgbuildChanged;
             self.options.pkgbuild_sha256sum = current_review.pkgbuild_digest;
         } else if (!builtin.is_test) return error.UnreviewedBuilderRequest;
@@ -877,9 +882,9 @@ pub const PackageBuilder = struct {
         const build_date = std.Io.Clock.real.now(self.io).toSeconds();
         try self.writePackageInfo(package_build, pkgdir_handle, full_version, package_arch, payload_size, build_date);
         try self.writeBuildInfo(package_build, pkgdir_handle, full_version, package_arch, build_date);
-        if (package_build.install_file != null) {
-            const install_contents = package_build.post_install orelse return error.MissingInstallFile;
-            try writeMetadataFile(pkgdir_handle, self.io, ".INSTALL", install_contents);
+        if (package_build.install_file) |install_file| {
+            const reviewed_script = self.findInstallScript(install_file) orelse return error.MissingInstallFile;
+            try writeMetadataFile(pkgdir_handle, self.io, ".INSTALL", reviewed_script.contents);
         } else {
             try deleteFileIgnoreMissing(pkgdir_handle, self.io, ".INSTALL");
         }
@@ -922,6 +927,25 @@ pub const PackageBuilder = struct {
         const owned_name = try self.allocator.dupe(u8, package_name);
         errdefer self.allocator.free(owned_name);
         return .{ .path = output_path, .package_name = owned_name };
+    }
+
+    fn findInstallScript(self: *const PackageBuilder, file_name: []const u8) ?*const install_script.Script {
+        for (self.options.install_scripts) |*script| {
+            if (std.mem.eql(u8, script.file_name, file_name)) return script;
+        }
+        return null;
+    }
+
+    fn installScriptsMatch(
+        self: *const PackageBuilder,
+        current_scripts: []const install_script.Script,
+    ) bool {
+        if (self.options.install_scripts.len != current_scripts.len) return false;
+        for (current_scripts) |current| {
+            const reviewed = self.findInstallScript(current.file_name) orelse return false;
+            if (!std.mem.eql(u8, reviewed.contents, current.contents)) return false;
+        }
+        return true;
     }
 
     fn packageArchitecture(self: *const PackageBuilder, package_build: *const PackageBuild) []const u8 {

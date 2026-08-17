@@ -136,10 +136,14 @@ pub const pkgbuild = struct {
     pub const validation = @import("pkgbuild/shared_validtor.zig");
     pub const homograph_validator = @import("pkgbuild/homograph_validator.zig");
     pub const post_install_validator = @import("pkgbuild/post_install_validator.zig");
+    pub const install_script = @import("pkgbuild/install_script.zig");
+    pub const install_script_scanner = @import("pkgbuild/install_script_scanner.zig");
 
     pub const Parser = parser.PkgbuildParser;
     pub const HomographValidator = homograph_validator.HomographValidator;
     pub const PostInstallValidator = post_install_validator.PostInstallValidator;
+    pub const InstallScript = install_script.Script;
+    pub const InstallScriptScanner = install_script_scanner.InstallScriptScanner;
 };
 
 pub const local = struct {
@@ -495,6 +499,8 @@ test {
     _ = @import("appimage/update_manager.zig");
     _ = @import("pkgbuild/pkgbuild_parser.zig");
     _ = @import("pkgbuild/post_install_validator.zig");
+    _ = @import("pkgbuild/install_script.zig");
+    _ = @import("pkgbuild/install_script_scanner.zig");
     _ = @import("pkgbuild/homograph_validator.zig");
     _ = @import("aur/manager.zig");
     _ = @import("aur/builder/builder_test.zig");

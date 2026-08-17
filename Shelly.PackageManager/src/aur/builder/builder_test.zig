@@ -15,6 +15,7 @@ const builder_mod = @import("builder.zig");
 const PackageBuilder = builder_mod.PackageBuilder;
 const process_runner = @import("../builder.zig");
 const pkgbuild_mod = @import("../../pkgbuild/pkgbuild_parser.zig");
+const install_script = @import("../../pkgbuild/install_script.zig");
 const op_context = @import("operation_context");
 const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
 const archive = @import("archive");
@@ -553,6 +554,83 @@ test "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata" {
     const payload_hex = std.fmt.bytesToHex(payload_digest, .lower);
     try testing.expect(std.mem.indexOf(u8, gzip.stdout, &payload_hex) != null);
     try testing.expect(std.mem.indexOf(u8, gzip.stdout, "sha256digest=") != null);
+}
+
+test "PackageBuilder packages the exact reviewed install script with metadata mode" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=install-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\install=install-demo.install
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/install-demo"
+        \\}
+    ;
+    const script_contents =
+        "#!/bin/bash\n" ++
+        "banner='preserve me exactly'\n" ++
+        "touch \"$startdir/install-script-was-executed\"\n" ++
+        "helper() { printf '%s\\n' \"$banner\"; }\n" ++
+        "pre_install() { helper \"$1\"; }\n" ++
+        "post_install() { true; }\n" ++
+        "pre_upgrade() { printf '%s %s\\n' \"$1\" \"$2\"; }\n" ++
+        "post_upgrade() { true; }\n" ++
+        "pre_remove() { true; }\n" ++
+        "post_remove() { true; }\n";
+
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "PKGBUILD", .data = pkgbuild_content });
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "install-demo.install", .data = script_contents });
+    const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
+    defer allocator.free(pkgbuild_path);
+    var review = try builder_mod.preparePkgbuildReview(
+        allocator,
+        io,
+        fixture.build_dir,
+        pkgbuild_content,
+        fixture.package_builds,
+    );
+    defer review.deinit();
+    try testing.expectEqual(@as(usize, 1), review.install_scripts.len);
+    inline for (std.meta.tags(install_script.Hook)) |hook|
+        try testing.expect(review.install_scripts[0].effectiveHook(hook) != null);
+
+    fixture.builder.options.pkgbuild_path = pkgbuild_path;
+    fixture.builder.options.reviewed_pkgbuild_digest = review.digest;
+    var substituted_script = try install_script.Script.init(
+        allocator,
+        "install-demo.install",
+        "post_install() { false; }\n",
+    );
+    defer substituted_script.deinit(allocator);
+    const substituted_scripts = [_]install_script.Script{substituted_script};
+    fixture.builder.options.install_scripts = &substituted_scripts;
+    try testing.expectError(error.ReviewedPkgbuildChanged, fixture.builder.BuildPackage());
+    fixture.builder.options.install_scripts = review.install_scripts;
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectError(
+        error.FileNotFound,
+        fixture.temporary.dir.access(io, "install-script-was-executed", .{}),
+    );
+
+    const packaged_script = try readPackageEntry(allocator, artifacts[0].path, ".INSTALL");
+    defer allocator.free(packaged_script);
+    try testing.expectEqualStrings(script_contents, packaged_script);
+
+    var reader = try archive.Reader.init(allocator, artifacts[0].path);
+    defer reader.deinit();
+    var saw_install = false;
+    while (try reader.next()) |entry| {
+        if (!std.mem.eql(u8, entry.path, ".INSTALL")) continue;
+        saw_install = true;
+        try testing.expectEqual(@as(u32, 0o644), entry.permissions);
+    }
+    try testing.expect(saw_install);
 }
 
 test "PackageBuilder strips ELF debug sections unless PKGBUILD disables strip" {
