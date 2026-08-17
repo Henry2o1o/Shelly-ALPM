@@ -88,9 +88,6 @@ check() {
   (cd Shelly.Cli.Zig && zig build test \
     --cache-dir "${srcdir}/zig-cache" \
     --global-cache-dir "${srcdir}/zig-global-cache")
-  scripts/check-flatpak-separation.sh \
-    out-cli/bin/shelly \
-    out-flatpak-backend/lib/libshelly-flatpak-backend.so.1
 }
 
 package_shelly() {

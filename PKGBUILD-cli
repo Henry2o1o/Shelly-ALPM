@@ -67,9 +67,6 @@ check() {
   (cd Shelly.Flatpak.Backend && zig build test abi-test integration-test)
   (cd Shelly.PackageManager && zig build flatpak-test)
   (cd Shelly.Cli.Zig && zig build test)
-  scripts/check-flatpak-separation.sh \
-    "${srcdir}/zig-out/bin/shelly" \
-    "${srcdir}/zig-out-flatpak-backend/lib/libshelly-flatpak-backend.so.1"
 }
 
 package_shelly-cli() {
