@@ -99,9 +99,22 @@ const Real = struct {
         var names = try pkgbuild_parser.package_names_content(pkgbuild_content);
         defer names.deinit(context.allocator);
 
+        var requested_names: std.ArrayList([]const u8) = .empty;
+        defer requested_names.deinit(context.allocator);
+        for (invocation.options) |option| {
+            if (!std.mem.eql(u8, option.name, "--package")) continue;
+            const requested_name = option.value orelse return error.MissingPackageName;
+            if (!containsString(names.items, requested_name))
+                return error.SelectedPackageNotFound;
+            if (!containsString(requested_names.items, requested_name))
+                try requested_names.append(context.allocator, requested_name);
+        }
+        if (requested_names.items.len == 0)
+            try requested_names.appendSlice(context.allocator, names.items);
+
         const package_builds = try context.allocator.alloc(
             Zigalpm.pkgbuild.parser.Pkgbuild,
-            names.items.len,
+            requested_names.items.len,
         );
 
         var parsed_count: usize = 0;
@@ -111,7 +124,7 @@ const Real = struct {
             context.allocator.free(package_builds);
         }
 
-        for (names.items, package_builds) |name, *pkgbuild| {
+        for (requested_names.items, package_builds) |name, *pkgbuild| {
             pkgbuild.* = try (Zigalpm.pkgbuild.Parser{
                 .allocator = context.allocator,
                 .io = context.io,
@@ -130,7 +143,17 @@ const Real = struct {
         );
         defer review.deinit();
 
-        if (!optionEnabled(invocation, "--reviewed")) {
+        const coordinator_child = optionEnabled(invocation, "--coordinator-child");
+        const expected_digest = if (coordinator_child) digest: {
+            const encoded = optionValue(invocation, "--review-digest") orelse
+                return error.MissingReviewDigest;
+            const parsed = try parseReviewDigest(encoded);
+            if (!std.mem.eql(u8, &parsed, &review.digest))
+                return error.ReviewedPkgbuildChanged;
+            break :digest parsed;
+        } else review.digest;
+
+        if (!coordinator_child and !optionEnabled(invocation, "--reviewed")) {
             var answer = try operation.ask(.{
                 .kind = .review_changes,
                 .prompt = "Build packages from this PKGBUILD?",
@@ -167,15 +190,15 @@ const Real = struct {
             package_builds,
             operation_context,
             makepkg.*,
-            names.items,
+            requested_names.items,
             .{
                 .build_directory = build_directory,
                 .pkgbuild_path = pkgbuild_path,
-                .clean_after_success = true,
-                .overwrite = true,
-                .run_check = true,
-                .skip_source_pgp_verification = false,
-                .reviewed_pkgbuild_digest = review.digest,
+                .clean_after_success = !optionEnabled(invocation, "--keep-workdirs"),
+                .overwrite = !optionEnabled(invocation, "--no-overwrite"),
+                .run_check = optionEnabled(invocation, "--check"),
+                .skip_source_pgp_verification = optionEnabled(invocation, "--skip-source-pgp-verification"),
+                .reviewed_pkgbuild_digest = expected_digest,
                 .sources_prepared = false,
             },
             context.environ,
@@ -213,6 +236,24 @@ fn optionEnabled(invocation: *const parser.Invocation, name: []const u8) bool {
         return !std.ascii.eqlIgnoreCase(value, "false");
     }
     return false;
+}
+
+fn optionValue(invocation: *const parser.Invocation, name: []const u8) ?[]const u8 {
+    for (invocation.options) |option|
+        if (std.mem.eql(u8, option.name, name)) return option.value;
+    return null;
+}
+
+fn containsString(values: []const []const u8, wanted: []const u8) bool {
+    for (values) |value| if (std.mem.eql(u8, value, wanted)) return true;
+    return false;
+}
+
+fn parseReviewDigest(encoded: []const u8) ![std.crypto.hash.sha2.Sha256.digest_length]u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    if (encoded.len != digest.len * 2) return error.InvalidReviewDigest;
+    _ = std.fmt.hexToBytes(&digest, encoded) catch return error.InvalidReviewDigest;
+    return digest;
 }
 
 test "build command routes review questions through standard and UI lifecycles" {
@@ -298,4 +339,37 @@ test "reviewed option only controls whether build approval is requested" {
     const normal = try parser.parse(arena.allocator(), &manifest, &.{"build"});
     try std.testing.expect(optionEnabled(&reviewed.dispatch, "--reviewed"));
     try std.testing.expect(!optionEnabled(&normal.dispatch, "--reviewed"));
+}
+
+test "coordinator build options preserve selected packages and reviewed digest" {
+    const spec = @import("../cli/spec.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const encoded = "5a" ** std.crypto.hash.sha2.Sha256.digest_length;
+    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "build",
+        "--coordinator-child",
+        "--review-digest",
+        encoded,
+        "--package",
+        "demo",
+        "--package",
+        "demo-docs",
+        "--check",
+        "/tmp/PKGBUILD",
+    });
+    try std.testing.expect(optionEnabled(&outcome.dispatch, "--coordinator-child"));
+    try std.testing.expect(optionEnabled(&outcome.dispatch, "--check"));
+    try std.testing.expectEqualStrings(encoded, optionValue(&outcome.dispatch, "--review-digest").?);
+    var selected: usize = 0;
+    for (outcome.dispatch.options) |option| {
+        if (std.mem.eql(u8, option.name, "--package")) selected += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), selected);
+    try std.testing.expectEqualStrings("/tmp/PKGBUILD", outcome.dispatch.positionals[0]);
+
+    const digest = try parseReviewDigest(encoded);
+    try std.testing.expectEqualSlices(u8, &([_]u8{0x5a} ** digest.len), &digest);
+    try std.testing.expectError(error.InvalidReviewDigest, parseReviewDigest("abc"));
 }

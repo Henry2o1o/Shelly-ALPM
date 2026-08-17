@@ -595,7 +595,16 @@ fn runAur(
     if (!isAurVersionInstall(invocation) and
         optionEnabled(invocation, "--build-deps") and invocation.positionals.len > 1)
         return error.MultipleDependencyTargets;
-    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{ .root = true, .use_chroot = optionEnabled(invocation, "--chroot"), .no_check = !optionEnabled(invocation, "--check"), .operation_context = operation_context });
+    const executable = try std.process.executablePathAlloc(context.io, context.allocator);
+    defer context.allocator.free(executable);
+    const build_command = std.mem.trimEnd(u8, executable, " (deleted)");
+    const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
+        .root = true,
+        .use_chroot = optionEnabled(invocation, "--chroot"),
+        .no_check = !optionEnabled(invocation, "--check"),
+        .build_command = build_command,
+        .operation_context = operation_context,
+    });
     defer manager.deinit();
     manager.setOperationContext(operation_context);
     defer manager.setOperationContext(null);
