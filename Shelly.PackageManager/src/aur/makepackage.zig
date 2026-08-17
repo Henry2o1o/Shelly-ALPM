@@ -211,9 +211,8 @@ pub const MakePackageConfiguration = struct {
                     const key = std.mem.trim(u8, owned_line[0..eq_index], " \t");
                     var value = std.mem.trim(u8, owned_line[eq_index + 1 ..], " \t");
 
-                    if (value.len >= 2 and
-                        value[0] == '"' and
-                        value[value.len - 1] == '"')
+                    if (value.len >= 2 and ((value[0] == '"' and value[value.len - 1] == '"') or
+                        (value[0] == '\'' and value[value.len - 1] == '\'')))
                     {
                         value = value[1 .. value.len - 1];
                     }
@@ -352,6 +351,15 @@ test "makepkg parser reads a quoted scalar case-insensitively" {
         }
     };
     try TestParser(&Assert.value).run("cHoSt=\"x86_64-pc-linux-gnu\"\n");
+}
+
+test "makepkg parser removes single quotes from package extension" {
+    const Assert = struct {
+        fn value(config: *const MakePackageConfiguration) !void {
+            try std.testing.expectEqualStrings(".pkg.tar.zst", config.package_extension);
+        }
+    };
+    try TestParser(&Assert.value).run("PKGEXT='.pkg.tar.zst'\n");
 }
 
 test "makepkg parser joins backslash-continued CFLAGS" {

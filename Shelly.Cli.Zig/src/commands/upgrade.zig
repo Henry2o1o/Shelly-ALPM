@@ -620,9 +620,13 @@ fn runAur(
     // selecting the same native output path as the default.
     _ = optionEnabled(invocation, "--singlepane");
 
+    const executable = try std.process.executablePathAlloc(context.io, context.allocator);
+    defer context.allocator.free(executable);
+    const build_command = std.mem.trimEnd(u8, executable, " (deleted)");
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
         .root = true,
         .no_check = !optionEnabled(invocation, "--check"),
+        .build_command = build_command,
     });
     defer manager.deinit();
     manager.setOperationContext(operation_context);

@@ -64,6 +64,8 @@ pub const alpm = struct {
 
 pub const aur = @import("aur/manager.zig");
 
+pub const builder = @import("aur/builder/builder.zig");
+
 pub const flatpak = struct {
     pub const manager = @import("flatpak/manager.zig");
     pub const remote_manager = @import("flatpak/remote_manager.zig");
@@ -162,6 +164,7 @@ pub const operation = @import("operation_context");
 pub const HttpClient = @import("ShellyHttp");
 
 pub const shared = struct {
+    pub const archive = @import("archive");
     pub const downloader = @import("shared/downloader.zig");
     pub const list_dictionary = @import("shared/list_dictionary.zig");
     pub const xdg_paths = @import("shared/xdg_paths.zig");
@@ -487,12 +490,14 @@ test {
     _ = @import("flatpak/appstream_parser.zig");
     _ = @import("flatpak/events.zig");
     _ = @import("appimage/manager.zig");
+    _ = @import("archive");
     _ = @import("shared/downloader.zig");
     _ = @import("appimage/update_manager.zig");
     _ = @import("pkgbuild/pkgbuild_parser.zig");
     _ = @import("pkgbuild/post_install_validator.zig");
     _ = @import("pkgbuild/homograph_validator.zig");
     _ = @import("aur/manager.zig");
+    _ = @import("aur/builder/builder_test.zig");
     _ = @import("local/manager.zig");
     _ = @import("local/file_inspector.zig");
     _ = @import("local/xdg_integration.zig");
