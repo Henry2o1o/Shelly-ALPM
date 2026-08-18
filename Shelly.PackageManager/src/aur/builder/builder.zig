@@ -1159,6 +1159,8 @@ pub const PackageBuilder = struct {
             try updateOptionalStrings(self.allocator, &package_build.license, values, append)
         else if (std.mem.eql(u8, entry.name, "groups"))
             try updateOptionalStrings(self.allocator, &package_build.groups, values, append)
+        else if (std.mem.eql(u8, entry.name, "arch") and !append and values.len == 0)
+            return
         else if (std.mem.eql(u8, entry.name, "arch"))
             try updateOptionalStrings(self.allocator, &package_build.arch, values, append)
         else if (std.mem.eql(u8, entry.name, "depends")) {

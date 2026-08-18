@@ -268,6 +268,7 @@ test "aggregate split-package review includes member-specific files and detects 
         \\pkgname=('review-one' 'review-two')
         \\pkgver=1
         \\pkgrel=1
+        \\arch=('any')
         \\source=('one.patch')
         \\package_review-one() {
         \\  changelog=one.changelog

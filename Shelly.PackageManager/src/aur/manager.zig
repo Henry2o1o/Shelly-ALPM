@@ -2797,7 +2797,7 @@ test "PKGBUILD validation combines post-install and homograph findings" {
     var results = try validatePkgbuild(
         std.testing.allocator,
         std.testing.io,
-        "pkgname='dеmo'\npkgver=1\npkgrel=1\ninstall=demo.install\n",
+        "pkgname='dеmo'\npkgver=1\npkgrel=1\narch=('any')\ninstall=demo.install\n",
         base_directory,
     );
     defer results.deinit(std.testing.allocator);
@@ -2934,7 +2934,7 @@ test "review digest covers exact local source contents and missing sources fail 
     defer temporary.cleanup();
     try temporary.dir.writeFile(std.testing.io, .{
         .sub_path = "PKGBUILD",
-        .data = "pkgname=demo\npkgver=1\npkgrel=1\nsource=('install.sh')\n",
+        .data = "pkgname=demo\npkgver=1\npkgrel=1\narch=('any')\nsource=('install.sh')\n",
     });
     try temporary.dir.writeFile(std.testing.io, .{
         .sub_path = "install.sh",
@@ -3011,6 +3011,7 @@ test "Dropbox brace-expanded signature is not treated as a local review input" {
         \\pkgname=dropbox
         \\pkgver=258.4.3749
         \\pkgrel=1
+        \\arch=('any')
         \\source=("DropboxGlyph_Blue.svg"
         \\        "terms.txt"
         \\        "dropbox.service"

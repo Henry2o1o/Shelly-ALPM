@@ -258,6 +258,7 @@ test "dependency resolution partitions installed repo and AUR dependencies" {
     const parser = pkgbuild.PkgbuildParser{ .allocator = allocator, .io = std.testing.io };
     var info = try parser.parser_content(
         \\pkgname=demo
+        \\arch=('any')
         \\depends=('glibc' 'aur-runtime')
         \\makedepends=('cmake>=3')
         \\checkdepends=('check-only')

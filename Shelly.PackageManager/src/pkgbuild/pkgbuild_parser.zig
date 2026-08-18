@@ -365,6 +365,7 @@ pub const PkgbuildParser = struct {
         }
         try self.validate_execution_assignments(content);
         try self.validate_selected_package(content, &vars);
+        try self.validate_architecture_directives(content, &vars);
         const package_functions = try self.inspect_package_functions(content, &vars);
 
         const install_assignment = try self.resolve_file_assignment(content, &vars, "install");
@@ -385,8 +386,8 @@ pub const PkgbuildParser = struct {
         const local_source_contents = try self.resolve_local_source_contents(local_source_files, base_dir);
 
         const depends = try self.resolve_package_array_field(content, &vars, "depends");
-        const make_depends = try self.resolve_array_field(content, &vars, "makedepends");
-        const check_depends = try self.resolve_array_field(content, &vars, "checkdepends");
+        const make_depends = try self.resolve_arch_array_field(content, &vars, "makedepends");
+        const check_depends = try self.resolve_arch_array_field(content, &vars, "checkdepends");
         const xdata = try self.resolve_array_field(content, &vars, "xdata");
         errdefer freeStringSlice(self.allocator, xdata);
         try validate_xdata(xdata);
@@ -404,7 +405,7 @@ pub const PkgbuildParser = struct {
             .url = try self.resolve_package_string_field(content, &vars, "url"),
             .license = try self.resolve_package_array_field(content, &vars, "license"),
             .groups = try self.resolve_package_array_field(content, &vars, "groups"),
-            .arch = try self.resolve_package_array_field(content, &vars, "arch"),
+            .arch = try self.resolve_effective_architecture_field(content, &vars),
             .depends = depends,
             .make_depends = make_depends,
             .check_depends = check_depends,
@@ -1067,6 +1068,61 @@ pub const PkgbuildParser = struct {
         return error.SelectedPackageNotFound;
     }
 
+    fn validate_architecture_directives(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+    ) !void {
+        const global = try self.resolve_array_field(content, vars, "arch");
+        defer freeStringSlice(self.allocator, global);
+        if (global.len == 0) return error.InvalidArchitectureDirective;
+        try validate_architecture_entries(global);
+        if (!contains_string(global, "any") and !contains_string(global, self.package_carch))
+            return error.UnsupportedArchitecture;
+
+        const names = try self.resolve_array_field(content, vars, "pkgname");
+        defer freeStringSlice(self.allocator, names);
+        if (names.len > 0) {
+            for (names) |name|
+                try self.validate_package_architecture_override(content, vars, global, name);
+        } else if (vars.get("pkgname")) |name| {
+            try self.validate_package_architecture_override(content, vars, global, name);
+        }
+    }
+
+    fn validate_package_architecture_override(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+        global: []const []const u8,
+        package_name: []const u8,
+    ) !void {
+        var package_parser = self;
+        package_parser.selected_package_name = package_name;
+        const override = try package_parser.resolve_package_array_field(content, vars, "arch");
+        defer freeStringSlice(self.allocator, override);
+        if (override.len == 0) return;
+
+        try validate_architecture_entries(override);
+        if (contains_string(override, "any")) return;
+        for (override) |architecture|
+            if (!contains_string(global, architecture))
+                return error.InvalidArchitectureDirective;
+    }
+
+    fn validate_architecture_entries(architectures: []const []const u8) !void {
+        if (contains_string(architectures, "any") and architectures.len != 1)
+            return error.InvalidArchitectureDirective;
+        for (architectures, 0..) |architecture, index| {
+            for (architecture) |byte|
+                if (!std.ascii.isAlphanumeric(byte) and byte != '_')
+                    return error.InvalidArchitectureDirective;
+            for (architectures[0..index]) |earlier|
+                if (std.mem.eql(u8, earlier, architecture))
+                    return error.InvalidArchitectureDirective;
+        }
+    }
+
     const PackageFunctionState = struct {
         is_split: bool,
         has_generic: bool,
@@ -1224,6 +1280,17 @@ pub const PkgbuildParser = struct {
         }
 
         return values.toOwnedSlice(self.allocator);
+    }
+
+    fn resolve_effective_architecture_field(
+        self: PkgbuildParser,
+        content: []const u8,
+        vars: *std.StringHashMap([]const u8),
+    ) ![][]const u8 {
+        const effective = try self.resolve_package_array_field(content, vars, "arch");
+        if (effective.len > 0) return effective;
+        self.allocator.free(effective);
+        return self.resolve_array_field(content, vars, "arch");
     }
 
     fn tokenize(self: PkgbuildParser, expr: []const u8) ![][]const u8 {
@@ -5012,9 +5079,19 @@ test "replace_substring_expansion: multiple expansions in one string" {
     try std.testing.expectEqualStrings("abc and 456", result);
 }
 
+fn parse_test_pkgbuild(
+    parser: PkgbuildParser,
+    content: []const u8,
+    base_dir: ?[]const u8,
+) !Pkgbuild {
+    const complete = try std.fmt.allocPrint(parser.allocator, "arch=('any')\n{s}", .{content});
+    defer parser.allocator.free(complete);
+    return parser.parser_content(complete, base_dir);
+}
+
 test "parser_content resolves python-sabctools source as remote" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    var info = try parser.parser_content(
+    var info = try parse_test_pkgbuild(parser,
         \\pkgname=python-sabctools
         \\_name=sabctools
         \\pkgver=9.6.3
@@ -5034,7 +5111,7 @@ test "parser_content resolves python-sabctools source as remote" {
 
 test "parser_content expands Dropbox archive and signature sources" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    var info = try parser.parser_content(
+    var info = try parse_test_pkgbuild(parser,
         \\pkgname=dropbox
         \\pkgver=258.4.3749
         \\pkgrel=1
@@ -6005,6 +6082,7 @@ test "package_names_content discovers and resolves every split package member" {
     const content =
         \\_pkgbase=demo
         \\pkgname=("$_pkgbase" "${_pkgbase}-docs" "${_pkgbase}-debug")
+        \\arch=('any')
     ;
     var names = try parser.package_names_content(content);
     defer names.deinit(std.testing.allocator);
@@ -6079,7 +6157,7 @@ test "parser_content: scalar fields and raw arrays" {
         \\license=('MIT' 'GPL')
         \\arch=('x86_64' 'aarch64')
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("myapp", info.pkg_name.?);
@@ -6104,7 +6182,7 @@ test "parser_content: depends resolved through variable substitution" {
         \\_libver=1.0
         \\depends=('bash' 'somelib>=1.0')
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 2), info.depends.?.len);
@@ -6118,7 +6196,7 @@ test "parser_content: dangling version constraint on unresolved variable is stri
         \\pkgname=myapp
         \\depends=('somepkg>=$_missing_var')
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), info.depends.?.len);
@@ -6131,7 +6209,7 @@ test "parser_content: parsed_depends splits name, operator, and version" {
         \\pkgname=myapp
         \\depends=('bash' 'somelib>=1.0')
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 2), info.parsed_depends.?.len);
@@ -6152,7 +6230,7 @@ test "parser_content: array reference expansion via ${arr[@]}" {
         \\_common_deps=('bash' 'coreutils')
         \\depends=('${_common_deps[@]}' 'extra-pkg')
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 3), info.depends.?.len);
@@ -6173,7 +6251,7 @@ test "parser_content: local source file content is read via base_dir" {
         \\pkgname=myapp
         \\source=('fix.patch' 'https://example.com/upstream.tar.gz')
     ;
-    var info = try parser.parser_content(content, base_dir);
+    var info = try parse_test_pkgbuild(parser, content, base_dir);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 2), info.source.?.len);
@@ -6193,7 +6271,7 @@ test "parser_content: inline post_install is not treated as an install script" {
         \\  echo "installed"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
     try std.testing.expect(info.install_file == null);
 }
@@ -6213,7 +6291,7 @@ test "parser_content: resolves install filename without reading hook bodies" {
         \\pkgname=myapp
         \\install=myapp.install
     ;
-    var info = try parser.parser_content(content, base_dir);
+    var info = try parse_test_pkgbuild(parser, content, base_dir);
     defer info.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("myapp.install", info.install_file.?);
 }
@@ -6241,7 +6319,7 @@ test "parser_content: flutter-3382-bin resolves dependencies declared in package
         \\  )
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("flutter-3382-bin", info.pkg_name.?);
@@ -6268,7 +6346,7 @@ test "parser_content: selected split package isolates package-scoped dependencie
         \\  depends+=('readline')
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 2), info.depends.?.len);
@@ -6312,7 +6390,7 @@ test "parser_content: selected split package resolves package-scoped install fil
         \\  install="$pkgname.install"
         \\}
     ;
-    var info = try parser.parser_content(content, base_dir);
+    var info = try parse_test_pkgbuild(parser, content, base_dir);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("dms-shell-git.install", info.install_file.?);
@@ -6364,7 +6442,7 @@ test "parser_content: pkgname resolves when pkgbase is also present" {
         \\    rm -r "${pkgdir}/usr/share/rustdesk/files/"
         \\}
     ;
-    var info = try parser.parser_content(content, base_dir);
+    var info = try parse_test_pkgbuild(parser, content, base_dir);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("rustdesk-bin", info.pkg_name.?);
@@ -6515,7 +6593,7 @@ test "parser_content: selected split package install overrides global and siblin
         \\  install="$pkgname.install"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("demo-two.install", info.install_file.?);
@@ -6592,13 +6670,13 @@ test "parser_content: unresolved install variable fails before filesystem valida
 
     try std.testing.expectError(
         error.UnresolvedPkgbuildVariable,
-        parser.parser_content(content, null),
+        parse_test_pkgbuild(parser, content, null),
     );
 }
 
-test "parser_content: empty content produces empty arrays and null scalars" {
+test "parser_content: minimal content produces empty package metadata" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    var info = try parser.parser_content("", null);
+    var info = try parser.parser_content("arch=('any')\n", null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expect(info.pkg_name == null);
@@ -6617,6 +6695,7 @@ test "parser: reads PKGBUILD from disk and resolves relative base_dir" {
         \\pkgname=myapp
         \\pkgver=1.0.0
         \\pkgrel=1
+        \\arch=('any')
         \\source=('fix.patch')
         ,
     });
@@ -6826,7 +6905,7 @@ test "parser_content: execution steps follow makepkg execution order" {
         \\  make
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -6867,7 +6946,7 @@ test "parser_content: execution steps skip functions the PKGBUILD does not defin
         \\  install -Dm755 target/demo "$pkgdir/usr/bin/demo"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -6887,7 +6966,7 @@ test "parser_content: execution steps is null when no known functions are define
         \\  echo "not an execution step"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expect(info.execution == null);
@@ -6904,7 +6983,7 @@ test "parser_content: verify-only execution remains separate from extracted life
         \\  test -f "$1"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 0), info.execution.?.steps.len);
@@ -6937,7 +7016,7 @@ test "parser_content: execution steps resolve package-scoped function for select
         \\  make install-two
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -6961,7 +7040,7 @@ test "parser_content: execution steps fall back to package() when package-scoped
         \\  make install
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -6981,7 +7060,7 @@ test "parser_content: execution step bodies preserve nested blocks" {
         \\  fi
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7012,7 +7091,7 @@ test "parser_content: execution prelude preserves generic scalars arrays and app
         \\  for commit in "${_backports[@]}"; do echo "$commit"; done
         \\}
     ;
-    var info = try parser.parser_content(content, "/build/demo");
+    var info = try parse_test_pkgbuild(parser, content, "/build/demo");
     defer info.deinit(std.testing.allocator);
 
     const prelude = info.execution.?.shared_prelude;
@@ -7079,7 +7158,7 @@ test "parser_content: execution step expanded bodies resolve PKGBUILD and makepk
         \\  install -Dm644 README "$pkgdir/usr/share/doc/$pkgname/README"
         \\}
     ;
-    var info = try parser.parser_content(content, "/build/hello");
+    var info = try parse_test_pkgbuild(parser, content, "/build/hello");
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7112,7 +7191,7 @@ test "parser_content: execution step expansion respects single quotes and escape
         \\  echo \$pkgname stays literal
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7135,7 +7214,7 @@ test "parser_content: execution step expansion keeps runtime syntax for the shel
         \\  test $? -eq 0 && echo ${UNSET_VAR:-ok} $$
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7158,7 +7237,7 @@ test "parser_content: execution step expansion leaves directory variables litera
         \\  cd "$srcdir/$pkgname-$pkgver"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7184,7 +7263,7 @@ test "parser_content: execution step expansion uses selected split package for p
         \\  install -Dm644 license "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
         \\}
     ;
-    var info = try parser.parser_content(content, "/build/demo");
+    var info = try parse_test_pkgbuild(parser, content, "/build/demo");
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7212,7 +7291,7 @@ test "parser_content: execution step expansion applies parameter expansion opera
         \\  rel=$((pkgrel + 1))
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7240,7 +7319,7 @@ test "parser_content: execution step expansion keeps quoted heredoc bodies liter
         \\  echo "$pkgname"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7272,7 +7351,7 @@ test "parser_content: execution step expansion expands unquoted heredoc bodies" 
         \\EOF
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7307,7 +7386,7 @@ test "parser_content: execution step expansion shields nested heredocs inside qu
         \\  install -Dm644 README "$pkgdir/README"
         \\}
     ;
-    var info = try parser.parser_content(content, "/build/shelly");
+    var info = try parse_test_pkgbuild(parser, content, "/build/shelly");
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7330,7 +7409,7 @@ test "parser_content: execution step expansion shields nested heredocs inside qu
 test "parser_content: execution step expansion matches tab-indented heredoc terminators" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "pkgname=hello\n\npackage() {\n  cat <<-EOF\n\tbody line $pkgname\n\tEOF\n  echo done\n}";
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7351,7 +7430,7 @@ test "parser_content: execution step expansion does not mistake arithmetic shift
         \\  echo "$pkgname"
         \\}
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
 
     const steps = info.execution.?.steps;
@@ -7371,6 +7450,7 @@ test "parser_content: architecture sources and b2 sums follow makepkg ordering" 
     };
     const content =
         \\pkgname=qwen-code-bin
+        \\arch=('aarch64')
         \\source=('common.txt')
         \\source_x86_64=('x86.tar.gz')
         \\source_aarch64=('arm.tar.gz')
@@ -7391,6 +7471,147 @@ test "parser_content: architecture sources and b2 sums follow makepkg ordering" 
     try std.testing.expectEqualStrings("arm.tar.gz", info.no_extract.?[0]);
 }
 
+test "architecture-specific build dependencies merge active suffixes" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .package_carch = "aarch64",
+    };
+    const content =
+        \\pkgname=dependency-demo
+        \\arch=('x86_64' 'aarch64')
+        \\makedepends=('cmake>=3')
+        \\makedepends_x86_64=('nasm')
+        \\makedepends_aarch64=('meson')
+        \\checkdepends=('pytest')
+        \\checkdepends_x86_64=('dejagnu')
+        \\checkdepends_aarch64=('bats>=1')
+    ;
+    var info = try parser.parser_content(content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), info.make_depends.?.len);
+    try std.testing.expectEqualStrings("cmake>=3", info.make_depends.?[0]);
+    try std.testing.expectEqualStrings("meson", info.make_depends.?[1]);
+    try std.testing.expectEqual(@as(usize, 2), info.parsed_make_depends.?.len);
+    try std.testing.expectEqualStrings("cmake", info.parsed_make_depends.?[0].name);
+    try std.testing.expectEqualStrings("3", info.parsed_make_depends.?[0].version);
+    try std.testing.expectEqualStrings("meson", info.parsed_make_depends.?[1].name);
+
+    try std.testing.expectEqual(@as(usize, 2), info.check_depends.?.len);
+    try std.testing.expectEqualStrings("pytest", info.check_depends.?[0]);
+    try std.testing.expectEqualStrings("bats>=1", info.check_depends.?[1]);
+    try std.testing.expectEqual(@as(usize, 2), info.parsed_check_depends.?.len);
+    try std.testing.expectEqualStrings("bats", info.parsed_check_depends.?[1].name);
+    try std.testing.expectEqualStrings("1", info.parsed_check_depends.?[1].version);
+}
+
+test "architecture directives enforce makepkg rules" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+
+    var native = try parser.parser_content("pkgname=demo\narch=('x86_64')\n", null);
+    native.deinit(std.testing.allocator);
+    var portable = try parser.parser_content("pkgname=demo\narch=('any')\n", null);
+    portable.deinit(std.testing.allocator);
+
+    const custom_parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .package_carch = "custom_arch64",
+    };
+    var custom = try custom_parser.parser_content("pkgname=demo\narch=('custom_arch64')\n", null);
+    custom.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        parser.parser_content("pkgname=demo\n", null),
+    );
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        parser.parser_content("pkgname=demo\narch=()\n", null),
+    );
+    try std.testing.expectError(
+        error.UnsupportedArchitecture,
+        parser.parser_content("pkgname=demo\narch=('aarch64')\n", null),
+    );
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        parser.parser_content("pkgname=demo\narch=('x86_64' 'x86_64')\n", null),
+    );
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        parser.parser_content("pkgname=demo\narch=('x86-64' 'x86_64')\n", null),
+    );
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        parser.parser_content("pkgname=demo\narch=('any' 'x86_64')\n", null),
+    );
+}
+
+test "split architecture overrides validate every member and inherit empty arrays" {
+    const content =
+        \\pkgname=('demo-native' 'demo-foreign' 'demo-portable')
+        \\arch=('x86_64' 'aarch64')
+        \\package_demo-native() {
+        \\  arch=()
+        \\}
+        \\package_demo-foreign() {
+        \\  arch=('aarch64')
+        \\}
+        \\package_demo-portable() {
+        \\  arch=('any')
+        \\}
+    ;
+    const native_parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-native",
+    };
+    var native = try native_parser.parser_content(content, null);
+    defer native.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), native.arch.?.len);
+    try std.testing.expectEqualStrings("x86_64", native.arch.?[0]);
+    try std.testing.expectEqualStrings("aarch64", native.arch.?[1]);
+
+    const portable_parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "demo-portable",
+    };
+    var portable = try portable_parser.parser_content(content, null);
+    defer portable.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), portable.arch.?.len);
+    try std.testing.expectEqualStrings("any", portable.arch.?[0]);
+
+    const invalid_member_prefix =
+        \\pkgname=('demo-native' 'demo-invalid')
+        \\arch=('x86_64' 'aarch64')
+        \\package_demo-native() {
+        \\  arch=('x86_64')
+        \\}
+    ;
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        native_parser.parser_content(invalid_member_prefix ++
+            "\npackage_demo-invalid() {\n  arch=('riscv64')\n}\n", null),
+    );
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        native_parser.parser_content(invalid_member_prefix ++
+            "\npackage_demo-invalid() {\n  arch=('x86-64')\n}\n", null),
+    );
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        native_parser.parser_content(invalid_member_prefix ++
+            "\npackage_demo-invalid() {\n  arch=('any' 'x86_64')\n}\n", null),
+    );
+    try std.testing.expectError(
+        error.InvalidArchitectureDirective,
+        native_parser.parser_content(invalid_member_prefix ++
+            "\npackage_demo-invalid() {\n  arch=('aarch64' 'aarch64')\n}\n", null),
+    );
+}
+
 test "parser_content: resolves validpgpkeys as a global array" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content =
@@ -7400,7 +7621,7 @@ test "parser_content: resolves validpgpkeys as a global array" {
         \\  '89ABCDEF0123456789ABCDEF0123456789ABCDEF'
         \\)
     ;
-    var info = try parser.parser_content(content, null);
+    var info = try parse_test_pkgbuild(parser, content, null);
     defer info.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 2), info.valid_pgp_keys.?.len);
     try std.testing.expectEqualStrings(

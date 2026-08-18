@@ -370,6 +370,7 @@ test "PackageBuilder init keeps the provided collaborators" {
 
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
+        \\arch=('any')
         \\
         \\build() {
         \\  true
@@ -436,6 +437,7 @@ test "PackageBuilder rejects a legacy unwritable package tree" {
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
         \\pkgver=1
+        \\arch=('any')
         \\package() {
         \\  mkdir -p "$pkgdir/usr"
         \\}
@@ -454,6 +456,7 @@ test "PackageBuilder cannot perform privileged package filesystem operations" {
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
         \\pkgver=1
+        \\arch=('any')
         \\package() {
         \\  mkdir -p "$pkgdir/usr/share/demo"
         \\  mknod "$pkgdir/usr/share/demo/device" c 1 3
@@ -514,6 +517,7 @@ test "PackageBuilder rejects unsupported virtual ownership" {
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
         \\pkgver=1
+        \\arch=('any')
         \\package() {
         \\  mkdir -p "$pkgdir/usr/share/demo"
         \\  touch "$pkgdir/usr/share/demo/data"
@@ -1497,6 +1501,7 @@ test "PackageBuilder reports failure when a step exits non-zero" {
     var capture: CompletionCapture = .{};
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
+        \\arch=('any')
         \\
         \\build() {
         \\  exit 3
@@ -1530,6 +1535,7 @@ test "PackageBuilder reports failure instead of crashing without execution steps
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
         \\pkgver=1.0
+        \\arch=('any')
     , null, null);
     defer fixture.destroy();
 
@@ -1663,6 +1669,11 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
         \\xdata=('channel=stable')
         \\depends_x86_64=('glibc')
         \\makedepends=('zig')
+        \\makedepends_x86_64=('cmake')
+        \\makedepends_aarch64=('meson')
+        \\checkdepends=('pytest')
+        \\checkdepends_x86_64=('bats')
+        \\checkdepends_aarch64=('dejagnu')
         \\pkgver() {
         \\  printf '1.1.r4.gsplit\n'
         \\}
@@ -1704,6 +1715,12 @@ test "PackageBuilder preserves selected split metadata in PKGINFO" {
     try testing.expect(std.mem.indexOf(u8, main_info, "depend = pacman\n") != null);
     try testing.expect(std.mem.indexOf(u8, main_info, "depend = gtk4\n") != null);
     try testing.expect(std.mem.indexOf(u8, main_info, "depend = libarch\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "makedepend = zig\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "makedepend = cmake\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "makedepend = meson\n") == null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "checkdepend = pytest\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "checkdepend = bats\n") != null);
+    try testing.expect(std.mem.indexOf(u8, main_info, "checkdepend = dejagnu\n") == null);
     try testing.expect(std.mem.indexOf(u8, main_info, "optdepend = libstarfish: dependency viewer\n") != null);
     try testing.expect(std.mem.indexOf(u8, main_info, "group = shelly-tools\n") != null);
     try testing.expect(std.mem.indexOf(u8, main_info, "backup = etc/shelly.conf\n") != null);
@@ -1867,7 +1884,7 @@ test "PackageBuilder rejects wrong metadata types and skips unsupported split ar
         \\pkgname=('arch-native' 'arch-foreign')
         \\pkgver=1
         \\pkgrel=1
-        \\arch=('x86_64')
+        \\arch=('x86_64' 'aarch64')
         \\package_arch-native() {
         \\  mkdir -p "$pkgdir/usr/share/native"
         \\}
@@ -1895,6 +1912,24 @@ test "PackageBuilder rejects wrong metadata types and skips unsupported split ar
     const selected_info = try readPkgInfo(allocator, selected_artifacts[0].path);
     defer allocator.free(selected_info);
     try testing.expect(std.mem.indexOf(u8, selected_info, "xdata = pkgtype=split\n") != null);
+
+    var inherited_any = try Fixture.create(allocator,
+        \\pkgname=arch-any
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  arch=()
+        \\  mkdir -p "$pkgdir/usr/share/arch-any"
+        \\}
+    , null, null);
+    defer inherited_any.destroy();
+    const inherited_artifacts = try inherited_any.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, inherited_artifacts);
+    try testing.expect(std.mem.endsWith(u8, inherited_artifacts[0].path, "arch-any-1-1-any.pkg.tar.zst"));
+    const inherited_info = try readPkgInfo(allocator, inherited_artifacts[0].path);
+    defer allocator.free(inherited_info);
+    try testing.expect(std.mem.indexOf(u8, inherited_info, "arch = any\n") != null);
 }
 
 test "PackageBuilder honors check and overwrite policies" {
