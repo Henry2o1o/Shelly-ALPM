@@ -6,7 +6,7 @@ const test_support = @import("test_support.zig");
 const PackageBuilder = Zigalpm.builder.PackageBuilder;
 const standard_single_pane = @import("../output/standard_single_pane.zig");
 const ui_operation = @import("../output/ui_operation.zig");
-const MakePackageConfiguration = Zigalpm.builder.MakePackageConfiguration;
+const ShellyBuildConfiguration = Zigalpm.builder.ShellyBuildConfiguration;
 
 const command_path = "shelly build build";
 
@@ -77,11 +77,12 @@ const Real = struct {
         var completion: Zigalpm.OperationCompletionStatus = .failed;
         defer operation.finish(completion);
 
-        const makepkg = try MakePackageConfiguration.init(
+        const shellybuild = try ShellyBuildConfiguration.init(
             context.io,
             context.allocator,
+            context.environ,
         );
-        defer makepkg.deinit();
+        defer shellybuild.deinit();
 
         const pkgbuild_content = try std.Io.Dir.cwd().readFileAlloc(
             context.io,
@@ -93,7 +94,7 @@ const Real = struct {
         const pkgbuild_parser = Zigalpm.pkgbuild.Parser{
             .allocator = context.allocator,
             .io = context.io,
-            .package_carch = makepkg.package_carch,
+            .package_carch = shellybuild.build.carch,
         };
 
         var names = try pkgbuild_parser.package_names_content(pkgbuild_content);
@@ -129,7 +130,7 @@ const Real = struct {
                 .allocator = context.allocator,
                 .io = context.io,
                 .selected_package_name = name,
-                .package_carch = makepkg.package_carch,
+                .package_carch = shellybuild.build.carch,
             }).parser_content(pkgbuild_content, build_directory);
 
             parsed_count += 1;
@@ -185,20 +186,52 @@ const Real = struct {
             build_directory,
         );
 
+        const package_base = package_builds[0].variables.get("pkgbase") orelse
+            package_builds[0].pkg_name orelse return error.MissingPackageName;
+        const work_directory = if (shellybuild.destinations.build) |build_root|
+            try Zigalpm.builder.uniqueWorkDirectory(
+                context.allocator,
+                context.io,
+                build_root,
+                package_base,
+            )
+        else
+            try context.allocator.dupe(u8, build_directory);
+        defer context.allocator.free(work_directory);
+
         const builder = try PackageBuilder.init(
             context.allocator,
             package_builds,
             operation_context,
-            makepkg.*,
+            shellybuild.*,
             requested_names.items,
             .{
-                .build_directory = build_directory,
+                .start_directory = build_directory,
+                .work_directory = work_directory,
+                .package_destination = shellybuild.destinations.packages orelse build_directory,
+                .source_destination = shellybuild.destinations.sources orelse build_directory,
+                .log_destination = shellybuild.destinations.logs orelse build_directory,
                 .pkgbuild_path = pkgbuild_path,
                 .clean_after_success = !optionEnabled(invocation, "--keep-workdirs"),
                 .overwrite = !optionEnabled(invocation, "--no-overwrite"),
-                .run_check = optionEnabled(invocation, "--check"),
+                .run_check = if (optionEnabled(invocation, "--no-check"))
+                    false
+                else if (optionEnabled(invocation, "--check"))
+                    true
+                else
+                    shellybuild.build.check,
+                .sign = if (optionEnabled(invocation, "--nosign"))
+                    false
+                else if (optionEnabled(invocation, "--sign"))
+                    true
+                else
+                    shellybuild.package.sign,
+                .sign_key = optionValue(invocation, "--key") orelse shellybuild.package.sign_key,
+                .run_verify = !optionEnabled(invocation, "--noverify"),
                 .skip_source_pgp_verification = optionEnabled(invocation, "--skip-source-pgp-verification"),
                 .reviewed_pkgbuild_digest = expected_digest,
+                .install_scripts = review.install_scripts,
+                .reviewed_files = review.reviewed_files,
                 .sources_prepared = false,
             },
             context.environ,
@@ -357,10 +390,12 @@ test "coordinator build options preserve selected packages and reviewed digest" 
         "--package",
         "demo-docs",
         "--check",
+        "--noverify",
         "/tmp/PKGBUILD",
     });
     try std.testing.expect(optionEnabled(&outcome.dispatch, "--coordinator-child"));
     try std.testing.expect(optionEnabled(&outcome.dispatch, "--check"));
+    try std.testing.expect(optionEnabled(&outcome.dispatch, "--noverify"));
     try std.testing.expectEqualStrings(encoded, optionValue(&outcome.dispatch, "--review-digest").?);
     var selected: usize = 0;
     for (outcome.dispatch.options) |option| {
