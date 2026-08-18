@@ -3,8 +3,14 @@ const operation_api = @import("operation_context");
 const pkgbuild_parser = @import("../../pkgbuild/pkgbuild_parser.zig");
 const pkgbuild_validation = @import("pkgbuild_validation.zig");
 const review_integrity = @import("../review_integrity.zig");
+const install_script = @import("../../pkgbuild/install_script.zig");
 
 pub const Digest = [std.crypto.hash.sha2.Sha256.digest_length]u8;
+
+pub const ReviewedFile = struct {
+    name: []const u8,
+    contents: []const u8,
+};
 
 const binary_review_message =
     "Binary file (content is not displayed). Review the file's source and checksum before proceeding.";
@@ -15,11 +21,21 @@ pub const PreparedPkgbuildReview = struct {
     findings: []operation_api.ReviewFinding,
     related_files: []operation_api.QuestionAttachment,
     reviewed_file_names: []const []const u8,
+    /// Byte-exact snapshots for every reviewed local, install, and changelog
+    /// file. Packaging consumes these bytes rather than reopening paths after
+    /// approval.
+    reviewed_files: []const ReviewedFile,
+    /// Exact reviewed bytes for every distinct package install script.
+    install_scripts: []install_script.Script,
+    /// SHA-256 of the PKGBUILD itself, as required by BUILDINFO v2.
+    pkgbuild_digest: Digest,
+    /// Integrity digest covering the PKGBUILD and every reviewed related file.
     digest: Digest,
 
     pub fn deinit(self: *PreparedPkgbuildReview) void {
         const allocator = self.arena.allocator();
         for (self.validations) |*validation| validation.deinit(allocator);
+        for (self.install_scripts) |*script| script.deinit(allocator);
         self.arena.deinit();
         self.* = undefined;
     }
@@ -71,20 +87,15 @@ pub fn preparePkgbuildReview(
     var validation_count: usize = 0;
     var findings: std.ArrayList(operation_api.ReviewFinding) = .empty;
     var reviewed_names = std.StringHashMap(void).init(allocator);
+    var install_names = std.StringHashMap(void).init(allocator);
 
-    for (package_builds, validations) |*package_build, *validation| {
-        validation.* = try pkgbuild_validation.validatePkgbuildInfo(
-            allocator,
-            io,
-            package_build,
-            build_directory,
-            pkgbuild_content,
-        );
-        validation_count += 1;
-        try appendValidationFindings(allocator, &findings, validation);
-
-        if (package_build.install_file) |install_file|
+    for (package_builds) |*package_build| {
+        if (package_build.install_file) |install_file| {
             try reviewed_names.put(install_file, {});
+            try install_names.put(install_file, {});
+        }
+        if (package_build.changelog_file) |changelog_file|
+            try reviewed_names.put(changelog_file, {});
         if (package_build.local_source_files) |files| for (files) |file_name|
             try reviewed_names.put(file_name, {});
     }
@@ -96,8 +107,11 @@ pub fn preparePkgbuildReview(
         file_names[name_index] = try allocator.dupe(u8, name.*);
     std.mem.sort([]const u8, file_names, {}, stringBefore);
 
+    const reviewed_files = try allocator.alloc(ReviewedFile, file_names.len);
     const related_files = try allocator.alloc(operation_api.QuestionAttachment, file_names.len);
-    for (file_names, related_files) |file_name, *attachment| {
+    const scripts = try allocator.alloc(install_script.Script, install_names.count());
+    var script_count: usize = 0;
+    for (file_names, related_files, reviewed_files) |file_name, *attachment, *reviewed_file| {
         try review_integrity.requireReviewedFile(allocator, io, build_directory, file_name);
         const path = try std.fs.path.join(allocator, &.{ build_directory, file_name });
         const content = try std.Io.Dir.cwd().readFileAlloc(
@@ -110,24 +124,41 @@ pub fn preparePkgbuildReview(
             .name = file_name,
             .content = if (std.unicode.utf8ValidateSlice(content)) content else binary_review_message,
         };
+        reviewed_file.* = .{ .name = file_name, .contents = content };
+        if (install_names.contains(file_name)) {
+            scripts[script_count] = try install_script.Script.init(allocator, file_name, content);
+            script_count += 1;
+        }
+    }
+
+    for (package_builds, validations) |*package_build, *validation| {
+        validation.* = try pkgbuild_validation.validatePkgbuildInfoWithInstallScript(
+            allocator,
+            io,
+            package_build,
+            build_directory,
+            pkgbuild_content,
+            findInstallScript(scripts[0..script_count], package_build.install_file),
+        );
+        validation_count += 1;
+        try appendValidationFindings(allocator, &findings, validation);
     }
 
     // Finish every arena-backed allocation before copying the arena into the
     // returned owner. Allocating after the copy can leave its chunk list stale.
     const owned_findings = try findings.toOwnedSlice(allocator);
-    const digest = try digestReview(
-        allocator,
-        io,
-        build_directory,
-        pkgbuild_content,
-        file_names,
-    );
+    const digest = digestLoadedReview(pkgbuild_content, reviewed_files);
+    var pkgbuild_digest: Digest = undefined;
+    std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
     return .{
         .arena = arena,
         .validations = validations[0..validation_count],
         .findings = owned_findings,
         .related_files = related_files,
         .reviewed_file_names = file_names,
+        .reviewed_files = reviewed_files,
+        .install_scripts = scripts[0..script_count],
+        .pkgbuild_digest = pkgbuild_digest,
         .digest = digest,
     };
 }
@@ -138,7 +169,7 @@ fn appendValidationFindings(
     validation: *const pkgbuild_validation.PkgbuildValidation,
 ) !void {
     for ([_][]const pkgbuild_validation.ValidationFinding{
-        validation.post_install.findings.items,
+        validation.scripts.findings.items,
         validation.homograph.findings.items,
         validation.local_source.findings.items,
     }) |source| for (source) |finding| try destination.append(allocator, .{
@@ -152,6 +183,26 @@ fn appendValidationFindings(
         .matched_line = finding.matched_line,
         .message = finding.message,
     });
+}
+
+fn findInstallScript(
+    scripts: []install_script.Script,
+    file_name: ?[]const u8,
+) ?*const install_script.Script {
+    const wanted = file_name orelse return null;
+    for (scripts) |*script| {
+        if (std.mem.eql(u8, script.file_name, wanted)) return script;
+    }
+    return null;
+}
+
+fn digestLoadedReview(pkgbuild_content: []const u8, files: anytype) Digest {
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    hashReviewField(&hash, "PKGBUILD", pkgbuild_content);
+    for (files) |file| hashReviewField(&hash, file.name, file.contents);
+    var digest: Digest = undefined;
+    hash.final(&digest);
+    return digest;
 }
 
 fn digestReview(
@@ -206,14 +257,22 @@ test "aggregate split-package review includes member-specific files and detects 
     const build_directory = try temporary.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(build_directory);
     try temporary.dir.writeFile(io, .{ .sub_path = "one.patch", .data = "one\n" });
-    try temporary.dir.writeFile(io, .{ .sub_path = "two.install", .data = "post_install() { true; }\n" });
+    try temporary.dir.writeFile(io, .{ .sub_path = "one.changelog", .data = "release one\n" });
+    const install_contents =
+        "helper() { true; }\n" ++
+        "pre_install() { helper \"$1\"; }\n" ++
+        "post_upgrade() { true; }\n";
+    try temporary.dir.writeFile(io, .{ .sub_path = "two.install", .data = install_contents });
     const content =
         \\pkgbase=review-demo
         \\pkgname=('review-one' 'review-two')
         \\pkgver=1
         \\pkgrel=1
+        \\arch=('any')
         \\source=('one.patch')
-        \\package_review-one() { true; }
+        \\package_review-one() {
+        \\  changelog=one.changelog
+        \\}
         \\package_review-two() {
         \\  install=two.install
         \\}
@@ -233,11 +292,22 @@ test "aggregate split-package review includes member-specific files and detects 
 
     var review = try preparePkgbuildReview(allocator, io, build_directory, content, &builds);
     defer review.deinit();
-    try std.testing.expectEqual(@as(usize, 2), review.related_files.len);
+    try std.testing.expectEqual(@as(usize, 3), review.related_files.len);
+    try std.testing.expectEqual(@as(usize, 3), review.reviewed_files.len);
+    try std.testing.expectEqual(@as(usize, 1), review.install_scripts.len);
+    try std.testing.expectEqualStrings("two.install", review.install_scripts[0].file_name);
+    try std.testing.expectEqualStrings(install_contents, review.install_scripts[0].contents);
 
     const pkgbuild_path = try std.fs.path.join(allocator, &.{ build_directory, "PKGBUILD" });
     defer allocator.free(pkgbuild_path);
     try temporary.dir.writeFile(io, .{ .sub_path = "PKGBUILD", .data = content });
+    try review.verifyCurrent(allocator, io, pkgbuild_path, build_directory);
+    try temporary.dir.writeFile(io, .{ .sub_path = "two.install", .data = "post_install() { false; }\n" });
+    try std.testing.expectError(
+        error.ReviewedPkgbuildChanged,
+        review.verifyCurrent(allocator, io, pkgbuild_path, build_directory),
+    );
+    try temporary.dir.writeFile(io, .{ .sub_path = "two.install", .data = install_contents });
     try review.verifyCurrent(allocator, io, pkgbuild_path, build_directory);
     try temporary.dir.writeFile(io, .{ .sub_path = "one.patch", .data = "changed\n" });
     try std.testing.expectError(

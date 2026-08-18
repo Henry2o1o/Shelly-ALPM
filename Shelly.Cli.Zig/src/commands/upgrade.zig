@@ -625,7 +625,8 @@ fn runAur(
     const build_command = std.mem.trimEnd(u8, executable, " (deleted)");
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
         .root = true,
-        .no_check = !optionEnabled(invocation, "--check"),
+        .check = checkOverride(invocation),
+        .sign = signOverride(invocation),
         .build_command = build_command,
     });
     defer manager.deinit();
@@ -661,6 +662,18 @@ fn runAur(
         );
     }
     try manager.updatePackages(package_names);
+}
+
+fn checkOverride(invocation: *const parser.Invocation) ?bool {
+    if (optionEnabled(invocation, "--no-check")) return false;
+    if (optionEnabled(invocation, "--check")) return true;
+    return null;
+}
+
+fn signOverride(invocation: *const parser.Invocation) ?bool {
+    if (optionEnabled(invocation, "--nosign")) return false;
+    if (optionEnabled(invocation, "--sign")) return true;
+    return null;
 }
 
 fn rebaseEolFlatpaks(

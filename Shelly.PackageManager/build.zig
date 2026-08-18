@@ -1,4 +1,5 @@
 const std = @import("std");
+const package_manifest = @import("build.zig.zon");
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -17,6 +18,10 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
     const shelly_http = b.dependency("shelly_http", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const toml = b.dependency("toml", .{
         .target = target,
         .optimize = optimize,
     });
@@ -76,6 +81,13 @@ pub fn build(b: *std.Build) void {
     mod.addImport("archive", archive_mod);
     mod.addImport("operation_context", operation_context_mod);
     mod.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
+    mod.addImport("toml", toml.module("toml"));
+    const package_options = b.addOptions();
+    package_options.addOption([]const u8, "version", package_manifest.version);
+    // Keep this generated module distinct from consumers that independently
+    // expose an identically-valued `version` option.
+    package_options.addOption(bool, "is_package_manager", true);
+    mod.addOptions("package_options", package_options);
 
     // PackageManager imports only the backend's data-only protocol module.
     // The native implementation is discovered with dlopen at runtime and is
@@ -211,22 +223,24 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
-    const makepackage_test_module = b.createModule(.{
-        .root_source_file = b.path("src/aur/makepackage.zig"),
+    const shellybuild_test_module = b.createModule(.{
+        .root_source_file = b.path("src/aur/shellybuild.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const makepackage_tests = b.addTest(.{
-        .name = "makepackage-test",
-        .root_module = makepackage_test_module,
+    shellybuild_test_module.addImport("toml", toml.module("toml"));
+    shellybuild_test_module.addImport("operation_context", operation_context_mod);
+    const shellybuild_tests = b.addTest(.{
+        .name = "shellybuild-test",
+        .root_module = shellybuild_test_module,
     });
-    const run_makepackage_tests = b.addRunArtifact(makepackage_tests);
-    test_step.dependOn(&run_makepackage_tests.step);
-    const makepackage_test_step = b.step(
-        "makepackage-test",
-        "Run makepkg configuration parser tests",
+    const run_shellybuild_tests = b.addRunArtifact(shellybuild_tests);
+    test_step.dependOn(&run_shellybuild_tests.step);
+    const shellybuild_test_step = b.step(
+        "shellybuild-test",
+        "Run shellybuild configuration parser tests",
     );
-    makepackage_test_step.dependOn(&run_makepackage_tests.step);
+    shellybuild_test_step.dependOn(&run_shellybuild_tests.step);
 
     // Local package tests are isolated from the package manager's live-system
     // integration tests and use only temporary configured roots.
@@ -278,6 +292,10 @@ pub fn build(b: *std.Build) void {
             "embedded whitespace does not bypass homograph analysis",
             "risky tool in local_source_contents produces finding",
             "aggregate split-package review includes member-specific files and detects changes",
+            "install script discovers every libalpm hook and preserves exact bytes",
+            "install script uses the last duplicate hook definition",
+            "install script classifies helpers hooks and top-level code",
+            "install script scanner covers top-level helpers and hooks",
         },
     });
     const run_pkgbuild_review_tests = b.addRunArtifact(pkgbuild_review_tests);
@@ -529,6 +547,23 @@ pub fn build(b: *std.Build) void {
             "AUR git remote and VCS suffix parsing mirror the C# manager",
             "VCS source parser replicates git source filtering and variable expansion",
             "parser_content:",
+            "architecture-specific build dependencies merge active suffixes",
+            "architecture directives enforce makepkg rules",
+            "split architecture overrides validate every member and inherit empty arrays",
+            "package metadata schema matches makepkg package overrides",
+            "package metadata decoder preserves empty and multiline values",
+            "package metadata decoder rejects type mismatch records",
+            "signed Git source parser accepts query before or after fragment",
+            "bare Git protocol source parser preserves location and supports metadata",
+            "detached source pairing handles exact renamed and compressed payload names",
+            "source PGP status",
+            "source PGP pin validation",
+            "source PGP verifier validates pinned-untrusted detached signatures without private keys",
+            "package signer rejects missing keys without creating a signature",
+            "install script discovers every libalpm hook and preserves exact bytes",
+            "install script uses the last duplicate hook definition",
+            "install script classifies helpers hooks and top-level code",
+            "install script scanner covers top-level helpers and hooks",
             "VCS store round trips the C# compatible JSON shape and cleans orphans",
             "VCS package checks execute concurrently and retain per-package results",
             "VCS checks retry and baseline transiently failed sources",
@@ -544,21 +579,45 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder cannot perform privileged package filesystem operations",
             "PackageBuilder simulates root ownership without host chown",
             "PackageBuilder rejects unsupported virtual ownership",
-            "PackageBuilder runs execution steps in the configured build directory",
+            "PackageBuilder runs source-less execution steps inside srcdir",
+            "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata",
+            "PackageBuilder exports configured build environment to lifecycle steps",
+            "PackageBuilder honors PKGBUILD build flag make flag and LTO negations",
+            "PackageBuilder packages exact reviewed install and changelog files",
+            "PackageBuilder strips ELF debug sections unless PKGBUILD disables strip",
             "PackageBuilder runs local declarations and reviewed helper functions inside package steps",
             "PackageBuilder accepts b2 checksums and honors noextract",
             "PackageBuilder stages and verifies local sources before build steps",
+            "PackageBuilder runs verify after integrity checks and before extraction",
+            "PackageBuilder verify failure preserves the committed src tree",
+            "PackageBuilder supports noverify and PGP-skip verify policies",
+            "PackageBuilder runs verify once for all split package members",
+            "PackageBuilder verifies pinned detached signatures from the user keyring",
+            "PackageBuilder rejects bad signatures atomically unless explicitly skipped",
+            "PackageBuilder verifies signatures over compressed payload contents",
+            "PackageBuilder verifies signed Git sources requested with signed",
+            "PackageBuilder signs published packages with the configured signing key",
+            "PackageBuilder fails atomically when the signing key is unavailable",
+            "PackageBuilder leaves packages unsigned when signing is disabled",
             "PackageBuilder rejects a source checksum mismatch without committing srcdir",
             "PackageBuilder extracts source archives into srcdir",
             "PackageBuilder downloads renamed file sources before build steps",
             "PackageBuilder rejects unsupported source protocols",
             "PackageBuilder cancels source preparation without committing srcdir",
-            "PackageBuilder clones renamed git sources into srcdir before pkgver",
+            "PackageBuilder runs relative VCS paths from srcdir before pkgver",
+            "PackageBuilder applies generic patch arrays and propagates dynamic pkgver",
+            "PackageBuilder rejects invalid dynamic pkgver output",
+            "PackageBuilder tees stdout and stderr to a successful durable log",
+            "PackageBuilder retains failed and cancelled build logs",
+            "PackageBuilder fails before PKGBUILD execution when log destination is unusable",
             "PackageBuilder reports failure when a step exits non-zero",
             "PackageBuilder reports failure instead of crashing without execution steps",
             "PackageBuilder builds all requested split members after shared steps run once",
             "PackageBuilder keeps shared split builds under the global pkgname",
             "PackageBuilder preserves selected split metadata in PKGINFO",
+            "PackageBuilder isolates unset metadata between split members",
+            "PackageBuilder enforces makepkg package function contracts",
+            "PackageBuilder rejects wrong metadata types and skips unsupported split architectures",
             "PackageBuilder honors check and overwrite policies",
             "PackageBuilder cleans work directories only after successful configured builds",
             "PackageBuilder rolls back completed split artifacts when a later member fails",
@@ -569,6 +628,8 @@ pub fn build(b: *std.Build) void {
             "coordinator child build arguments bind review package set and policies",
             "clean invoking-user build command drops the elevated environment",
             "build progress parser recognizes makepkg percentage lines",
+            "build environment exports flags hosts and compiler wrapper paths",
+            "disabled build environment removes inherited flags and hosts",
             "streaming process execution forwards stdout stderr and a final unterminated line",
             "streaming process execution delivers output before the child exits",
             "streaming process execution terminates when the shared operation is cancelled",
