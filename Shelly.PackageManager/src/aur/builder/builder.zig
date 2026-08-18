@@ -1152,12 +1152,13 @@ pub const PackageBuilder = struct {
         const capture_metadata = package_step;
         const executable_body = try std.fmt.allocPrint(
             self.allocator,
-            "{s}\n{s}\n{s}\ndeclare -- startdir=\"$4\"\ndeclare -- srcdir=\"$5\"\n{s}\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
+            "{s}\n{s}\n{s}\ndeclare -- startdir=\"$4\"\ndeclare -- srcdir=\"$5\"\n{s}\n{s}\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
             .{
                 if (package_step) virtualMetadataShellPrelude else "",
                 if (package_step) package_metadata.shell_capture_prelude else "",
                 execution_prelude,
                 if (package_step) "declare -- pkgdir=\"$6\"" else "",
+                messagingShellPrelude,
                 helper_definitions,
                 body,
                 if (capture_pkgver) "__shelly_step > \"$2\"" else "__shelly_step",
@@ -1972,6 +1973,36 @@ fn collectInstalledPackages(allocator: std.mem.Allocator) ![][]u8 {
     }.before);
     return installed.toOwnedSlice(allocator);
 }
+
+/// makepkg messaging helpers (util/message.sh). PKGBUILDs call these from any
+/// lifecycle function; step output is piped, so colors stay off like makepkg
+/// does for non-terminal output. Defined before PKGBUILD helpers so a
+/// PKGBUILD that ships its own definitions keeps overriding them.
+const messagingShellPrelude =
+    \\msg() {
+    \\  local mesg=$1; shift
+    \\  printf "==> ${mesg}\n" "$@"
+    \\}
+    \\msg2() {
+    \\  local mesg=$1; shift
+    \\  printf "  -> ${mesg}\n" "$@"
+    \\}
+    \\plain() {
+    \\  local mesg=$1; shift
+    \\  printf "    ${mesg}\n" "$@"
+    \\}
+    \\plainerr() {
+    \\  plain "$@" >&2
+    \\}
+    \\warning() {
+    \\  local mesg=$1; shift
+    \\  printf "==> WARNING: ${mesg}\n" "$@" >&2
+    \\}
+    \\error() {
+    \\  local mesg=$1; shift
+    \\  printf "==> ERROR: ${mesg}\n" "$@" >&2
+    \\}
+;
 
 /// Bash functions used only for package() and package_<name>(). They simulate
 /// the common fakeroot ownership operations without changing host ownership.

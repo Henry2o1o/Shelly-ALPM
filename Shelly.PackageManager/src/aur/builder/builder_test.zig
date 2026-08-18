@@ -766,6 +766,40 @@ test "PackageBuilder runs source-less execution steps inside srcdir" {
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
 }
 
+test "PackageBuilder provides makepkg messaging helpers to lifecycle steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=messaging-demo
+        \\pkgver=1.0
+        \\arch=('any')
+        \\
+        \\build() {
+        \\  msg 'building %s' "$pkgname"
+        \\  msg2 'compiling'
+        \\  plain 'detail line'
+        \\  plainerr 'detail on stderr'
+        \\  warning 'non-fatal warning'
+        \\  error 'non-fatal error message'
+        \\  echo built > build-marker
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\  echo packaged > "$pkgdir/package-marker"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+
+    // Like makepkg, error() reports without aborting the step.
+    try fixture.temporary.dir.access(io, "src/build-marker", .{});
+    try fixture.temporary.dir.access(io, "pkg/messaging-demo/package-marker", .{});
+}
+
 test "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata" {
     const allocator = testing.allocator;
     const io = testing.io;
