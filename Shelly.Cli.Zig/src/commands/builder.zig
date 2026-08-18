@@ -220,6 +220,13 @@ const Real = struct {
                     true
                 else
                     shellybuild.build.check,
+                .sign = if (optionEnabled(invocation, "--nosign"))
+                    false
+                else if (optionEnabled(invocation, "--sign"))
+                    true
+                else
+                    shellybuild.package.sign,
+                .sign_key = optionValue(invocation, "--key") orelse shellybuild.package.sign_key,
                 .run_verify = !optionEnabled(invocation, "--noverify"),
                 .skip_source_pgp_verification = optionEnabled(invocation, "--skip-source-pgp-verification"),
                 .reviewed_pkgbuild_digest = expected_digest,

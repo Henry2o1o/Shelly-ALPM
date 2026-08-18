@@ -13,6 +13,7 @@ const downloader = @import("../../shared/downloader.zig");
 const package_options = @import("package_options");
 const install_script = @import("../../pkgbuild/install_script.zig");
 const source_pgp_verifier = @import("../../shared/source_pgp_verifier.zig");
+const package_signer = @import("../../shared/package_signer.zig");
 const alpm_bindings = @import("../../alpm/bindings.zig").libalpm;
 const raw_alpm = alpm_bindings.alpm;
 
@@ -47,6 +48,17 @@ pub const BuildOptions = struct {
     /// callers normally leave this null so GnuPG uses the invoking user's
     /// keyring through the builder's sanitized environment.
     source_pgp_gnupg_home: ?[]const u8 = null,
+    /// Signs each published package archive with a detached binary OpenPGP
+    /// signature, matching makepkg's --sign behavior.
+    sign: bool = false,
+    /// Key id or fingerprint passed to GPG's --local-user when signing; null
+    /// selects the default key from the invoking user's keyring, matching
+    /// makepkg's GPGKEY.
+    sign_key: ?[]const u8 = null,
+    /// Optional signing keyring override for isolated builds and tests.
+    /// Production callers normally leave this null so GnuPG uses the
+    /// invoking user's keyring through the builder's sanitized environment.
+    sign_gnupg_home: ?[]const u8 = null,
     start_directory: []const u8,
     work_directory: []const u8,
     package_destination: []const u8,
@@ -319,7 +331,7 @@ pub const PackageBuilder = struct {
         var artifacts: std.ArrayList(BuildArtifact) = .empty;
         errdefer {
             for (artifacts.items) |artifact| {
-                std.Io.Dir.cwd().deleteFile(self.io, artifact.path) catch {};
+                self.removePublishedArtifact(artifact.path);
                 artifact.deinit(self.allocator);
             }
             artifacts.deinit(self.allocator);
@@ -356,7 +368,7 @@ pub const PackageBuilder = struct {
                 return error.ReviewedPkgbuildChanged;
             const artifact = try self.assemblePackage(package_build);
             artifacts.append(self.allocator, artifact) catch |err| {
-                std.Io.Dir.cwd().deleteFile(self.io, artifact.path) catch {};
+                self.removePublishedArtifact(artifact.path);
                 artifact.deinit(self.allocator);
                 return err;
             };
@@ -1539,11 +1551,68 @@ pub const PackageBuilder = struct {
             try writer.addDirectory(pkgdir);
             try writer.finish();
         }
+
+        var temporary_signature_path: ?[]u8 = null;
+        defer if (temporary_signature_path) |path| self.allocator.free(path);
+        errdefer if (temporary_signature_path) |path| {
+            std.Io.Dir.cwd().deleteFile(self.io, path) catch {};
+        };
+        if (self.options.sign) {
+            try self.logPhase("signing");
+            temporary_signature_path = try std.fmt.allocPrint(
+                self.allocator,
+                "{s}.sig",
+                .{temporary_path},
+            );
+            try self.signPackageArchive(temporary_path, temporary_signature_path.?);
+        }
+
         try std.Io.Dir.cwd().rename(temporary_path, std.Io.Dir.cwd(), output_path, self.io);
+        errdefer if (self.options.sign) {
+            std.Io.Dir.cwd().deleteFile(self.io, output_path) catch {};
+        };
+        if (self.options.sign) {
+            const output_signature_path = try std.fmt.allocPrint(
+                self.allocator,
+                "{s}.sig",
+                .{output_path},
+            );
+            defer self.allocator.free(output_signature_path);
+            errdefer std.Io.Dir.cwd().deleteFile(self.io, output_signature_path) catch {};
+            try std.Io.Dir.cwd().rename(
+                temporary_signature_path.?,
+                std.Io.Dir.cwd(),
+                output_signature_path,
+                self.io,
+            );
+        }
 
         const owned_name = try self.allocator.dupe(u8, package_name);
         errdefer self.allocator.free(owned_name);
         return .{ .path = output_path, .package_name = owned_name };
+    }
+
+    fn signPackageArchive(
+        self: *PackageBuilder,
+        payload_path: []const u8,
+        signature_path: []const u8,
+    ) !void {
+        const signer = package_signer.Signer{
+            .allocator = self.allocator,
+            .io = self.io,
+            .environ = self.environ,
+            .gnupg_home = self.options.sign_gnupg_home,
+        };
+        try signer.signDetached(payload_path, signature_path, self.options.sign_key);
+    }
+
+    /// Removes a published archive together with its detached signature, if
+    /// one exists, so rollbacks never leave orphaned signature files.
+    fn removePublishedArtifact(self: *PackageBuilder, path: []const u8) void {
+        std.Io.Dir.cwd().deleteFile(self.io, path) catch {};
+        const signature_path = std.fmt.allocPrint(self.allocator, "{s}.sig", .{path}) catch return;
+        defer self.allocator.free(signature_path);
+        std.Io.Dir.cwd().deleteFile(self.io, signature_path) catch {};
     }
 
     fn findInstallScript(self: *const PackageBuilder, file_name: []const u8) ?*const install_script.Script {

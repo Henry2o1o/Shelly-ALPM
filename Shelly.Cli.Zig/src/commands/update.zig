@@ -235,6 +235,7 @@ fn runAur(
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
         .root = true,
         .check = checkOverride(invocation),
+        .sign = signOverride(invocation),
         .build_command = build_command,
         .operation_context = operation_context,
     });
@@ -247,6 +248,12 @@ fn runAur(
 fn checkOverride(invocation: *const parser.Invocation) ?bool {
     if (optionEnabled(invocation, "--no-check")) return false;
     if (optionEnabled(invocation, "--check")) return true;
+    return null;
+}
+
+fn signOverride(invocation: *const parser.Invocation) ?bool {
+    if (optionEnabled(invocation, "--nosign")) return false;
+    if (optionEnabled(invocation, "--sign")) return true;
     return null;
 }
 

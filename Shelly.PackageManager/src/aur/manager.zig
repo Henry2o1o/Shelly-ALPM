@@ -44,6 +44,7 @@ pub const InitOptions = struct {
     temp_path: ?[]const u8 = null,
     show_hidden_packages: bool = false,
     check: ?bool = null,
+    sign: ?bool = null,
     cache_root: ?[]const u8 = null,
     aur_git_base_url: []const u8 = "https://aur.archlinux.org",
     makepkg_command: ?[]const u8 = null,
@@ -182,6 +183,8 @@ pub const Manager = struct {
     chroot_path: []u8,
     use_chroot: bool,
     no_check: bool,
+    sign: bool,
+    sign_key: ?[]const u8,
     skip_optional_dependency_prompt: bool = false,
     pkgbuild_approval_handler: ?PkgbuildApprovalHandler = null,
     operation_context: ?*operation_api.OperationContext = null,
@@ -263,6 +266,11 @@ pub const Manager = struct {
                 false
             else
                 shellybuild_config.build.check),
+            .sign = options.sign orelse if (options.use_chroot or options.makepkg_command != null)
+                false
+            else
+                shellybuild_config.package.sign,
+            .sign_key = shellybuild_config.package.sign_key,
             .operation_context = options.operation_context,
         };
         self.vcs_store.loadFile(self.io(), self.vcs_store_path) catch {};
@@ -1551,6 +1559,8 @@ pub const Manager = struct {
                 .overwrite = !historical,
                 .clean_after_success = !historical,
                 .skip_source_pgp_verification = false,
+                .sign = self.sign,
+                .sign_key = self.sign_key,
                 .start_directory = prepared.cache_path,
                 .work_directory = work_directory,
                 .package_destination = self.shellybuild_config.destinations.packages orelse prepared.cache_path,
@@ -1588,6 +1598,8 @@ pub const Manager = struct {
             requested_names,
             &digest_hex,
             self.no_check,
+            self.sign,
+            self.sign_key,
             historical,
         );
 
@@ -2341,6 +2353,8 @@ fn appendShellyBuildArguments(
     requested_names: []const []const u8,
     digest_hex: []const u8,
     no_check: bool,
+    sign: bool,
+    sign_key: ?[]const u8,
     historical: bool,
 ) !void {
     try arguments.appendSlice(allocator, &.{
@@ -2353,6 +2367,9 @@ fn appendShellyBuildArguments(
     for (requested_names) |requested_name|
         try arguments.appendSlice(allocator, &.{ "--package", requested_name });
     try arguments.append(allocator, if (no_check) "--no-check" else "--check");
+    try arguments.append(allocator, if (sign) "--sign" else "--nosign");
+    if (sign_key) |key|
+        try arguments.appendSlice(allocator, &.{ "--key", key });
     if (historical) {
         try arguments.append(allocator, "--no-overwrite");
         try arguments.append(allocator, "--keep-workdirs");
@@ -2431,6 +2448,7 @@ fn forwardBuildLine(data: ?*anyopaque, stream: builder.StreamKind, line: []const
 
 test "coordinator child build arguments bind review package set and policies" {
     const digest = "5a" ** std.crypto.hash.sha2.Sha256.digest_length;
+    const sign_key = "CE4814F7337B98A2527A32F8FCEBF9274CA93649";
     var upgrade: std.ArrayList([]const u8) = .empty;
     defer upgrade.deinit(std.testing.allocator);
     try appendShellyBuildArguments(
@@ -2440,6 +2458,8 @@ test "coordinator child build arguments bind review package set and policies" {
         &.{ "demo", "demo-docs" },
         digest,
         false,
+        true,
+        sign_key,
         false,
     );
     const expected_upgrade = [_][]const u8{
@@ -2453,6 +2473,9 @@ test "coordinator child build arguments bind review package set and policies" {
         "--package",
         "demo-docs",
         "--check",
+        "--sign",
+        "--key",
+        sign_key,
         "/cache/demo/PKGBUILD",
     };
     try std.testing.expectEqual(expected_upgrade.len, upgrade.items.len);
@@ -2468,11 +2491,16 @@ test "coordinator child build arguments bind review package set and policies" {
         &.{"demo"},
         digest,
         true,
+        false,
+        null,
         true,
     );
     try std.testing.expect(containsConst(historical.items, "--no-overwrite"));
     try std.testing.expect(containsConst(historical.items, "--keep-workdirs"));
+    try std.testing.expect(containsConst(historical.items, "--nosign"));
     try std.testing.expect(!containsConst(historical.items, "--check"));
+    try std.testing.expect(!containsConst(historical.items, "--sign"));
+    try std.testing.expect(!containsConst(historical.items, "--key"));
     try std.testing.expect(!containsConst(upgrade.items, "--skip-source-pgp-verification"));
     try std.testing.expect(!containsConst(historical.items, "--skip-source-pgp-verification"));
     try std.testing.expectEqualStrings(

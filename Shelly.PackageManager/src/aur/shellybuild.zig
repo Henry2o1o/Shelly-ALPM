@@ -27,6 +27,8 @@ pub const PackageConfiguration = struct {
     strip_binaries: []const []const u8,
     strip_shared: []const []const u8,
     strip_static: []const []const u8,
+    sign: bool,
+    sign_key: ?[]const u8,
 };
 
 pub const DestinationConfiguration = struct {
@@ -58,6 +60,8 @@ const PackageLayer = struct {
     strip_binaries: ?[]const []const u8 = null,
     strip_shared: ?[]const []const u8 = null,
     strip_static: ?[]const []const u8 = null,
+    sign: ?bool = null,
+    sign_key: ?[]const u8 = null,
 };
 
 const DestinationLayer = struct {
@@ -136,6 +140,8 @@ pub const ShellyBuildConfiguration = struct {
                 .strip_binaries = &.{"--strip-all"},
                 .strip_shared = &.{"--strip-debug"},
                 .strip_static = &.{"--strip-unneeded"},
+                .sign = false,
+                .sign_key = null,
             },
             .destinations = .{
                 .build = null,
@@ -188,6 +194,8 @@ pub const ShellyBuildConfiguration = struct {
             if (package.strip_binaries) |value| self.package.strip_binaries = try duplicateStrings(allocator, value);
             if (package.strip_shared) |value| self.package.strip_shared = try duplicateStrings(allocator, value);
             if (package.strip_static) |value| self.package.strip_static = try duplicateStrings(allocator, value);
+            if (package.sign) |value| self.package.sign = value;
+            if (package.sign_key) |value| self.package.sign_key = try allocator.dupe(u8, value);
         }
         if (layer.destinations) |destinations| {
             if (destinations.build) |value| self.destinations.build = try allocator.dupe(u8, value);
@@ -205,6 +213,9 @@ pub const ShellyBuildConfiguration = struct {
         }
         if (!isValidPackageExtension(self.package.extension))
             return error.InvalidPackageExtension;
+        if (self.package.sign_key) |key| {
+            if (key.len == 0) return error.InvalidConfiguration;
+        }
         inline for (.{ self.destinations.build, self.destinations.packages, self.destinations.sources, self.destinations.logs }) |path| {
             if (path) |configured| {
                 if (!std.fs.path.isAbsolute(configured)) return error.DestinationPathNotAbsolute;
@@ -272,7 +283,7 @@ fn validateKnownKeys(allocator: std.mem.Allocator, content: []const u8) !void {
 }
 
 const build_keys: []const []const u8 = &.{ "carch", "chost", "cppflags", "cflags", "cxxflags", "ldflags", "ltoflags", "makeflags", "check", "ccache", "distcc", "distcc_hosts" };
-const package_keys: []const []const u8 = &.{ "packager", "extension", "options", "strip_binaries", "strip_shared", "strip_static" };
+const package_keys: []const []const u8 = &.{ "packager", "extension", "options", "strip_binaries", "strip_shared", "strip_static", "sign", "sign_key" };
 const destination_keys: []const []const u8 = &.{ "build", "packages", "sources", "logs" };
 
 fn containsString(values: []const []const u8, expected: []const u8) bool {
@@ -307,6 +318,8 @@ test "shellybuild compiled defaults are safe and complete" {
     try std.testing.expect(!config.build.ccache);
     try std.testing.expect(!config.build.distcc);
     try std.testing.expectEqualStrings(".pkg.tar.zst", config.package.extension);
+    try std.testing.expect(!config.package.sign);
+    try expectOptionalUnset(config.package.sign_key);
     try expectOptionalUnset(config.destinations.build);
     try expectOptionalUnset(config.destinations.packages);
     try expectOptionalUnset(config.destinations.sources);
@@ -395,6 +408,39 @@ test "shellybuild requires absolute destination paths" {
     try std.testing.expectError(error.DestinationPathNotAbsolute, ShellyBuildConfiguration.initFromBuffers(
         std.testing.allocator,
         "[destinations]\nsources = \"relative/sources\"\n",
+        null,
+    ));
+}
+
+test "shellybuild signing policy merges field by field and rejects empty keys" {
+    const system =
+        \\[package]
+        \\sign = true
+        \\sign_key = "CE4814F7337B98A2527A32F8FCEBF9274CA93649"
+    ;
+    const config = try ShellyBuildConfiguration.initFromBuffers(std.testing.allocator, system, null);
+    defer config.deinit();
+    try std.testing.expect(config.package.sign);
+    try std.testing.expectEqualStrings(
+        "CE4814F7337B98A2527A32F8FCEBF9274CA93649",
+        config.package.sign_key.?,
+    );
+
+    const overridden = try ShellyBuildConfiguration.initFromBuffers(
+        std.testing.allocator,
+        system,
+        "[package]\nsign = false\n",
+    );
+    defer overridden.deinit();
+    try std.testing.expect(!overridden.package.sign);
+    try std.testing.expectEqualStrings(
+        "CE4814F7337B98A2527A32F8FCEBF9274CA93649",
+        overridden.package.sign_key.?,
+    );
+
+    try std.testing.expectError(error.InvalidConfiguration, ShellyBuildConfiguration.initFromBuffers(
+        std.testing.allocator,
+        "[package]\nsign_key = \"\"\n",
         null,
     ));
 }

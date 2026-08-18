@@ -42,6 +42,8 @@ options = ["strip", "docs", "emptydirs", "zipman", "purge", "lto"]
 strip_binaries = ["--strip-all"]
 strip_shared = ["--strip-debug"]
 strip_static = ["--strip-unneeded"]
+sign = false
+sign_key = "0000000000000000000000000000000000000000"
 
 [destinations]
 build = "/var/tmp/shellybuild"
@@ -60,6 +62,10 @@ Global PKGBUILD `options=()` values merge over configured package options. `!bui
 
 Configured `check` is the default for in-process builds. `--check` explicitly enables `check()`, and `--no-check` explicitly disables it.
 
+## Package signing
+
+`sign` controls whether the in-process builder creates a detached binary OpenPGP signature next to every published package archive (`<package>.pkg.tar.<ext>.sig`), matching makepkg's `--sign`. `sign_key` selects the GPG key id or fingerprint passed to `--local-user`; when unset, GPG uses the default key from the invoking user's keyring (makepkg's `GPGKEY` equivalent). Signing is evaluated with the invoking user's environment and keyring, including elevated coordinator builds that re-execute as that user. `--sign` and `--nosign` override the configured default per invocation, and a signing failure fails the build instead of publishing an unsigned package.
+
 ## Destinations and source cache
 
 - `build` contains collision-resistant package-base work roots. `$srcdir`, `$pkgdir`, temporary extraction trees, and `.BUILDINFO`'s `builddir` use this location.
@@ -73,4 +79,4 @@ The reviewed checkout remains `$startdir`. Local PKGBUILD sources and `verify()`
 
 Every in-process build creates one file named `<package-base>-<unix-seconds>-<random>.log` under the configured log destination before source or lifecycle execution. The log records phase boundaries, labels stdout and stderr separately, and ends with `success`, `failed`, or `cancelled`. Output continues to stream to normal CLI and UI operation events. Logs are retained on every outcome; inability to create the log prevents PKGBUILD execution.
 
-`SRCPKGDEST`, source-package generation, package signing, and arbitrary shell configuration are intentionally unsupported.
+`SRCPKGDEST`, source-package generation, and arbitrary shell configuration are intentionally unsupported.

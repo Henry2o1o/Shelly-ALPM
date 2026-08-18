@@ -31,6 +31,8 @@ pub const variants = [_]types.Variant{
         .options = &.{
             flag("--check", &.{}, "Run each PKGBUILD check() function during the rebuild"),
             flag("--no-check", &.{}, "Skip each PKGBUILD check() function during the rebuild"),
+            flag("--sign", &.{}, "Sign rebuilt packages with GPG"),
+            flag("--nosign", &.{}, "Skip signing rebuilt packages"),
         },
     },
     .{

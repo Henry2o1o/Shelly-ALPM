@@ -1,6 +1,7 @@
 const types = @import("types.zig");
 
 const flag = types.flag;
+const stringOption = types.stringOption;
 
 fn hiddenFlag(name: []const u8, description: []const u8) types.Option {
     var option = types.flag(name, &.{}, description);
@@ -24,6 +25,9 @@ pub const variants = [_]types.Variant{.{
         flag("--sync-deps", &.{"-s"}, "Installs missing dependencies"),
         flag("--check", &.{"-c"}, "Performs check on PKGBUILD and installs check depends"),
         flag("--no-check", &.{}, "Skips the PKGBUILD check() function"),
+        flag("--sign", &.{}, "Signs the resulting packages with GPG"),
+        flag("--nosign", &.{}, "Skips signing the resulting packages"),
+        stringOption("--key", &.{}, "Specifies the GPG key used for package signing", false),
         flag("--noverify", &.{}, "Skips the PKGBUILD verify() function"),
         flag("--isolated", &.{"-i"}, "Runs isolated root build. (This is currently nonfunctional and is being worked on)"),
         hiddenFlag("--coordinator-child", "Runs as a non-root child of an elevated package operation"),

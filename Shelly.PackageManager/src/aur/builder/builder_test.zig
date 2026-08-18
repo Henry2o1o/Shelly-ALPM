@@ -20,12 +20,15 @@ const op_context = @import("operation_context");
 const ShellyBuildConfiguration = @import("../shellybuild.zig").ShellyBuildConfiguration;
 const archive = @import("archive");
 const raw_alpm = @import("../../alpm/bindings.zig").libalpm.alpm;
+const source_pgp_verifier = @import("../../shared/source_pgp_verifier.zig");
 
 const source_pgp_fingerprint = "2E37DFCC9287C8A2F84B2519241A5B24548FAC70";
 const source_pgp_public_key_base64 = "LS0tLS1CRUdJTiBQR1AgUFVCTElDIEtFWSBCTE9DSy0tLS0tCgptRE1FYW9OTXZ4WUpLd1lCQkFIYVJ3OEJBUWRBM0RFdFI5MXZLRU4zcXVsTmJBWVh2Z2EvRWl5K1VoQTMxeVBKCjcwZGlvbzIwTUZOb1pXeHNlU0JUYjNWeVkyVWdWR1Z6ZENBOGMyOTFjbU5sTFhSbGMzUkFaWGhoYlhCc1pTNXAKYm5aaGJHbGtQb2lRQkJNV0NnQTRGaUVFTGpmZnpKS0h5S0w0U3lVWkpCcGJKRlNQckhBRkFtcURUTDhDR3dNRgpDd2tJQndJR0ZRb0pDQXNDQkJZQ0F3RUNIZ0VDRjRBQUNna1FKQnBiSkZTUHJIQnJnUUVBbVFEdkNMNHZoc01CClgya3Y2V3ZFN1pMVzgyaUZQbkJaR2U1SXpDYWVvdUlCQVBMRC80M2RmbGlxZkVFTzFFZktJQVQ5SjV3cXdldmUKdFRBdXFvVGFRUXNLCj1jbzViCi0tLS0tRU5EIFBHUCBQVUJMSUMgS0VZIEJMT0NLLS0tLS0K";
 const source_pgp_signature_base64 = "iHUEABYKAB0WIQQuN9/MkofIovhLJRkkGlskVI+scAUCaoNNkwAKCRAkGlskVI+scBdcAP91A7dSPdze1V9Nmg8WM8/fQ1ok2OdwBK5tSxyvKX4OeQEA16pbB6X6y/DarBoa3OaU5Up21xdPZL1g+3o2i1xztgM=";
 const source_pgp_payload_gzip_base64 = "H4sIAAAAAAAAA0ssLclIzSvJTE4sSU1RKEiszMlPTOECACsbVvAWAAAA";
 const signed_git_bundle_base64 = "IyB2MiBnaXQgYnVuZGxlCjljYWUwYTE2NWExZGQ2NjdjZWMxN2Y2ODQ4NjAxYWU5Y2EwZGQyMzIgcmVmcy9oZWFkcy9tYWluCgpQQUNLAAAAAgAAAAOdG3icrY/NboJAGEX38xTf3ljHgjAktekoE6RYKr+mSxgHpIAoDIo+fVObdNVl7+6exUmObIWAx0wnhCs8ybJUJSlXVEF2mGt4ync6T2ealvJEUwhKerlvWgj2oqquEDR9ywWEopPw1N3PWIpOvoghqY+VeCgO56Qqds8w1YlmGBgrBMZYxRjxpq4LKcV/uPJj3hU5jL+3YJbtwsbaQGBbLg0jn905AgTFKmJ08eHQBd7ante7xuStbDK7Oe/Xr35ZWlVXxvao4zRaJo3rTnPqLH36yxFw59ZSz1RHhuFvsa2YVlwPnIomji5X3XGWnwrzWX7AOulXtxV/z02D9b13wmtcTeIYQXY5qs4p3AaKFrYzm1nDlRheUF+iiS8onyOYY/+Wo58a5pp/taCsGGTfCvQFaluI2KMCeJwzNDAwMzFRKEiszMlPTGEoCGu5+pP98hNt39nJAtc8/aclPLsLAN9wDr22AXicSywtyUjNK8lMTixJTVEoSKzMyU9M4QIAZowIeN5X7vtMSMeGSu5llThgA/cTIihw";
+const signing_pgp_fingerprint = "CE4814F7337B98A2527A32F8FCEBF9274CA93649";
+const signing_pgp_secret_key_base64 = "LS0tLS1CRUdJTiBQR1AgUFJJVkFURSBLRVkgQkxPQ0stLS0tLQoKbEZnRWFvUGN4eFlKS3dZQkJBSGFSdzhCQVFkQUpqQVAyRXhlWFBrVDduZTM5R3dCSkhINlpXVkhnRzV0NGNRcApnWlYySENJQUFRRGtVbGVMZXp2U1JTdkdqVHRDclRjcFIxdUhrejVveWFSYWQyeGFRNzE1WkE0eHRFWlRhR1ZzCmJIa2dWR1Z6ZENCVGFXZHVhVzVuSUV0bGVTQW9kR1Z6ZEMxdmJteDVLU0E4YzJobGJHeDVMWE5wWjI0dGRHVnoKZEVCbGVHRnRjR3hsTG1sdWRtRnNhV1EraUpBRUV4WUtBRGdXSVFUT1NCVDNNM3VZb2xKNk12ajg2L2tuVEtrMgpTUVVDYW9QY3h3SWJBd1VMQ1FnSEFnWVZDZ2tJQ3dJRUZnSURBUUllQVFJWGdBQUtDUkQ4Ni9rblRLazJTVGhMCkFQNGhoblkrMW5zUUxRblpkN0Fqb3NlNkwrOHgzbFVJS3NOV2ZlNTVtT2dHZ1FFQWhWckorU2lvVnBLYVduVWwKTkNVU3NTUjVPeEwxV21xZE9QUVNzQ0lYQVFzPQo9WUZ2MgotLS0tLUVORCBQR1AgUFJJVkFURSBLRVkgQkxPQ0stLS0tLQo=";
 
 const ErrorCapture = struct {
     count: usize = 0,
@@ -392,6 +395,167 @@ fn prepareSourcePgpHome(fixture: *Fixture) ![:0]u8 {
         public_key,
     }, null);
     return home;
+}
+
+/// Prepares an isolated GNUPGHOME that holds the test signing key pair so
+/// PackageBuilder can create detached package signatures. The returned home
+/// is a short path because GnuPG agent sockets have a length limit.
+fn prepareSigningPgpHome(fixture: *Fixture) ![:0]u8 {
+    const allocator = fixture.allocator;
+    const io = testing.io;
+    try fixture.temporary.dir.createDir(io, "gnupg", .fromMode(0o700));
+    try writeBase64Fixture(
+        allocator,
+        io,
+        fixture.temporary.dir,
+        "signing-test-secret.asc",
+        signing_pgp_secret_key_base64,
+    );
+    const actual_home = try fixture.temporary.dir.realPathFileAlloc(io, "gnupg", allocator);
+    defer allocator.free(actual_home);
+    const short_home_text = try std.fmt.allocPrint(
+        allocator,
+        "/tmp/sk-{s}",
+        .{std.fs.path.basename(fixture.build_dir)},
+    );
+    defer allocator.free(short_home_text);
+    const short_home = try allocator.dupeZ(u8, short_home_text);
+    errdefer allocator.free(short_home);
+    try std.Io.Dir.cwd().symLink(io, actual_home, short_home, .{});
+    const home = try allocator.dupeZ(u8, short_home);
+    errdefer allocator.free(home);
+    const secret_key = try fixture.temporary.dir.realPathFileAlloc(io, "signing-test-secret.asc", allocator);
+    defer allocator.free(secret_key);
+    try runTestCommand(allocator, io, &.{
+        "/usr/bin/gpg",
+        "--homedir",
+        home,
+        "--batch",
+        "--import",
+        secret_key,
+    }, null);
+    fixture.short_gnupg_home = short_home;
+    return home;
+}
+
+test "PackageBuilder signs published packages with the configured signing key" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=signing-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/signing-demo"
+        \\  printf 'signed payload\n' > "$pkgdir/usr/share/signing-demo/data"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    const gnupg_home = try prepareSigningPgpHome(&fixture);
+    defer allocator.free(gnupg_home);
+    fixture.builder.options.sign = true;
+    fixture.builder.options.sign_key = signing_pgp_fingerprint;
+    fixture.builder.options.sign_gnupg_home = gnupg_home;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+
+    const signature_path = try std.fmt.allocPrint(allocator, "{s}.sig", .{artifacts[0].path});
+    defer allocator.free(signature_path);
+    try std.Io.Dir.cwd().access(io, signature_path, .{});
+
+    const verifier = source_pgp_verifier.Verifier{
+        .allocator = allocator,
+        .io = io,
+        .environ = testing.environ,
+        .gnupg_home = gnupg_home,
+    };
+    var verification = try verifier.verifyDetached(
+        signature_path,
+        artifacts[0].path,
+        &.{signing_pgp_fingerprint},
+    );
+    defer verification.deinit(allocator);
+    try testing.expectEqualStrings(signing_pgp_fingerprint, verification.primary_fingerprint);
+    try testing.expectEqual(source_pgp_verifier.Warning.none, verification.warning);
+
+    const log = try readOnlyBuildLog(allocator, io, fixture.build_dir);
+    defer allocator.free(log);
+    try testing.expect(std.mem.indexOf(u8, log, "[phase] signing") != null);
+
+    // Terminate the gpg-agent daemon spawned during signing so it does not
+    // outlive the fixture and interfere with teardown.
+    var kill = try process_runner.run(allocator, io, &.{ "/usr/bin/gpgconf", "--homedir", gnupg_home, "--kill", "gpg-agent" }, null, null);
+    defer kill.deinit(allocator);
+}
+
+test "PackageBuilder fails atomically when the signing key is unavailable" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=signing-failure-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/signing-failure-demo"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.createDir(io, "gnupg", .fromMode(0o700));
+    const actual_home = try fixture.temporary.dir.realPathFileAlloc(io, "gnupg", allocator);
+    defer allocator.free(actual_home);
+    const short_home_text = try std.fmt.allocPrint(
+        allocator,
+        "/tmp/sk-{s}",
+        .{std.fs.path.basename(fixture.build_dir)},
+    );
+    defer allocator.free(short_home_text);
+    const short_home = try allocator.dupeZ(u8, short_home_text);
+    try std.Io.Dir.cwd().symLink(io, actual_home, short_home, .{});
+    fixture.short_gnupg_home = short_home;
+    fixture.builder.options.sign = true;
+    fixture.builder.options.sign_key = signing_pgp_fingerprint;
+    fixture.builder.options.sign_gnupg_home = short_home;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+
+    // Signing failures must not leave a published unsigned artifact behind.
+    var directory = try std.Io.Dir.cwd().openDir(io, fixture.build_dir, .{ .iterate = true });
+    defer directory.close(io);
+    var iterator = directory.iterate();
+    while (try iterator.next(io)) |entry| {
+        if (entry.kind == .file and process_runner.isPackageArchiveArtifact(entry.name))
+            return error.UnexpectedPublishedArtifact;
+    }
+}
+
+test "PackageBuilder leaves packages unsigned when signing is disabled" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=unsigned-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/unsigned-demo"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const signature_path = try std.fmt.allocPrint(allocator, "{s}.sig", .{artifacts[0].path});
+    defer allocator.free(signature_path);
+    try testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(io, signature_path, .{}),
+    );
 }
 
 test "PackageBuilder init keeps the provided collaborators" {

@@ -66,6 +66,7 @@ pub const aur = @import("aur/manager.zig");
 
 pub const builder = @import("aur/builder/builder.zig");
 pub const source_pgp_verifier = @import("shared/source_pgp_verifier.zig");
+pub const package_signer = @import("shared/package_signer.zig");
 
 pub const flatpak = struct {
     pub const manager = @import("flatpak/manager.zig");
@@ -498,6 +499,7 @@ test {
     _ = @import("archive");
     _ = @import("shared/downloader.zig");
     _ = @import("shared/source_pgp_verifier.zig");
+    _ = @import("shared/package_signer.zig");
     _ = @import("appimage/update_manager.zig");
     _ = @import("pkgbuild/pkgbuild_parser.zig");
     _ = @import("pkgbuild/post_install_validator.zig");

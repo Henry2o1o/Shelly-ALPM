@@ -58,6 +58,8 @@ pub const variants = [_]types.Variant{
             flag("--chroot", &.{"-c"}, "Build packages in a clean chroot with makechrootpkg"),
             flag("--check", &.{}, "Enable the PKGBUILD check() function during package builds"),
             flag("--no-check", &.{}, "Disable the PKGBUILD check() function during package builds"),
+            flag("--sign", &.{}, "Sign built packages with GPG"),
+            flag("--nosign", &.{}, "Skip signing built packages"),
             flag("--version", &.{"-v"}, "Install exactly one AUR package from the following Git commit operand"),
         },
     },
