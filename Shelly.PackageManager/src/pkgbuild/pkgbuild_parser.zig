@@ -2908,6 +2908,10 @@ pub const PkgbuildParser = struct {
 
         var in_single = false;
         var in_double = false;
+        // Bash starts a comment only at a word boundary; tracking it keeps
+        // quote characters inside comments (e.g. "Don't") from corrupting the
+        // scan so the closing paren of the array is still recognized.
+        var word_start = true;
         var i = start;
         while (i < content.len) {
             const c = content[i];
@@ -2915,18 +2919,25 @@ pub const PkgbuildParser = struct {
                 try sb.append(allocator, c);
                 try sb.append(allocator, content[i + 1]);
                 i += 2;
+                word_start = false;
                 continue;
             }
             if (c == '\'' and !in_double) {
                 in_single = !in_single;
                 try sb.append(allocator, c);
                 i += 1;
+                word_start = false;
                 continue;
             }
             if (c == '"' and !in_single) {
                 in_double = !in_double;
                 try sb.append(allocator, c);
                 i += 1;
+                word_start = false;
+                continue;
+            }
+            if (c == '#' and !in_single and !in_double and word_start) {
+                while (i < content.len and content[i] != '\n') i += 1;
                 continue;
             }
             if (c == ')' and !in_single and !in_double) {
@@ -2934,6 +2945,7 @@ pub const PkgbuildParser = struct {
                 break;
             }
             try sb.append(allocator, c);
+            word_start = (c == ' ' or c == '\t' or c == '\n') and !in_single and !in_double;
             i += 1;
         }
 
@@ -7134,6 +7146,170 @@ test "parser_content: execution prelude rejects command substitutions" {
             \\package() { :; }
         , null),
     );
+}
+
+test "parser_content: scx style PKGBUILD with commented backports parses" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var info = try parser.parser_content(
+        \\# Maintainer: Peter Jung ptr1337 <admin@ptr1337.dev>
+        \\# Maintainer: Piotr Górski <lucjan.lucjanov@gmail.com>
+        \\# Contributor: Tejun Heo <tj@kernel.org>
+        \\
+        \\# Available profiles: “release”, “release-tiny”, “release-fast“
+        \\# See: https://github.com/sched-ext/scx/blob/main/Cargo.toml
+        \\_mode=release
+        \\
+        \\pkgname=scx-scheds-git
+        \\_gitname=scx
+        \\pkgver=1.1.2.r109.g096342e06
+        \\pkgrel=1
+        \\pkgdesc='sched_ext schedulers and tools'
+        \\url='https://github.com/sched-ext/scx'
+        \\arch=('x86_64')
+        \\license=('GPL-2.0-only')
+        \\depends=(
+        \\  libseccomp
+        \\  libelf
+        \\  zlib
+        \\)
+        \\makedepends=(
+        \\  cargo
+        \\  clang
+        \\  git
+        \\  llvm
+        \\  llvm-libs
+        \\)
+        \\optdepends=(
+        \\'scx-tools: scx_loader and scxctl - A DBUS Interface for Managing sched_ext Schedulers '
+        \\)
+        \\options=(!lto)
+        \\provides=("scx-scheds")
+        \\conflicts=("scx-scheds")
+        \\source=("git+https://github.com/sched-ext/scx")
+        \\sha256sums=('SKIP')
+        \\
+        \\_backports=(
+        \\9d9398fcb7d97bf3ba4fa851afbd1aee84225035 # scx_cake: 1.2.0 — clean-slate EEVDF-parity rewrite
+        \\c400cfe078ba18fda721623ec350589da3ba62b6 # scx_cake: identity-gated preempt fast paths + RT-owned CPU avoidance
+        \\d2a0488beaa506a2ba072856acd37a8a67c30e05 # scx_cake 1.2.0: K+L+M+S1d checkpoint — game gate passed, sealed benchmark wins
+        \\aff3b3e83aa1360e2dff098c49f32345b2267e69 # scx_cake: G20-G26 campaign checkpoint -- first frame win over native EEVDF
+        \\f81768c9d4ee80c531b0d62e2b5cf9682db34d15 # scheds: Introduce scx_maestro
+        \\0a1ee1a70f6e342e7f03198b8f60618dbc6b2146 # scx_maestro: Honor cgroup cpu.weight for tasks and sub-schedulers
+        \\78edbf583f264fe8fd8da14431c4eb0cc08f3c5d # scx_maestro: Allow to enable/disable NUMA and SMT optimizations
+        \\308a0f86b81b4c9d216c329087e32446c57089ef # scx_maestro: Don't update deadline in case of re-enqueue
+        \\a1b3b62908ff87f29004723945f234df392f1537 # scx_maestro: Introduce completely fair scheduling
+        \\df5e4db110f7f6f8dd40b697925e10c8a69a490d # scx_maestro: Make enqueue + CPU kick more reliable
+        \\1c522b684df912ff1331843f611c3ce00187b801 # scx_maestro: Enforce preemption each tick on CPU contention
+        \\f4027d565a830ef640f06531af0b27318747ccb9 # scx_maestro: Temporarily drop sub-sched support
+        \\1aa5c53760f1b1c244dc790c46b28ea999ac1827 # scx_maestro: bump to 1.1.1
+        \\593d82c4c1d2585697ff62e97c28cd263b705d73 # scx_maestro: fix formatting
+        \\93e75b8cc9d1eb1a221c9c03c7131f37937e3404 # scx_maestro: bump to 1.1.2
+        \\7b4def157aaa88f038906268081fb95c2a619a78 # scx_maestro: Use scx_bpf_task_set_slice() setter
+        \\099df006b3d903b6665bacbde70d9dac6af5d2fe # scx_pandemonium: bump to 5.17.0
+        \\9c7987d7153ae0e1769ba708011147a51b95a562 # scx_pandemonium: bump to 5.17.1
+        \\5d0467ac827b8f1e98bbf57ccbdbf88a96a47b23 # Cargo: update dependencies to latest versions
+        \\)
+        \\
+        \\_reverts=(
+        \\)
+        \\
+        \\pkgver() {
+        \\  cd $_gitname
+        \\  git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+        \\}
+        \\
+        \\prepare() {
+        \\  cd $_gitname
+        \\
+        \\  local _c _l
+        \\   for _c in "${_backports[@]}"; do
+        \\     if [[ "${_c}" == *..* ]]; then _l='--reverse'; else _l='--max-count=1'; fi
+        \\     git log --oneline "${_l}" "${_c}"
+        \\     git cherry-pick --mainline 1 --no-commit "${_c}"
+        \\   done
+        \\   for _c in "${_reverts[@]}"; do
+        \\     if [[ "${_c}" == *..* ]]; then _l='--reverse'; else _l='--max-count=1'; fi
+        \\     git log --oneline "${_l}" "${_c}"
+        \\     git revert --mainline 1 --no-commit "${_c}"
+        \\   done
+        \\
+        \\  local src
+        \\   for src in "${source[@]}"; do
+        \\     src="${src%%::*}"
+        \\     src="${src##*/}"
+        \\     [[ $src = *.patch ]] || continue
+        \\     echo "Applying patch $src..."
+        \\     patch -Np1 < "../$src"
+        \\   done
+        \\
+        \\  export RUSTUP_TOOLCHAIN=stable
+        \\  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+        \\}
+        \\
+        \\build() {
+        \\  cd $_gitname
+        \\  export RUSTUP_TOOLCHAIN=stable
+        \\  export CARGO_TARGET_DIR=target
+        \\  cargo build \
+        \\     --profile=$_mode \
+        \\     --frozen \
+        \\     --workspace \
+        \\     --exclude scx_rlfifo \
+        \\     --exclude scx_characterize \
+        \\     --exclude xtask \
+        \\     --exclude vmlinux_docify \
+        \\     --exclude scx_arena_selftests
+        \\}
+        \\
+        \\package() {
+        \\  cd $_gitname
+        \\
+        \\  # Install all built executables (skip .so and .d files)
+        \\  find target/$_mode \
+        \\    -maxdepth 1 -type f -executable ! -name '*.so' \
+        \\    -exec install -Dm755 -t "$pkgdir/usr/bin/" {} +
+        \\}
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    const prelude = info.execution.?.shared_prelude;
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        prelude,
+        "declare -a _backports=('9d9398fcb7d97bf3ba4fa851afbd1aee84225035' 'c400cfe078ba18fda721623ec350589da3ba62b6' 'd2a0488beaa506a2ba072856acd37a8a67c30e05' 'aff3b3e83aa1360e2dff098c49f32345b2267e69' 'f81768c9d4ee80c531b0d62e2b5cf9682db34d15' '0a1ee1a70f6e342e7f03198b8f60618dbc6b2146' '78edbf583f264fe8fd8da14431c4eb0cc08f3c5d' '308a0f86b81b4c9d216c329087e32446c57089ef' 'a1b3b62908ff87f29004723945f234df392f1537' 'df5e4db110f7f6f8dd40b697925e10c8a69a490d' '1c522b684df912ff1331843f611c3ce00187b801' 'f4027d565a830ef640f06531af0b27318747ccb9' '1aa5c53760f1b1c244dc790c46b28ea999ac1827' '593d82c4c1d2585697ff62e97c28cd263b705d73' '93e75b8cc9d1eb1a221c9c03c7131f37937e3404' '7b4def157aaa88f038906268081fb95c2a619a78' '099df006b3d903b6665bacbde70d9dac6af5d2fe' '9c7987d7153ae0e1769ba708011147a51b95a562' '5d0467ac827b8f1e98bbf57ccbdbf88a96a47b23')",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, prelude, "declare -a _reverts=()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prelude, "declare -- _mode='release'") != null);
+
+    const steps = info.execution.?.steps;
+    try std.testing.expectEqual(@as(usize, 4), steps.len);
+    try std.testing.expectEqualStrings("prepare", steps[0].name);
+    try std.testing.expectEqualStrings("pkgver", steps[1].name);
+    try std.testing.expectEqualStrings("build", steps[2].name);
+    try std.testing.expectEqualStrings("package", steps[3].name);
+}
+
+test "parser_content: array comment quotes do not leak past the closing paren" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var info = try parser.parser_content(
+        \\pkgname=demo
+        \\pkgver=1
+        \\arch=('any')
+        \\_list=(
+        \\abc123 # Don't let this apostrophe escape the array
+        \\def456
+        \\)
+        \\prepare() {
+        \\  :
+        \\}
+        \\package() {
+        \\  echo "$(impossible)" > /dev/null
+        \\}
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    const prelude = info.execution.?.shared_prelude;
+    try std.testing.expect(std.mem.indexOf(u8, prelude, "declare -a _list=('abc123' 'def456')") != null);
 }
 
 test "parser_content: execution step expanded bodies resolve PKGBUILD and makepkg variables" {
