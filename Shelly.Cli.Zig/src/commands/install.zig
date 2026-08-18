@@ -601,7 +601,7 @@ fn runAur(
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
         .root = true,
         .use_chroot = optionEnabled(invocation, "--chroot"),
-        .no_check = !optionEnabled(invocation, "--check"),
+        .check = checkOverride(invocation),
         .build_command = build_command,
         .operation_context = operation_context,
     });
@@ -619,6 +619,12 @@ fn runAur(
     } else {
         try manager.installPackages(invocation.positionals);
     }
+}
+
+fn checkOverride(invocation: *const parser.Invocation) ?bool {
+    if (optionEnabled(invocation, "--no-check")) return false;
+    if (optionEnabled(invocation, "--check")) return true;
+    return null;
 }
 
 fn runAppImage(

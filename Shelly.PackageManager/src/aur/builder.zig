@@ -27,6 +27,19 @@ pub const LineHandler = struct {
     }
 };
 
+pub const BuildEnvironment = struct {
+    cppflags: ?[]const []const u8 = null,
+    cflags: ?[]const []const u8 = null,
+    cxxflags: ?[]const []const u8 = null,
+    ldflags: ?[]const []const u8 = null,
+    ltoflags: ?[]const []const u8 = null,
+    makeflags: ?[]const []const u8 = null,
+    chost: ?[]const u8 = null,
+    distcc_hosts: ?[]const []const u8 = null,
+    ccache: bool = false,
+    distcc: bool = false,
+};
+
 pub const OwnedCommand = struct {
     argv: [][]u8,
 
@@ -110,7 +123,34 @@ pub fn runStreamingWithEnvironmentOperation(
     line_handler: LineHandler,
     operation: ?*const operation_api.Operation,
 ) !u8 {
-    var environ_map = try executionEnvironment(allocator, environ);
+    return runStreamingWithBuildEnvironmentOperation(
+        allocator,
+        io,
+        environ,
+        null,
+        argv,
+        working_directory,
+        timeout_seconds,
+        line_handler,
+        operation,
+    );
+}
+
+pub fn runStreamingWithBuildEnvironmentOperation(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    build_environment: ?BuildEnvironment,
+    argv: []const []const u8,
+    working_directory: ?[]const u8,
+    timeout_seconds: ?u32,
+    line_handler: LineHandler,
+    operation: ?*const operation_api.Operation,
+) !u8 {
+    var environ_map = if (build_environment) |build|
+        try executionEnvironmentWithBuild(allocator, environ, build)
+    else
+        try executionEnvironment(allocator, environ);
     defer environ_map.deinit();
     var child = try std.process.spawn(io, .{
         .argv = argv,
@@ -234,6 +274,64 @@ pub fn executionEnvironment(allocator: std.mem.Allocator, environ: std.process.E
     defer allocator.free(path);
     try environ_map.put("PATH", path);
     return environ_map;
+}
+
+pub fn executionEnvironmentWithBuild(
+    allocator: std.mem.Allocator,
+    environ: std.process.Environ,
+    build: BuildEnvironment,
+) !std.process.Environ.Map {
+    var environ_map = try executionEnvironment(allocator, environ);
+    errdefer environ_map.deinit();
+
+    try putJoinedOrRemove(allocator, &environ_map, "CPPFLAGS", build.cppflags);
+    try putJoinedOrRemove(allocator, &environ_map, "CFLAGS", build.cflags);
+    try putJoinedOrRemove(allocator, &environ_map, "CXXFLAGS", build.cxxflags);
+    try putJoinedOrRemove(allocator, &environ_map, "LDFLAGS", build.ldflags);
+    try putJoinedOrRemove(allocator, &environ_map, "LTOFLAGS", build.ltoflags);
+    try putJoinedOrRemove(allocator, &environ_map, "MAKEFLAGS", build.makeflags);
+    try putScalarOrRemove(&environ_map, "CHOST", build.chost);
+    try putJoinedOrRemove(
+        allocator,
+        &environ_map,
+        "DISTCC_HOSTS",
+        if (build.distcc) build.distcc_hosts else null,
+    );
+
+    const base_path = environ_map.get("PATH") orelse "";
+    var prefixed_path: std.ArrayList(u8) = .empty;
+    defer prefixed_path.deinit(allocator);
+    if (build.ccache) try prefixed_path.appendSlice(allocator, "/usr/lib/ccache/bin:");
+    if (build.distcc) try prefixed_path.appendSlice(allocator, "/usr/lib/distcc/bin:");
+    try prefixed_path.appendSlice(allocator, base_path);
+    try environ_map.put("PATH", prefixed_path.items);
+    return environ_map;
+}
+
+fn putJoinedOrRemove(
+    allocator: std.mem.Allocator,
+    environ_map: *std.process.Environ.Map,
+    name: []const u8,
+    values: ?[]const []const u8,
+) !void {
+    if (values) |configured| {
+        const joined = try std.mem.join(allocator, " ", configured);
+        defer allocator.free(joined);
+        try environ_map.put(name, joined);
+    } else {
+        _ = environ_map.swapRemove(name);
+    }
+}
+
+fn putScalarOrRemove(
+    environ_map: *std.process.Environ.Map,
+    name: []const u8,
+    value: ?[]const u8,
+) !void {
+    if (value) |configured|
+        try environ_map.put(name, configured)
+    else
+        _ = environ_map.swapRemove(name);
 }
 
 pub fn buildExecutionPath(allocator: std.mem.Allocator, environ: std.process.Environ) ![]u8 {
@@ -605,6 +703,57 @@ test "execution PATH adds Arch Perl paths exactly once" {
     var environ_map = try executionEnvironment(std.testing.allocator, std.testing.environ);
     defer environ_map.deinit();
     try std.testing.expectEqualStrings(path, environ_map.get("PATH").?);
+}
+
+test "build environment exports flags hosts and compiler wrapper paths" {
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("PATH", "/usr/bin:/bin");
+    const environ: std.process.Environ = .{
+        .block = try environ_map.createPosixBlock(std.testing.allocator, .{}),
+    };
+    defer environ.block.deinit(std.testing.allocator);
+
+    var effective = try executionEnvironmentWithBuild(std.testing.allocator, environ, .{
+        .cppflags = &.{"-D_FORTIFY_SOURCE=3"},
+        .cflags = &.{ "-O3", "-pipe" },
+        .cxxflags = &.{"-O3"},
+        .ldflags = &.{"-Wl,-z,now"},
+        .ltoflags = &.{"-flto=auto"},
+        .makeflags = &.{"-j8"},
+        .chost = "x86_64-pc-linux-gnu",
+        .distcc_hosts = &.{ "builder/8", "localhost/2" },
+        .ccache = true,
+        .distcc = true,
+    });
+    defer effective.deinit();
+
+    try std.testing.expectEqualStrings("-D_FORTIFY_SOURCE=3", effective.get("CPPFLAGS").?);
+    try std.testing.expectEqualStrings("-O3 -pipe", effective.get("CFLAGS").?);
+    try std.testing.expectEqualStrings("-j8", effective.get("MAKEFLAGS").?);
+    try std.testing.expectEqualStrings("builder/8 localhost/2", effective.get("DISTCC_HOSTS").?);
+    try std.testing.expect(std.mem.startsWith(u8, effective.get("PATH").?, "/usr/lib/ccache/bin:/usr/lib/distcc/bin:"));
+}
+
+test "disabled build environment removes inherited flags and hosts" {
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("CFLAGS", "ambient flags");
+    try environ_map.put("MAKEFLAGS", "ambient make flags");
+    try environ_map.put("DISTCC_HOSTS", "ambient host");
+    const environ: std.process.Environ = .{
+        .block = try environ_map.createPosixBlock(std.testing.allocator, .{}),
+    };
+    defer environ.block.deinit(std.testing.allocator);
+
+    var effective = try executionEnvironmentWithBuild(std.testing.allocator, environ, .{
+        .chost = "x86_64-pc-linux-gnu",
+    });
+    defer effective.deinit();
+    try std.testing.expect(effective.get("CFLAGS") == null);
+    try std.testing.expect(effective.get("MAKEFLAGS") == null);
+    try std.testing.expect(effective.get("DISTCC_HOSTS") == null);
+    try std.testing.expectEqualStrings("x86_64-pc-linux-gnu", effective.get("CHOST").?);
 }
 
 test "UID lookup and VCS build commands replicate invoking-user behavior" {

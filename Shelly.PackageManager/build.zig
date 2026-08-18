@@ -21,6 +21,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const toml = b.dependency("toml", .{
+        .target = target,
+        .optimize = optimize,
+    });
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -77,6 +81,7 @@ pub fn build(b: *std.Build) void {
     mod.addImport("archive", archive_mod);
     mod.addImport("operation_context", operation_context_mod);
     mod.addImport("ShellyHttp", shelly_http.module("ShellyHttp"));
+    mod.addImport("toml", toml.module("toml"));
     const package_options = b.addOptions();
     package_options.addOption([]const u8, "version", package_manifest.version);
     // Keep this generated module distinct from consumers that independently
@@ -218,22 +223,24 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
-    const makepackage_test_module = b.createModule(.{
-        .root_source_file = b.path("src/aur/makepackage.zig"),
+    const shellybuild_test_module = b.createModule(.{
+        .root_source_file = b.path("src/aur/shellybuild.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const makepackage_tests = b.addTest(.{
-        .name = "makepackage-test",
-        .root_module = makepackage_test_module,
+    shellybuild_test_module.addImport("toml", toml.module("toml"));
+    shellybuild_test_module.addImport("operation_context", operation_context_mod);
+    const shellybuild_tests = b.addTest(.{
+        .name = "shellybuild-test",
+        .root_module = shellybuild_test_module,
     });
-    const run_makepackage_tests = b.addRunArtifact(makepackage_tests);
-    test_step.dependOn(&run_makepackage_tests.step);
-    const makepackage_test_step = b.step(
-        "makepackage-test",
-        "Run makepkg configuration parser tests",
+    const run_shellybuild_tests = b.addRunArtifact(shellybuild_tests);
+    test_step.dependOn(&run_shellybuild_tests.step);
+    const shellybuild_test_step = b.step(
+        "shellybuild-test",
+        "Run shellybuild configuration parser tests",
     );
-    makepackage_test_step.dependOn(&run_makepackage_tests.step);
+    shellybuild_test_step.dependOn(&run_shellybuild_tests.step);
 
     // Local package tests are isolated from the package manager's live-system
     // integration tests and use only temporary configured roots.
@@ -573,6 +580,8 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder rejects unsupported virtual ownership",
             "PackageBuilder runs source-less execution steps inside srcdir",
             "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata",
+            "PackageBuilder exports configured build environment to lifecycle steps",
+            "PackageBuilder honors PKGBUILD build flag make flag and LTO negations",
             "PackageBuilder packages exact reviewed install and changelog files",
             "PackageBuilder strips ELF debug sections unless PKGBUILD disables strip",
             "PackageBuilder runs local declarations and reviewed helper functions inside package steps",
@@ -594,6 +603,9 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder runs relative VCS paths from srcdir before pkgver",
             "PackageBuilder applies generic patch arrays and propagates dynamic pkgver",
             "PackageBuilder rejects invalid dynamic pkgver output",
+            "PackageBuilder tees stdout and stderr to a successful durable log",
+            "PackageBuilder retains failed and cancelled build logs",
+            "PackageBuilder fails before PKGBUILD execution when log destination is unusable",
             "PackageBuilder reports failure when a step exits non-zero",
             "PackageBuilder reports failure instead of crashing without execution steps",
             "PackageBuilder builds all requested split members after shared steps run once",
@@ -612,6 +624,8 @@ pub fn build(b: *std.Build) void {
             "coordinator child build arguments bind review package set and policies",
             "clean invoking-user build command drops the elevated environment",
             "build progress parser recognizes makepkg percentage lines",
+            "build environment exports flags hosts and compiler wrapper paths",
+            "disabled build environment removes inherited flags and hosts",
             "streaming process execution forwards stdout stderr and a final unterminated line",
             "streaming process execution delivers output before the child exits",
             "streaming process execution terminates when the shared operation is cancelled",

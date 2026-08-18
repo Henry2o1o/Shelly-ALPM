@@ -23,6 +23,7 @@ pub const variants = [_]types.Variant{.{
         flag("--reviewed", &.{"-r"}, "Marks the package as reviewed"),
         flag("--sync-deps", &.{"-s"}, "Installs missing dependencies"),
         flag("--check", &.{"-c"}, "Performs check on PKGBUILD and installs check depends"),
+        flag("--no-check", &.{}, "Skips the PKGBUILD check() function"),
         flag("--noverify", &.{}, "Skips the PKGBUILD verify() function"),
         flag("--isolated", &.{"-i"}, "Runs isolated root build. (This is currently nonfunctional and is being worked on)"),
         hiddenFlag("--coordinator-child", "Runs as a non-root child of an elevated package operation"),

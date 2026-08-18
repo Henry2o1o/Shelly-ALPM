@@ -17,7 +17,7 @@ const process_runner = @import("../builder.zig");
 const pkgbuild_mod = @import("../../pkgbuild/pkgbuild_parser.zig");
 const install_script = @import("../../pkgbuild/install_script.zig");
 const op_context = @import("operation_context");
-const MakePkgConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
+const ShellyBuildConfiguration = @import("../shellybuild.zig").ShellyBuildConfiguration;
 const archive = @import("archive");
 const raw_alpm = @import("../../alpm/bindings.zig").libalpm.alpm;
 
@@ -51,12 +51,30 @@ const CompletionCapture = struct {
     }
 };
 
+const StreamCapture = struct {
+    stdout_seen: std.atomic.Value(bool) = .init(false),
+    stderr_seen: std.atomic.Value(bool) = .init(false),
+
+    fn handle(data: ?*anyopaque, event: op_context.Event) void {
+        const self: *@This() = @ptrCast(@alignCast(data.?));
+        switch (event) {
+            .status => |status| {
+                if (std.mem.eql(u8, status.message, "log stdout marker"))
+                    self.stdout_seen.store(true, .release);
+                if (std.mem.eql(u8, status.message, "log stderr marker"))
+                    self.stderr_seen.store(true, .release);
+            },
+            else => {},
+        }
+    }
+};
+
 const Fixture = struct {
     builder: *PackageBuilder,
     package_builds: []pkgbuild_mod.Pkgbuild,
     requested_names: [][]const u8,
     operation_context: *op_context.OperationContext,
-    config: *MakePkgConfiguration,
+    config: *ShellyBuildConfiguration,
     // Sentinel-terminated: realPathFileAlloc allocates len+1 for the 0 byte,
     // and free() only releases the full allocation when the slice type still
     // carries the sentinel.
@@ -108,13 +126,7 @@ const Fixture = struct {
             _ = try operation_context.subscribe(handler);
         }
 
-        const config_content = try std.fmt.allocPrint(
-            allocator,
-            "builddir={s}\npkgdest={s}\n",
-            .{ build_dir, build_dir },
-        );
-        defer allocator.free(config_content);
-        const config = try MakePkgConfiguration.initFromBuffer(io, allocator, config_content);
+        const config = try ShellyBuildConfiguration.initFromBuffers(allocator, null, null);
         errdefer config.deinit();
 
         const package_builds = try allocator.alloc(pkgbuild_mod.Pkgbuild, 1);
@@ -136,7 +148,11 @@ const Fixture = struct {
                 .overwrite = true,
                 .clean_after_success = false,
                 .skip_source_pgp_verification = true,
-                .build_directory = build_dir,
+                .start_directory = build_dir,
+                .work_directory = build_dir,
+                .package_destination = build_dir,
+                .source_destination = build_dir,
+                .log_destination = build_dir,
                 .sources_prepared = true,
                 .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
                 .pkgbuild_sha256sum = pkgbuild_digest,
@@ -192,13 +208,7 @@ const Fixture = struct {
         operation_context.* = op_context.OperationContext.init(allocator, io);
         errdefer operation_context.deinit();
         if (event_handler) |handler| _ = try operation_context.subscribe(handler);
-        const config_content = try std.fmt.allocPrint(
-            allocator,
-            "builddir={s}\npkgdest={s}\n",
-            .{ build_dir, build_dir },
-        );
-        defer allocator.free(config_content);
-        const config = try MakePkgConfiguration.initFromBuffer(io, allocator, config_content);
+        const config = try ShellyBuildConfiguration.initFromBuffers(allocator, null, null);
         errdefer config.deinit();
         const requested_names = try allocator.dupe([]const u8, requested);
         errdefer allocator.free(requested_names);
@@ -215,7 +225,11 @@ const Fixture = struct {
                 .overwrite = true,
                 .clean_after_success = false,
                 .skip_source_pgp_verification = true,
-                .build_directory = build_dir,
+                .start_directory = build_dir,
+                .work_directory = build_dir,
+                .package_destination = build_dir,
+                .source_destination = build_dir,
+                .log_destination = build_dir,
                 .sources_prepared = true,
                 .reviewed_pkgbuild_digest = [_]u8{0} ** std.crypto.hash.sha2.Sha256.digest_length,
                 .pkgbuild_sha256sum = pkgbuild_digest,
@@ -292,6 +306,21 @@ fn readPackageEntry(
         return allocator.dupe(u8, buffer[0..amount]);
     }
     return error.MissingPackageEntry;
+}
+
+fn readOnlyBuildLog(allocator: std.mem.Allocator, io: std.Io, directory_path: []const u8) ![]u8 {
+    var directory = try std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true });
+    defer directory.close(io);
+    var iterator = directory.iterate();
+    var found: ?[]u8 = null;
+    defer if (found) |path| allocator.free(path);
+    while (try iterator.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".log")) continue;
+        if (found != null) return error.MultipleBuildLogs;
+        found = try std.fs.path.join(allocator, &.{ directory_path, entry.name });
+    }
+    const path = found orelse return error.MissingBuildLog;
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
 }
 
 fn readPkgInfo(allocator: std.mem.Allocator, package_path: []const u8) ![]u8 {
@@ -622,6 +651,67 @@ test "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata" {
     const payload_hex = std.fmt.bytesToHex(payload_digest, .lower);
     try testing.expect(std.mem.indexOf(u8, gzip.stdout, &payload_hex) != null);
     try testing.expect(std.mem.indexOf(u8, gzip.stdout, "sha256digest=") != null);
+}
+
+test "PackageBuilder exports configured build environment to lifecycle steps" {
+    const allocator = testing.allocator;
+    const pkgbuild_content =
+        \\pkgname=environment-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/environment-demo"
+        \\  printf '%s\n' "$CPPFLAGS|$CFLAGS|$CXXFLAGS|$LDFLAGS|$LTOFLAGS|$MAKEFLAGS|$CHOST|$DISTCC_HOSTS|$PATH" > "$pkgdir/usr/share/environment-demo/environment"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    fixture.builder.shellybuild_config.build.cppflags = &.{"-D_FORTIFY_SOURCE=3"};
+    fixture.builder.shellybuild_config.build.cflags = &.{ "-O3", "-pipe" };
+    fixture.builder.shellybuild_config.build.cxxflags = &.{"-O3"};
+    fixture.builder.shellybuild_config.build.ldflags = &.{"-Wl,-z,now"};
+    fixture.builder.shellybuild_config.build.ltoflags = &.{"-flto=auto"};
+    fixture.builder.shellybuild_config.build.makeflags = &.{"-j8"};
+    fixture.builder.shellybuild_config.build.distcc_hosts = &.{"builder/8"};
+    fixture.builder.shellybuild_config.build.ccache = true;
+    fixture.builder.shellybuild_config.build.distcc = true;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const environment = try readPackageEntry(allocator, artifacts[0].path, "usr/share/environment-demo/environment");
+    defer allocator.free(environment);
+    try testing.expect(std.mem.indexOf(u8, environment, "-D_FORTIFY_SOURCE=3|-O3 -pipe|-O3|-Wl,-z,now|-flto=auto|-j8|x86_64-pc-linux-gnu|builder/8|") != null);
+    try testing.expect(std.mem.indexOf(u8, environment, "/usr/lib/ccache/bin:/usr/lib/distcc/bin:") != null);
+}
+
+test "PackageBuilder honors PKGBUILD build flag make flag and LTO negations" {
+    const allocator = testing.allocator;
+    const pkgbuild_content =
+        \\pkgname=environment-negation-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\options=('!buildflags' '!makeflags' '!lto')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/environment-negation-demo"
+        \\  printf '%s\n' "${CPPFLAGS-unset}|${CFLAGS-unset}|${CXXFLAGS-unset}|${LDFLAGS-unset}|${LTOFLAGS-unset}|${MAKEFLAGS-unset}|$CHOST|${DISTCC_HOSTS-unset}" > "$pkgdir/usr/share/environment-negation-demo/environment"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    fixture.builder.shellybuild_config.build.cppflags = &.{"-D_FORTIFY_SOURCE=3"};
+    fixture.builder.shellybuild_config.build.cflags = &.{"-O3"};
+    fixture.builder.shellybuild_config.build.cxxflags = &.{"-O3"};
+    fixture.builder.shellybuild_config.build.ldflags = &.{"-Wl,-z,now"};
+    fixture.builder.shellybuild_config.build.ltoflags = &.{"-flto=auto"};
+    fixture.builder.shellybuild_config.build.makeflags = &.{"-j8"};
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const environment = try readPackageEntry(allocator, artifacts[0].path, "usr/share/environment-negation-demo/environment");
+    defer allocator.free(environment);
+    try testing.expectEqualStrings("unset|unset|unset|unset|unset|unset|x86_64-pc-linux-gnu|unset\n", environment);
 }
 
 test "PackageBuilder packages exact reviewed install and changelog files" {
@@ -1290,14 +1380,55 @@ test "PackageBuilder downloads renamed file sources before build steps" {
     defer allocator.free(pkgbuild);
     var fixture = try Fixture.create(allocator, pkgbuild, null, null);
     defer fixture.destroy();
+    const work_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "work" });
+    defer allocator.free(work_path);
+    const source_cache = try std.fs.path.join(allocator, &.{ fixture.build_dir, "source-cache" });
+    defer allocator.free(source_cache);
+    const package_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "packages" });
+    defer allocator.free(package_destination);
+    const log_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "logs" });
+    defer allocator.free(log_destination);
+    fixture.builder.options.work_directory = work_path;
+    fixture.builder.options.source_destination = source_cache;
+    fixture.builder.options.package_destination = package_destination;
+    fixture.builder.options.log_destination = log_destination;
     fixture.builder.options.sources_prepared = false;
-    try fixture.temporary.dir.deleteTree(io, "src");
 
-    const artifacts = try fixture.builder.BuildPackage();
-    defer builder_mod.deinitArtifacts(allocator, artifacts);
-    try testing.expectEqual(@as(usize, 1), artifacts.len);
-    try fixture.temporary.dir.access(io, "src/downloaded.txt", .{});
-    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/downloaded.txt", .{});
+    {
+        const artifacts = try fixture.builder.BuildPackage();
+        defer builder_mod.deinitArtifacts(allocator, artifacts);
+        try testing.expectEqual(@as(usize, 1), artifacts.len);
+        try testing.expectEqualStrings(package_destination, std.fs.path.dirname(artifacts[0].path).?);
+        const build_info = try readPackageEntry(allocator, artifacts[0].path, ".BUILDINFO");
+        defer allocator.free(build_info);
+        const expected_builddir = try std.fmt.allocPrint(allocator, "builddir = {s}\n", .{work_path});
+        defer allocator.free(expected_builddir);
+        const expected_startdir = try std.fmt.allocPrint(allocator, "startdir = {s}\n", .{fixture.build_dir});
+        defer allocator.free(expected_startdir);
+        try testing.expect(std.mem.indexOf(u8, build_info, expected_builddir) != null);
+        try testing.expect(std.mem.indexOf(u8, build_info, expected_startdir) != null);
+    }
+    const cached_source = try std.fs.path.join(allocator, &.{ source_cache, "downloaded.txt" });
+    defer allocator.free(cached_source);
+    const staged_source = try std.fs.path.join(allocator, &.{ work_path, "src/downloaded.txt" });
+    defer allocator.free(staged_source);
+    try std.Io.Dir.cwd().access(io, cached_source, .{});
+    try std.Io.Dir.cwd().access(io, staged_source, .{});
+
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = cached_source, .data = "corrupt\n" });
+    {
+        const artifacts = try fixture.builder.BuildPackage();
+        defer builder_mod.deinitArtifacts(allocator, artifacts);
+    }
+    const repaired = try std.Io.Dir.cwd().readFileAlloc(io, cached_source, allocator, .unlimited);
+    defer allocator.free(repaired);
+    try testing.expectEqualStrings("reviewed\n", repaired);
+
+    try remote.dir.deleteFile(io, "source.txt");
+    {
+        const artifacts = try fixture.builder.BuildPackage();
+        defer builder_mod.deinitArtifacts(allocator, artifacts);
+    }
 }
 
 test "PackageBuilder rejects unsupported source protocols" {
@@ -1382,15 +1513,44 @@ test "PackageBuilder runs relative VCS paths from srcdir before pkgver" {
     defer allocator.free(pkgbuild);
     var fixture = try Fixture.create(allocator, pkgbuild, null, null);
     defer fixture.destroy();
+    const work_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "work" });
+    defer allocator.free(work_path);
+    const source_cache = try std.fs.path.join(allocator, &.{ fixture.build_dir, "source-cache" });
+    defer allocator.free(source_cache);
+    const package_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "packages" });
+    defer allocator.free(package_destination);
+    const log_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "logs" });
+    defer allocator.free(log_destination);
+    fixture.builder.options.work_directory = work_path;
+    fixture.builder.options.source_destination = source_cache;
+    fixture.builder.options.package_destination = package_destination;
+    fixture.builder.options.log_destination = log_destination;
     fixture.builder.options.sources_prepared = false;
-    try fixture.temporary.dir.deleteTree(io, "src");
 
-    const artifacts = try fixture.builder.BuildPackage();
-    defer builder_mod.deinitArtifacts(allocator, artifacts);
-    try testing.expectEqual(@as(usize, 1), artifacts.len);
-    try fixture.temporary.dir.access(io, "src/shelly-git/.git", .{});
-    try fixture.temporary.dir.access(io, "src/shelly-git/source-marker", .{});
-    try fixture.temporary.dir.access(io, "pkg/shelly-git/usr/share/shelly/source-marker", .{});
+    {
+        const artifacts = try fixture.builder.BuildPackage();
+        defer builder_mod.deinitArtifacts(allocator, artifacts);
+        try testing.expectEqual(@as(usize, 1), artifacts.len);
+    }
+    const cached_repository = try std.fs.path.join(allocator, &.{ source_cache, "shelly-git" });
+    defer allocator.free(cached_repository);
+    const staged_repository = try std.fs.path.join(allocator, &.{ work_path, "src/shelly-git/.git" });
+    defer allocator.free(staged_repository);
+    try std.Io.Dir.cwd().access(io, cached_repository, .{});
+    try std.Io.Dir.cwd().access(io, staged_repository, .{});
+
+    try remote.dir.writeFile(io, .{ .sub_path = "source-marker", .data = "refreshed\n" });
+    try runTestCommand(allocator, io, &.{ "git", "add", "source-marker" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "commit", "-m", "refresh" }, remote_path);
+    {
+        const artifacts = try fixture.builder.BuildPackage();
+        defer builder_mod.deinitArtifacts(allocator, artifacts);
+    }
+    const refreshed_path = try std.fs.path.join(allocator, &.{ work_path, "src/shelly-git/source-marker" });
+    defer allocator.free(refreshed_path);
+    const refreshed = try std.Io.Dir.cwd().readFileAlloc(io, refreshed_path, allocator, .unlimited);
+    defer allocator.free(refreshed);
+    try testing.expectEqualStrings("refreshed\n", refreshed);
 }
 
 test "PackageBuilder applies generic patch arrays and propagates dynamic pkgver" {
@@ -1493,6 +1653,84 @@ test "PackageBuilder rejects invalid dynamic pkgver output" {
     defer fixture.destroy();
 
     try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+}
+
+test "PackageBuilder tees stdout and stderr to a successful durable log" {
+    const allocator = testing.allocator;
+    var streams: StreamCapture = .{};
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=log-success
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  echo 'log stdout marker'
+        \\  echo 'log stderr marker' >&2
+        \\}
+    , .{ .function = StreamCapture.handle, .data = &streams }, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const log = try readOnlyBuildLog(allocator, testing.io, fixture.build_dir);
+    defer allocator.free(log);
+    try testing.expect(std.mem.indexOf(u8, log, "[phase] package") != null);
+    try testing.expect(std.mem.indexOf(u8, log, "[stdout] log stdout marker") != null);
+    try testing.expect(std.mem.indexOf(u8, log, "[stderr] log stderr marker") != null);
+    try testing.expect(std.mem.indexOf(u8, log, "[status] success") != null);
+    try testing.expect(streams.stdout_seen.load(.acquire));
+    try testing.expect(streams.stderr_seen.load(.acquire));
+}
+
+test "PackageBuilder retains failed and cancelled build logs" {
+    const allocator = testing.allocator;
+    var failed_fixture = try Fixture.create(allocator,
+        \\pkgname=log-failure
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\build() { echo 'failure marker' >&2; exit 7; }
+        \\package() { :; }
+    , null, null);
+    defer failed_fixture.destroy();
+    try testing.expectError(error.BuildFailed, failed_fixture.builder.BuildPackage());
+    const failed_log = try readOnlyBuildLog(allocator, testing.io, failed_fixture.build_dir);
+    defer allocator.free(failed_log);
+    try testing.expect(std.mem.indexOf(u8, failed_log, "[stderr] failure marker") != null);
+    try testing.expect(std.mem.indexOf(u8, failed_log, "[status] failed") != null);
+
+    var cancelled_fixture = try Fixture.create(allocator,
+        \\pkgname=log-cancelled
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() { :; }
+    , null, null);
+    defer cancelled_fixture.destroy();
+    cancelled_fixture.operation_context.cancel();
+    try testing.expectError(error.Cancelled, cancelled_fixture.builder.BuildPackage());
+    const cancelled_log = try readOnlyBuildLog(allocator, testing.io, cancelled_fixture.build_dir);
+    defer allocator.free(cancelled_log);
+    try testing.expect(std.mem.indexOf(u8, cancelled_log, "[status] cancelled") != null);
+}
+
+test "PackageBuilder fails before PKGBUILD execution when log destination is unusable" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=log-unusable
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() { touch "$startdir/executed"; }
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "not-a-directory", .data = "file" });
+    const unusable = try std.fs.path.join(allocator, &.{ fixture.build_dir, "not-a-directory" });
+    defer allocator.free(unusable);
+    fixture.builder.options.log_destination = unusable;
+    try testing.expectError(error.BuildDirectoryNotWritable, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "executed", .{}));
 }
 
 test "PackageBuilder reports failure when a step exits non-zero" {
@@ -1953,6 +2191,9 @@ test "PackageBuilder honors check and overwrite policies" {
     const artifacts = try fixture.builder.BuildPackage();
     defer builder_mod.deinitArtifacts(allocator, artifacts);
     try testing.expectEqual(@as(usize, 1), artifacts.len);
+    const build_info = try readPackageEntry(allocator, artifacts[0].path, ".BUILDINFO");
+    defer allocator.free(build_info);
+    try testing.expect(std.mem.indexOf(u8, build_info, "buildenv = !check\n") != null);
 
     fixture.builder.options.overwrite = false;
     try testing.expectError(error.AlreadyBuilt, fixture.builder.BuildPackage());
@@ -2241,21 +2482,35 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     }, "shelly-bin");
     defer fixture.destroy();
 
+    const work_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "representative-work" });
+    defer allocator.free(work_path);
+    const source_cache = try std.fs.path.join(allocator, &.{ fixture.build_dir, "representative-sources" });
+    defer allocator.free(source_cache);
+    const package_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "representative-packages" });
+    defer allocator.free(package_destination);
+    const log_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "representative-logs" });
+    defer allocator.free(log_destination);
+    fixture.builder.options.work_directory = work_path;
+    fixture.builder.options.source_destination = source_cache;
+    fixture.builder.options.package_destination = package_destination;
+    fixture.builder.options.log_destination = log_destination;
+    try fixture.temporary.dir.createDirPath(io, "representative-work/src");
+
     std.debug.print("[builder-test] building vendored PKGBUILD-bin ({d} bytes) as package 'shelly-bin'\n", .{shelly_bin_pkgbuild.len});
     std.debug.print("[builder-test] build directory: {s}\n", .{fixture.build_dir});
 
     // Populate $srcdir the way makepkg would after extracting the release
     // tarballs referenced by the PKGBUILD's source array.
     for ([_][]const u8{ "shelly-ui", "shelly-notifications", "shelly", "shelly-key" }) |binary| {
-        const sub_path = try std.fmt.allocPrint(allocator, "src/{s}", .{binary});
+        const sub_path = try std.fmt.allocPrint(allocator, "representative-work/src/{s}", .{binary});
         defer allocator.free(sub_path);
         try fixture.temporary.dir.writeFile(io, .{ .sub_path = sub_path, .data = "#!/bin/sh\nexit 0\n" });
     }
-    for ([_][]const u8{ "src/shellylogo.png", "src/shellylogo-tray.png", "src/shellylogo-update.png" }) |icon| {
+    for ([_][]const u8{ "representative-work/src/shellylogo.png", "representative-work/src/shellylogo-tray.png", "representative-work/src/shellylogo-update.png" }) |icon| {
         try fixture.temporary.dir.writeFile(io, .{ .sub_path = icon, .data = "placeholder icon bytes" });
     }
-    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "src/shelly.fish", .data = "# fish completions\n" });
-    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "src/_shelly", .data = "# zsh completions\n" });
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "representative-work/src/shelly.fish", .data = "# fish completions\n" });
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "representative-work/src/_shelly", .data = "# zsh completions\n" });
 
     const artifacts = try fixture.builder.BuildPackage();
     defer builder_mod.deinitArtifacts(allocator, artifacts);
@@ -2265,11 +2520,21 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     try testing.expectEqualStrings("shelly-bin", artifact.package_name);
     try testing.expect(artifact.path.len > 0);
     try testing.expect(std.mem.endsWith(u8, artifact.path, "shelly-bin-3.0.3-1-x86_64.pkg.tar.zst"));
+    try testing.expectEqualStrings(package_destination, std.fs.path.dirname(artifact.path).?);
     try std.Io.Dir.cwd().access(io, artifact.path, .{});
+    var pacman_result = try process_runner.run(
+        allocator,
+        io,
+        &.{ "pacman", "-Qip", "--", artifact.path },
+        null,
+        null,
+    );
+    defer pacman_result.deinit(allocator);
+    try testing.expectEqual(@as(u8, 0), pacman_result.exit_code);
     std.debug.print("[builder-test] BuildPackage succeeded: artifact '{s}' at {s}\n", .{ artifact.package_name, artifact.path });
 
     // package_shelly-bin installed the full tree into $pkgdir.
-    const pkgdir = try std.fs.path.join(allocator, &.{ fixture.build_dir, "pkg", "shelly-bin" });
+    const pkgdir = try std.fs.path.join(allocator, &.{ work_path, "pkg", "shelly-bin" });
     defer allocator.free(pkgdir);
     try printPackageTree(allocator, io, pkgdir);
 
@@ -2358,6 +2623,19 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     try testing.expect(saw_mtree);
     try testing.expect(saw_executable);
     try testing.expect(saw_data_file);
+
+    const build_info = try readPackageEntry(allocator, artifact.path, ".BUILDINFO");
+    defer allocator.free(build_info);
+    const expected_builddir = try std.fmt.allocPrint(allocator, "builddir = {s}\n", .{work_path});
+    defer allocator.free(expected_builddir);
+    const expected_startdir = try std.fmt.allocPrint(allocator, "startdir = {s}\n", .{fixture.build_dir});
+    defer allocator.free(expected_startdir);
+    try testing.expect(std.mem.indexOf(u8, build_info, expected_builddir) != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, expected_startdir) != null);
+    const build_log = try readOnlyBuildLog(allocator, io, log_destination);
+    defer allocator.free(build_log);
+    try testing.expect(std.mem.indexOf(u8, build_log, "[status] success") != null);
+    try std.Io.Dir.cwd().access(io, source_cache, .{});
 
     // libalpm is the final consumer of the artifact. Loading it here catches
     // package-format or metadata defects that a libarchive readback alone

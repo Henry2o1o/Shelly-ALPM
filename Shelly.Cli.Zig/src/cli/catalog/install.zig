@@ -57,6 +57,7 @@ pub const variants = [_]types.Variant{
             flag("--make-deps", &.{"-m"}, "Install make dependencies for the requested packages"),
             flag("--chroot", &.{"-c"}, "Build packages in a clean chroot with makechrootpkg"),
             flag("--check", &.{}, "Enable the PKGBUILD check() function during package builds"),
+            flag("--no-check", &.{}, "Disable the PKGBUILD check() function during package builds"),
             flag("--version", &.{"-v"}, "Install exactly one AUR package from the following Git commit operand"),
         },
     },

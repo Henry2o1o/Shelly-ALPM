@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-pub const MakePackageConfiguration = @import("../makepackage.zig").MakePackageConfiguration;
-const MakePkgConfiguration = MakePackageConfiguration;
+pub const ShellyBuildConfiguration = @import("../shellybuild.zig").ShellyBuildConfiguration;
 const pkgbuild_parser = @import("../../pkgbuild/pkgbuild_parser.zig");
 const package_metadata = @import("../../pkgbuild/package_metadata.zig");
 const PackageBuild = pkgbuild_parser.Pkgbuild;
@@ -48,7 +47,11 @@ pub const BuildOptions = struct {
     /// callers normally leave this null so GnuPG uses the invoking user's
     /// keyring through the builder's sanitized environment.
     source_pgp_gnupg_home: ?[]const u8 = null,
-    build_directory: []const u8,
+    start_directory: []const u8,
+    work_directory: []const u8,
+    package_destination: []const u8,
+    source_destination: []const u8,
+    log_destination: []const u8,
     /// Exact PKGBUILD path used for the final in-process integrity check.
     /// It may be omitted only by unit-test fixtures.
     pkgbuild_path: ?[]const u8 = null,
@@ -87,8 +90,54 @@ pub const FailureLocation = struct {
     step_name: ?[]const u8 = null,
 };
 
+const BuildLog = struct {
+    file: std.Io.File,
+    io: std.Io,
+    mutex: std.Io.Mutex = .init,
+    failed: std.atomic.Value(bool) = .init(false),
+
+    fn writeRecord(self: *BuildLog, kind: []const u8, message: []const u8) !void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        try self.file.writeStreamingAll(self.io, "[");
+        try self.file.writeStreamingAll(self.io, kind);
+        try self.file.writeStreamingAll(self.io, "] ");
+        try self.file.writeStreamingAll(self.io, message);
+        try self.file.writeStreamingAll(self.io, "\n");
+        try self.file.sync(self.io);
+    }
+
+    fn writeStream(self: *BuildLog, stream: process_runner.StreamKind, line: []const u8) void {
+        self.writeRecord(if (stream == .stderr) "stderr" else "stdout", line) catch
+            self.failed.store(true, .release);
+    }
+
+    fn ensureHealthy(self: *const BuildLog) !void {
+        if (self.failed.load(.acquire)) return error.BuildLogWriteFailed;
+    }
+
+    fn close(self: *BuildLog) void {
+        self.file.close(self.io);
+    }
+};
+
 pub fn requireNonRootEffectiveUid(effective_uid: u32) error{BuilderMustNotRunAsRoot}!void {
     if (effective_uid == 0) return error.BuilderMustNotRunAsRoot;
+}
+
+pub fn uniqueWorkDirectory(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    build_root: []const u8,
+    package_base: []const u8,
+) ![]u8 {
+    const normalized = try archive.normalizeEntryPath(allocator, package_base);
+    defer allocator.free(normalized);
+    if (std.mem.indexOfScalar(u8, normalized, '/') != null) return error.InvalidPackageBase;
+    var random_suffix: [8]u8 = undefined;
+    io.random(&random_suffix);
+    const suffix = std.fmt.bytesToHex(random_suffix, .lower);
+    return std.fmt.allocPrint(allocator, "{s}/{s}-{s}", .{ build_root, normalized, suffix });
 }
 
 /// Locks the current Linux process to the non-root privilege level. The flag
@@ -129,19 +178,20 @@ pub const PackageBuilder = struct {
     allocator: std.mem.Allocator,
     package_builds: []PackageBuild,
     operation_context: *op_context.OperationContext,
-    makepkg_config: MakePkgConfiguration,
+    shellybuild_config: ShellyBuildConfiguration,
     requested_names: []const []const u8,
     options: BuildOptions,
     environ: std.process.Environ,
     io: std.Io,
     failure_location: FailureLocation = .{},
     active_operation: ?*op_context.Operation = null,
+    active_log: ?*BuildLog = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
         package_builds: []PackageBuild,
         operation_context: *op_context.OperationContext,
-        makepackage_configuration: MakePkgConfiguration,
+        shellybuild_configuration: ShellyBuildConfiguration,
         requested_names: []const []const u8,
         options: BuildOptions,
         environ: std.process.Environ,
@@ -157,7 +207,7 @@ pub const PackageBuilder = struct {
             .allocator = allocator,
             .package_builds = package_builds,
             .operation_context = operation_context,
-            .makepkg_config = makepackage_configuration,
+            .shellybuild_config = shellybuild_configuration,
             .requested_names = requested_names,
             .options = options,
             .environ = environ,
@@ -213,7 +263,7 @@ pub const PackageBuilder = struct {
             var current_review = try preparePkgbuildReview(
                 self.allocator,
                 self.io,
-                self.options.build_directory,
+                self.options.start_directory,
                 current_pkgbuild,
                 self.package_builds,
             );
@@ -229,12 +279,25 @@ pub const PackageBuilder = struct {
         if (self.active_operation != null) return error.BuildAlreadyRunning;
         self.active_operation = operation;
         defer self.active_operation = null;
-        return self.buildPackage(operation);
+        try self.validateBuildDirectories();
+        var log = try self.openBuildLog();
+        defer log.close();
+        self.active_log = &log;
+        defer self.active_log = null;
+        try log.writeRecord("build", "started");
+        const artifacts = self.buildPackage(operation) catch |err| {
+            log.writeRecord("status", if (err == error.Cancelled) "cancelled" else "failed") catch {};
+            return err;
+        };
+        log.writeRecord("status", "success") catch |err| {
+            deinitArtifacts(self.allocator, artifacts);
+            return err;
+        };
+        return artifacts;
     }
 
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
         try secureBuilderProcess();
-        try self.validateBuildDirectories();
         try self.validatePackageFunctions();
         if (!self.options.sources_prepared) try self.prepareSources(operation);
         const shared_execution = self.package_builds[0].execution orelse
@@ -301,7 +364,7 @@ pub const PackageBuilder = struct {
 
         if (self.options.clean_after_success) {
             for ([_][]const u8{ "src", "pkg" }) |name| {
-                const path = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, name });
+                const path = try std.fs.path.join(self.allocator, &.{ self.options.work_directory, name });
                 defer self.allocator.free(path);
                 std.Io.Dir.cwd().deleteTree(self.io, path) catch {};
             }
@@ -333,6 +396,7 @@ pub const PackageBuilder = struct {
     }
 
     fn prepareSources(self: *PackageBuilder, operation: *op_context.Operation) !void {
+        try self.logPhase("sources");
         try operation.checkCancelled();
         const package_build = &self.package_builds[0];
         self.failure_location = .{
@@ -348,11 +412,11 @@ pub const PackageBuilder = struct {
         if (sources.len > 0 and !hasSourceChecksums(package_build))
             return error.MissingSourceChecksums;
 
-        const srcdir = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, "src" });
+        const srcdir = try std.fs.path.join(self.allocator, &.{ self.options.work_directory, "src" });
         defer self.allocator.free(srcdir);
-        const source_staging = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, ".sources.shelly-staging" });
+        const source_staging = try std.fs.path.join(self.allocator, &.{ self.options.work_directory, ".sources.shelly-staging" });
         defer self.allocator.free(source_staging);
-        const extraction_staging = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, ".src.shelly-staging" });
+        const extraction_staging = try std.fs.path.join(self.allocator, &.{ self.options.work_directory, ".src.shelly-staging" });
         defer self.allocator.free(extraction_staging);
 
         std.Io.Dir.cwd().deleteTree(self.io, source_staging) catch {
@@ -394,7 +458,7 @@ pub const PackageBuilder = struct {
             self.raiseSourceMessage(package_build, source.name);
             switch (source.kind) {
                 .local => try self.copyLocalSource(source.location, destination),
-                .http => try self.downloadSource(operation, source.location, destination),
+                .http => try self.acquireHttpSource(operation, source, destination, false),
                 .git => try self.cloneGitSource(operation, source, destination),
             }
         }
@@ -406,7 +470,11 @@ pub const PackageBuilder = struct {
             if (source.source.kind == .git) {
                 try requireSkippedVcsChecksums(package_build, source.index);
             } else {
-                try self.verifySourceChecksums(package_build, source.index, source.destination);
+                self.verifySourceChecksums(package_build, source.index, source.destination) catch |err| {
+                    if (err != error.SourceChecksumMismatch or source.source.kind != .http) return err;
+                    try self.acquireHttpSource(operation, source.source, source.destination, true);
+                    try self.verifySourceChecksums(package_build, source.index, source.destination);
+                };
             }
         }
 
@@ -435,7 +503,7 @@ pub const PackageBuilder = struct {
                     execution.shared_prelude,
                     execution.shared_helpers,
                     step.body,
-                    self.options.build_directory,
+                    self.options.start_directory,
                 );
                 // Direct local sources are the real files in $startdir rather
                 // than temporary links. Carry any intentional verify()
@@ -484,7 +552,7 @@ pub const PackageBuilder = struct {
     fn copyLocalSource(self: *PackageBuilder, source_name: []const u8, destination: []const u8) !void {
         const normalized = try archive.normalizeEntryPath(self.allocator, source_name);
         defer self.allocator.free(normalized);
-        const source_path = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, normalized });
+        const source_path = try std.fs.path.join(self.allocator, &.{ self.options.start_directory, normalized });
         defer self.allocator.free(source_path);
         const stat = try std.Io.Dir.cwd().statFile(self.io, source_path, .{ .follow_symlinks = false });
         if (stat.kind != .file) return error.InvalidLocalSource;
@@ -503,7 +571,7 @@ pub const PackageBuilder = struct {
         for (prepared) |*source| {
             const visible_path = try std.fs.path.join(
                 self.allocator,
-                &.{ self.options.build_directory, source.source.name },
+                &.{ self.options.start_directory, source.source.name },
             );
             errdefer self.allocator.free(visible_path);
             const exists = if (std.Io.Dir.cwd().statFile(
@@ -556,27 +624,91 @@ pub const PackageBuilder = struct {
         }
     }
 
+    fn acquireHttpSource(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        source: ParsedSource,
+        destination: []const u8,
+        force_refresh: bool,
+    ) !void {
+        const cache_path = try std.fs.path.join(
+            self.allocator,
+            &.{ self.options.source_destination, source.name },
+        );
+        defer self.allocator.free(cache_path);
+        if (force_refresh) std.Io.Dir.cwd().deleteFile(self.io, cache_path) catch {};
+        const cached = std.Io.Dir.cwd().statFile(
+            self.io,
+            cache_path,
+            .{ .follow_symlinks = false },
+        ) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        if (cached) |stat| {
+            if (stat.kind != .file) return error.InvalidSourceCacheEntry;
+        } else {
+            var random_suffix: [8]u8 = undefined;
+            self.io.random(&random_suffix);
+            const suffix = std.fmt.bytesToHex(random_suffix, .lower);
+            const temporary_path = try std.fmt.allocPrint(
+                self.allocator,
+                "{s}.shelly-{s}.tmp",
+                .{ cache_path, suffix },
+            );
+            defer self.allocator.free(temporary_path);
+            errdefer std.Io.Dir.cwd().deleteFile(self.io, temporary_path) catch {};
+            try self.downloadSource(operation, source.location, temporary_path);
+            std.Io.Dir.cwd().renamePreserve(temporary_path, std.Io.Dir.cwd(), cache_path, self.io) catch |err| switch (err) {
+                error.PathAlreadyExists => std.Io.Dir.cwd().deleteFile(self.io, temporary_path) catch {},
+                else => return err,
+            };
+        }
+        std.Io.Dir.cwd().deleteFile(self.io, destination) catch {};
+        try std.Io.Dir.copyFile(.cwd(), cache_path, .cwd(), destination, self.io, .{});
+    }
+
     fn cloneGitSource(
         self: *PackageBuilder,
         operation: *op_context.Operation,
         source: ParsedSource,
         destination: []const u8,
     ) !void {
-        var clone_args: std.ArrayList([]const u8) = .empty;
-        defer clone_args.deinit(self.allocator);
-        try clone_args.appendSlice(self.allocator, &.{ "clone", "--", source.location, destination });
-        if (source.reference) |reference| switch (reference.kind) {
-            .branch, .tag => {
-                clone_args.clearRetainingCapacity();
-                try clone_args.appendSlice(self.allocator, &.{
-                    "clone", "--branch", reference.value, "--single-branch", "--", source.location, destination,
-                });
-            },
-            .commit => {},
+        const cache_path = try std.fs.path.join(
+            self.allocator,
+            &.{ self.options.source_destination, source.name },
+        );
+        defer self.allocator.free(cache_path);
+        const cached = std.Io.Dir.cwd().statFile(
+            self.io,
+            cache_path,
+            .{ .follow_symlinks = false },
+        ) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
         };
-        try self.runSourceCommand(operation, clone_args.items);
-        if (source.reference) |reference| if (reference.kind == .commit)
-            try self.runSourceCommand(operation, &.{ "-C", destination, "checkout", "--detach", reference.value });
+        if (cached) |stat| {
+            if (stat.kind != .directory) return error.InvalidSourceCacheEntry;
+            try self.runSourceCommand(operation, &.{ "-C", cache_path, "remote", "set-url", "origin", source.location });
+            try self.runSourceCommand(operation, &.{ "-C", cache_path, "remote", "update", "--prune" });
+        } else {
+            var random_suffix: [8]u8 = undefined;
+            self.io.random(&random_suffix);
+            const suffix = std.fmt.bytesToHex(random_suffix, .lower);
+            const temporary_path = try std.fmt.allocPrint(
+                self.allocator,
+                "{s}.shelly-{s}.tmp",
+                .{ cache_path, suffix },
+            );
+            defer self.allocator.free(temporary_path);
+            errdefer std.Io.Dir.cwd().deleteTree(self.io, temporary_path) catch {};
+            try self.runSourceCommand(operation, &.{ "clone", "--mirror", "--", source.location, temporary_path });
+            std.Io.Dir.cwd().renamePreserve(temporary_path, std.Io.Dir.cwd(), cache_path, self.io) catch |err| switch (err) {
+                error.PathAlreadyExists => std.Io.Dir.cwd().deleteTree(self.io, temporary_path) catch {},
+                else => return err,
+            };
+        }
+        try self.materializeGitSource(operation, source, cache_path, destination);
     }
 
     fn materializeGitSource(
@@ -625,17 +757,26 @@ pub const PackageBuilder = struct {
         var stream_context: StepStreamContext = .{
             .operation = operation,
             .package_name = self.requested_names[0],
+            .log = self.active_log,
         };
-        const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
+        const effective_options = try effectivePackageOptions(
+            self.allocator,
+            self.shellybuild_config.package.options,
+            self.package_builds[0].options orelse &.{},
+        );
+        defer freeOwnedStrings(self.allocator, effective_options);
+        const exit_code = try process_runner.runStreamingWithBuildEnvironmentOperation(
             self.allocator,
             self.io,
             self.environ,
+            self.buildEnvironment(effective_options),
             command.items,
-            self.options.build_directory,
+            self.options.source_destination,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
             operation,
         );
+        if (self.active_log) |log| try log.ensureHealthy();
         if (exit_code != 0) return error.SourceVcsFailed;
     }
 
@@ -899,24 +1040,24 @@ pub const PackageBuilder = struct {
 
     fn validateBuildDirectories(self: *PackageBuilder) !void {
         const cwd = std.Io.Dir.cwd();
-        const root_stat = cwd.statFile(self.io, self.options.build_directory, .{}) catch |err| switch (err) {
-            error.FileNotFound => {
-                cwd.createDirPath(self.io, self.options.build_directory) catch {
-                    self.reportUnwritableBuildDirectory(self.options.build_directory);
-                    return error.BuildDirectoryNotWritable;
-                };
-                return;
-            },
-            else => return err,
-        };
-        if (root_stat.kind != .directory) {
-            self.reportUnwritableBuildDirectory(self.options.build_directory);
-            return error.BuildDirectoryNotWritable;
+        const start_stat = try cwd.statFile(self.io, self.options.start_directory, .{});
+        if (start_stat.kind != .directory) return error.InvalidStartDirectory;
+
+        for ([_][]const u8{
+            self.options.work_directory,
+            self.options.package_destination,
+            self.options.source_destination,
+            self.options.log_destination,
+        }) |root| {
+            cwd.createDirPath(self.io, root) catch {
+                self.reportUnwritableBuildDirectory(root);
+                return error.BuildDirectoryNotWritable;
+            };
+            try self.validateWritableDirectory(root);
         }
-        try self.validateWritableDirectory(self.options.build_directory);
 
         for ([_][]const u8{ "src", "pkg", ".src.shelly-staging" }) |name| {
-            const path = try std.fs.path.join(self.allocator, &.{ self.options.build_directory, name });
+            const path = try std.fs.path.join(self.allocator, &.{ self.options.work_directory, name });
             defer self.allocator.free(path);
             try self.validateWritableDirectory(path);
         }
@@ -954,6 +1095,30 @@ pub const PackageBuilder = struct {
             operation.reportError(error.BuildDirectoryNotWritable, message, "build", null, false);
     }
 
+    fn openBuildLog(self: *PackageBuilder) !BuildLog {
+        const package_base = self.package_builds[0].variables.get("pkgbase") orelse
+            self.package_builds[0].pkg_name orelse self.requested_names[0];
+        const normalized = try archive.normalizeEntryPath(self.allocator, package_base);
+        defer self.allocator.free(normalized);
+        if (std.mem.indexOfScalar(u8, normalized, '/') != null) return error.InvalidPackageBase;
+        var random_suffix: [8]u8 = undefined;
+        self.io.random(&random_suffix);
+        const suffix = std.fmt.bytesToHex(random_suffix, .lower);
+        const timestamp = std.Io.Clock.real.now(self.io).toSeconds();
+        const path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/{s}-{d}-{s}.log",
+            .{ self.options.log_destination, normalized, timestamp, suffix },
+        );
+        defer self.allocator.free(path);
+        const file = try std.Io.Dir.cwd().createFile(self.io, path, .{ .exclusive = true });
+        return .{ .file = file, .io = self.io };
+    }
+
+    fn logPhase(self: *PackageBuilder, name: []const u8) !void {
+        if (self.active_log) |log| try log.writeRecord("phase", name);
+    }
+
     fn runStep(
         self: *PackageBuilder,
         operation: *op_context.Operation,
@@ -964,6 +1129,7 @@ pub const PackageBuilder = struct {
         body: []const u8,
         working_directory: ?[]const u8,
     ) !void {
+        try self.logPhase(step_name);
         self.failure_location = .{
             .package_name = package_name,
             .step_name = step_name,
@@ -974,11 +1140,12 @@ pub const PackageBuilder = struct {
         const capture_metadata = package_step;
         const executable_body = try std.fmt.allocPrint(
             self.allocator,
-            "{s}\n{s}\n{s}\ndeclare -- startdir=\"$4\"\ndeclare -- srcdir=\"$5\"\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
+            "{s}\n{s}\n{s}\ndeclare -- startdir=\"$4\"\ndeclare -- srcdir=\"$5\"\n{s}\n{s}\ndeclare -- pkgver=\"$1\"\n__shelly_step() {{\n{s}\n}}\n{s}",
             .{
                 if (package_step) virtualMetadataShellPrelude else "",
                 if (package_step) package_metadata.shell_capture_prelude else "",
                 execution_prelude,
+                if (package_step) "declare -- pkgdir=\"$6\"" else "",
                 helper_definitions,
                 body,
                 if (capture_pkgver) "__shelly_step > \"$2\"" else "__shelly_step",
@@ -994,18 +1161,23 @@ pub const PackageBuilder = struct {
 
         const srcdir = try std.fs.path.join(
             self.allocator,
-            &.{ self.options.build_directory, "src" },
+            &.{ self.options.work_directory, "src" },
         );
         defer self.allocator.free(srcdir);
 
         const pkgver_result_path = try std.fs.path.join(
             self.allocator,
-            &.{ self.options.build_directory, ".shelly-pkgver" },
+            &.{ self.options.work_directory, ".shelly-pkgver" },
         );
         defer self.allocator.free(pkgver_result_path);
+        const runtime_pkgdir = try std.fs.path.join(
+            self.allocator,
+            &.{ self.options.work_directory, "pkg", package_name },
+        );
+        defer self.allocator.free(runtime_pkgdir);
         const metadata_result_path = try std.fs.path.join(
             self.allocator,
-            &.{ self.options.build_directory, ".shelly-package-metadata" },
+            &.{ self.options.work_directory, ".shelly-package-metadata" },
         );
         defer self.allocator.free(metadata_result_path);
         if (capture_pkgver) {
@@ -1026,20 +1198,32 @@ pub const PackageBuilder = struct {
             std.Io.Dir.cwd().deleteFile(self.io, metadata_result_path) catch {};
 
         const current_pkgver = self.package_builds[0].pkg_version orelse "";
-        const runtime_startdir = working_directory orelse self.options.build_directory;
+        const runtime_startdir = self.options.start_directory;
         const runtime_working_directory = working_directory orelse srcdir;
 
-        var stream_context: StepStreamContext = .{ .operation = operation, .package_name = package_name };
-        const exit_code = try process_runner.runStreamingWithEnvironmentOperation(
+        var stream_context: StepStreamContext = .{
+            .operation = operation,
+            .package_name = package_name,
+            .log = self.active_log,
+        };
+        const effective_options = try effectivePackageOptions(
+            self.allocator,
+            self.shellybuild_config.package.options,
+            self.package_builds[0].options orelse &.{},
+        );
+        defer freeOwnedStrings(self.allocator, effective_options);
+        const exit_code = try process_runner.runStreamingWithBuildEnvironmentOperation(
             self.allocator,
             self.io,
             self.environ,
-            &.{ "/bin/bash", "-e", "-c", command_body, "shelly-step", current_pkgver, pkgver_result_path, metadata_result_path, runtime_startdir, srcdir },
+            self.buildEnvironment(effective_options),
+            &.{ "/bin/bash", "-e", "-c", command_body, "shelly-step", current_pkgver, pkgver_result_path, metadata_result_path, runtime_startdir, srcdir, runtime_pkgdir },
             runtime_working_directory,
             null,
             .{ .function = forwardStepLine, .data = &stream_context },
             operation,
         );
+        if (self.active_log) |log| try log.ensureHealthy();
         if (package_step and exit_code == virtual_metadata_rejected_exit_code)
             return error.PrivilegedPackageOperationUnsupported;
         if (exit_code != 0) return error.StepFailed;
@@ -1064,6 +1248,30 @@ pub const PackageBuilder = struct {
             try self.applyPackageMetadata(package_name, output);
         }
         operation.status(.information, step_name, "aur_build_output", @intFromEnum(events.EventType.aur_build_output));
+    }
+
+    fn buildEnvironment(
+        self: *const PackageBuilder,
+        effective_options: []const []u8,
+    ) process_runner.BuildEnvironment {
+        const buildflags = !optionExplicitlyDisabled(effective_options, "buildflags");
+        const makeflags = !optionExplicitlyDisabled(effective_options, "makeflags");
+        const lto = buildflags and !optionExplicitlyDisabled(effective_options, "lto");
+        return .{
+            .cppflags = if (buildflags) self.shellybuild_config.build.cppflags else null,
+            .cflags = if (buildflags) self.shellybuild_config.build.cflags else null,
+            .cxxflags = if (buildflags) self.shellybuild_config.build.cxxflags else null,
+            .ldflags = if (buildflags) self.shellybuild_config.build.ldflags else null,
+            .ltoflags = if (lto) self.shellybuild_config.build.ltoflags else null,
+            .makeflags = if (makeflags) self.shellybuild_config.build.makeflags else null,
+            .chost = self.shellybuild_config.build.chost,
+            .distcc_hosts = if (self.shellybuild_config.build.distcc)
+                self.shellybuild_config.build.distcc_hosts
+            else
+                null,
+            .ccache = self.shellybuild_config.build.ccache,
+            .distcc = self.shellybuild_config.build.distcc,
+        };
     }
 
     fn applyDynamicPkgver(self: *PackageBuilder, output: []const u8) !void {
@@ -1112,12 +1320,12 @@ pub const PackageBuilder = struct {
         // Base values are authoritative first. Architecture-specific values
         // are appended in a second pass, matching makepkg's merge_arch_attrs.
         for (entries) |entry| {
-            if (package_metadata.architectureBase(entry.name, self.makepkg_config.package_carch) != null)
+            if (package_metadata.architectureBase(entry.name, self.shellybuild_config.build.carch) != null)
                 continue;
             try self.applyPackageMetadataEntry(package_build, entry, false);
         }
         for (entries) |entry| {
-            const base = package_metadata.architectureBase(entry.name, self.makepkg_config.package_carch) orelse
+            const base = package_metadata.architectureBase(entry.name, self.shellybuild_config.build.carch) orelse
                 continue;
             var effective = entry;
             effective.name = base;
@@ -1190,7 +1398,7 @@ pub const PackageBuilder = struct {
         const package_name = package_build.pkg_name orelse return error.MissingPackageName;
         const pkgdir = try std.fs.path.join(
             self.allocator,
-            &.{ self.options.build_directory, "pkg", package_name },
+            &.{ self.options.work_directory, "pkg", package_name },
         );
         defer self.allocator.free(pkgdir);
         std.Io.Dir.cwd().deleteTree(self.io, pkgdir) catch {
@@ -1209,7 +1417,7 @@ pub const PackageBuilder = struct {
     fn tidyPackage(self: *PackageBuilder, package_build: *const PackageBuild, pkgdir: []const u8) !void {
         const effective = try effectivePackageOptions(
             self.allocator,
-            self.makepkg_config.options,
+            self.shellybuild_config.package.options,
             package_build.options orelse &.{},
         );
         defer freeOwnedStrings(self.allocator, effective);
@@ -1228,13 +1436,11 @@ pub const PackageBuilder = struct {
             const path = try std.fs.path.join(self.allocator, &.{ pkgdir, entry.path });
             defer self.allocator.free(path);
             const kind = try stripKind(self.io, path);
-            const raw_flags = switch (kind orelse continue) {
-                .binary => self.makepkg_config.strip_binaries,
-                .shared => self.makepkg_config.strip_shared,
-                .static => self.makepkg_config.strip_static,
+            const flags = switch (kind orelse continue) {
+                .binary => self.shellybuild_config.package.strip_binaries,
+                .shared => self.shellybuild_config.package.strip_shared,
+                .static => self.shellybuild_config.package.strip_static,
             };
-            const flags = try parseConfigurationWords(self.allocator, raw_flags);
-            defer freeOwnedStrings(self.allocator, flags);
             var command: std.ArrayList([]const u8) = .empty;
             defer command.deinit(self.allocator);
             try command.append(self.allocator, "strip");
@@ -1262,7 +1468,7 @@ pub const PackageBuilder = struct {
         const package_arch = self.packageArchitecture(package_build);
         const pkgdir = try std.fs.path.join(
             self.allocator,
-            &.{ self.options.build_directory, "pkg", package_name },
+            &.{ self.options.work_directory, "pkg", package_name },
         );
         defer self.allocator.free(pkgdir);
 
@@ -1296,16 +1502,16 @@ pub const PackageBuilder = struct {
         defer mtree_file.close(self.io);
         try mtree_file.setPermissions(self.io, .fromMode(0o644));
 
-        try std.Io.Dir.cwd().createDirPath(self.io, self.options.build_directory);
+        try std.Io.Dir.cwd().createDirPath(self.io, self.options.package_destination);
         const file_name = try std.fmt.allocPrint(
             self.allocator,
             "{s}-{s}-{s}{s}",
-            .{ package_name, full_version, package_arch, self.makepkg_config.package_extension },
+            .{ package_name, full_version, package_arch, self.shellybuild_config.package.extension },
         );
         defer self.allocator.free(file_name);
         const output_path = try std.fs.path.joinZ(
             self.allocator,
-            &.{ self.options.build_directory, file_name },
+            &.{ self.options.package_destination, file_name },
         );
         errdefer self.allocator.free(output_path);
         if (!self.options.overwrite) {
@@ -1316,12 +1522,24 @@ pub const PackageBuilder = struct {
                 else => return err,
             }
         }
-        errdefer std.Io.Dir.cwd().deleteFile(self.io, output_path) catch {};
+        var random_suffix: [8]u8 = undefined;
+        self.io.random(&random_suffix);
+        const suffix = std.fmt.bytesToHex(random_suffix, .lower);
+        const temporary_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/.shelly-{s}-{s}",
+            .{ self.options.package_destination, suffix, file_name },
+        );
+        defer self.allocator.free(temporary_path);
+        errdefer std.Io.Dir.cwd().deleteFile(self.io, temporary_path) catch {};
 
-        var writer = try archive.Writer.initWithMetadata(self.allocator, self.io, output_path, virtual_metadata);
-        defer writer.deinit();
-        try writer.addDirectory(pkgdir);
-        try writer.finish();
+        {
+            var writer = try archive.Writer.initWithMetadata(self.allocator, self.io, temporary_path, virtual_metadata);
+            defer writer.deinit();
+            try writer.addDirectory(pkgdir);
+            try writer.finish();
+        }
+        try std.Io.Dir.cwd().rename(temporary_path, std.Io.Dir.cwd(), output_path, self.io);
 
         const owned_name = try self.allocator.dupe(u8, package_name);
         errdefer self.allocator.free(owned_name);
@@ -1375,7 +1593,7 @@ pub const PackageBuilder = struct {
                 if (std.mem.eql(u8, architecture, "any")) return "any";
             }
         }
-        return self.makepkg_config.package_carch;
+        return self.shellybuild_config.build.carch;
     }
 
     fn packageSupportsArchitecture(
@@ -1386,7 +1604,7 @@ pub const PackageBuilder = struct {
         if (architectures.len == 0) return true;
         for (architectures) |architecture| {
             if (std.mem.eql(u8, architecture, "any") or
-                std.mem.eql(u8, architecture, self.makepkg_config.package_carch)) return true;
+                std.mem.eql(u8, architecture, self.shellybuild_config.build.carch)) return true;
         }
         return false;
     }
@@ -1414,7 +1632,7 @@ pub const PackageBuilder = struct {
         if (package_build.pkg_desc) |value| try writeKeyValue(writer, "pkgdesc", value);
         if (package_build.url) |value| try writeKeyValue(writer, "url", value);
         try writer.print("builddate = {d}\n", .{build_date});
-        try writeKeyValue(writer, "packager", self.makepkg_config.packager);
+        try writeKeyValue(writer, "packager", self.shellybuild_config.package.packager);
         try writer.print("size = {d}\n", .{payload_size});
         try writeKeyValue(writer, "arch", package_arch);
         try writeKeyValues(writer, "license", package_build.license);
@@ -1453,30 +1671,27 @@ pub const PackageBuilder = struct {
             return error.MissingPkgbuildDigest;
         const pkgbuild_digest_hex = std.fmt.bytesToHex(pkgbuild_digest, .lower);
         try writeKeyValue(writer, "pkgbuild_sha256sum", &pkgbuild_digest_hex);
-        try writeKeyValue(writer, "packager", self.makepkg_config.packager);
+        try writeKeyValue(writer, "packager", self.shellybuild_config.package.packager);
         try writer.print("builddate = {d}\n", .{build_date});
-        try writeKeyValue(writer, "builddir", self.options.build_directory);
+        try writeKeyValue(writer, "builddir", self.options.work_directory);
         try writeKeyValue(
             writer,
             "startdir",
             if (self.options.pkgbuild_path) |path|
-                std.fs.path.dirname(path) orelse self.options.build_directory
+                std.fs.path.dirname(path) orelse self.options.start_directory
             else
-                self.options.build_directory,
+                self.options.start_directory,
         );
         try writeKeyValue(writer, "buildtool", "shelly");
         try writeKeyValue(writer, "buildtoolver", package_options.version);
 
-        const build_environment = try parseConfigurationWords(
-            self.allocator,
-            self.makepkg_config.build_environment,
-        );
-        defer freeOwnedStrings(self.allocator, build_environment);
-        for (build_environment) |value| try writeKeyValue(writer, "buildenv", value);
+        try writeKeyValue(writer, "buildenv", if (self.options.run_check) "check" else "!check");
+        try writeKeyValue(writer, "buildenv", if (self.shellybuild_config.build.ccache) "ccache" else "!ccache");
+        try writeKeyValue(writer, "buildenv", if (self.shellybuild_config.build.distcc) "distcc" else "!distcc");
 
         const effective_options = try effectivePackageOptions(
             self.allocator,
-            self.makepkg_config.options,
+            self.shellybuild_config.package.options,
             package_build.options orelse &.{},
         );
         defer freeOwnedStrings(self.allocator, effective_options);
@@ -1595,58 +1810,18 @@ fn freeOwnedStrings(allocator: std.mem.Allocator, values: [][]u8) void {
     allocator.free(values);
 }
 
-/// Parses the shell-like array syntax used for makepkg.conf option and flag
-/// values. It deliberately supports data syntax only; no substitutions or
-/// commands are evaluated.
-fn parseConfigurationWords(allocator: std.mem.Allocator, raw: []const u8) ![][]u8 {
-    var text = std.mem.trim(u8, raw, " \t\r\n");
-    if (text.len >= 2 and text[0] == '(' and text[text.len - 1] == ')')
-        text = text[1 .. text.len - 1];
-
-    var words: std.ArrayList([]u8) = .empty;
+fn duplicateOwnedStrings(allocator: std.mem.Allocator, values: []const []const u8) ![][]u8 {
+    const duplicated = try allocator.alloc([]u8, values.len);
+    var count: usize = 0;
     errdefer {
-        for (words.items) |word| allocator.free(word);
-        words.deinit(allocator);
+        for (duplicated[0..count]) |value| allocator.free(value);
+        allocator.free(duplicated);
     }
-    var index: usize = 0;
-    while (index < text.len) {
-        while (index < text.len and std.ascii.isWhitespace(text[index])) index += 1;
-        if (index >= text.len or text[index] == '#') break;
-        var word: std.ArrayList(u8) = .empty;
-        defer word.deinit(allocator);
-        var quote: ?u8 = null;
-        var started = false;
-        while (index < text.len) {
-            const byte = text[index];
-            if (quote == null and (std.ascii.isWhitespace(byte) or byte == '#')) break;
-            started = true;
-            if (byte == '\\' and quote != '\'') {
-                index += 1;
-                if (index >= text.len) return error.InvalidConfigurationArray;
-                try word.append(allocator, text[index]);
-                index += 1;
-                continue;
-            }
-            if (byte == '\'' or byte == '"') {
-                if (quote == null) {
-                    quote = byte;
-                    index += 1;
-                    continue;
-                }
-                if (quote.? == byte) {
-                    quote = null;
-                    index += 1;
-                    continue;
-                }
-            }
-            try word.append(allocator, byte);
-            index += 1;
-        }
-        if (quote != null) return error.InvalidConfigurationArray;
-        if (started) try words.append(allocator, try allocator.dupe(u8, word.items));
-        if (index < text.len and text[index] == '#') break;
+    for (values, duplicated) |value, *destination| {
+        destination.* = try allocator.dupe(u8, value);
+        count += 1;
     }
-    return words.toOwnedSlice(allocator);
+    return duplicated;
 }
 
 fn optionName(value: []const u8) []const u8 {
@@ -1661,12 +1836,20 @@ fn optionEnabled(options: []const []u8, name: []const u8) bool {
     return false;
 }
 
+fn optionExplicitlyDisabled(options: []const []u8, name: []const u8) bool {
+    for (options) |option| {
+        if (std.mem.eql(u8, optionName(option), name))
+            return std.mem.startsWith(u8, option, "!");
+    }
+    return false;
+}
+
 fn effectivePackageOptions(
     allocator: std.mem.Allocator,
-    configured: []const u8,
+    configured: []const []const u8,
     overrides: []const []const u8,
 ) ![][]u8 {
-    var options = try parseConfigurationWords(allocator, configured);
+    var options = try duplicateOwnedStrings(allocator, configured);
     errdefer freeOwnedStrings(allocator, options);
     for (overrides) |override| {
         if (override.len == 0 or std.mem.eql(u8, override, "!")) continue;
@@ -2088,10 +2271,12 @@ fn rejectExistingDestination(io: std.Io, path: []const u8) !void {
 const StepStreamContext = struct {
     operation: *op_context.Operation,
     package_name: []const u8,
+    log: ?*BuildLog,
 };
 
 fn forwardStepLine(data: ?*anyopaque, stream: process_runner.StreamKind, line: []const u8) void {
     const context: *StepStreamContext = @ptrCast(@alignCast(data.?));
+    if (context.log) |log| log.writeStream(stream, line);
     const event_type: events.EventType = if (stream == .stderr) .aur_build_error else .aur_build_output;
     context.operation.status(
         if (stream == .stderr) .warning else .information,

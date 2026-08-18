@@ -50,6 +50,10 @@
             .url = "git+https://github.com/ianprime0509/zig-xml#6a446191d2509788959766b60a13b8626d9ad078",
             .hash = "xml-0.2.0-ZTbP3x07AgAwDNgFEj9liF24YjojTKyznD3-Njf9w5HT",
         },
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml.git#8685923e32e8b8a795eb2715684236975a70faed",
+            .hash = "toml-0.3.0-bV14BRmKAQAWR0FT0KUKFwVJTImaFhWjSe6HfSMtNZOH",
+        },
     },
     .paths = .{
         "build.zig",

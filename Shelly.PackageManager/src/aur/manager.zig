@@ -6,7 +6,7 @@ const alpm_events = @import("../alpm/events.zig");
 const pkgbuild_parser = @import("../pkgbuild/pkgbuild_parser.zig");
 const pkgbuild_validation = @import("builder/pkgbuild_validation.zig");
 const operation_api = @import("operation_context");
-const MakePackageConfiguration = @import("makepackage.zig").MakePackageConfiguration;
+const ShellyBuildConfiguration = @import("shellybuild.zig").ShellyBuildConfiguration;
 const package_builder = @import("builder/builder.zig");
 const review_integrity = @import("review_integrity.zig");
 
@@ -43,14 +43,23 @@ pub const InitOptions = struct {
     chroot_path: []const u8 = "/var/lib/shelly/chroot",
     temp_path: ?[]const u8 = null,
     show_hidden_packages: bool = false,
-    no_check: bool = true,
+    check: ?bool = null,
     cache_root: ?[]const u8 = null,
     aur_git_base_url: []const u8 = "https://aur.archlinux.org",
     makepkg_command: ?[]const u8 = null,
     /// Path to the Shelly CLI used to execute reviewed builds as the original
     /// non-root caller of an elevated install or upgrade operation.
     build_command: ?[]const u8 = null,
+    /// Overrides both configuration lookup paths as a pair. This is primarily
+    /// useful to isolate embedded callers and tests from host policy; absent
+    /// files at either path still mean "no override".
+    shellybuild_configuration_paths: ?ShellyBuildConfigurationPaths = null,
     operation_context: ?*operation_api.OperationContext = null,
+};
+
+pub const ShellyBuildConfigurationPaths = struct {
+    system: []const u8,
+    user: []const u8,
 };
 
 pub const PkgbuildDiffRequest = struct {
@@ -168,7 +177,7 @@ pub const Manager = struct {
     aur_git_base_url: []u8,
     makepkg_command: ?[]u8,
     build_command: ?[]u8,
-    makepkg_config: *MakePackageConfiguration,
+    shellybuild_config: *ShellyBuildConfiguration,
     vcs_store_path: []u8,
     chroot_path: []u8,
     use_chroot: bool,
@@ -185,8 +194,18 @@ pub const Manager = struct {
         const temporary_root = if (options.use_temp_path) options.temp_path else null;
         const alpm = try AlpmManager.init(allocator, environ, .{ .config_path = options.config_path, .use_root = options.root, .temp_root_path = temporary_root });
         errdefer alpm.deinit();
-        const makepkg_config = try MakePackageConfiguration.init(alpm.io(), allocator);
-        errdefer makepkg_config.deinit();
+        const shellybuild_config = if (options.use_chroot or options.makepkg_command != null)
+            try ShellyBuildConfiguration.initFromBuffers(allocator, null, null)
+        else if (options.shellybuild_configuration_paths) |paths|
+            try ShellyBuildConfiguration.initFromPaths(
+                alpm.io(),
+                allocator,
+                paths.system,
+                paths.user,
+            )
+        else
+            try ShellyBuildConfiguration.init(alpm.io(), allocator, environ);
+        errdefer shellybuild_config.deinit();
         const cache_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_CACHE_HOME", ".cache");
         defer allocator.free(cache_home);
         const data_home = try resolveXdgHome(allocator, alpm.io(), environ, "XDG_DATA_HOME", ".local/share");
@@ -236,11 +255,14 @@ pub const Manager = struct {
             .aur_git_base_url = aur_git_base_url,
             .makepkg_command = makepkg_command,
             .build_command = build_command,
-            .makepkg_config = makepkg_config,
+            .shellybuild_config = shellybuild_config,
             .vcs_store_path = vcs_store_path,
             .chroot_path = chroot_path,
             .use_chroot = options.use_chroot,
-            .no_check = options.no_check,
+            .no_check = !(options.check orelse if (options.use_chroot or options.makepkg_command != null)
+                false
+            else
+                shellybuild_config.build.check),
             .operation_context = options.operation_context,
         };
         self.vcs_store.loadFile(self.io(), self.vcs_store_path) catch {};
@@ -275,7 +297,7 @@ pub const Manager = struct {
         self.approved_pkgbuild_reviews.deinit();
         self.dispatcher.deinit();
         self.aur_client.deinit();
-        self.makepkg_config.deinit();
+        self.shellybuild_config.deinit();
         self.alpm.deinit();
         allocator.free(self.cache_root);
         allocator.free(self.aur_git_base_url);
@@ -1293,7 +1315,7 @@ pub const Manager = struct {
             .allocator = self.allocator,
             .io = self.io(),
             .selected_package_name = package_name,
-            .package_carch = self.makepkg_config.package_carch,
+            .package_carch = self.shellybuild_config.build.carch,
         }).parser(pkgbuild_path);
         errdefer info.deinit(self.allocator);
         try requireReviewInputs(self.allocator, self.io(), cache_path, &info);
@@ -1485,7 +1507,7 @@ pub const Manager = struct {
                 .allocator = self.allocator,
                 .io = self.io(),
                 .selected_package_name = requested_name,
-                .package_carch = self.makepkg_config.package_carch,
+                .package_carch = self.shellybuild_config.build.carch,
             }).parser_content(prepared.new_pkgbuild, prepared.cache_path);
             parsed_count += 1;
         }
@@ -1508,18 +1530,32 @@ pub const Manager = struct {
             );
 
         const active_context = self.operation_context orelse operation.context;
+        const work_directory = if (self.shellybuild_config.destinations.build) |build_root|
+            try package_builder.uniqueWorkDirectory(
+                self.allocator,
+                self.io(),
+                build_root,
+                prepared.package_name,
+            )
+        else
+            try self.allocator.dupe(u8, prepared.cache_path);
+        defer self.allocator.free(work_directory);
         const package_build = try package_builder.PackageBuilder.init(
             self.allocator,
             package_builds,
             active_context,
-            self.makepkg_config.*,
+            self.shellybuild_config.*,
             requested_names,
             .{
                 .run_check = !self.no_check,
                 .overwrite = !historical,
                 .clean_after_success = !historical,
                 .skip_source_pgp_verification = false,
-                .build_directory = prepared.cache_path,
+                .start_directory = prepared.cache_path,
+                .work_directory = work_directory,
+                .package_destination = self.shellybuild_config.destinations.packages orelse prepared.cache_path,
+                .source_destination = self.shellybuild_config.destinations.sources orelse prepared.cache_path,
+                .log_destination = self.shellybuild_config.destinations.logs orelse prepared.cache_path,
                 .pkgbuild_path = prepared.pkgbuild_path,
                 .reviewed_pkgbuild_digest = build_review.digest,
                 .install_scripts = build_review.install_scripts,
@@ -2316,7 +2352,7 @@ fn appendShellyBuildArguments(
     });
     for (requested_names) |requested_name|
         try arguments.appendSlice(allocator, &.{ "--package", requested_name });
-    if (!no_check) try arguments.append(allocator, "--check");
+    try arguments.append(allocator, if (no_check) "--no-check" else "--check");
     if (historical) {
         try arguments.append(allocator, "--no-overwrite");
         try arguments.append(allocator, "--keep-workdirs");
@@ -2880,6 +2916,10 @@ test "prepared non-chroot split package builds use the custom builder" {
     defer allocator.free(db_path);
     const package_cache = try std.fs.path.join(allocator, &.{ root, "packages" });
     defer allocator.free(package_cache);
+    const shellybuild_system_path = try std.fs.path.join(allocator, &.{ root, "missing-system-shellybuild.conf" });
+    defer allocator.free(shellybuild_system_path);
+    const shellybuild_user_path = try std.fs.path.join(allocator, &.{ root, "missing-user-shellybuild.conf" });
+    defer allocator.free(shellybuild_user_path);
     try std.Io.Dir.cwd().createDirPath(io, remote_root);
     try std.Io.Dir.cwd().createDirPath(io, cache_root);
     try std.Io.Dir.cwd().createDirPath(io, alpm_root);
@@ -2903,6 +2943,10 @@ test "prepared non-chroot split package builds use the custom builder" {
         .config_path = config_path,
         .cache_root = cache_root,
         .aur_git_base_url = remote_root,
+        .shellybuild_configuration_paths = .{
+            .system = shellybuild_system_path,
+            .user = shellybuild_user_path,
+        },
     });
     defer manager.deinit();
     _ = try manager.cachePkgbase("demo-cli", "demo-suite");
