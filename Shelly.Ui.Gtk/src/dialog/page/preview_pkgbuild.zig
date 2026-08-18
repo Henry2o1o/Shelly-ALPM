@@ -71,7 +71,11 @@ pub const PkgbuildReviewDialog = extern struct {
     pub fn showPreview(self: *Self, name: []const u8) void {
         const p = self.priv();
         var buf: [512]u8 = undefined;
-        const heading = std.fmt.bufPrintZ(&buf, "{s}: {s}", .{ "PKGBUILD", name },) catch "PKGBUILD";
+        const heading = std.fmt.bufPrintZ(
+            &buf,
+            "{s}: {s}",
+            .{ "PKGBUILD", name },
+        ) catch "PKGBUILD";
         gtk.Label.setLabel(p.heading_label, heading);
         self.start_load(name);
     }
