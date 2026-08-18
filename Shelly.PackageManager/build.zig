@@ -580,6 +580,7 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder simulates root ownership without host chown",
             "PackageBuilder rejects unsupported virtual ownership",
             "PackageBuilder runs source-less execution steps inside srcdir",
+            "PackageBuilder provides makepkg messaging helpers to lifecycle steps",
             "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata",
             "PackageBuilder exports configured build environment to lifecycle steps",
             "PackageBuilder honors PKGBUILD build flag make flag and LTO negations",
