@@ -682,6 +682,143 @@ pub const Manager = struct {
         self.raisePackageProgress(.aur_package_completed, package_name, 1, 1, "Dependencies installed successfully");
     }
 
+    /// Builds and installs the named packages as build dependencies of a
+    /// direct PKGBUILD build. A package whose name appears in the optional
+    /// local PKGBUILD directory is staged from that directory instead of
+    /// being downloaded from the AUR, so a direct build's own PKGBUILD can
+    /// satisfy its dependency edge. Recursive dependencies are resolved and
+    /// reviewed before anything is installed, and every package is installed
+    /// with the dependency install reason.
+    pub fn installAurBuildDependencies(
+        self: *Self,
+        dependency_names: []const []const u8,
+        local_pkgbuild_directory: ?[]const u8,
+    ) !void {
+        var operation_scope = OperationScope.init(self, .install, if (dependency_names.len == 0) null else dependency_names[0]);
+        operation_scope.attach();
+        defer operation_scope.finish(.success);
+        errdefer operation_scope.fail();
+        try self.checkCancelled();
+        try self.alpm.sync(false);
+
+        var collection = DependencyCollection.init(self.allocator);
+        defer collection.deinit();
+        var visited = std.StringHashMap(void).init(self.allocator);
+        defer {
+            var keys = visited.keyIterator();
+            while (keys.next()) |key| self.allocator.free(key.*);
+            visited.deinit();
+        }
+
+        var prepared_count: usize = 0;
+        for (dependency_names) |dependency_name| {
+            var prepared = if (try self.prepareLocalPackageForBuild(dependency_name, local_pkgbuild_directory)) |local|
+                local
+            else
+                try self.preparePackageForBuild(dependency_name, null);
+            var prepared_live = true;
+            defer if (prepared_live) prepared.deinit(self.allocator);
+            if (visited.contains(prepared.package_base)) continue;
+            try visited.put(try self.allocator.dupe(u8, prepared.package_base));
+            try self.collectDependenciesRecursive(&prepared.info, &collection, &visited);
+            try collection.addAur(&prepared, .build);
+            prepared_live = false;
+            prepared_count += 1;
+        }
+
+        if (prepared_count == 0) return;
+        try self.requireDependencyApprovals(&collection);
+        self.raisePackageProgress(.aur_install_start, dependency_names[0], 1, 1, "Installing AUR build dependencies");
+        try self.installCollection(&collection);
+        self.raisePackageProgress(.aur_install_done, dependency_names[0], 1, 1, "");
+    }
+
+    /// Prepares a dependency build from a PKGBUILD directory on disk instead
+    /// of an AUR checkout. Returns null when the directory is absent or its
+    /// PKGBUILD does not name the requested package, so callers fall back to
+    /// the AUR.
+    fn prepareLocalPackageForBuild(
+        self: *Self,
+        package_name: []const u8,
+        directory: ?[]const u8,
+    ) !?PreparedPackage {
+        const base_directory = directory orelse return null;
+        const pkgbuild_path = try std.fs.path.join(self.allocator, &.{ base_directory, "PKGBUILD" });
+        defer self.allocator.free(pkgbuild_path);
+        const content = std.Io.Dir.cwd().readFileAlloc(
+            self.io(),
+            pkgbuild_path,
+            self.allocator,
+            .limited(max_file_size),
+        ) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
+        };
+        errdefer self.allocator.free(content);
+
+        var names = (pkgbuild_parser.PkgbuildParser{
+            .allocator = self.allocator,
+            .io = self.io(),
+            .package_carch = self.shellybuild_config.build.carch,
+        }).package_names_content(content) catch return null;
+        defer names.deinit(self.allocator);
+
+        var contains_name = false;
+        for (names.items) |name| {
+            if (std.mem.eql(u8, name, package_name)) {
+                contains_name = true;
+                break;
+            }
+        }
+        if (!contains_name) return null;
+
+        var info = try (pkgbuild_parser.PkgbuildParser{
+            .allocator = self.allocator,
+            .io = self.io(),
+            .selected_package_name = package_name,
+            .package_carch = self.shellybuild_config.build.carch,
+        }).parser_content(content, base_directory);
+        errdefer info.deinit(self.allocator);
+        try requireReviewInputs(self.allocator, self.io(), base_directory, &info);
+
+        const owned_name = try self.allocator.dupe(u8, package_name);
+        errdefer self.allocator.free(owned_name);
+        const package_base = try self.allocator.dupe(
+            u8,
+            info.variables.get("pkgbase") orelse info.pkg_name orelse package_name,
+        );
+        errdefer self.allocator.free(package_base);
+        const cache_path = try self.allocator.dupe(u8, base_directory);
+        errdefer self.allocator.free(cache_path);
+        const owned_pkgbuild_path = try self.allocator.dupe(u8, pkgbuild_path);
+        errdefer self.allocator.free(owned_pkgbuild_path);
+
+        var validation_results = try validatePkgbuildInfo(self.allocator, self.io(), &info, base_directory, content);
+        errdefer validation_results.deinit(self.allocator);
+        const digest = try reviewDigest(self.allocator, self.io(), base_directory, content, &info);
+
+        const previous_commit = try self.allocator.alloc(u8, 0);
+        errdefer self.allocator.free(previous_commit);
+        const target_commit = try self.allocator.alloc(u8, 0);
+        errdefer self.allocator.free(target_commit);
+        const old_pkgbuild = try self.allocator.alloc(u8, 0);
+        errdefer self.allocator.free(old_pkgbuild);
+
+        return .{
+            .package_name = owned_name,
+            .package_base = package_base,
+            .cache_path = cache_path,
+            .pkgbuild_path = owned_pkgbuild_path,
+            .previous_commit = previous_commit,
+            .target_commit = target_commit,
+            .old_pkgbuild = old_pkgbuild,
+            .new_pkgbuild = content,
+            .digest = digest,
+            .info = info,
+            .validation_results = validation_results,
+        };
+    }
+
     pub fn installPackages(self: *Self, package_names: []const []const u8) !void {
         var operation_scope = OperationScope.init(self, .install, if (package_names.len == 0) null else package_names[0]);
         operation_scope.attach();
