@@ -127,6 +127,19 @@ pub fn build_var_hashmap(self: PkgbuildParser, content: []const u8) !std.StringH
         try vars.put(key_owned, value_owned);
     }
 
+    // makepkg exposes CARCH to every top-level assignment, so metadata that
+    // references it (most commonly source=() URLs) resolves statically. Seed
+    // it unless the PKGBUILD defined its own value.
+    if (!vars.contains("CARCH")) {
+        const key_owned = try self.allocator.dupe(u8, "CARCH");
+        const value_owned = try self.allocator.dupe(u8, self.package_carch);
+        vars.put(key_owned, value_owned) catch |err| {
+            self.allocator.free(key_owned);
+            self.allocator.free(value_owned);
+            return err;
+        };
+    }
+
     try inject_array_pkgname(self, content, &vars);
 
     var pass: usize = 0;
@@ -374,12 +387,13 @@ test "build_var_hashmap: later redeclaration overwrites earlier value" {
     try std.testing.expectEqualStrings("2.0", vars.get("pkgver").?);
 }
 
-test "build_var_hashmap: empty content produces empty map" {
+test "build_var_hashmap: empty content seeds only CARCH" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var vars = try build_var_hashmap(parser, "");
     defer free_vars(std.testing.allocator, &vars);
 
-    try std.testing.expectEqual(@as(usize, 0), vars.count());
+    try std.testing.expectEqual(@as(usize, 1), vars.count());
+    try std.testing.expectEqualStrings("x86_64", vars.get("CARCH").?);
 }
 
 test "build_var_hashmap: lines that do not match key=value are ignored" {
@@ -387,7 +401,7 @@ test "build_var_hashmap: lines that do not match key=value are ignored" {
     var vars = try build_var_hashmap(parser, "# a comment\n\npkgname=app\n");
     defer free_vars(std.testing.allocator, &vars);
 
-    try std.testing.expectEqual(@as(usize, 1), vars.count());
+    try std.testing.expectEqual(@as(usize, 2), vars.count());
     try std.testing.expectEqualStrings("app", vars.get("pkgname").?);
 }
 

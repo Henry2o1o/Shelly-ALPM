@@ -1351,6 +1351,53 @@ test "parser_content: array command substitution is still rejected" {
     );
 }
 
+test "parser_content: source URL resolves CARCH statically" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var info = try parse_test_pkgbuild(parser,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\source=("demo-$CARCH.tar.gz::https://example.test/demo-$CARCH.tar.gz")
+        \\sha256sums=('SKIP')
+        \\package() { :; }
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), info.source.?.len);
+    try std.testing.expectEqualStrings(
+        "demo-x86_64.tar.gz::https://example.test/demo-x86_64.tar.gz",
+        info.source.?[0],
+    );
+}
+
+test "parser_content: dynamic date and CARCH both resolve in source" {
+    var overrides: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer overrides.deinit();
+    try overrides.put("_date", "20260819");
+
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .dynamic_overrides = &overrides,
+    };
+    var info = try parse_test_pkgbuild(parser,
+        \\pkgname=demo-nightly-bin
+        \\pkgver=1
+        \\pkgrel=1
+        \\_date="$(date -u +%Y%m%d)"
+        \\source=("demo-$_date-$CARCH.zip::https://example.test/nightly/demo-$CARCH-linux-gnu.zip")
+        \\sha256sums=('SKIP')
+        \\package() { :; }
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), info.source.?.len);
+    try std.testing.expectEqualStrings(
+        "demo-20260819-x86_64.zip::https://example.test/nightly/demo-x86_64-linux-gnu.zip",
+        info.source.?[0],
+    );
+}
+
 test "parser_content: scx style PKGBUILD with commented backports parses" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var info = try parser.parser_content(
