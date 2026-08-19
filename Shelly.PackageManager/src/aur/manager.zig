@@ -719,7 +719,7 @@ pub const Manager = struct {
             var prepared_live = true;
             defer if (prepared_live) prepared.deinit(self.allocator);
             if (visited.contains(prepared.package_base)) continue;
-            try visited.put(try self.allocator.dupe(u8, prepared.package_base));
+            try visited.put(try self.allocator.dupe(u8, prepared.package_base), {});
             try self.collectDependenciesRecursive(&prepared.info, &collection, &visited);
             try collection.addAur(&prepared, .build);
             prepared_live = false;

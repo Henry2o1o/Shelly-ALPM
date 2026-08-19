@@ -61,7 +61,7 @@ fn checkSyncDepsNeeded(
     defer manager.deinit();
 
     var backend_context: AlpmResolverContext = .{ .manager = manager };
-    const plan = try resolveSyncDependencies(
+    var plan = try resolveSyncDependencies(
         context.allocator,
         request.package_builds,
         request.no_check,
@@ -322,7 +322,7 @@ const BuildRequest = struct {
     pkgbuild_path: []u8,
     /// Borrows `pkgbuild_path`; valid until the request is deinitialized.
     build_directory: []const u8,
-    shellybuild: ShellyBuildConfiguration,
+    shellybuild: *ShellyBuildConfiguration,
     package_builds: []Zigalpm.pkgbuild.parser.Pkgbuild,
     parsed_count: usize,
     no_check: bool,
