@@ -553,7 +553,7 @@ pub const AppImageManager = struct {
         return std.fs.path.join(self.allocator, &.{ icon_dir, dest_icon_name });
     }
 
-    fn updateIconCache(self: AppImageManager, data_home: []const u8) !void {
+    fn updateIconCache(self: AppImageManager, data_home: []const u8) std.mem.Allocator.Error!void {
         const theme_dir = try std.fs.path.join(self.allocator, &.{ data_home, "icons/hicolor" });
         defer self.allocator.free(theme_dir);
         var proc = std.process.spawn(self.io, .{
@@ -563,10 +563,19 @@ pub const AppImageManager = struct {
             .stderr = .ignore,
         }) catch |err| switch (err) {
             error.FileNotFound => return,
-            else => return err,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                std.log.warn("Could not run gtk-update-icon-cache for {s}: {s}. Installed icons may not appear in menus until the icon cache is rebuilt.", .{ theme_dir, @errorName(err) });
+                return;
+            },
         };
-        const term = try proc.wait(self.io);
-        if (term != .exited or term.exited != 0) return error.IconCacheRefreshFailed;
+        const term = proc.wait(self.io) catch |err| {
+            std.log.warn("Could not wait for gtk-update-icon-cache for {s}: {s}. Installed icons may not appear in menus until the icon cache is rebuilt.", .{ theme_dir, @errorName(err) });
+            return;
+        };
+        if (term != .exited or term.exited != 0) {
+            std.log.warn("gtk-update-icon-cache failed for {s}. Installed icons may not appear in menus until the icon cache is rebuilt.", .{theme_dir});
+        }
     }
 
     fn parseExecSuffix(exec_value: []const u8) []const u8 {
@@ -667,14 +676,8 @@ pub const AppImageManager = struct {
         defer self.allocator.free(data_home);
         const desktop_dir = try std.fs.path.join(self.allocator, &.{ data_home, "applications" });
         defer self.allocator.free(desktop_dir);
-        self.updateDesktopDatabase(desktop_dir) catch |err| {
-            integration.rollback() catch |rollback_err| std.log.err("Could not restore desktop integration after cache failure: {s}", .{@errorName(rollback_err)});
-            return err;
-        };
-        if (icon_source != null) self.updateIconCache(data_home) catch |err| {
-            integration.rollback() catch |rollback_err| std.log.err("Could not restore desktop integration after cache failure: {s}", .{@errorName(rollback_err)});
-            return err;
-        };
+        try self.updateDesktopDatabase(desktop_dir);
+        if (icon_source != null) try self.updateIconCache(data_home);
         return integration;
     }
 
