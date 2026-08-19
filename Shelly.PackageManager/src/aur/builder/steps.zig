@@ -9,6 +9,7 @@ const op_context = @import("operation_context");
 const archive = @import("archive");
 const process_runner = @import("../builder.zig");
 const metadata = @import("metadata.zig");
+const sandbox = @import("sandbox.zig");
 const PackageBuilder = @import("builder.zig").PackageBuilder;
 const ExecutionStep = @import("../../pkgbuild/pkgbuild_parser.zig").execution_step;
 
@@ -187,12 +188,16 @@ pub fn runStep(
         self.package_builds[0].options orelse &.{},
     );
     defer metadata.freeOwnedStrings(self.allocator, effective_options);
+    const step_argv: []const []const u8 = &.{ "/bin/bash", "-e", "-c", command_body, "shelly-step", current_pkgver, pkgver_result_path, metadata_result_path, runtime_startdir, srcdir, runtime_pkgdir };
+    const sandbox_enabled = self.shellybuild_config.sandbox.enabled;
+    const wrapped = if (sandbox_enabled) try wrapStepCommand(self, step_argv) else null;
+    defer if (wrapped) |command| command.deinit(self.allocator);
     const exit_code = try process_runner.runStreamingWithBuildEnvironmentOperation(
         self.allocator,
         self.io,
         self.environ,
         buildEnvironment(self, effective_options),
-        &.{ "/bin/bash", "-e", "-c", command_body, "shelly-step", current_pkgver, pkgver_result_path, metadata_result_path, runtime_startdir, srcdir, runtime_pkgdir },
+        if (wrapped) |command| command.argv else step_argv,
         runtime_working_directory,
         null,
         .{ .function = forwardStepLine, .data = &stream_context },
@@ -201,7 +206,10 @@ pub fn runStep(
     if (self.active_log) |log| try log.ensureHealthy();
     if (package_step and exit_code == virtual_metadata_rejected_exit_code)
         return error.PrivilegedPackageOperationUnsupported;
-    if (exit_code != 0) return error.StepFailed;
+    if (exit_code != 0) {
+        if (sandbox_enabled) writeSandboxFailureHint(self);
+        return error.StepFailed;
+    }
     if (capture_pkgver) {
         const output = try std.Io.Dir.cwd().readFileAlloc(
             self.io,
@@ -223,6 +231,58 @@ pub fn runStep(
         try metadata.applyPackageMetadata(self, package_name, output);
     }
     operation.status(.information, step_name, "aur_build_output", @intFromEnum(events.EventType.aur_build_output));
+}
+
+const WrappedStepCommand = struct {
+    argv: [][]const u8,
+    executable: ?[:0]u8,
+
+    fn deinit(self: WrappedStepCommand, allocator: std.mem.Allocator) void {
+        allocator.free(self.argv);
+        if (self.executable) |path| allocator.free(path);
+    }
+};
+
+/// Wraps the step argv in the Landlock sandbox wrapper. The wrapper receives
+/// only the per-build paths; the fixed base allow-list is applied by the
+/// wrapper entry point itself.
+fn wrapStepCommand(self: *PackageBuilder, child_argv: []const []const u8) !WrappedStepCommand {
+    var executable: ?[:0]u8 = null;
+    errdefer if (executable) |path| self.allocator.free(path);
+    var prefix_storage: [2][]const u8 = undefined;
+    const wrapper_prefix: []const []const u8 = if (self.options.sandbox_wrapper_prefix) |prefix|
+        prefix
+    else blk: {
+        const path = try std.process.executablePathAlloc(self.io, self.allocator);
+        executable = path;
+        prefix_storage = .{ path, sandbox.wrapper_argument };
+        break :blk &prefix_storage;
+    };
+
+    const sandbox_config = self.shellybuild_config.sandbox;
+    var read_write: std.ArrayList([]const u8) = .empty;
+    defer read_write.deinit(self.allocator);
+    try read_write.append(self.allocator, self.options.work_directory);
+    try read_write.append(self.allocator, self.options.start_directory);
+    for (sandbox_config.extra_write) |path|
+        try read_write.append(self.allocator, path);
+
+    const argv = try sandbox.buildWrappedCommand(
+        self.allocator,
+        wrapper_prefix,
+        read_write.items,
+        sandbox_config.extra_read,
+        child_argv,
+    );
+    return .{ .argv = argv, .executable = executable };
+}
+
+fn writeSandboxFailureHint(self: *const PackageBuilder) void {
+    const log = self.active_log orelse return;
+    log.writeRecord(
+        "sandbox",
+        "step failed inside the Landlock sandbox; if it hit a permission error, grant additional paths through [sandbox] extra_read or extra_write",
+    ) catch {};
 }
 
 pub fn buildEnvironment(

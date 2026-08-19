@@ -37,7 +37,8 @@ the active operation/log.
 | `source_spec.zig` | **Pure source-entry parsing.** `ParsedSource.parse` classifies `source=()` entries (local/http/git), handles `name::url` renames, `#branch=/tag=/commit=` fragments and `?signed` queries; detached-signature pairing (`findDetachedPayload`); archive-name and symlink-target safety checks. No IO, no builder state — fully unit-tested in-file. |
 | `checksums.zig` | **Checksum tables.** Maps the seven PKGBUILD sum arrays (`sha512sums` … `b2sums`) into `checksumSets`, enforces count/SKIP rules, and verifies file hashes (`verifyFileHash`). |
 | `metadata.zig` | **Metadata + option helpers.** makepkg option merging (`effectivePackageOptions`, `!option` semantics), `pkgver` validation, ownership-safe replacement of optional strings/arrays, and application of runtime-captured package metadata onto the parsed PKGBUILD (`applyPackageMetadata`). |
-| `security.zig` | **Privilege guards.** Non-root effective-UID policy, `prctl(NO_NEW_PRIVS)` process lockdown, randomized unique work directories, and `narrowBuilderError` (anyerror → `BuilderErrors`). |
+| `security.zig` | **Privilege guards.** Non-root effective-UID policy, `prctl(NO_NEW_PRIVS)` process lockdown (`setNoNewPrivs` is shared with the sandbox wrapper), randomized unique work directories, and `narrowBuilderError` (anyerror → `BuilderErrors`). |
+| `sandbox.zig` | **Landlock step confinement.** Raw Landlock syscalls (ruleset create/add-rule/restrict-self), the ABI probe, the base and per-build allow-list, the `__sandbox-exec` wrapper protocol (`parseWrapperArguments`/`buildWrappedCommand`), and their unit tests. Steps re-execute through the CLI wrapper so only the untrusted bash children are confined. |
 | `sources.zig` | **Source pipeline.** Copies local files, downloads HTTP sources into the cache, mirror-clones git sources, verifies checksums and PGP signatures (including compressed `.sig` payloads), runs the optional `verify()` step, and safely extracts archives into the staging tree (path traversal, symlink, and size limits). |
 | `steps.zig` | **Step execution.** Build-directory validation, the build log (`BuildLog`), and `runStep` — the bash runner that executes each PKGBUILD function with the prelude environment, messaging/virtual-metadata shell preludes, stream forwarding, `pkgver()` capture, and package-metadata capture. |
 | `package_file.zig` | **Package assembly.** `tidy`/strip handling, `.PKGINFO` and `.BUILDINFO` writers, install-script/changelog placement from reviewed contents, `.MTREE` generation, archive creation via the Shelly archive writer, detached OpenPGP signing, and rollback cleanup. |
@@ -49,12 +50,12 @@ the active operation/log.
 ## Module dependencies
 
 ```
-builder.zig ──> security, steps, sources, package_file, metadata,
+builder.zig ──> security, sandbox, steps, sources, package_file, metadata,
                 pkgbuild_review, pkgbuild_validation
 sources.zig ──> steps, checksums, source_spec, metadata
-steps.zig   ──> metadata
+steps.zig   ──> metadata, sandbox
 package_file.zig ──> steps, metadata
-security.zig, checksums.zig, source_spec.zig, metadata.zig ──> (leaves)
+security.zig, sandbox.zig, checksums.zig, source_spec.zig, metadata.zig ──> (leaves)
 ```
 
 All modules import `PackageBuilder` from `builder.zig` for the shared build
@@ -66,9 +67,11 @@ accessible across files, so no getters are needed.
 - **Start with `builder.zig`** (~340 lines) — it reads as the pipeline index.
 - **Security-critical paths:** `sources.zig` extraction guards
   (`ensureSafeArchivePath`, `rejectSymlinkDestination`, size caps),
-  `security.zig` privilege handling, and the virtual-metadata prelude in
-  `steps.zig` (fakeroot simulation that rejects privileged operations with
-  exit code 97 → `PrivilegedPackageOperationUnsupported`).
+  `security.zig` privilege handling, `sandbox.zig` Landlock confinement
+  (allow-list construction and the `__sandbox-exec` wrapper protocol), and
+  the virtual-metadata prelude in `steps.zig` (fakeroot simulation that
+  rejects privileged operations with exit code 97 →
+  `PrivilegedPackageOperationUnsupported`).
 - **Integrity model:** nothing executes until the reviewed digest matches
   (`builder.zig` `runWithOperation`); nothing is captured from a package step
   that the metadata module does not explicitly whitelist

@@ -19,16 +19,19 @@ pub const PkgbuildValidation = pkgbuild_validation.PkgbuildValidation;
 pub const pkgbuild_review = @import("pkgbuild_review.zig");
 pub const PreparedPkgbuildReview = pkgbuild_review.PreparedPkgbuildReview;
 pub const preparePkgbuildReview = pkgbuild_review.preparePkgbuildReview;
+pub const sandbox = @import("sandbox.zig");
 
 pub const requireNonRootEffectiveUid = security.requireNonRootEffectiveUid;
 pub const uniqueWorkDirectory = security.uniqueWorkDirectory;
 pub const secureBuilderProcess = security.secureBuilderProcess;
+pub const setNoNewPrivs = security.setNoNewPrivs;
 
 test {
     _ = @import("source_spec.zig");
     _ = @import("checksums.zig");
     _ = @import("metadata.zig");
     _ = @import("security.zig");
+    _ = @import("sandbox.zig");
     _ = @import("steps.zig");
     _ = @import("sources.zig");
     _ = @import("package_file.zig");
@@ -94,6 +97,11 @@ pub const BuildOptions = struct {
     install_scripts: []const install_script.Script = &.{},
     /// Byte-exact local and auxiliary files retained by package review.
     reviewed_files: []const pkgbuild_review.ReviewedFile = &.{},
+    /// Wrapper command prefix used to confine lifecycle steps with Landlock
+    /// when `[sandbox] enabled` is set. Production callers leave this null so
+    /// steps re-execute the current executable's `__sandbox-exec` entry
+    /// point; tests inject a passthrough stub.
+    sandbox_wrapper_prefix: ?[]const []const u8 = null,
 };
 
 pub const BuilderErrors = error{
@@ -106,6 +114,7 @@ pub const BuilderErrors = error{
     ReviewedPkgbuildChanged,
     BuildDirectoryNotWritable,
     PrivilegedPackageOperationUnsupported,
+    SandboxUnsupported,
 };
 
 pub const FailureLocation = struct {
@@ -238,6 +247,7 @@ pub const PackageBuilder = struct {
 
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
         try security.secureBuilderProcess();
+        try self.requireSandboxAvailability();
         try self.validatePackageFunctions();
         if (!self.options.sources_prepared) try sources.prepareSources(self, operation);
         const shared_execution = self.package_builds[0].execution orelse
@@ -313,6 +323,14 @@ pub const PackageBuilder = struct {
         }
 
         return artifacts.toOwnedSlice(self.allocator);
+    }
+
+    /// Sandboxed builds hard-fail when the kernel cannot confine the steps:
+    /// silently dropping the sandbox would run untrusted PKGBUILD code with
+    /// full user access despite the explicit configuration.
+    fn requireSandboxAvailability(self: *const PackageBuilder) !void {
+        if (!self.shellybuild_config.sandbox.enabled) return;
+        if (sandbox.abiVersion() < 1) return error.SandboxUnsupported;
     }
 
     fn validatePackageFunctions(self: *const PackageBuilder) !void {

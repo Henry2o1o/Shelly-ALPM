@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const builtin = @import("builtin");
 
 const builder_mod = @import("builder.zig");
 const PackageBuilder = builder_mod.PackageBuilder;
@@ -2862,4 +2863,163 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     // The operation completed successfully.
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
     std.debug.print("[builder-test] operation completed: {s}\n", .{@tagName(capture.completion.?)});
+}
+
+test "sandbox policy denies paths outside the allow-list" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builder_mod.sandbox.abiVersion() < 1) return error.SkipZigTest;
+
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    var allowed_dir = std.testing.tmpDir(.{});
+    defer allowed_dir.cleanup();
+    try allowed_dir.dir.writeFile(io, .{ .sub_path = "allowed-file", .data = "inside\n" });
+    var denied_dir = std.testing.tmpDir(.{});
+    defer denied_dir.cleanup();
+    try denied_dir.dir.writeFile(io, .{ .sub_path = "denied-file", .data = "outside\n" });
+
+    const allowed_root = try allowed_dir.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(allowed_root);
+    const allowed_path = try allowed_dir.dir.realPathFileAlloc(io, "allowed-file", allocator);
+    defer allocator.free(allowed_path);
+    const denied_path = try denied_dir.dir.realPathFileAlloc(io, "denied-file", allocator);
+    defer allocator.free(denied_path);
+
+    // Landlock is irreversible, so the probe runs in a forked child to keep
+    // the shared test process unrestricted. Exit code 0 means the policy was
+    // applied, the allowed path stayed readable, and the denied path was
+    // rejected.
+    const fork_rc = std.os.linux.fork();
+    try testing.expectEqual(std.os.linux.E.SUCCESS, std.os.linux.errno(@intCast(fork_rc)));
+    if (fork_rc == 0) {
+        std.process.exit(probeSandboxPolicy(allocator, allowed_root, allowed_path, denied_path));
+    }
+    var status: u32 = 0;
+    _ = std.os.linux.waitpid(@intCast(fork_rc), &status, 0);
+    try testing.expectEqual(@as(u32, 0), status & 0x7f);
+    const exit_code = (status >> 8) & 0xff;
+    try testing.expectEqual(@as(u32, 0), exit_code);
+}
+
+fn probeSandboxPolicy(
+    allocator: std.mem.Allocator,
+    allowed_root: []const u8,
+    allowed_path: []const u8,
+    denied_path: []const u8,
+) u8 {
+    builder_mod.setNoNewPrivs() catch return 10;
+    builder_mod.sandbox.applyPolicy(allocator, .{
+        .read_write_paths = &.{ allowed_root, "/tmp" },
+        .read_only_paths = &.{},
+    }) catch return 11;
+    if (!probePathReadable(allocator, allowed_path)) return 12;
+    if (probePathReadable(allocator, denied_path)) return 13;
+    return 0;
+}
+
+fn probePathReadable(allocator: std.mem.Allocator, path: []const u8) bool {
+    const path_z = allocator.dupeZ(u8, path) catch return false;
+    const rc = std.os.linux.open(path_z.ptr, .{}, 0);
+    if (std.os.linux.errno(@intCast(rc)) != .SUCCESS) return false;
+    _ = std.os.linux.close(@intCast(rc));
+    return true;
+}
+
+test "PackageBuilder wraps lifecycle steps through the sandbox wrapper when enabled" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builder_mod.sandbox.abiVersion() < 1) return error.SkipZigTest;
+
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=sandbox-demo
+        \\pkgver=1.0
+        \\arch=('any')
+        \\
+        \\build() {
+        \\  echo built > build-marker
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\  echo packaged > "$pkgdir/package-marker"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    // Passthrough stub standing in for the real `__sandbox-exec` entry
+    // point: it records that it ran, then execs the child argv after `--`.
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "wrapper-stub.sh",
+        .data =
+        \\#!/bin/sh
+        \\dir=$(dirname "$0")
+        \\echo ran > "$dir/wrapper-marker"
+        \\while [ "$1" != "--" ]; do shift; done
+        \\shift
+        \\exec "$@"
+        ,
+    });
+    try fixture.temporary.dir.setFilePermissions(io, "wrapper-stub.sh", .fromMode(0o755), .{});
+    const stub_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "wrapper-stub.sh" });
+    defer allocator.free(stub_path);
+    var wrapper_prefix = [_][]const u8{stub_path};
+
+    fixture.builder.shellybuild_config.sandbox.enabled = true;
+    fixture.builder.options.sandbox_wrapper_prefix = &wrapper_prefix;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+
+    // The wrapper handled every lifecycle step before bash ran.
+    try fixture.temporary.dir.access(io, "wrapper-marker", .{});
+    try fixture.temporary.dir.access(io, "src/build-marker", .{});
+    try fixture.temporary.dir.access(io, "pkg/sandbox-demo/package-marker", .{});
+}
+
+test "PackageBuilder records a sandbox hint when a confined step fails" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builder_mod.sandbox.abiVersion() < 1) return error.SkipZigTest;
+
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=sandbox-failure-demo
+        \\pkgver=1.0
+        \\arch=('any')
+        \\
+        \\build() {
+        \\  exit 1
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "wrapper-stub.sh",
+        .data =
+        \\#!/bin/sh
+        \\while [ "$1" != "--" ]; do shift; done
+        \\shift
+        \\exec "$@"
+        ,
+    });
+    try fixture.temporary.dir.setFilePermissions(io, "wrapper-stub.sh", .fromMode(0o755), .{});
+    const stub_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "wrapper-stub.sh" });
+    defer allocator.free(stub_path);
+    var wrapper_prefix = [_][]const u8{stub_path};
+
+    fixture.builder.shellybuild_config.sandbox.enabled = true;
+    fixture.builder.options.sandbox_wrapper_prefix = &wrapper_prefix;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+
+    const build_log = try readOnlyBuildLog(allocator, io, fixture.build_dir);
+    defer allocator.free(build_log);
+    try testing.expect(std.mem.indexOf(u8, build_log, "[sandbox] step failed inside the Landlock sandbox") != null);
 }

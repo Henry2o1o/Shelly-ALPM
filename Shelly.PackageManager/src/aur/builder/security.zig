@@ -25,6 +25,17 @@ pub fn uniqueWorkDirectory(
     return std.fmt.allocPrint(allocator, "{s}/{s}-{s}", .{ build_root, normalized, suffix });
 }
 
+/// Sets `PR_SET_NO_NEW_PRIVS` for the calling process. Required before an
+/// unprivileged process may apply Landlock, and inherited by every child.
+pub fn setNoNewPrivs() !void {
+    _ = try std.posix.prctl(.SET_NO_NEW_PRIVS, .{
+        @as(usize, 1),
+        @as(usize, 0),
+        @as(usize, 0),
+        @as(usize, 0),
+    });
+}
+
 /// Locks the current Linux process to the non-root privilege level. The flag
 /// is inherited by every build child and cannot be unset.
 pub fn secureBuilderProcess() !void {
@@ -36,12 +47,7 @@ pub fn secureBuilderProcess() !void {
     // root before executing PKGBUILD steps.
     if (!builtin.is_test)
         try requireNonRootEffectiveUid(@intCast(std.os.linux.geteuid()));
-    _ = try std.posix.prctl(.SET_NO_NEW_PRIVS, .{
-        @as(usize, 1),
-        @as(usize, 0),
-        @as(usize, 0),
-        @as(usize, 0),
-    });
+    try setNoNewPrivs();
 }
 
 pub fn narrowBuilderError(err: anyerror) BuilderErrors {
@@ -54,6 +60,7 @@ pub fn narrowBuilderError(err: anyerror) BuilderErrors {
         error.ReviewedPkgbuildChanged => BuilderErrors.ReviewedPkgbuildChanged,
         error.BuildDirectoryNotWritable => BuilderErrors.BuildDirectoryNotWritable,
         error.PrivilegedPackageOperationUnsupported => BuilderErrors.PrivilegedPackageOperationUnsupported,
+        error.SandboxUnsupported => BuilderErrors.SandboxUnsupported,
         else => BuilderErrors.BuildFailed,
     };
 }

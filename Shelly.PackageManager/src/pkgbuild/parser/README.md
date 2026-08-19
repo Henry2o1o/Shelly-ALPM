@@ -7,12 +7,6 @@ engine. Anything only a real shell could evaluate (command substitution,
 runtime variables) is either rejected at parse time or left literally in the
 step bodies for the builder's shell to handle.
 
-The original 7,800-line monolith (`pkgbuild_parser.zig`) was split into this
-folder so each concern can be reviewed and unit-tested on its own. The old
-file survives as a 19-line **facade** one level up that re-exports the public
-API, so all external callers (`aur/manager.zig`, `aur/builder/*`, the pkgbuild
-validators, the CLI) import it unchanged.
-
 ## Parse flow at a glance
 
 ```
