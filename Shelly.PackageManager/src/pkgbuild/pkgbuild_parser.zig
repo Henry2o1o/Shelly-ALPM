@@ -10,6 +10,7 @@ pub const PackageNames = parser.PackageNames;
 pub const parsed_dep = parser.parsed_dep;
 pub const split_entry = parser.split_entry;
 pub const kvp = parser.kvp;
+pub const dynamic_assignment = parser.dynamic_assignment;
 pub const execution_step = parser.execution_step;
 pub const execution_plan = parser.execution_plan;
 pub const PkgbuildParser = parser.PkgbuildParser;

@@ -138,7 +138,7 @@ const Fixture = struct {
         package_builds[0] = info;
         const requested_names = try allocator.alloc([]const u8, 1);
         errdefer allocator.free(requested_names);
-        requested_names[0] = info.pkg_name orelse "";
+        requested_names[0] = try allocator.dupe(u8, info.pkg_name orelse "");
         var pkgbuild_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
         const builder = try PackageBuilder.init(
@@ -214,8 +214,16 @@ const Fixture = struct {
         if (event_handler) |handler| _ = try operation_context.subscribe(handler);
         const config = try ShellyBuildConfiguration.initFromBuffers(allocator, null, null);
         errdefer config.deinit();
-        const requested_names = try allocator.dupe([]const u8, requested);
-        errdefer allocator.free(requested_names);
+        const requested_names = try allocator.alloc([]const u8, requested.len);
+        var duped_names: usize = 0;
+        errdefer {
+            for (requested_names[0..duped_names]) |name| allocator.free(name);
+            allocator.free(requested_names);
+        }
+        for (requested, requested_names) |name, *slot| {
+            slot.* = try allocator.dupe(u8, name);
+            duped_names += 1;
+        }
         var pkgbuild_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
         const builder = try PackageBuilder.init(
@@ -260,6 +268,7 @@ const Fixture = struct {
         // The testing allocator catches omissions.
         for (self.package_builds) |*package_build| package_build.deinit(self.allocator);
         self.allocator.free(self.package_builds);
+        for (self.requested_names) |name| self.allocator.free(name);
         self.allocator.free(self.requested_names);
         self.builder.deinit();
         self.config.deinit();
@@ -623,6 +632,54 @@ test "PackageBuilder rejects a PKGBUILD changed after review" {
         error.ReviewedPkgbuildChanged,
         fixture.builder.BuildPackage(),
     );
+}
+
+test "PackageBuilder resolves top-level command substitution before building" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\_greeting="$(printf 'dynamic-resolved')"
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  printf '%s' "$_greeting" > "$pkgdir/usr/share/demo/value"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+
+    // The analysis parse records the assignment without evaluating it.
+    try testing.expect(fixture.package_builds[0].hasDynamicAssignments());
+    try testing.expect(fixture.package_builds[0].variables.get("_greeting") == null);
+
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "PKGBUILD", .data = pkgbuild_content });
+    const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
+    defer allocator.free(pkgbuild_path);
+    var review = try builder_mod.preparePkgbuildReview(
+        allocator,
+        io,
+        fixture.build_dir,
+        pkgbuild_content,
+        fixture.package_builds,
+    );
+    defer review.deinit();
+    fixture.builder.options.pkgbuild_path = pkgbuild_path;
+    fixture.builder.options.reviewed_pkgbuild_digest = review.digest;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+
+    // The builder evaluated the assignment and re-parsed with the value seeded,
+    // so the resolved value reaches the package step and lands in the archive.
+    const value = try readPackageEntry(allocator, artifacts[0].path, "usr/share/demo/value");
+    defer allocator.free(value);
+    try testing.expectEqualStrings("dynamic-resolved", value);
+    try testing.expectEqualStrings("dynamic-resolved", fixture.package_builds[0].variables.get("_greeting").?);
+    try testing.expect(!fixture.package_builds[0].hasDynamicAssignments());
 }
 
 test "PackageBuilder rejects a legacy unwritable package tree" {

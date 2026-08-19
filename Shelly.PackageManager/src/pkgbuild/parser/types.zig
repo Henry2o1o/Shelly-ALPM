@@ -46,6 +46,12 @@ pub const Pkgbuild = struct {
     parsed_check_depends: ?[]parsed_dep = null,
     check_depends: ?[][]const u8 = null,
     execution: ?execution_plan = null,
+    /// Top-level scalar assignments whose value is a command substitution
+    /// (`name=$(...)`). The static parser records them instead of executing
+    /// them; the builder evaluates them post-review in the sandbox and
+    /// re-parses with the results. Empty when none are present or after a
+    /// re-parse that seeded every value.
+    dynamic_assignments: []dynamic_assignment = &.{},
 
     pub fn deinit(self: *Pkgbuild, allocator: std.mem.Allocator) void {
         if (self.pkg_name) |v| allocator.free(v);
@@ -182,6 +188,12 @@ pub const Pkgbuild = struct {
             allocator.free(deps);
         }
         if (self.execution) |plan| plan.deinit(allocator);
+        for (self.dynamic_assignments) |assignment| assignment.deinit(allocator);
+        if (self.dynamic_assignments.len > 0) allocator.free(self.dynamic_assignments);
+    }
+
+    pub fn hasDynamicAssignments(self: Pkgbuild) bool {
+        return self.dynamic_assignments.len > 0;
     }
 
     pub fn get_full_version(self: Pkgbuild, allocator: std.mem.Allocator) ![]const u8 {
@@ -241,6 +253,21 @@ pub const kvp = struct {
     pub fn deinit(self: kvp, allocator: std.mem.Allocator) void {
         allocator.free(self.key);
         allocator.free(self.value);
+    }
+};
+
+/// A top-level scalar assignment whose value contains a command substitution,
+/// e.g. `_date="$(date -u +%Y%m%d)"`. `statement` is the full assignment line
+/// exactly as written, so the builder can re-emit it verbatim for sandboxed
+/// evaluation (this also covers `name+=$(...)`). Nothing about it is executed
+/// by the static parser.
+pub const dynamic_assignment = struct {
+    name: []const u8,
+    statement: []const u8,
+
+    pub fn deinit(self: dynamic_assignment, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.statement);
     }
 };
 

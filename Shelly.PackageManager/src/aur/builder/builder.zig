@@ -248,6 +248,8 @@ pub const PackageBuilder = struct {
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
         try security.secureBuilderProcess();
         try self.requireSandboxAvailability();
+        if (self.package_builds[0].hasDynamicAssignments())
+            try self.resolveDynamicBuilds(operation);
         try self.validatePackageFunctions();
         if (!self.options.sources_prepared) try sources.prepareSources(self, operation);
         const shared_execution = self.package_builds[0].execution orelse
@@ -323,6 +325,45 @@ pub const PackageBuilder = struct {
         }
 
         return artifacts.toOwnedSlice(self.allocator);
+    }
+
+    /// Resolves packages that declare top-level command-substitution
+    /// assignments. The recorded assignments are evaluated in the sandbox
+    /// (post-review), then the PKGBUILD is re-parsed with the resulting values
+    /// seeded so downstream stages — source acquisition and lifecycle steps —
+    /// see fully resolved metadata. Replaces `package_builds` contents in place.
+    fn resolveDynamicBuilds(self: *PackageBuilder, operation: *op_context.Operation) !void {
+        var overrides = try steps.evaluateDynamicAssignments(self, operation);
+        defer {
+            var it = overrides.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            overrides.deinit();
+        }
+
+        const pkgbuild_path = self.options.pkgbuild_path orelse
+            return error.UnreviewedBuilderRequest;
+        const content = try std.Io.Dir.cwd().readFileAlloc(
+            self.io,
+            pkgbuild_path,
+            self.allocator,
+            .limited(32 * 1024 * 1024),
+        );
+        defer self.allocator.free(content);
+
+        for (self.package_builds, self.requested_names) |*package_build, requested_name| {
+            const reparsed = try (pkgbuild_parser.PkgbuildParser{
+                .allocator = self.allocator,
+                .io = self.io,
+                .selected_package_name = requested_name,
+                .package_carch = self.shellybuild_config.build.carch,
+                .dynamic_overrides = &overrides,
+            }).parser_content(content, self.options.start_directory);
+            package_build.deinit(self.allocator);
+            package_build.* = reparsed;
+        }
     }
 
     /// Sandboxed builds hard-fail when the kernel cannot confine the steps:

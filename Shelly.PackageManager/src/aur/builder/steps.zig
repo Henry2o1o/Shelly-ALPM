@@ -277,6 +277,117 @@ fn wrapStepCommand(self: *PackageBuilder, child_argv: []const []const u8) !Wrapp
     return .{ .argv = argv, .executable = executable };
 }
 
+/// Evaluates the top-level command-substitution assignments recorded by the
+/// static parser. Each assignment's original statement runs in a sandboxed
+/// bash child (post-review, confined exactly like lifecycle steps), then the
+/// resulting values are read back. Returns a name -> value map used to seed the
+/// resolution re-parse. Mirrors the pkgver() capture pattern in `runStep`.
+pub fn evaluateDynamicAssignments(
+    self: *PackageBuilder,
+    operation: *op_context.Operation,
+) !std.StringHashMap([]const u8) {
+    const package_build = &self.package_builds[0];
+    const dynamic = package_build.dynamic_assignments;
+    const execution = package_build.execution orelse return error.MissingExecutionSteps;
+
+    var result: std.StringHashMap([]const u8) = .init(self.allocator);
+    errdefer {
+        var it = result.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        result.deinit();
+    }
+
+    var script: std.Io.Writer.Allocating = .init(self.allocator);
+    errdefer script.deinit();
+    const script_writer = &script.writer;
+    try script_writer.writeAll(execution.shared_prelude);
+    try script_writer.writeAll("\n");
+    for (dynamic) |assignment| {
+        try script_writer.writeAll(assignment.statement);
+        try script_writer.writeAll("\n");
+    }
+    try script_writer.writeAll("printf '%s\\0'");
+    for (dynamic) |assignment| {
+        try script_writer.print(" \"${s}\"", .{assignment.name});
+    }
+    try script_writer.writeAll(" > \"$1\"\n");
+    const command_body = try script.toOwnedSlice();
+    defer self.allocator.free(command_body);
+
+    const result_path = try std.fs.path.join(
+        self.allocator,
+        &.{ self.options.work_directory, ".shelly-dynamic-vars" },
+    );
+    defer self.allocator.free(result_path);
+    std.Io.Dir.cwd().deleteFile(self.io, result_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    defer std.Io.Dir.cwd().deleteFile(self.io, result_path) catch {};
+
+    try logPhase(self, "dynamic-assignments");
+    try operation.checkCancelled();
+    self.failure_location = .{
+        .package_name = package_build.pkg_name,
+        .step_name = "dynamic-assignments",
+    };
+
+    var stream_context: StepStreamContext = .{
+        .operation = operation,
+        .package_name = self.requested_names[0],
+        .log = self.active_log,
+    };
+    const effective_options = try metadata.effectivePackageOptions(
+        self.allocator,
+        self.shellybuild_config.package.options,
+        package_build.options orelse &.{},
+    );
+    defer metadata.freeOwnedStrings(self.allocator, effective_options);
+    const step_argv: []const []const u8 = &.{ "/bin/bash", "-e", "-c", command_body, "shelly-dynamic", result_path };
+    const sandbox_enabled = self.shellybuild_config.sandbox.enabled;
+    const wrapped = if (sandbox_enabled) try wrapStepCommand(self, step_argv) else null;
+    defer if (wrapped) |command| command.deinit(self.allocator);
+    const exit_code = try process_runner.runStreamingWithBuildEnvironmentOperation(
+        self.allocator,
+        self.io,
+        self.environ,
+        buildEnvironment(self, effective_options),
+        if (wrapped) |command| command.argv else step_argv,
+        self.options.work_directory,
+        null,
+        .{ .function = forwardStepLine, .data = &stream_context },
+        operation,
+    );
+    if (self.active_log) |log| try log.ensureHealthy();
+    if (exit_code != 0) {
+        if (sandbox_enabled) writeSandboxFailureHint(self);
+        return error.StepFailed;
+    }
+
+    const output = try std.Io.Dir.cwd().readFileAlloc(
+        self.io,
+        result_path,
+        self.allocator,
+        .limited(1024 * 1024),
+    );
+    defer self.allocator.free(output);
+    var values = std.mem.splitScalar(u8, output, 0);
+    for (dynamic) |assignment| {
+        const value = values.next() orelse return error.StepFailed;
+        const key_owned = try self.allocator.dupe(u8, assignment.name);
+        const value_owned = try self.allocator.dupe(u8, value);
+        result.put(key_owned, value_owned) catch |err| {
+            self.allocator.free(key_owned);
+            self.allocator.free(value_owned);
+            return err;
+        };
+    }
+    return result;
+}
+
 fn writeSandboxFailureHint(self: *const PackageBuilder) void {
     const log = self.active_log orelse return;
     log.writeRecord(

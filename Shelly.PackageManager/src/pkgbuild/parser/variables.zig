@@ -91,8 +91,26 @@ pub fn build_var_hashmap(self: PkgbuildParser, content: []const u8) !std.StringH
         const parsed = parse_kvp(executable_line) orelse continue;
 
         if (std.mem.startsWith(u8, parsed.value, "(")) continue;
-        if (shell_scan.contains_command_substitution(executable_line))
-            return error.UnsupportedDynamicAssignment;
+        if (shell_scan.contains_command_substitution(executable_line)) {
+            if (dynamicOverride(self, parsed.key)) |override_value| {
+                const key_owned = try self.allocator.dupe(u8, parsed.key);
+                const value_owned = try self.allocator.dupe(u8, override_value);
+                if (vars.fetchRemove(key_owned)) |old| {
+                    self.allocator.free(old.key);
+                    self.allocator.free(old.value);
+                }
+                vars.put(key_owned, value_owned) catch |err| {
+                    self.allocator.free(key_owned);
+                    self.allocator.free(value_owned);
+                    return err;
+                };
+            }
+            // A dynamic assignment without an override is skipped: the static
+            // parser never executes command substitution. The builder evaluates
+            // the recorded assignments post-review and re-parses with their
+            // values seeded as overrides.
+            continue;
+        }
 
         const key_owned = try self.allocator.dupe(u8, parsed.key);
         errdefer self.allocator.free(key_owned);
@@ -139,6 +157,50 @@ pub fn build_var_hashmap(self: PkgbuildParser, content: []const u8) !std.StringH
     }
 
     return vars;
+}
+
+fn dynamicOverride(self: PkgbuildParser, name: []const u8) ?[]const u8 {
+    const overrides = self.dynamic_overrides orelse return null;
+    return overrides.get(name);
+}
+
+/// Collects every top-level scalar assignment whose value contains a command
+/// substitution and that has no seeded override, in declaration order. The
+/// builder evaluates these post-review in the sandbox and re-parses with the
+/// results. Returns an empty slice when there are none.
+pub fn collect_dynamic_assignments(self: PkgbuildParser, content: []const u8) ![]types.dynamic_assignment {
+    var list: std.ArrayList(types.dynamic_assignment) = .empty;
+    errdefer {
+        for (list.items) |item| {
+            self.allocator.free(item.name);
+            self.allocator.free(item.statement);
+        }
+        list.deinit(self.allocator);
+    }
+
+    var line_itr = std.mem.splitScalar(u8, content, '\n');
+    while (line_itr.next()) |full_line| {
+        const line = std.mem.trimEnd(u8, full_line, "\r");
+        const executable_line = try shell_scan.strip_comment(line);
+        const parsed = parse_kvp(executable_line) orelse continue;
+        if (std.mem.startsWith(u8, parsed.value, "(")) continue;
+        if (!shell_scan.contains_command_substitution(executable_line)) continue;
+        if (dynamicOverride(self, parsed.key) != null) continue;
+
+        const name_owned = try self.allocator.dupe(u8, parsed.key);
+        const statement_owned = try self.allocator.dupe(u8, std.mem.trim(u8, executable_line, " \t"));
+        list.append(self.allocator, .{ .name = name_owned, .statement = statement_owned }) catch |err| {
+            self.allocator.free(name_owned);
+            self.allocator.free(statement_owned);
+            return err;
+        };
+    }
+
+    if (list.items.len == 0) {
+        list.deinit(self.allocator);
+        return @as([]types.dynamic_assignment, &.{});
+    }
+    return list.toOwnedSlice(self.allocator);
 }
 
 fn inject_array_pkgname(
@@ -247,16 +309,51 @@ test "build_var_hashmap: skips array declarations" {
     try std.testing.expectEqualStrings("app", vars.get("pkgname").?);
 }
 
-test "build_var_hashmap: rejects command substitution but keeps arithmetic" {
+test "build_var_hashmap: skips command substitution but keeps arithmetic" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    try std.testing.expectError(
-        error.UnsupportedDynamicAssignment,
-        build_var_hashmap(parser, "gitrev=$(git rev-parse HEAD)\n"),
-    );
+    var dynamic_vars = try build_var_hashmap(parser, "gitrev=$(git rev-parse HEAD)\n");
+    defer free_vars(std.testing.allocator, &dynamic_vars);
+    try std.testing.expect(dynamic_vars.get("gitrev") == null);
 
     var vars = try build_var_hashmap(parser, "count=$((1+2))\n");
     defer free_vars(std.testing.allocator, &vars);
     try std.testing.expect(vars.get("count") != null);
+}
+
+test "build_var_hashmap: seeded override replaces a skipped command substitution" {
+    var overrides: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer overrides.deinit();
+    try overrides.put("_date", "20260819");
+
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io, .dynamic_overrides = &overrides };
+    var vars = try build_var_hashmap(parser, "_date=\"$(date -u +%Y%m%d)\"\n_tag=\"nightly-$_date\"\n");
+    defer free_vars(std.testing.allocator, &vars);
+    try std.testing.expectEqualStrings("20260819", vars.get("_date").?);
+    try std.testing.expectEqualStrings("nightly-20260819", vars.get("_tag").?);
+}
+
+test "collect_dynamic_assignments: records command substitutions in order, skips overridden" {
+    var overrides: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer overrides.deinit();
+    try overrides.put("_resolved", "value");
+
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io, .dynamic_overrides = &overrides };
+    const content =
+        \\pkgname=demo
+        \\_date="$(date -u +%Y%m%d)"
+        \\_resolved="$(already known)"
+        \\_rev="$(git rev-parse --short HEAD)"
+    ;
+    const dynamic = try collect_dynamic_assignments(parser, content);
+    defer {
+        for (dynamic) |assignment| assignment.deinit(std.testing.allocator);
+        if (dynamic.len > 0) std.testing.allocator.free(dynamic);
+    }
+    try std.testing.expectEqual(@as(usize, 2), dynamic.len);
+    try std.testing.expectEqualStrings("_date", dynamic[0].name);
+    try std.testing.expectEqualStrings("_date=\"$(date -u +%Y%m%d)\"", dynamic[0].statement);
+    try std.testing.expectEqualStrings("_rev", dynamic[1].name);
+    try std.testing.expectEqualStrings("_rev=\"$(git rev-parse --short HEAD)\"", dynamic[1].statement);
 }
 
 test "build_var_hashmap: resolves chained variable references" {

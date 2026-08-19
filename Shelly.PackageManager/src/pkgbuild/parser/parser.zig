@@ -15,6 +15,7 @@ pub const PackageNames = types.PackageNames;
 pub const parsed_dep = types.parsed_dep;
 pub const split_entry = types.split_entry;
 pub const kvp = types.kvp;
+pub const dynamic_assignment = types.dynamic_assignment;
 pub const execution_step = types.execution_step;
 pub const execution_plan = types.execution_plan;
 
@@ -38,6 +39,12 @@ pub const PkgbuildParser = struct {
     io: std.Io,
     selected_package_name: ?[]const u8 = null,
     package_carch: []const u8 = "x86_64",
+    /// Pre-evaluated values for top-level command-substitution assignments,
+    /// produced by the builder's sandboxed dynamic-assignment evaluation. When
+    /// present, `build_var_hashmap` seeds these instead of skipping the
+    /// assignment, letting a re-parse resolve everything that depends on them.
+    /// Null on the initial (analysis) parse.
+    dynamic_overrides: ?*const std.StringHashMap([]const u8) = null,
 
     /// Public entry point kept on the parser type for existing callers;
     /// implemented in `function_body.zig`.
@@ -91,6 +98,11 @@ pub const PkgbuildParser = struct {
                 self.allocator.free(entry.value_ptr.*);
             }
             vars.deinit();
+        }
+        const dynamic_assignments = try variables.collect_dynamic_assignments(self, content);
+        errdefer {
+            for (dynamic_assignments) |assignment| assignment.deinit(self.allocator);
+            if (dynamic_assignments.len > 0) self.allocator.free(dynamic_assignments);
         }
         try execution.validate_execution_assignments(self, content);
         try validation.validate_selected_package(self, content, &vars);
@@ -169,6 +181,7 @@ pub const PkgbuildParser = struct {
             .parsed_make_depends = try dependencies.parse_dependencies(self, make_depends),
             .parsed_check_depends = try dependencies.parse_dependencies(self, check_depends),
             .execution = try execution.resolve_execution_plan(self, content, &vars, base_dir),
+            .dynamic_assignments = dynamic_assignments,
         };
     }
 
@@ -1276,16 +1289,57 @@ test "parser_content: execution prelude preserves generic scalars arrays and app
     try std.testing.expect(std.mem.indexOf(u8, prelude, "declare -- _label='can'\\''t'") != null);
 }
 
-test "parser_content: execution prelude rejects command substitutions" {
+test "parser_content: scalar command substitution is recorded for build-time evaluation" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    try std.testing.expectError(
-        error.UnsupportedDynamicAssignment,
-        parser.parser_content(
-            \\pkgname=demo
-            \\pkgver=$(git describe)
-            \\package() { :; }
-        , null),
+    var info = try parse_test_pkgbuild(parser,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\_date="$(date -u +%Y%m%d)"
+        \\package() { :; }
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expect(info.hasDynamicAssignments());
+    try std.testing.expectEqual(@as(usize, 1), info.dynamic_assignments.len);
+    try std.testing.expectEqualStrings("_date", info.dynamic_assignments[0].name);
+    try std.testing.expectEqualStrings("_date=\"$(date -u +%Y%m%d)\"", info.dynamic_assignments[0].statement);
+    // The unresolved variable is absent from the analysis-time map.
+    try std.testing.expect(info.variables.get("_date") == null);
+}
+
+test "parser_content: seeded dynamic override resolves dependent fields" {
+    var overrides: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer overrides.deinit();
+    try overrides.put("_date", "20260819");
+
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .dynamic_overrides = &overrides,
+    };
+    var info = try parse_test_pkgbuild(parser,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\_date="$(date -u +%Y%m%d)"
+        \\source=("demo-$_date.tar.gz::https://example.test/demo-$_date.tar.gz")
+        \\sha256sums=('SKIP')
+        \\package() { :; }
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expect(!info.hasDynamicAssignments());
+    try std.testing.expectEqualStrings("20260819", info.variables.get("_date").?);
+    try std.testing.expectEqual(@as(usize, 1), info.source.?.len);
+    try std.testing.expectEqualStrings(
+        "demo-20260819.tar.gz::https://example.test/demo-20260819.tar.gz",
+        info.source.?[0],
     );
+}
+
+test "parser_content: array command substitution is still rejected" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     try std.testing.expectError(
         error.UnsupportedDynamicAssignment,
         parser.parser_content(
