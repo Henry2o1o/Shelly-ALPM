@@ -38,6 +38,15 @@ pub const DestinationConfiguration = struct {
     logs: ?[]const u8,
 };
 
+/// Landlock confinement for the untrusted PKGBUILD lifecycle steps. Disabled
+/// by default; when enabled the builder hard-fails on kernels without
+/// Landlock support rather than running the steps unprotected.
+pub const SandboxConfiguration = struct {
+    enabled: bool,
+    extra_read: []const []const u8,
+    extra_write: []const []const u8,
+};
+
 const BuildLayer = struct {
     carch: ?[]const u8 = null,
     chost: ?[]const u8 = null,
@@ -71,10 +80,17 @@ const DestinationLayer = struct {
     logs: ?[]const u8 = null,
 };
 
+const SandboxLayer = struct {
+    enabled: ?bool = null,
+    extra_read: ?[]const []const u8 = null,
+    extra_write: ?[]const []const u8 = null,
+};
+
 const ConfigurationLayer = struct {
     build: ?BuildLayer = null,
     package: ?PackageLayer = null,
     destinations: ?DestinationLayer = null,
+    sandbox: ?SandboxLayer = null,
 };
 
 pub const ShellyBuildConfiguration = struct {
@@ -85,6 +101,7 @@ pub const ShellyBuildConfiguration = struct {
     build: BuildConfiguration,
     package: PackageConfiguration,
     destinations: DestinationConfiguration,
+    sandbox: SandboxConfiguration,
 
     pub fn init(
         io: std.Io,
@@ -149,6 +166,11 @@ pub const ShellyBuildConfiguration = struct {
                 .sources = null,
                 .logs = null,
             },
+            .sandbox = .{
+                .enabled = false,
+                .extra_read = &.{},
+                .extra_write = &.{},
+            },
         };
         errdefer self.arena.deinit();
 
@@ -203,6 +225,11 @@ pub const ShellyBuildConfiguration = struct {
             if (destinations.sources) |value| self.destinations.sources = try allocator.dupe(u8, value);
             if (destinations.logs) |value| self.destinations.logs = try allocator.dupe(u8, value);
         }
+        if (layer.sandbox) |sandbox| {
+            if (sandbox.enabled) |value| self.sandbox.enabled = value;
+            if (sandbox.extra_read) |value| self.sandbox.extra_read = try duplicateStrings(allocator, value);
+            if (sandbox.extra_write) |value| self.sandbox.extra_write = try duplicateStrings(allocator, value);
+        }
     }
 
     fn validate(self: *const Self) !void {
@@ -220,6 +247,12 @@ pub const ShellyBuildConfiguration = struct {
             if (path) |configured| {
                 if (!std.fs.path.isAbsolute(configured)) return error.DestinationPathNotAbsolute;
             }
+        }
+        for (self.sandbox.extra_read) |path| {
+            if (!std.fs.path.isAbsolute(path)) return error.SandboxPathNotAbsolute;
+        }
+        for (self.sandbox.extra_write) |path| {
+            if (!std.fs.path.isAbsolute(path)) return error.SandboxPathNotAbsolute;
         }
     }
 };
@@ -269,6 +302,8 @@ fn validateKnownKeys(allocator: std.mem.Allocator, content: []const u8) !void {
             package_keys
         else if (std.mem.eql(u8, entry.key_ptr.*, "destinations"))
             destination_keys
+        else if (std.mem.eql(u8, entry.key_ptr.*, "sandbox"))
+            sandbox_keys
         else
             return error.UnknownConfigurationKey;
         const table = switch (entry.value_ptr.*) {
@@ -285,6 +320,7 @@ fn validateKnownKeys(allocator: std.mem.Allocator, content: []const u8) !void {
 const build_keys: []const []const u8 = &.{ "carch", "chost", "cppflags", "cflags", "cxxflags", "ldflags", "ltoflags", "makeflags", "check", "ccache", "distcc", "distcc_hosts" };
 const package_keys: []const []const u8 = &.{ "packager", "extension", "options", "strip_binaries", "strip_shared", "strip_static", "sign", "sign_key" };
 const destination_keys: []const []const u8 = &.{ "build", "packages", "sources", "logs" };
+const sandbox_keys: []const []const u8 = &.{ "enabled", "extra_read", "extra_write" };
 
 fn containsString(values: []const []const u8, expected: []const u8) bool {
     for (values) |value| if (std.mem.eql(u8, value, expected)) return true;
@@ -324,6 +360,9 @@ test "shellybuild compiled defaults are safe and complete" {
     try expectOptionalUnset(config.destinations.packages);
     try expectOptionalUnset(config.destinations.sources);
     try expectOptionalUnset(config.destinations.logs);
+    try std.testing.expect(!config.sandbox.enabled);
+    try std.testing.expectEqual(@as(usize, 0), config.sandbox.extra_read.len);
+    try std.testing.expectEqual(@as(usize, 0), config.sandbox.extra_write.len);
 }
 
 test "shellybuild comment-only sections do not override compiled defaults" {
@@ -408,6 +447,49 @@ test "shellybuild requires absolute destination paths" {
     try std.testing.expectError(error.DestinationPathNotAbsolute, ShellyBuildConfiguration.initFromBuffers(
         std.testing.allocator,
         "[destinations]\nsources = \"relative/sources\"\n",
+        null,
+    ));
+}
+
+test "shellybuild sandbox section parses and merges field by field" {
+    const system =
+        \\[sandbox]
+        \\enabled = true
+        \\extra_read = ["/system/read"]
+    ;
+    const config = try ShellyBuildConfiguration.initFromBuffers(std.testing.allocator, system, null);
+    defer config.deinit();
+    try std.testing.expect(config.sandbox.enabled);
+    try std.testing.expectEqual(@as(usize, 1), config.sandbox.extra_read.len);
+    try std.testing.expectEqualStrings("/system/read", config.sandbox.extra_read[0]);
+    try std.testing.expectEqual(@as(usize, 0), config.sandbox.extra_write.len);
+
+    const overridden = try ShellyBuildConfiguration.initFromBuffers(
+        std.testing.allocator,
+        system,
+        "[sandbox]\nenabled = false\nextra_write = [\"/user/write\"]\n",
+    );
+    defer overridden.deinit();
+    try std.testing.expect(!overridden.sandbox.enabled);
+    try std.testing.expectEqualStrings("/system/read", overridden.sandbox.extra_read[0]);
+    try std.testing.expectEqual(@as(usize, 1), overridden.sandbox.extra_write.len);
+    try std.testing.expectEqualStrings("/user/write", overridden.sandbox.extra_write[0]);
+}
+
+test "shellybuild requires absolute sandbox paths and known keys" {
+    try std.testing.expectError(error.SandboxPathNotAbsolute, ShellyBuildConfiguration.initFromBuffers(
+        std.testing.allocator,
+        "[sandbox]\nextra_read = [\"relative/read\"]\n",
+        null,
+    ));
+    try std.testing.expectError(error.SandboxPathNotAbsolute, ShellyBuildConfiguration.initFromBuffers(
+        std.testing.allocator,
+        "[sandbox]\nextra_write = [\"relative/write\"]\n",
+        null,
+    ));
+    try std.testing.expectError(error.UnknownConfigurationKey, ShellyBuildConfiguration.initFromBuffers(
+        std.testing.allocator,
+        "[sandbox]\nnetwork = false\n",
         null,
     ));
 }

@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const builtin = @import("builtin");
 
 const builder_mod = @import("builder.zig");
 const PackageBuilder = builder_mod.PackageBuilder;
@@ -137,7 +138,7 @@ const Fixture = struct {
         package_builds[0] = info;
         const requested_names = try allocator.alloc([]const u8, 1);
         errdefer allocator.free(requested_names);
-        requested_names[0] = info.pkg_name orelse "";
+        requested_names[0] = try allocator.dupe(u8, info.pkg_name orelse "");
         var pkgbuild_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
         const builder = try PackageBuilder.init(
@@ -213,8 +214,16 @@ const Fixture = struct {
         if (event_handler) |handler| _ = try operation_context.subscribe(handler);
         const config = try ShellyBuildConfiguration.initFromBuffers(allocator, null, null);
         errdefer config.deinit();
-        const requested_names = try allocator.dupe([]const u8, requested);
-        errdefer allocator.free(requested_names);
+        const requested_names = try allocator.alloc([]const u8, requested.len);
+        var duped_names: usize = 0;
+        errdefer {
+            for (requested_names[0..duped_names]) |name| allocator.free(name);
+            allocator.free(requested_names);
+        }
+        for (requested, requested_names) |name, *slot| {
+            slot.* = try allocator.dupe(u8, name);
+            duped_names += 1;
+        }
         var pkgbuild_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(pkgbuild_content, &pkgbuild_digest, .{});
         const builder = try PackageBuilder.init(
@@ -259,6 +268,7 @@ const Fixture = struct {
         // The testing allocator catches omissions.
         for (self.package_builds) |*package_build| package_build.deinit(self.allocator);
         self.allocator.free(self.package_builds);
+        for (self.requested_names) |name| self.allocator.free(name);
         self.allocator.free(self.requested_names);
         self.builder.deinit();
         self.config.deinit();
@@ -356,6 +366,49 @@ fn writeBase64Fixture(
     defer allocator.free(decoded);
     try std.base64.standard.Decoder.decode(decoded, encoded);
     try directory.writeFile(io, .{ .sub_path = sub_path, .data = decoded });
+}
+
+/// Creates the small ar-plus-tar structure used by Debian binary packages.
+/// Keeping it local makes source-extraction tests independent of upstream
+/// downloads while exercising the same nested data.tar.xz flow as binary AUR
+/// recipes such as visual-studio-code-bin.
+fn writeDebFixture(fixture: *Fixture, sub_path: []const u8) !void {
+    const allocator = fixture.allocator;
+    const io = testing.io;
+    try fixture.temporary.dir.createDirPath(io, "deb-fixture");
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "deb-fixture/debian-binary",
+        .data = "2.0\n",
+    });
+
+    const fixture_directory = try std.fs.path.join(
+        allocator,
+        &.{ fixture.build_dir, "deb-fixture" },
+    );
+    defer allocator.free(fixture_directory);
+    const control_archive = try std.fs.path.join(
+        allocator,
+        &.{ fixture_directory, "control.tar.xz" },
+    );
+    defer allocator.free(control_archive);
+    const data_archive = try std.fs.path.join(
+        allocator,
+        &.{ fixture_directory, "data.tar.xz" },
+    );
+    defer allocator.free(data_archive);
+    const deb_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, sub_path });
+    defer allocator.free(deb_path);
+
+    try archive.writeFixture(allocator, control_archive, .xz, &.{});
+    try archive.writeFixture(allocator, data_archive, .xz, &.{
+        .{ .path = "usr/share/deb-source-demo/payload", .contents = "from deb\n" },
+    });
+    try runTestCommand(
+        allocator,
+        io,
+        &.{ "/usr/bin/ar", "rc", deb_path, "debian-binary", "control.tar.xz", "data.tar.xz" },
+        fixture_directory,
+    );
 }
 
 fn prepareSourcePgpHome(fixture: *Fixture) ![:0]u8 {
@@ -622,6 +675,54 @@ test "PackageBuilder rejects a PKGBUILD changed after review" {
         error.ReviewedPkgbuildChanged,
         fixture.builder.BuildPackage(),
     );
+}
+
+test "PackageBuilder resolves top-level command substitution before building" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\_greeting="$(printf 'dynamic-resolved')"
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  printf '%s' "$_greeting" > "$pkgdir/usr/share/demo/value"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+
+    // The analysis parse records the assignment without evaluating it.
+    try testing.expect(fixture.package_builds[0].hasDynamicAssignments());
+    try testing.expect(fixture.package_builds[0].variables.get("_greeting") == null);
+
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "PKGBUILD", .data = pkgbuild_content });
+    const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
+    defer allocator.free(pkgbuild_path);
+    var review = try builder_mod.preparePkgbuildReview(
+        allocator,
+        io,
+        fixture.build_dir,
+        pkgbuild_content,
+        fixture.package_builds,
+    );
+    defer review.deinit();
+    fixture.builder.options.pkgbuild_path = pkgbuild_path;
+    fixture.builder.options.reviewed_pkgbuild_digest = review.digest;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+
+    // The builder evaluated the assignment and re-parsed with the value seeded,
+    // so the resolved value reaches the package step and lands in the archive.
+    const value = try readPackageEntry(allocator, artifacts[0].path, "usr/share/demo/value");
+    defer allocator.free(value);
+    try testing.expectEqualStrings("dynamic-resolved", value);
+    try testing.expectEqualStrings("dynamic-resolved", fixture.package_builds[0].variables.get("_greeting").?);
+    try testing.expect(!fixture.package_builds[0].hasDynamicAssignments());
 }
 
 test "PackageBuilder rejects a legacy unwritable package tree" {
@@ -1553,6 +1654,70 @@ test "PackageBuilder extracts source archives into srcdir" {
     try fixture.temporary.dir.access(io, "src/payload.tar.gz", .{});
     try fixture.temporary.dir.access(io, "src/demo/source.txt", .{});
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
+}
+
+test "PackageBuilder extracts Debian sources before package steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=deb-source-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('code_1_amd64.deb')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  bsdtar -xf data.tar.xz -C "$pkgdir/"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try writeDebFixture(&fixture, "code_1_amd64.deb");
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/code_1_amd64.deb", .{});
+    try fixture.temporary.dir.access(io, "src/debian-binary", .{});
+    try fixture.temporary.dir.access(io, "src/control.tar.xz", .{});
+    try fixture.temporary.dir.access(io, "src/data.tar.xz", .{});
+    const payload = try fixture.temporary.dir.readFileAlloc(
+        io,
+        "pkg/deb-source-demo/usr/share/deb-source-demo/payload",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(payload);
+    try testing.expectEqualStrings("from deb\n", payload);
+}
+
+test "PackageBuilder honors noextract for Debian sources" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=deb-noextract-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('opaque.deb')
+        \\noextract=('opaque.deb')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  test ! -e "$srcdir/data.tar.xz"
+        \\  install -Dm644 "$srcdir/opaque.deb" "$pkgdir/usr/share/deb-noextract-demo/opaque.deb"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try writeDebFixture(&fixture, "opaque.deb");
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/opaque.deb", .{});
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src/data.tar.xz", .{}));
+    try fixture.temporary.dir.access(io, "pkg/deb-noextract-demo/usr/share/deb-noextract-demo/opaque.deb", .{});
 }
 
 test "PackageBuilder downloads renamed file sources before build steps" {
@@ -2862,4 +3027,163 @@ test "PackageBuilder builds a real package from the repository PKGBUILD-bin" {
     // The operation completed successfully.
     try testing.expectEqual(op_context.CompletionStatus.success, capture.completion.?);
     std.debug.print("[builder-test] operation completed: {s}\n", .{@tagName(capture.completion.?)});
+}
+
+test "sandbox policy denies paths outside the allow-list" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builder_mod.sandbox.abiVersion() < 1) return error.SkipZigTest;
+
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    var allowed_dir = std.testing.tmpDir(.{});
+    defer allowed_dir.cleanup();
+    try allowed_dir.dir.writeFile(io, .{ .sub_path = "allowed-file", .data = "inside\n" });
+    var denied_dir = std.testing.tmpDir(.{});
+    defer denied_dir.cleanup();
+    try denied_dir.dir.writeFile(io, .{ .sub_path = "denied-file", .data = "outside\n" });
+
+    const allowed_root = try allowed_dir.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(allowed_root);
+    const allowed_path = try allowed_dir.dir.realPathFileAlloc(io, "allowed-file", allocator);
+    defer allocator.free(allowed_path);
+    const denied_path = try denied_dir.dir.realPathFileAlloc(io, "denied-file", allocator);
+    defer allocator.free(denied_path);
+
+    // Landlock is irreversible, so the probe runs in a forked child to keep
+    // the shared test process unrestricted. Exit code 0 means the policy was
+    // applied, the allowed path stayed readable, and the denied path was
+    // rejected.
+    const fork_rc = std.os.linux.fork();
+    try testing.expectEqual(std.os.linux.E.SUCCESS, std.os.linux.errno(@intCast(fork_rc)));
+    if (fork_rc == 0) {
+        std.process.exit(probeSandboxPolicy(allocator, allowed_root, allowed_path, denied_path));
+    }
+    var status: u32 = 0;
+    _ = std.os.linux.waitpid(@intCast(fork_rc), &status, 0);
+    try testing.expectEqual(@as(u32, 0), status & 0x7f);
+    const exit_code = (status >> 8) & 0xff;
+    try testing.expectEqual(@as(u32, 0), exit_code);
+}
+
+fn probeSandboxPolicy(
+    allocator: std.mem.Allocator,
+    allowed_root: []const u8,
+    allowed_path: []const u8,
+    denied_path: []const u8,
+) u8 {
+    builder_mod.setNoNewPrivs() catch return 10;
+    builder_mod.sandbox.applyPolicy(allocator, .{
+        .read_write_paths = &.{ allowed_root, "/tmp" },
+        .read_only_paths = &.{},
+    }) catch return 11;
+    if (!probePathReadable(allocator, allowed_path)) return 12;
+    if (probePathReadable(allocator, denied_path)) return 13;
+    return 0;
+}
+
+fn probePathReadable(allocator: std.mem.Allocator, path: []const u8) bool {
+    const path_z = allocator.dupeZ(u8, path) catch return false;
+    const rc = std.os.linux.open(path_z.ptr, .{}, 0);
+    if (std.os.linux.errno(@intCast(rc)) != .SUCCESS) return false;
+    _ = std.os.linux.close(@intCast(rc));
+    return true;
+}
+
+test "PackageBuilder wraps lifecycle steps through the sandbox wrapper when enabled" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builder_mod.sandbox.abiVersion() < 1) return error.SkipZigTest;
+
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=sandbox-demo
+        \\pkgver=1.0
+        \\arch=('any')
+        \\
+        \\build() {
+        \\  echo built > build-marker
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\  echo packaged > "$pkgdir/package-marker"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    // Passthrough stub standing in for the real `__sandbox-exec` entry
+    // point: it records that it ran, then execs the child argv after `--`.
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "wrapper-stub.sh",
+        .data =
+        \\#!/bin/sh
+        \\dir=$(dirname "$0")
+        \\echo ran > "$dir/wrapper-marker"
+        \\while [ "$1" != "--" ]; do shift; done
+        \\shift
+        \\exec "$@"
+        ,
+    });
+    try fixture.temporary.dir.setFilePermissions(io, "wrapper-stub.sh", .fromMode(0o755), .{});
+    const stub_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "wrapper-stub.sh" });
+    defer allocator.free(stub_path);
+    var wrapper_prefix = [_][]const u8{stub_path};
+
+    fixture.builder.shellybuild_config.sandbox.enabled = true;
+    fixture.builder.options.sandbox_wrapper_prefix = &wrapper_prefix;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+
+    // The wrapper handled every lifecycle step before bash ran.
+    try fixture.temporary.dir.access(io, "wrapper-marker", .{});
+    try fixture.temporary.dir.access(io, "src/build-marker", .{});
+    try fixture.temporary.dir.access(io, "pkg/sandbox-demo/package-marker", .{});
+}
+
+test "PackageBuilder records a sandbox hint when a confined step fails" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builder_mod.sandbox.abiVersion() < 1) return error.SkipZigTest;
+
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=sandbox-failure-demo
+        \\pkgver=1.0
+        \\arch=('any')
+        \\
+        \\build() {
+        \\  exit 1
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "wrapper-stub.sh",
+        .data =
+        \\#!/bin/sh
+        \\while [ "$1" != "--" ]; do shift; done
+        \\shift
+        \\exec "$@"
+        ,
+    });
+    try fixture.temporary.dir.setFilePermissions(io, "wrapper-stub.sh", .fromMode(0o755), .{});
+    const stub_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "wrapper-stub.sh" });
+    defer allocator.free(stub_path);
+    var wrapper_prefix = [_][]const u8{stub_path};
+
+    fixture.builder.shellybuild_config.sandbox.enabled = true;
+    fixture.builder.options.sandbox_wrapper_prefix = &wrapper_prefix;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+
+    const build_log = try readOnlyBuildLog(allocator, io, fixture.build_dir);
+    defer allocator.free(build_log);
+    try testing.expect(std.mem.indexOf(u8, build_log, "[sandbox] step failed inside the Landlock sandbox") != null);
 }

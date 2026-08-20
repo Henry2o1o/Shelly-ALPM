@@ -261,7 +261,7 @@ pub const UpdateManager = struct {
                     self.emitStatusFmt(.warning, "AppImage {s} has no static update URL.", .{app.name});
                     return null;
                 }
-                return self.check_static_url_update(app.update_url, app.name, app.version);
+                return self.guardInstalledRelease(app, try self.check_static_url_update(app.update_url, app.name, app.version));
             },
             .github => {
                 const owner = app.repo_owner orelse {
@@ -274,7 +274,7 @@ pub const UpdateManager = struct {
                 };
                 return self.providerUpdateOrWarn(
                     app.name,
-                    try self.check_github_update(owner, repo, app.name, app.version, app.allow_prerelease),
+                    self.guardInstalledRelease(app, try self.check_github_update(owner, repo, app.name, app.version, app.allow_prerelease)),
                 );
             },
             .gitlab => {
@@ -288,7 +288,7 @@ pub const UpdateManager = struct {
                 };
                 return self.providerUpdateOrWarn(
                     app.name,
-                    try self.check_gitlab_update(owner, repo, app.name, app.version, app.allow_prerelease),
+                    self.guardInstalledRelease(app, try self.check_gitlab_update(owner, repo, app.name, app.version, app.allow_prerelease)),
                 );
             },
             .codeberg => {
@@ -302,7 +302,7 @@ pub const UpdateManager = struct {
                 };
                 return self.providerUpdateOrWarn(
                     app.name,
-                    try self.check_codeberg_update(owner, repo, app.name, app.version, app.allow_prerelease),
+                    self.guardInstalledRelease(app, try self.check_codeberg_update(owner, repo, app.name, app.version, app.allow_prerelease)),
                 );
             },
             .forgejo => {
@@ -312,10 +312,21 @@ pub const UpdateManager = struct {
                 }
                 return self.providerUpdateOrWarn(
                     app.name,
-                    try self.check_forgejo_update(app.update_url, app.name, app.version, app.allow_prerelease),
+                    self.guardInstalledRelease(app, try self.check_forgejo_update(app.update_url, app.name, app.version, app.allow_prerelease)),
                 );
             },
         }
+    }
+
+    fn guardInstalledRelease(self: UpdateManager, app: *const appimage.AppImage, result_in: ?appimage.AppImageUpdate) ?appimage.AppImageUpdate {
+        var result = result_in;
+        if (result) |*update_result| {
+            applyInstalledReleaseGuard(app, update_result);
+            if (!update_result.is_update_available) {
+                self.emitStatusFmt(.information, "AppImage {s} is already up to date ({s}).", .{ app.name, update_result.version });
+            }
+        }
+        return result;
     }
 
     pub fn deinit_update(self: UpdateManager, update_result: appimage.AppImageUpdate) void {
@@ -911,7 +922,7 @@ pub const UpdateManager = struct {
         download_url: []const u8,
         current_version: []const u8,
     ) !appimage.AppImageUpdate {
-        const is_available = try version_unknown_or_dif(current_version, version);
+        const is_available = updateIsAvailable(current_version, version);
         const owned_name = try allocator.dupe(u8, app_name);
         errdefer allocator.free(owned_name);
         const owned_version = try allocator.dupe(u8, version);
@@ -999,12 +1010,69 @@ pub const UpdateManager = struct {
         return isAppImage(file_path);
     }
 
-    fn version_unknown_or_dif(current_version: []const u8, last_version: []const u8) !bool {
-        if (std.ascii.eqlIgnoreCase(current_version, "Unknown")) {
-            return true;
+    fn normalizeVersionToken(raw: []const u8) []const u8 {
+        var token = std.mem.trim(u8, raw, &std.ascii.whitespace);
+        token = std.mem.trim(u8, token, "\"");
+        token = std.mem.trim(u8, token, &std.ascii.whitespace);
+        if (token.len > 1 and (token[0] == 'v' or token[0] == 'V') and std.ascii.isDigit(token[1])) {
+            token = token[1..];
         }
+        return token;
+    }
 
-        return !std.ascii.eqlIgnoreCase(current_version, last_version);
+    fn isNumericDottedVersion(version: []const u8) bool {
+        if (std.mem.indexOfScalar(u8, version, '.') == null) return false;
+        var components = std.mem.splitScalar(u8, version, '.');
+        while (components.next()) |component| {
+            if (component.len == 0) return false;
+            for (component) |character| {
+                if (!std.ascii.isDigit(character)) return false;
+            }
+        }
+        return true;
+    }
+
+    fn compareNumericVersions(a: []const u8, b: []const u8) std.math.Order {
+        var a_components = std.mem.splitScalar(u8, a, '.');
+        var b_components = std.mem.splitScalar(u8, b, '.');
+        while (true) {
+            const a_component = a_components.next();
+            const b_component = b_components.next();
+            if (a_component == null and b_component == null) return .eq;
+            const a_value: u64 = if (a_component) |component|
+                std.fmt.parseInt(u64, component, 10) catch std.math.maxInt(u64)
+            else
+                0;
+            const b_value: u64 = if (b_component) |component|
+                std.fmt.parseInt(u64, component, 10) catch std.math.maxInt(u64)
+            else
+                0;
+            if (a_value != b_value) return std.math.order(a_value, b_value);
+        }
+    }
+
+    fn updateIsAvailable(current_version: []const u8, remote_version: []const u8) bool {
+        const current = normalizeVersionToken(current_version);
+        const remote = normalizeVersionToken(remote_version);
+        if (current.len == 0 or std.ascii.eqlIgnoreCase(current, "unknown")) return true;
+        if (remote.len == 0) return true;
+        if (isNumericDottedVersion(current) and isNumericDottedVersion(remote)) {
+            return compareNumericVersions(remote, current) == .gt;
+        }
+        return !std.ascii.eqlIgnoreCase(current, remote);
+    }
+
+    fn releaseTagMatches(installed_tag: ?[]const u8, remote_version: []const u8) bool {
+        const tag = installed_tag orelse return false;
+        if (tag.len == 0) return false;
+        return std.ascii.eqlIgnoreCase(normalizeVersionToken(tag), normalizeVersionToken(remote_version));
+    }
+
+    fn applyInstalledReleaseGuard(app: *const appimage.AppImage, result: *appimage.AppImageUpdate) void {
+        if (result.is_update_available and releaseTagMatches(app.release_tag, result.version)) {
+            std.log.debug("AppImage {s} already has release '{s}' installed; suppressing update.", .{ app.name, result.version });
+            result.is_update_available = false;
+        }
     }
 
     fn appImageManager(self: UpdateManager) appimage_manager.AppImageManager {
@@ -1113,13 +1181,84 @@ test "test isAppImage" {
     try std.testing.expect(!UpdateManager.isAppImage("xxx.AppImage.txt"));
 }
 
-test "test version unknown or diff" {
-    const result_true_1 = try UpdateManager.version_unknown_or_dif("67", "Unknown");
-    const result_false_1 = try UpdateManager.version_unknown_or_dif("67", "67");
-    const result_true_2 = try UpdateManager.version_unknown_or_dif("67", "68");
-    try std.testing.expect(result_true_1);
-    try std.testing.expect(!result_false_1);
-    try std.testing.expect(result_true_2);
+test "updateIsAvailable: formats and normalize v prefixes and quotes" {
+    // v-prefixed provider tag vs plain embedded version — the reported bug.
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.4", "v1.7.4") == false);
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.0", "v1.7.4") == true);
+    // Quotes and surrounding whitespace are ignored.
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.4", " \"v1.7.4\" ") == false);
+    try std.testing.expect(UpdateManager.updateIsAvailable("\"1.7.4\"", "v1.7.4") == false);
+    // Case-insensitive equality.
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.4", "1.7.4") == false);
+}
+
+test "updateIsAvailable: compares dotted numeric versions semantically" {
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.4", "1.7.5") == true);
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.4", "1.10.0") == true);
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.10", "1.7.9") == false);
+    try std.testing.expect(UpdateManager.updateIsAvailable("2.0.0", "1.99.99") == false);
+    // Component count differences follow semver rules.
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7", "1.7.0") == false);
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7", "1.7.1") == true);
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.0", "1.8") == true);
+}
+
+test "updateIsAvailable: refuses downgrades" {
+    try std.testing.expect(UpdateManager.updateIsAvailable("2.0.0", "v1.9.0") == false);
+}
+
+test "updateIsAvailable: unknown or empty local versions always update" {
+    try std.testing.expect(UpdateManager.updateIsAvailable("Unknown", "v1.7.4") == true);
+    try std.testing.expect(UpdateManager.updateIsAvailable("", "v1.7.4") == true);
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.4", "") == true);
+}
+
+test "updateIsAvailable: non-semantic markers keep string comparison" {
+    // ETags and dates are not dotted numeric versions; any change counts.
+    try std.testing.expect(UpdateManager.updateIsAvailable("abc123", "abc123") == false);
+    try std.testing.expect(UpdateManager.updateIsAvailable("abc123", "def456") == true);
+    // Calendar tags stay single tokens.
+    try std.testing.expect(UpdateManager.updateIsAvailable("20250801", "20250801") == false);
+    try std.testing.expect(UpdateManager.updateIsAvailable("20250801", "20250901") == true);
+    // Mixed tokens (e.g. 1.7.4-beta) fall back to string equality.
+    try std.testing.expect(UpdateManager.updateIsAvailable("1.7.4-beta", "v1.7.4") == true);
+}
+
+test "releaseTagMatches: guard suppresses re-offering the installed release" {
+    const app = appimage.AppImage{
+        .name = "ARDM",
+        .version = "1.7.4",
+        .release_tag = "v1.7.4",
+    };
+    var update = appimage.AppImageUpdate{
+        .name = "ARDM",
+        .version = "v1.7.4",
+        .download_url = "https://example.com/ARDM.AppImage",
+        .is_update_available = true,
+    };
+    UpdateManager.applyInstalledReleaseGuard(&app, &update);
+    try std.testing.expect(!update.is_update_available);
+
+    // A different release is not suppressed.
+    var newer = appimage.AppImageUpdate{
+        .name = "ARDM",
+        .version = "v1.7.5",
+        .download_url = "https://example.com/ARDM.AppImage",
+        .is_update_available = true,
+    };
+    UpdateManager.applyInstalledReleaseGuard(&app, &newer);
+    try std.testing.expect(newer.is_update_available);
+
+    // Absent or empty tags never suppress.
+    const untagged = appimage.AppImage{ .name = "ARDM", .version = "1.7.4" };
+    var untagged_update = appimage.AppImageUpdate{
+        .name = "ARDM",
+        .version = "v1.7.4",
+        .download_url = "https://example.com/ARDM.AppImage",
+        .is_update_available = true,
+    };
+    UpdateManager.applyInstalledReleaseGuard(&untagged, &untagged_update);
+    try std.testing.expect(untagged_update.is_update_available);
 }
 
 test "test sysarch assume x86_64" {
@@ -2335,6 +2474,82 @@ test "update: automated update refreshes desktop name and exec path" {
     try std.testing.expect(std.mem.indexOf(u8, desktop, expected_exec) != null);
 }
 
+test "update follows a symlinked install directory" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const dir_path = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(dir_path);
+
+    const install_target = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "install-target" });
+    defer std.testing.allocator.free(install_target);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, install_target);
+    const install_dir = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "install-link" });
+    defer std.testing.allocator.free(install_dir);
+    try std.Io.Dir.cwd().symLink(std.testing.io, install_target, install_dir, .{});
+
+    const data_home = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "data" });
+    defer std.testing.allocator.free(data_home);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, data_home);
+
+    var environ = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ.deinit();
+    try environ.put("HOME", dir_path);
+    try environ.put("XDG_DATA_HOME", data_home);
+    try environ.put("XDG_CACHE_HOME", dir_path);
+    var environ_block = try environ.createPosixBlock(std.testing.allocator, .{});
+    defer environ_block.deinit(std.testing.allocator);
+    const test_environ: std.process.Environ = .{ .block = environ_block };
+
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "apps.db" });
+    defer std.testing.allocator.free(db_path);
+
+    const app_name = "Editor";
+    const current_path = try std.fs.path.join(std.testing.allocator, &.{ install_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(current_path);
+    try writeUpdateFixture(std.testing.io, current_path, "#!/bin/sh\nexit 0\n");
+
+    try seedDb(std.testing.allocator, std.testing.io, db_path, &.{
+        .{ .name = app_name, .version = "1.0.0", .desktop_name = "Old Name", .path = current_path },
+    });
+
+    const staged_path = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "staged.AppImage" });
+    defer std.testing.allocator.free(staged_path);
+    try writeUpdateFixture(std.testing.io, staged_path, newDesktopNameAppImage);
+
+    var um = makeStagedUpdateManager(std.testing.allocator, install_dir, db_path, staged_path);
+    um.environ = test_environ;
+    var dto = appimage.AppImageUpdate{
+        .name = app_name,
+        .version = "2.0.0",
+        .download_url = "https://example.com/Editor.AppImage",
+        .is_update_available = true,
+    };
+    try std.testing.expect(try um.update(&dto));
+
+    // The replacement must land in the directory the symlink points to.
+    const resolved_path = try std.fs.path.join(std.testing.allocator, &.{ install_target, "Editor.AppImage" });
+    defer std.testing.allocator.free(resolved_path);
+    const installed = try readUpdateFile(std.testing.allocator, std.testing.io, resolved_path);
+    defer std.testing.allocator.free(installed);
+    try std.testing.expectEqualStrings(newDesktopNameAppImage, installed);
+
+    const manager = appimage_manager.AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = test_environ,
+        .install_directory = install_dir,
+        .local_db_path = db_path,
+    };
+    const apps = try manager.getAppImagesFromLocalDb();
+    defer manager.freeAppImages(apps);
+    try std.testing.expectEqual(@as(usize, 1), apps.len);
+    try std.testing.expectEqualStrings("2.0.0", apps[0].version);
+    try std.testing.expectEqualStrings(current_path, apps[0].path);
+}
+
 test "update: preserves GitHub provider configuration" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2413,6 +2628,8 @@ test "update: preserves GitHub provider configuration" {
     try std.testing.expect(apps[0].allow_prerelease);
     try std.testing.expectEqualStrings("https://updates.example.com/editor", apps[0].update_url);
     try std.testing.expectEqualStrings("New Name", apps[0].desktop_name);
+    // The provider version of the applied update is remembered so the same release is never offered again.
+    try std.testing.expectEqualStrings("2.0.0", apps[0].release_tag.?);
 }
 
 test "update: preserves stable desktop filename when display name changes" {

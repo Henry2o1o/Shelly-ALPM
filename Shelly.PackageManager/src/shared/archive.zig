@@ -436,8 +436,8 @@ pub fn normalizeEntryPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 
 }
 
 // Test fixture support is intentionally kept in this internal module rather
-// than making tests depend on external `tar`, `gzip`, or `zstd` executables.
-pub const FixtureCompression = enum { none, gzip, zstd };
+// than making tests depend on external `tar`, `gzip`, `zstd`, or `xz` executables.
+pub const FixtureCompression = enum { none, gzip, zstd, xz };
 
 pub const FixtureEntry = struct {
     path: [:0]const u8,
@@ -461,6 +461,7 @@ pub fn writeFixture(
         .none => c.archive_write_add_filter_none(handle),
         .gzip => c.archive_write_add_filter_gzip(handle),
         .zstd => c.archive_write_add_filter_zstd(handle),
+        .xz => c.archive_write_add_filter_xz(handle),
     };
     if (filter_status < c.ARCHIVE_WARN) return Error.ArchiveWriteFailed;
     if (c.archive_write_set_format_pax_restricted(handle) < c.ARCHIVE_WARN)

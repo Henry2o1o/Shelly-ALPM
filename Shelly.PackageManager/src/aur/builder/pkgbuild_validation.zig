@@ -102,6 +102,28 @@ pub fn validatePkgbuildInfoWithInstallScript(
         scripts.has_findings = scripts.has_findings or install_findings.has_findings;
         transferred = true;
     }
+    if (info.hasDynamicAssignments()) {
+        for (info.dynamic_assignments) |assignment| {
+            const hook = try std.fmt.allocPrint(allocator, "assignment: {s}", .{assignment.name});
+            errdefer allocator.free(hook);
+            const matched_line = try allocator.dupe(u8, assignment.statement);
+            errdefer allocator.free(matched_line);
+            const message = try std.fmt.allocPrint(
+                allocator,
+                "Top-level assignment '{s}' uses command substitution and will be executed while building. Review the command before proceeding.",
+                .{assignment.statement},
+            );
+            errdefer allocator.free(message);
+            try scripts.findings.append(allocator, .{
+                .tool = "<pkgbuild>",
+                .severity = .warning,
+                .hook = hook,
+                .matched_line = matched_line,
+                .message = message,
+            });
+            scripts.has_findings = true;
+        }
+    }
     var homograph = try (homograph_validator.HomographValidator{ .allocator = allocator }).validate(info.*);
     errdefer homograph.deinit(allocator);
     return .{
