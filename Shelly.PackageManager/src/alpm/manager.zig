@@ -4946,40 +4946,34 @@ test "handleErrorMessage formats populated file conflict details" {
     ) != null);
 }
 
-test "onDownloadEvent uses fallback message when formatted message exceeds buffer" {
+test "onDownloadEvent reports out of memory when message allocation fails" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{
+        .fail_index = 0,
+    });
+
     var mgr: Manager = undefined;
-    mgr.allocator = testing.allocator;
+    mgr.allocator = failing.allocator();
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
     defer mgr.dispatcher.deinit();
 
-    var info_cap = InfoCapture{};
-    defer info_cap.deinit(testing.allocator);
+    var error_cap = ErrorCapture{};
 
-    _ = try mgr.dispatcher.addInformationalHandler(.{
-        .function = captureInfo,
-        .data = @ptrCast(&info_cap),
+    _ = try mgr.dispatcher.addErrorHandler(.{
+        .function = captureError,
+        .data = @ptrCast(&error_cap),
     });
-
-    var long_path: [600]u8 = undefined;
-    @memset(long_path[0..], 'a');
 
     Manager.onDownloadEvent(@ptrCast(&mgr), .{
         .event_type = .Start,
-        .destination_path = long_path[0..],
+        .destination_path = "/tmp/example.pkg.tar.zst",
     });
 
-    var info = info_cap.args orelse return error.TestFailed;
-    try testing.expectEqual(libalpm.EventType.pkg_retrieve_start,info.event_type,);
-    try testing.expectEqualStrings("Retrieving package...",info.message,);
+    try testing.expect(failing.has_induced_failure);
 
-    Manager.onDownloadEvent(@ptrCast(&mgr), .{
-        .event_type = .Complete,
-        .destination_path = long_path[0..],
-    });
-
-    info = info_cap.args orelse return error.TestFailed;
-    try testing.expectEqual(libalpm.EventType.pkg_retrieve_done, info.event_type,);
-    try testing.expectEqualStrings("Package retrieval completed.", info.message,);
+    try testing.expectEqualStrings(
+        "Out of memory while formatting package retrieval message.",
+        error_cap.text(),
+    );
 }
 
 test "handleErrorMessage emits descriptions for every scalar libalpm error" {
