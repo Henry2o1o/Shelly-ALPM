@@ -110,7 +110,7 @@ fn findAurDependency(dependencies: []const AurDependency, expected: ParsedDepend
     return null;
 }
 
-fn strongerRole(lhs: Role, rhs: Role) Role {
+pub fn strongerRole(lhs: Role, rhs: Role) Role {
     if (lhs == .runtime or rhs == .runtime) return .runtime;
     if (lhs == .build or rhs == .build) return .build;
     return .check;
