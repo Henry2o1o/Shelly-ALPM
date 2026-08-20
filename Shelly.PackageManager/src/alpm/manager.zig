@@ -2734,14 +2734,20 @@ pub const Manager = struct {
         const path = event.destination_path orelse "";
         switch (event.event_type) {
             .Start => {
-                var message_buffer: [512]u8 = undefined;
                 
-                const message = std.fmt.bufPrint(
-                    &message_buffer,
+                const message = std.fmt.allocPrint(
+                    self.allocator,
                     "Retrieving package: {s}",
                     .{std.fs.path.basename(path)},
-                ) catch "Retrieving package...";
-                            
+                ) catch {
+                    self.dispatcher.raiseError(.{
+                        .message = "Out of memory while formatting package retrieval message.",
+                    });
+                    return;
+                };
+
+                defer self.allocator.free(message);
+        
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_start,
                     .message = message,
@@ -2760,14 +2766,19 @@ pub const Manager = struct {
                 });
             },
             .Complete => {
-                var message_buffer: [512]u8 = undefined;
-
-                const message = std.fmt.bufPrint(
-                    &message_buffer,
+                const message = std.fmt.allocPrint(
+                    self.allocator,
                     "Package retrieval completed: {s}",
                     .{std.fs.path.basename(path)},
-                ) catch "Package retrieval completed.";
-                        
+                ) catch {
+                    self.dispatcher.raiseError(.{
+                        .message = "Out of memory while formatting package retrieval message.",
+                    });
+                    return; 
+                };
+                
+                defer self.allocator.free(message);
+                
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_done,
                     .message = message,
@@ -2815,21 +2826,23 @@ pub const Manager = struct {
                 if (line.len != 0) self.dispatcher.raiseScriptlet(.{ .line = line });
             },
             .package_operation_start => {
-                const operation = event.*.package_operation;
-            
-                var message_buffer: [512]u8 = undefined;
-            
+                const operation = event.*.package_operation;            
                 const message = switch (operation.operation) {
                     rawLibalpm.ALPM_PACKAGE_INSTALL => blk: {
                         const pkg = operation.newpkg orelse return;
                         const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse return;
                         const version = libalpm.str(rawLibalpm.alpm_pkg_get_version(pkg)) orelse return;
             
-                        break :blk std.fmt.bufPrint(
-                            &message_buffer,
+                        break :blk std.fmt.allocPrint(
+                            self.allocator,
                             "Installing package: {s}-{s}",
                             .{ name, version },
-                        ) catch "Installing package...";
+                        ) catch {
+                                self.dispatcher.raiseError(.{
+                                    .message = "Out of memory while formatting package operation.",
+                                });
+                                return;
+                            };
                     },
             
                     rawLibalpm.ALPM_PACKAGE_UPGRADE => blk: {
@@ -2840,11 +2853,16 @@ pub const Manager = struct {
                         const old_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(oldpkg)) orelse return;
                         const new_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(newpkg)) orelse return;
             
-                        break :blk std.fmt.bufPrint(
-                            &message_buffer,
+                        break :blk std.fmt.allocPrint(
+                            self.allocator,
                             "Upgrading package: {s} {s} -> {s}",
                             .{ name, old_version, new_version },
-                        ) catch "Upgrading package...";
+                        ) catch {
+                                self.dispatcher.raiseError(.{
+                                    .message = "Out of memory while formatting package operation.",
+                                });
+                                return;
+                            };
                     },
             
                     rawLibalpm.ALPM_PACKAGE_REINSTALL => blk: {
@@ -2852,11 +2870,16 @@ pub const Manager = struct {
                         const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse return;
                         const version = libalpm.str(rawLibalpm.alpm_pkg_get_version(pkg)) orelse return;
             
-                        break :blk std.fmt.bufPrint(
-                            &message_buffer,
+                        break :blk std.fmt.allocPrint(
+                            self.allocator,
                             "Reinstalling package: {s}-{s}",
                             .{ name, version },
-                        ) catch "Reinstalling package...";
+                        ) catch {
+                                self.dispatcher.raiseError(.{
+                                    .message = "Out of memory while formatting package operation.",
+                                });
+                                return;
+                            };
                     },
             
                     rawLibalpm.ALPM_PACKAGE_DOWNGRADE => blk: {
@@ -2867,11 +2890,16 @@ pub const Manager = struct {
                         const old_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(oldpkg)) orelse return;
                         const new_version = libalpm.str(rawLibalpm.alpm_pkg_get_version(newpkg)) orelse return;
             
-                        break :blk std.fmt.bufPrint(
-                            &message_buffer,
+                        break :blk std.fmt.allocPrint(
+                            self.allocator,
                             "Downgrading package: {s} {s} -> {s}",
                             .{ name, old_version, new_version },
-                        ) catch "Downgrading package...";
+                        ) catch {
+                                self.dispatcher.raiseError(.{
+                                    .message = "Out of memory while formatting package operation.",
+                                });
+                                return;
+                            };
                     },
             
                     rawLibalpm.ALPM_PACKAGE_REMOVE => blk: {
@@ -2879,15 +2907,21 @@ pub const Manager = struct {
                         const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse return;
                         const version = libalpm.str(rawLibalpm.alpm_pkg_get_version(pkg)) orelse return;
             
-                        break :blk std.fmt.bufPrint(
-                            &message_buffer,
+                        break :blk std.fmt.allocPrint(
+                            self.allocator,
                             "Removing package: {s}-{s}",
                             .{ name, version },
-                        ) catch "Removing package...";
+                        ) catch {
+                                self.dispatcher.raiseError(.{
+                                    .message = "Out of memory while formatting package operation.",
+                                });
+                                return;
+                            };
                     },
                     else => return
                 };
-            
+
+                defer self.allocator.free(message);
                 self.dispatcher.raiseInformational(.{
                     .event_type = event_type,
                     .message = message,
