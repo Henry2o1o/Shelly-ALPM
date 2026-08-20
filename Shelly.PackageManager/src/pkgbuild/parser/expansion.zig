@@ -1,5 +1,5 @@
-//! Bash parameter expansion engine: variables, trimming, replacement,
-//! substring, arithmetic, and command-substitution handling.
+//! Bash parameter expansion engine: variables, case conversion, trimming,
+//! replacement, substring, arithmetic, and command-substitution handling.
 const std = @import("std");
 const shell_scan = @import("shell_scan.zig");
 const arithmetic = @import("arithmetic.zig");
@@ -26,16 +26,19 @@ fn resolve_expansions(
     };
     defer self.allocator.free(step2);
 
-    const step3 = try replace_trim_expansion(self, step2, vars);
+    const step3 = try replace_case_expansion(self, step2, vars);
     defer self.allocator.free(step3);
 
-    const step4 = try replace_replacement_expansion(self, step3, vars);
+    const step4 = try replace_trim_expansion(self, step3, vars);
     defer self.allocator.free(step4);
 
-    const step5 = try replace_substring_expansion(self, step4, vars);
+    const step5 = try replace_replacement_expansion(self, step4, vars);
     defer self.allocator.free(step5);
 
-    return replace_plain_var(self, step5, vars);
+    const step6 = try replace_substring_expansion(self, step5, vars);
+    defer self.allocator.free(step6);
+
+    return replace_plain_var(self, step6, vars);
 }
 
 /// Resolves statically knowable variables in an execution step body.
@@ -71,6 +74,80 @@ pub fn resolve_step_string(self: PkgbuildParser, input: []const u8, vars: *std.S
 /// substitutions are kept instead of stripped.
 fn resolve_step_segment(self: PkgbuildParser, input: []const u8, vars: *std.StringHashMap([]const u8)) ![]const u8 {
     return resolve_expansions(self, input, vars, .execution);
+}
+
+fn replace_case_expansion(self: PkgbuildParser, input: []const u8, vars: *const std.StringHashMap([]const u8)) ![]const u8 {
+    var result: std.ArrayList(u8) = .empty;
+    defer result.deinit(self.allocator);
+
+    var pos: usize = 0;
+    while (pos < input.len) {
+        const open = std.mem.indexOfPos(u8, input, pos, "${") orelse {
+            try result.appendSlice(self.allocator, input[pos..]);
+            break;
+        };
+        try result.appendSlice(self.allocator, input[pos..open]);
+
+        var cursor = open + 2;
+        const name_start = cursor;
+        cursor = shell_scan.scan_word_chars(input, cursor);
+        const var_name = input[name_start..cursor];
+        if (var_name.len == 0 or cursor >= input.len or
+            (input[cursor] != ',' and input[cursor] != '^'))
+        {
+            try result.append(self.allocator, input[open]);
+            pos = open + 1;
+            continue;
+        }
+
+        const operator = input[cursor];
+        cursor += 1;
+        const convert_all = cursor < input.len and input[cursor] == operator;
+        if (convert_all) cursor += 1;
+
+        const pattern_start = cursor;
+        while (cursor < input.len and input[cursor] != '}') : (cursor += 1) {}
+        if (cursor >= input.len) {
+            try result.append(self.allocator, '$');
+            pos = input.len;
+            continue;
+        }
+        const pattern = input[pattern_start..cursor];
+        const match_end = cursor + 1;
+
+        if (vars.get(var_name)) |value| {
+            const converted = try apply_case_conversion(self, value, operator, convert_all, pattern);
+            defer self.allocator.free(converted);
+            try result.appendSlice(self.allocator, converted);
+        } else {
+            try result.appendSlice(self.allocator, input[open..match_end]);
+        }
+        pos = match_end;
+    }
+
+    return result.toOwnedSlice(self.allocator);
+}
+
+fn apply_case_conversion(
+    self: PkgbuildParser,
+    value: []const u8,
+    operator: u8,
+    convert_all: bool,
+    pattern: []const u8,
+) ![]const u8 {
+    const converted = try self.allocator.dupe(u8, value);
+    errdefer self.allocator.free(converted);
+
+    for (converted) |*character| {
+        const matches = pattern.len == 0 or glob_matches(pattern, std.mem.asBytes(character));
+        if (!matches) continue;
+        character.* = if (operator == ',')
+            std.ascii.toLower(character.*)
+        else
+            std.ascii.toUpper(character.*);
+        if (!convert_all) break;
+    }
+    return converted;
 }
 
 fn replace_replacement_expansion(self: PkgbuildParser, input: []const u8, vars: *const std.StringHashMap([]const u8)) ![]const u8 {
@@ -1497,6 +1574,36 @@ test "resolve_string: substring expansion" {
     const result = try resolve_string(parser, "${word:6} and ${word:0:5}", &vars);
     defer parser.allocator.free(result);
     try std.testing.expectEqualStrings("world and hello", result);
+}
+
+test "resolve_string: Bash case conversion operators" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer vars.deinit();
+    try vars.put("upper_initial", "GalaxyBudsClient");
+    try vars.put("lower_initial", "galaxyBudsClient");
+
+    const result = try resolve_string(
+        parser,
+        "${upper_initial,} ${upper_initial,,} ${lower_initial^} ${lower_initial^^}",
+        &vars,
+    );
+    defer parser.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "galaxyBudsClient galaxybudsclient GalaxyBudsClient GALAXYBUDSCLIENT",
+        result,
+    );
+}
+
+test "resolve_string: case conversion preserves unknown variables and supports patterns" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
+    defer vars.deinit();
+    try vars.put("word", "aBcDe");
+
+    const result = try resolve_string(parser, "${word^^c} ${word,,B} ${missing,,}", &vars);
+    defer parser.allocator.free(result);
+    try std.testing.expectEqualStrings("aBCDe abcDe ${missing,,}", result);
 }
 
 test "resolve_string: arithmetic expansion" {

@@ -850,11 +850,58 @@ pub const Manager = struct {
         }
     };
 
+    fn appendPackageFailure(
+        self: *Self,
+        failures: *std.ArrayList(PackageFailure),
+        package_name: []const u8,
+        reason: []const u8,
+    ) !void {
+        const owned_name = try self.allocator.dupe(u8, package_name);
+        failures.append(self.allocator, .{
+            .package_name = owned_name,
+            .reason = reason,
+        }) catch |err| {
+            self.allocator.free(owned_name);
+            return err;
+        };
+    }
+
+    fn recordPreparationFailure(
+        self: *Self,
+        failures: *std.ArrayList(PackageFailure),
+        package_name: []const u8,
+        err: anyerror,
+    ) !void {
+        switch (err) {
+            error.OutOfMemory,
+            error.Cancelled,
+            error.AccessDenied,
+            error.ReadOnlyFileSystem,
+            error.NoSpaceLeft,
+            error.DiskQuota,
+            error.ProcessFdQuotaExceeded,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            => return err,
+            else => try self.appendPackageFailure(
+                failures,
+                package_name,
+                preparationFailureReason(err),
+            ),
+        }
+    }
+
     fn installPackagesImpl(self: *Self, package_names: []const []const u8) !PackageResult {
         try self.checkCancelled();
         try self.alpm.refresh();
 
-        var plans = try self.prepareInstallPlans(package_names);
+        var failures: std.ArrayList(PackageFailure) = .empty;
+        errdefer {
+            for (failures.items) |failure| self.allocator.free(failure.package_name);
+            failures.deinit(self.allocator);
+        }
+
+        var plans = try self.prepareInstallPlans(package_names, &failures);
         defer {
             for (plans.items) |*plan| plan.deinit(self.allocator);
             plans.deinit(self.allocator);
@@ -862,18 +909,11 @@ pub const Manager = struct {
         // Discovery is deliberately completed for the whole operation before
         // the first review is shown. Only after every prepared checkout has
         // been approved may dependency installation or package execution begin.
-        try self.requireInstallPlanApprovals(plans.items);
-        for (plans.items) |*plan|
-            plan.selected_optional = try self.selectOptionalDependencies(&plan.prepared.info);
-        try self.confirmInstallPlans(plans.items);
-
-        var failures: std.ArrayList(PackageFailure) = .empty;
-
-        errdefer {
-            for (failures.items) |failure| {
-                self.allocator.free(failure.package_name);
-            }
-            failures.deinit(self.allocator);
+        if (plans.items.len > 0) {
+            try self.requireInstallPlanApprovals(plans.items);
+            for (plans.items) |*plan|
+                plan.selected_optional = try self.selectOptionalDependencies(&plan.prepared.info);
+            try self.confirmInstallPlans(plans.items);
         }
 
         for (plans.items, 0..) |*plan, index| {
@@ -944,6 +984,7 @@ pub const Manager = struct {
     fn prepareInstallPlans(
         self: *Self,
         package_names: []const []const u8,
+        failures: *std.ArrayList(PackageFailure),
     ) !std.ArrayList(PreparedInstall) {
         var plans: std.ArrayList(PreparedInstall) = .empty;
         errdefer {
@@ -954,7 +995,10 @@ pub const Manager = struct {
             const current = index + 1;
             self.raisePackageProgress(.aur_download_start, package_name, current, package_names.len, "");
 
-            const package_base = try self.resolvePkgbase(package_name);
+            const package_base = self.resolvePkgbase(package_name) catch |err| {
+                try self.recordPreparationFailure(failures, package_name, err);
+                continue;
+            };
             var existing_plan: ?*PreparedInstall = null;
             for (plans.items) |*candidate| {
                 if (std.mem.eql(u8, candidate.prepared.package_base, package_base)) {
@@ -968,7 +1012,10 @@ pub const Manager = struct {
                 continue;
             }
 
-            var plan = try self.prepareInstall(package_name);
+            var plan = self.prepareInstall(package_name) catch |err| {
+                try self.recordPreparationFailure(failures, package_name, err);
+                continue;
+            };
             errdefer plan.deinit(self.allocator);
             try plans.append(self.allocator, plan);
             self.raisePackageProgress(.aur_download_done, package_name, current, package_names.len, "");
@@ -2523,6 +2570,18 @@ fn buildFailureReason(err: anyerror) []const u8 {
     };
 }
 
+fn preparationFailureReason(err: anyerror) []const u8 {
+    return switch (err) {
+        error.UnresolvedPkgbuildVariable => "PKGBUILD contains an unresolved variable",
+        error.MissingPackageName => "PKGBUILD does not declare a package name",
+        error.UnsupportedPackageArchitecture => "PKGBUILD does not support this architecture",
+        error.MissingPkgbuildSourceFile => "PKGBUILD references a missing local source file",
+        error.UnsafePkgbuildSourcePath => "PKGBUILD references an unsafe local source path",
+        error.DownloadFailed => "Failed to download package sources",
+        else => "Failed to prepare package",
+    };
+}
+
 fn artifactPaths(
     allocator: std.mem.Allocator,
     artifacts: []const package_builder.BuildArtifact,
@@ -3480,11 +3539,15 @@ test "all requested PKGBUILDs are reviewed before the first build" {
     var approval = Approval{ .marker_path = marker_path };
     manager.setPkgbuildApprovalHandler(.{ .function = Approval.answer, .data = &approval });
 
-    var split_plans = try manager.prepareInstallPlans(&.{
-        "review-suite",
-        "review-suite-addon",
-        "review-suite",
-    });
+    var split_failures: std.ArrayList(Manager.PackageFailure) = .empty;
+    defer {
+        for (split_failures.items) |failure| allocator.free(failure.package_name);
+        split_failures.deinit(allocator);
+    }
+    var split_plans = try manager.prepareInstallPlans(
+        &.{ "review-suite", "review-suite-addon", "review-suite" },
+        &split_failures,
+    );
     defer {
         for (split_plans.items) |*plan| plan.deinit(allocator);
         split_plans.deinit(allocator);
@@ -3494,6 +3557,7 @@ test "all requested PKGBUILDs are reviewed before the first build" {
     try std.testing.expectEqual(@as(usize, 2), split_plans.items[0].requested_names.items.len);
     try std.testing.expectEqualStrings("review-suite", split_plans.items[0].requested_names.items[0]);
     try std.testing.expectEqualStrings("review-suite-addon", split_plans.items[0].requested_names.items[1]);
+    try std.testing.expectEqual(@as(usize, 0), split_failures.items.len);
 
     try std.testing.expectError(
         error.BuildFailed,
@@ -3561,7 +3625,7 @@ test "all requested PKGBUILDs are reviewed before the first build" {
     defer manager.setOperationContext(null);
     _ = try manager.cachePkgbase("missing-review-fixture", "missing-review-fixture");
     try std.testing.expectError(
-        error.DownloadFailed,
+        error.BuildFailed,
         manager.updatePackages(&.{"missing-review-fixture"}),
     );
     try std.testing.expectEqual(@as(usize, 1), failure_capture.count);
@@ -3712,6 +3776,158 @@ test "AUR package failures are emitted after all builds and fail the operation" 
     try std.testing.expect(!capture.emitted_before_all_builds);
     try std.testing.expect(!capture.completion_before_failures);
     try std.testing.expectEqual(operation_api.CompletionStatus.failed, capture.completion.?);
+}
+
+test "AUR package preparation failure does not stop valid packages" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const root = try temporary.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const remote_root = try std.fs.path.join(allocator, &.{ root, "remotes" });
+    defer allocator.free(remote_root);
+    const cache_root = try std.fs.path.join(allocator, &.{ root, "cache" });
+    defer allocator.free(cache_root);
+    const alpm_root = try std.fs.path.join(allocator, &.{ root, "alpm-root" });
+    defer allocator.free(alpm_root);
+    const db_path = try std.fs.path.join(allocator, &.{ root, "db" });
+    defer allocator.free(db_path);
+    const package_cache = try std.fs.path.join(allocator, &.{ root, "packages" });
+    defer allocator.free(package_cache);
+    try std.Io.Dir.cwd().createDirPath(io, remote_root);
+    try std.Io.Dir.cwd().createDirPath(io, cache_root);
+    try std.Io.Dir.cwd().createDirPath(io, alpm_root);
+    try std.Io.Dir.cwd().createDirPath(io, db_path);
+    try std.Io.Dir.cwd().createDirPath(io, package_cache);
+    try createAurFixtureRepository(allocator, io, remote_root, "valid-after-invalid", null);
+
+    const invalid_remote = try std.fs.path.join(allocator, &.{ remote_root, "invalid-metadata.git" });
+    defer allocator.free(invalid_remote);
+    try std.Io.Dir.cwd().createDirPath(io, invalid_remote);
+    const invalid_pkgbuild = try std.fs.path.join(allocator, &.{ invalid_remote, "PKGBUILD" });
+    defer allocator.free(invalid_pkgbuild);
+    try writeFixtureFile(io, invalid_pkgbuild,
+        \\pkgname=invalid-metadata
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\install="$missing.install"
+        \\package() { :; }
+    , false);
+    const invalid_srcinfo = try std.fs.path.join(allocator, &.{ invalid_remote, ".SRCINFO" });
+    defer allocator.free(invalid_srcinfo);
+    try writeFixtureFile(
+        io,
+        invalid_srcinfo,
+        "pkgbase = invalid-metadata\n\tpkgver = 1\n\tpkgrel = 1\n\tarch = any\npkgname = invalid-metadata\n",
+        false,
+    );
+    try runFixtureCommand(allocator, io, &.{ "git", "init" }, invalid_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "config", "user.email", "shelly-tests@example.invalid" }, invalid_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "config", "user.name", "Shelly Tests" }, invalid_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "add", "PKGBUILD", ".SRCINFO" }, invalid_remote);
+    try runFixtureCommand(allocator, io, &.{ "git", "commit", "-m", "fixture" }, invalid_remote);
+
+    const fake_makepkg_path = try std.fs.path.join(allocator, &.{ root, "fake-makepkg" });
+    defer allocator.free(fake_makepkg_path);
+    try writeFixtureFile(io, fake_makepkg_path,
+        \\#!/bin/sh
+        \\if grep -q '^pkgname=valid-after-invalid$' PKGBUILD; then
+        \\  printf 'pkgname = valid-after-invalid\npkgbase = valid-after-invalid\npkgver = 1-1\npkgdesc = valid fixture\nurl = https://example.invalid\nbuilddate = 1700000000\npackager = Shelly Tests\nsize = 0\narch = any\n' > .PKGINFO
+        \\  tar -czf valid-after-invalid-1-1-any.pkg.tar.gz .PKGINFO
+        \\  rm -f .PKGINFO
+        \\  exit 0
+        \\fi
+        \\exit 1
+    , true);
+
+    const config_path = try std.fs.path.join(allocator, &.{ root, "pacman.conf" });
+    defer allocator.free(config_path);
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\nArchitecture = auto\nSigLevel = Never\nRootDir = {s}\nDBPath = {s}\nCacheDir = {s}\n",
+        .{ alpm_root, db_path, package_cache },
+    );
+    defer allocator.free(config);
+    try writeFixtureFile(io, config_path, config, false);
+
+    var operation_context = operation_api.OperationContext.init(allocator, io);
+    defer operation_context.deinit();
+    operation_context.setQuestionHandler(.{
+        .function = struct {
+            fn answer(_: ?*anyopaque, question: operation_api.Question) operation_api.QuestionResponse {
+                return switch (question.kind) {
+                    .review_changes, .confirm_transaction => .accepted,
+                    else => .default,
+                };
+            }
+        }.answer,
+    });
+
+    const Capture = struct {
+        valid_completed: usize = 0,
+        invalid_failed: usize = 0,
+        completion: ?operation_api.CompletionStatus = null,
+
+        fn handle(data: ?*anyopaque, event: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            const envelope = switch (event) {
+                inline else => |payload| payload.envelope,
+            };
+            if (envelope.backend != .aur or envelope.kind != .install or envelope.parent_id != null) return;
+
+            switch (event) {
+                .progress => |progress| {
+                    const stage = progress.update.stage orelse return;
+                    const name = progress.update.message orelse return;
+                    if (std.mem.eql(u8, stage, "aur_package_completed") and
+                        std.mem.eql(u8, name, "valid-after-invalid"))
+                    {
+                        self.valid_completed += 1;
+                    } else if (std.mem.eql(u8, stage, "aur_package_failed") and
+                        std.mem.eql(u8, name, "invalid-metadata"))
+                    {
+                        self.invalid_failed += 1;
+                    }
+                },
+                .completed => |completed| self.completion = completed.status,
+                else => {},
+            }
+        }
+    };
+    var capture: Capture = .{};
+    const subscription = try operation_context.subscribe(.{
+        .function = Capture.handle,
+        .data = &capture,
+    });
+    defer _ = operation_context.unsubscribe(subscription);
+
+    var manager = try Manager.init(allocator, std.testing.environ, .{
+        .config_path = config_path,
+        .cache_root = cache_root,
+        .aur_git_base_url = remote_root,
+        .makepkg_command = fake_makepkg_path,
+    });
+    defer manager.deinit();
+    manager.alpm.disable_transaction_hooks();
+    manager.setOperationContext(&operation_context);
+    defer manager.setOperationContext(null);
+    _ = try manager.cachePkgbase("invalid-metadata", "invalid-metadata");
+    _ = try manager.cachePkgbase("valid-after-invalid", "valid-after-invalid");
+
+    try std.testing.expectError(
+        error.BuildFailed,
+        manager.installPackages(&.{ "invalid-metadata", "valid-after-invalid" }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), capture.invalid_failed);
+    try std.testing.expectEqual(@as(usize, 1), capture.valid_completed);
+    try std.testing.expectEqual(operation_api.CompletionStatus.failed, capture.completion.?);
+
+    const valid_name = try allocator.dupeZ(u8, "valid-after-invalid");
+    defer allocator.free(valid_name);
+    try std.testing.expect(manager.alpm.is_package_installed(valid_name));
 }
 
 test "build-only dependencies are removed after a failed build" {
