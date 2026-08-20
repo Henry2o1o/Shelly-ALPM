@@ -2741,6 +2741,7 @@ pub const Manager = struct {
                     .{std.fs.path.basename(path)},
                 ) catch {
                     self.dispatcher.raiseError(.{
+                        .err = error.OutOfMemory,
                         .message = "Out of memory while formatting package retrieval message.",
                     });
                     return;
@@ -2772,6 +2773,7 @@ pub const Manager = struct {
                     .{std.fs.path.basename(path)},
                 ) catch {
                     self.dispatcher.raiseError(.{
+                        .err = error.OutOfMemory,
                         .message = "Out of memory while formatting package retrieval message.",
                     });
                     return; 
@@ -2826,8 +2828,9 @@ pub const Manager = struct {
                 if (line.len != 0) self.dispatcher.raiseScriptlet(.{ .line = line });
             },
             .package_operation_start => {
-                const operation = event.*.package_operation;            
-                const message = switch (operation.operation) {
+                const operation = event.*.package_operation;
+            
+                const message = (switch (operation.operation) {
                     rawLibalpm.ALPM_PACKAGE_INSTALL => blk: {
                         const pkg = operation.newpkg orelse return;
                         const name = libalpm.str(rawLibalpm.alpm_pkg_get_name(pkg)) orelse return;
@@ -2837,12 +2840,7 @@ pub const Manager = struct {
                             self.allocator,
                             "Installing package: {s}-{s}",
                             .{ name, version },
-                        ) catch {
-                                self.dispatcher.raiseError(.{
-                                    .message = "Out of memory while formatting package operation.",
-                                });
-                                return;
-                            };
+                        );
                     },
             
                     rawLibalpm.ALPM_PACKAGE_UPGRADE => blk: {
@@ -2857,12 +2855,7 @@ pub const Manager = struct {
                             self.allocator,
                             "Upgrading package: {s} {s} -> {s}",
                             .{ name, old_version, new_version },
-                        ) catch {
-                                self.dispatcher.raiseError(.{
-                                    .message = "Out of memory while formatting package operation.",
-                                });
-                                return;
-                            };
+                        );
                     },
             
                     rawLibalpm.ALPM_PACKAGE_REINSTALL => blk: {
@@ -2874,12 +2867,7 @@ pub const Manager = struct {
                             self.allocator,
                             "Reinstalling package: {s}-{s}",
                             .{ name, version },
-                        ) catch {
-                                self.dispatcher.raiseError(.{
-                                    .message = "Out of memory while formatting package operation.",
-                                });
-                                return;
-                            };
+                        );
                     },
             
                     rawLibalpm.ALPM_PACKAGE_DOWNGRADE => blk: {
@@ -2894,12 +2882,7 @@ pub const Manager = struct {
                             self.allocator,
                             "Downgrading package: {s} {s} -> {s}",
                             .{ name, old_version, new_version },
-                        ) catch {
-                                self.dispatcher.raiseError(.{
-                                    .message = "Out of memory while formatting package operation.",
-                                });
-                                return;
-                            };
+                        );
                     },
             
                     rawLibalpm.ALPM_PACKAGE_REMOVE => blk: {
@@ -2911,17 +2894,20 @@ pub const Manager = struct {
                             self.allocator,
                             "Removing package: {s}-{s}",
                             .{ name, version },
-                        ) catch {
-                                self.dispatcher.raiseError(.{
-                                    .message = "Out of memory while formatting package operation.",
-                                });
-                                return;
-                            };
+                        );
                     },
-                    else => return
+            
+                    else => return,
+                }) catch {
+                    self.dispatcher.raiseError(.{
+                        .err = error.OutOfMemory,
+                        .message = "Out of memory while formatting package operation.",
+                    });
+                    return;
                 };
-
+            
                 defer self.allocator.free(message);
+            
                 self.dispatcher.raiseInformational(.{
                     .event_type = event_type,
                     .message = message,

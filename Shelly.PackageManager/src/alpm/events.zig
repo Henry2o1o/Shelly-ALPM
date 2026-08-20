@@ -28,6 +28,7 @@ pub const ProviderOption = struct {
 
 pub const ErrorArgs = struct {
     message: []const u8,
+    err: anyerror = error.AlpmOperationFailed,
 };
 
 pub const InformationalArgs = struct {
