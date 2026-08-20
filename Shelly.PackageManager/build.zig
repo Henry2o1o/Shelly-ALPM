@@ -674,6 +674,7 @@ pub fn build(b: *std.Build) void {
             "installAppImage reads desktop metadata and icons through standard AppImage symlinks",
             "installAppImage restores the previous binary when database commit fails",
             "update: automated update refreshes desktop name and exec path",
+            "update follows a symlinked install directory",
             "update: preserves GitHub provider configuration",
             "update: preserves stable desktop filename when display name changes",
             "update: preserves Exec= field codes",
