@@ -88,24 +88,24 @@ msgid "Review PKGBUILD"
 msgstr "Przejrzyj PKGBUILD"
 
 msgid "Search..."
-msgstr "Szukaj..."
+msgstr "Wyszukaj..."
 
 msgid "Sync metadata for all AppImages. Useful if AppImage self updated."
 msgstr ""
-"Synchronizuj metadane wszystkich pakietów AppImage. Przydatne, gdy AppImage "
+"Synchronizuj metadane wszystkich AppImage. Przydatne, gdy AppImage "
 "zaktualizował się automatycznie."
 
 msgid "Sync All"
 msgstr "Synchronizuj wszystko"
 
 msgid "Upgrade all AppImages to their latest versions"
-msgstr "Zaktualizuj wszystkie pakiety AppImage do najnowszych wersji"
+msgstr "Zaktualizuj wszystkie AppImage do najnowszych wersji"
 
 msgid "Upgrade All"
 msgstr "Zaktualizuj wszystko"
 
 msgid "Install a new AppImage from a file"
-msgstr "Zainstaluj nowy pakiet AppImage z pliku"
+msgstr "Zainstaluj nowy AppImage z pliku"
 
 msgid "Install AppImage"
 msgstr "Zainstaluj AppImage"
@@ -169,7 +169,7 @@ msgid "Preview Pkgbuild"
 msgstr "Podgląd PKGBUILD"
 
 msgid "Search the AUR by name or keyword"
-msgstr "Szukaj w AUR według nazwy lub słowa kluczowego"
+msgstr "Wyszukaj w AUR według nazwy lub słowa kluczowego"
 
 msgid "Installed Only"
 msgstr "Tylko zainstalowane"
@@ -276,7 +276,7 @@ msgid "Version History"
 msgstr "Historia wersji"
 
 msgid "Search packages..."
-msgstr "Szukaj pakietów..."
+msgstr "Wyszukaj pakiety..."
 
 msgid "Browse"
 msgstr "Przeglądaj"
@@ -315,7 +315,7 @@ msgid "e.g., https://flathub.org/repo/flathub.flatpakrepo"
 msgstr "np. https://flathub.org/repo/flathub.flatpakrepo"
 
 msgid "Scope"
-msgstr "Zakres instalacji"
+msgstr "Zakres"
 
 msgid "Show Runtimes"
 msgstr "Pokaż środowiska uruchomieniowe"
@@ -478,7 +478,7 @@ msgid "Enable Tray Icon"
 msgstr "Włącz ikonę w zasobniku systemowym"
 
 msgid "Add Tray To Auto Start"
-msgstr "Uruchamiaj w zasobniku przy starcie systemu"
+msgstr "Uruchom ikonę w zasobniku przy starcie systemu"
 
 msgid "Use weekly schedule"
 msgstr "Użyj harmonogramu tygodniowego"
@@ -564,13 +564,13 @@ msgid "Remove Cache on Uninstall"
 msgstr "Usuń pamięć podręczną podczas odinstalowywania"
 
 msgid "No Confirm"
-msgstr "Bez pytania o potwierdzenie (--noconfirm)"
+msgstr "Bez potwierdzania"
 
 msgid "Enable Shelly Search"
 msgstr "Włącz wyszukiwarkę Shelly"
 
 msgid "Enable Package Downgrade"
-msgstr "Zezwalaj na obniżanie wersji pakietów"
+msgstr "Włącz obniżanie wersji pakietów"
 
 msgid "Enable Webview Visualization (experimental)"
 msgstr "Włącz wizualizację WebView (eksperymentalne)"
@@ -636,7 +636,7 @@ msgid "Force Database Update"
 msgstr "Wymuś odświeżenie baz danych"
 
 msgid "Force a synchronization of the package database."
-msgstr "Wymuś pełną synchronizację bazy danych pakietów (-Syy)."
+msgstr "Wymuś pełną synchronizację bazy danych pakietów."
 
 msgid "Run"
 msgstr "Uruchom"
@@ -665,7 +665,7 @@ msgid "Purify Packages"
 msgstr "Oczyść pakiety"
 
 msgid "Remove corrupted/orphaned packages."
-msgstr "Usuwa uszkodzone lub osierocone pakiety."
+msgstr "Usuń uszkodzone lub osierocone pakiety."
 
 msgid "Clean Package Cache"
 msgstr "Wyczyść pamięć podręczną pakietów"
@@ -718,7 +718,7 @@ msgid "Recommended"
 msgstr "Polecane"
 
 msgid "Curated picks from Shelly"
-msgstr "Wyselekcjonowane propozycje od twórców Shelly"
+msgstr "Wyselekcjonowane propozycje od Shelly"
 
 msgid "Look and Feel"
 msgstr "Wygląd i zachowanie"
@@ -869,19 +869,19 @@ msgid "Only .AppImage files can be installed"
 msgstr "Można instalować wyłącznie pliki .AppImage"
 
 msgid "Installing AppImage"
-msgstr "Instalowanie pakietu AppImage"
+msgstr "Instalowanie AppImage"
 
 msgid "No AppImages need to be upgraded"
 msgstr "Żaden pakiet AppImage nie wymaga aktualizacji"
 
 msgid "Upgrading AppImages"
-msgstr "Aktualizowanie pakietów AppImage"
+msgstr "Aktualizowanie AppImage"
 
 msgid "Syncing AppImages"
-msgstr "Synchronizowanie pakietów AppImage"
+msgstr "Synchronizowanie AppImage"
 
 msgid "Syncing AppImage"
-msgstr "Synchronizowanie pakietu AppImage"
+msgstr "Synchronizowanie AppImage"
 
 msgid "Saving update configuration"
 msgstr "Zapisywanie konfiguracji aktualizacji"
@@ -890,13 +890,13 @@ msgid "Configuration files will be kept."
 msgstr "Pliki konfiguracyjne zostaną zachowane."
 
 msgid "Remove this AppImage?"
-msgstr "Usunąć ten pakiet AppImage?"
+msgstr "Usunąć ten AppImage?"
 
 msgid "Remove AppImage"
 msgstr "Usuń AppImage"
 
 msgid "Removing AppImage"
-msgstr "Usuwanie pakietu AppImage"
+msgstr "Usuwanie AppImage"
 
 msgid "Operation completed successfully"
 msgstr "Operacja zakończona pomyślnie"
@@ -1203,13 +1203,13 @@ msgid "Install Reason"
 msgstr "Powód instalacji"
 
 msgid "Provides"
-msgstr "Dostarcza (Provides)"
+msgstr "Dostarcza"
 
 msgid "Conflicts"
-msgstr "Konfliktuje z (Conflicts)"
+msgstr "Konfliktuje z"
 
 msgid "Required By"
-msgstr "Wymagany przez (Required By)"
+msgstr "Wymagany przez"
 
 msgid "Reinstalling package"
 msgstr "Ponowne instalowanie pakietu"
