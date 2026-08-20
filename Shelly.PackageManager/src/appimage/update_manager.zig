@@ -18,6 +18,7 @@ pub const UpdateManager = struct {
     operation_context: ?*operation_api.OperationContext = null,
     owned_dispatcher: ?*events.Dispatcher = null,
     database_commit: appimage_manager.DatabaseCommitFn = appimage_manager.commitDatabase,
+    cache_command_run: appimage_manager.CacheCommandRunFn = appimage_manager.runCacheCommand,
     /// Optional local path that, when set, replaces the network download in
     /// `update`. Used by integration tests to exercise the post-download logic
     /// deterministically. Production callers leave this null.
@@ -356,6 +357,7 @@ pub const UpdateManager = struct {
             .dispatcher = self.dispatcher,
             .operation_context = self.operation_context,
             .database_commit = self.database_commit,
+            .cache_command_run = self.cache_command_run,
         };
 
         const apps = try manager.getAppImagesFromLocalDb();
@@ -448,6 +450,7 @@ pub const UpdateManager = struct {
             .dispatcher = self.dispatcher,
             .operation_context = self.operation_context,
             .database_commit = self.database_commit,
+            .cache_command_run = self.cache_command_run,
         };
 
         try manager.setExecutable(download_path);
@@ -500,8 +503,6 @@ pub const UpdateManager = struct {
             return false;
         };
         defer integration.deinit();
-        self.emitStatus(.information, "Refreshed desktop entry and icon cache.");
-
         manager.addAppImageToLocalDb(updated_app) catch |err| {
             std.log.warn("Could not persist updated metadata: {s}. Rolling back...", .{@errorName(err)});
             self.emitStatusFmt(.err, "Could not persist the AppImage update: {s}. Rolling back...", .{@errorName(err)});
@@ -510,6 +511,8 @@ pub const UpdateManager = struct {
             return false;
         };
         try integration.finish();
+        manager.refreshDesktopCachesBestEffort(content.icon_source != null);
+        self.emitStatus(.information, "Refreshed desktop integration.");
         std.Io.Dir.cwd().deleteFile(self.io, backup_path) catch |err| {
             self.emitStatusFmt(.warning, "Could not remove the AppImage backup: {s}.", .{@errorName(err)});
         };
@@ -2392,7 +2395,34 @@ fn makeStagedUpdateManager(
     };
 }
 
-test "update: automated update refreshes desktop name and exec path" {
+fn failingUpdateCacheCommand(
+    allocator: std.mem.Allocator,
+    _: std.Io,
+    _: std.process.Environ,
+    _: []const []const u8,
+) !std.process.RunResult {
+    const stdout = try allocator.dupe(u8, "");
+    errdefer allocator.free(stdout);
+    return .{
+        .term = .{ .exited = 1 },
+        .stdout = stdout,
+        .stderr = try allocator.dupe(u8, "update cache rejected broken.desktop\n"),
+    };
+}
+
+const UpdateCacheWarningCapture = struct {
+    saw_cache_warning: bool = false,
+
+    fn handle(data: ?*anyopaque, args: events.StatusArgs) void {
+        if (args.kind != .warning) return;
+        const self: *@This() = @ptrCast(@alignCast(data.?));
+        self.saw_cache_warning = self.saw_cache_warning or
+            (std.mem.indexOf(u8, args.message, "update-desktop-database") != null and
+                std.mem.indexOf(u8, args.message, "broken.desktop") != null);
+    }
+};
+
+test "update: automated update commits despite cache refresh failure" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -2443,6 +2473,12 @@ test "update: automated update refreshes desktop name and exec path" {
 
     var um = makeStagedUpdateManager(std.testing.allocator, install_dir, db_path, staged_path);
     um.environ = test_environ;
+    var dispatcher = events.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    var capture: UpdateCacheWarningCapture = .{};
+    _ = try dispatcher.addStatusHandler(.{ .function = UpdateCacheWarningCapture.handle, .data = &capture });
+    um.dispatcher = &dispatcher;
+    um.cache_command_run = failingUpdateCacheCommand;
     var dto = appimage.AppImageUpdate{
         .name = app_name,
         .version = "2.0.0",
@@ -2472,6 +2508,7 @@ test "update: automated update refreshes desktop name and exec path" {
     const expected_exec = try std.fmt.allocPrint(std.testing.allocator, "Exec=\"{s}\" %U\n", .{current_path});
     defer std.testing.allocator.free(expected_exec);
     try std.testing.expect(std.mem.indexOf(u8, desktop, expected_exec) != null);
+    try std.testing.expect(capture.saw_cache_warning);
 }
 
 test "update follows a symlinked install directory" {
