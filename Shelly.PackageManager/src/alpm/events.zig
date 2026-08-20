@@ -372,7 +372,7 @@ pub const Dispatcher = struct {
 
     pub fn raiseError(self: *Dispatcher, args: ErrorArgs) void {
         _ = self.error_generation.fetchAdd(1, .monotonic);
-        if (self.operation) |operation| operation.reportError(error.AlpmOperationFailed, args.message, "alpm", null, false);
+        if (self.operation) |operation| operation.reportError(args.err, args.message, "alpm", null, false);
         self.dispatch(ErrorArgs, &self.errorEvents, args);
     }
 
