@@ -50,6 +50,11 @@ build = "/var/tmp/shellybuild"
 packages = "/var/cache/shelly/packages"
 sources = "/var/cache/shelly/sources"
 logs = "/var/log/shelly/build"
+
+[sandbox]
+enabled = false
+extra_read = []
+extra_write = []
 ```
 
 Flag and host arrays are joined with spaces only when a child process is launched. `ccache` prepends `/usr/lib/ccache/bin` to `PATH`; `distcc` prepends `/usr/lib/distcc/bin` and exports `DISTCC_HOSTS`. Shelly does not install those tools.
@@ -74,6 +79,18 @@ Configured `check` is the default for in-process builds. `--check` explicitly en
 - `logs` receives mandatory build logs.
 
 The reviewed checkout remains `$startdir`. Local PKGBUILD sources and `verify()` exposure use that reviewed directory and are not copied into the shared cache.
+
+## Step sandbox
+
+`[sandbox]` confines the untrusted PKGBUILD lifecycle steps (`prepare`, `pkgver`, `build`, `check`, `verify`, `package`) with the kernel's Landlock LSM so they cannot touch user folders. It applies to the in-process builder only and is disabled by default.
+
+- `enabled` turns the sandbox on. Every lifecycle step re-executes through a wrapper that applies a Landlock policy before running the step's bash process. Anything not on the allow-list — `$HOME` in particular — is denied. When `enabled` is true and the kernel lacks Landlock support, the build fails before the first step instead of running unprotected.
+- `extra_read` grants read access to additional absolute paths, for builds that legitimately read user state (`~/.cargo`, `~/.cache/ccache`, npm or Gradle caches).
+- `extra_write` grants read-write access to additional absolute paths.
+
+Steps always keep access to the build work directory, `$startdir`, `/usr`, `/etc`, `/opt`, `/proc`, `/sys`, `/tmp`, and the common `/dev` nodes toolchains open. The orchestrator itself is not sandboxed: source downloads, package assembly, log writing, and GPG signing run outside the policy, so the keyring never enters the allow-list.
+
+Known limitations: `/tmp` is the shared host tmpfs rather than a private mount, `/proc` visibility is unchanged from an unsandboxed build, and networking is not restricted. A sandboxed step that fails writes a `[sandbox]` hint line into the build log pointing at `extra_read` / `extra_write`.
 
 ## Logs
 

@@ -137,6 +137,23 @@ tests.
 - [ ] AUR installation works from CLI
 - [ ] AUR updates work from CLI
 
+### Sandboxed AUR Builds (Landlock)
+Requires a kernel with Landlock enabled (check `cat /sys/kernel/security/lsm`).
+- [ ] With `[sandbox] enabled = true` in `shellybuild.conf`, a PKGBUILD whose
+  `build()` runs `ls "$HOME"` fails that listing with "Permission denied" in
+  the step output while the build itself completes
+- [ ] The same PKGBUILD lists `$HOME` normally with the sandbox disabled
+- [ ] A step reading a file outside the allow-list (for example
+  `cat "$HOME/.ssh/id_rsa"`) is denied
+- [ ] Steps still have working `/tmp`, `/proc`, `/usr`, and `/etc` access
+  (`nproc`, redirects to `/dev/null`, and compiler invocations succeed)
+- [ ] Package signing still works with the sandbox enabled
+- [ ] On a kernel without Landlock, an enabled sandbox fails the build before
+  the first step instead of running unprotected
+- [ ] A build that needs extra user paths succeeds after adding them to
+  `[sandbox] extra_read` / `extra_write`
+- [ ] A failing sandboxed step leaves a `[sandbox]` hint line in its build log
+
 ### Keyring Management
 
 - [ ] `shelly keyring init` initializes keyring
