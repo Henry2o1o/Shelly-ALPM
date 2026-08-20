@@ -4956,6 +4956,11 @@ test "onDownloadEvent reports out of memory when message allocation fails" {
 
     try testing.expect(failing.has_induced_failure);
 
+    try testing.expectEqual(
+        error.OutOfMemory,
+        error_cap.err orelse return error.TestFailed,
+    );
+
     try testing.expectEqualStrings(
         "Out of memory while formatting package retrieval message.",
         error_cap.text(),
@@ -5128,6 +5133,7 @@ const ErrorCapture = struct {
     buf: [2048]u8 = undefined,
     len: usize = 0,
     count: usize = 0,
+    err: ?anyerror = null,
 
     fn text(self: *const ErrorCapture) []const u8 {
         return self.buf[0..self.len];
@@ -5137,6 +5143,7 @@ const ErrorCapture = struct {
 fn captureError(data: ?*anyopaque, args: events.ErrorArgs) void {
     const cap: *ErrorCapture = @ptrCast(@alignCast(data));
     cap.count += 1;
+    cap.err = args.err;
     const n = @min(args.message.len, cap.buf.len);
     @memcpy(cap.buf[0..n], args.message[0..n]);
     cap.len = n;
