@@ -277,6 +277,28 @@ test "package_names_content discovers and resolves every split package member" {
     }
 }
 
+test "parser_content: Cachy-style package names survive if prose in comments" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\# This reads the database if it exists
+        \\# Use this only if the GPU is supported
+        \\pkgbase=linux-cachyos
+        \\pkgname=("$pkgbase")
+        \\[ "$build_debug" = yes ] && pkgname+=("$pkgbase-dbg")
+        \\pkgname+=("$pkgbase-headers")
+        \\if [ "$build_zfs" = yes ]; then
+        \\pkgname+=("$pkgbase-zfs")
+        \\fi
+        \\arch=('x86_64')
+    ;
+    var names = try parser.package_names_content(content);
+    defer names.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), names.items.len);
+    try std.testing.expectEqualStrings("linux-cachyos", names.items[0]);
+    try std.testing.expectEqualStrings("linux-cachyos-headers", names.items[1]);
+}
+
 test "package_names_content discovers a resolved scalar package name" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var names = try parser.package_names_content(

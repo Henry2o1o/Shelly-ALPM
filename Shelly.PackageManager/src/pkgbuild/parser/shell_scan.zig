@@ -55,40 +55,264 @@ pub fn strip_comment(line: []const u8) ![]const u8 {
     return line;
 }
 
-fn matches_keyword(s: []const u8, keyword: []const u8) bool {
-    if (!std.mem.startsWith(u8, s, keyword)) return false;
-    if (s.len == keyword.len) return true;
-    const next = s[keyword.len];
-    return !(std.ascii.isAlphanumeric(next) or next == '_');
+fn is_shell_word_delimiter(c: u8) bool {
+    return std.ascii.isWhitespace(c) or std.mem.indexOfScalar(u8, ";&|()<>\"'`", c) != null;
 }
 
-fn count_if_fi_Depth(before: []const u8) usize {
-    var depth: usize = 0;
-    var i: usize = 0;
-    while (i < before.len) {
-        const prev_ok = i == 0 or
-            before[i - 1] == '\n' or
-            before[i - 1] == ';' or
-            std.ascii.isWhitespace(before[i - 1]);
+fn keyword_at(input: []const u8, start: usize, keyword: []const u8) bool {
+    if (!std.mem.startsWith(u8, input[start..], keyword)) return false;
+    const end = start + keyword.len;
+    return end == input.len or is_shell_word_delimiter(input[end]);
+}
 
-        if (prev_ok and matches_keyword(before[i..], "if")) {
+fn is_assignment_word(word: []const u8) bool {
+    const equals = std.mem.indexOfScalar(u8, word, '=') orelse return false;
+    if (equals == 0 or !(std.ascii.isAlphabetic(word[0]) or word[0] == '_')) return false;
+    for (word[1..equals]) |c| if (!is_word(c)) return false;
+    return true;
+}
+
+/// Returns the first byte after a command substitution, or the end of the
+/// input when it is unterminated. The contents are deliberately opaque to the
+/// outer conditional scanner: an `if` executed by $(...) cannot contain the
+/// top-level assignment being classified.
+fn skip_command_substitution(input: []const u8, start: usize) usize {
+    var depth: usize = 1;
+    var in_single = false;
+    var in_double = false;
+    var in_backtick = false;
+    var in_comment = false;
+    var word_start = true;
+    var i = start;
+    while (i < input.len) {
+        const c = input[i];
+        if (in_comment) {
+            i += 1;
+            if (c == '\n') {
+                in_comment = false;
+                word_start = true;
+            }
+            continue;
+        }
+        if (c == '\\' and !in_single and i + 1 < input.len) {
+            i += 2;
+            word_start = false;
+            continue;
+        }
+        if (c == '\'' and !in_double and !in_backtick) {
+            in_single = !in_single;
+            i += 1;
+            word_start = false;
+            continue;
+        }
+        if (c == '"' and !in_single and !in_backtick) {
+            in_double = !in_double;
+            i += 1;
+            word_start = false;
+            continue;
+        }
+        if (c == '`' and !in_single) {
+            in_backtick = !in_backtick;
+            i += 1;
+            word_start = false;
+            continue;
+        }
+        if (in_single or in_double or in_backtick) {
+            i += 1;
+            continue;
+        }
+        if (c == '#' and word_start) {
+            in_comment = true;
+            i += 1;
+            continue;
+        }
+        if (c == '$' and i + 1 < input.len and input[i + 1] == '(') {
             depth += 1;
             i += 2;
+            word_start = false;
             continue;
         }
-        if (prev_ok and matches_keyword(before[i..], "fi")) {
-            depth = if (depth > 0) depth - 1 else 0;
+        if (c == '(') {
+            depth += 1;
+        } else if (c == ')') {
+            depth -= 1;
+            i += 1;
+            if (depth == 0) return i;
+            word_start = false;
+            continue;
+        }
+        word_start = std.ascii.isWhitespace(c) or std.mem.indexOfScalar(u8, ";&|()", c) != null;
+        i += 1;
+    }
+    return input.len;
+}
+
+fn skip_backtick_substitution(input: []const u8, start: usize) usize {
+    var i = start;
+    while (i < input.len) {
+        if (input[i] == '\\' and i + 1 < input.len) {
             i += 2;
             continue;
         }
+        if (input[i] == '`') return i + 1;
         i += 1;
+    }
+    return input.len;
+}
+
+fn skip_heredoc_bodies(
+    self: PkgbuildParser,
+    input: []const u8,
+    start: usize,
+    pending: *std.ArrayList(heredoc_declaration),
+) usize {
+    var i = start;
+    while (pending.items.len > 0) {
+        const declaration = pending.orderedRemove(0);
+        defer self.allocator.free(declaration.delimiter);
+
+        while (i < input.len) {
+            const line_end = std.mem.indexOfScalarPos(u8, input, i, '\n') orelse input.len;
+            var line = input[i..line_end];
+            if (declaration.strip_tabs) line = std.mem.trimStart(u8, line, "\t");
+            line = std.mem.trimEnd(u8, line, "\r");
+            i = if (line_end < input.len) line_end + 1 else line_end;
+            if (std.mem.eql(u8, line, declaration.delimiter)) break;
+        }
+    }
+    return i;
+}
+
+fn conditional_depth(self: PkgbuildParser, input: []const u8) !usize {
+    var pending: std.ArrayList(heredoc_declaration) = .empty;
+    defer {
+        for (pending.items) |declaration| self.allocator.free(declaration.delimiter);
+        pending.deinit(self.allocator);
+    }
+
+    var depth: usize = 0;
+    var command_start = true;
+    var word_start = true;
+    var i: usize = 0;
+    while (i < input.len) {
+        const c = input[i];
+        if (c == '\n') {
+            i += 1;
+            command_start = true;
+            word_start = true;
+            if (pending.items.len > 0)
+                i = skip_heredoc_bodies(self, input, i, &pending);
+            continue;
+        }
+        if (std.ascii.isWhitespace(c)) {
+            i += 1;
+            word_start = true;
+            continue;
+        }
+        if (c == '#' and word_start) {
+            i = std.mem.indexOfScalarPos(u8, input, i, '\n') orelse input.len;
+            continue;
+        }
+        if (c == '\\' and i + 1 < input.len) {
+            if (word_start and command_start) command_start = false;
+            i += 2;
+            word_start = false;
+            continue;
+        }
+        if (c == '\'' or c == '"') {
+            const quote = c;
+            if (word_start and command_start) command_start = false;
+            i += 1;
+            while (i < input.len) {
+                if (quote == '"' and input[i] == '\\' and i + 1 < input.len) {
+                    i += 2;
+                    continue;
+                }
+                if (input[i] == quote) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            word_start = false;
+            continue;
+        }
+        if (c == '`') {
+            if (word_start and command_start) command_start = false;
+            i = skip_backtick_substitution(input, i + 1);
+            word_start = false;
+            continue;
+        }
+        if (c == '$' and i + 1 < input.len and input[i + 1] == '(') {
+            if (word_start and command_start) command_start = false;
+            i = skip_command_substitution(input, i + 2);
+            word_start = false;
+            continue;
+        }
+        if (c == '<' and i + 1 < input.len and input[i + 1] == '<' and
+            (i + 2 >= input.len or input[i + 2] != '<'))
+        {
+            if (try parse_heredoc_declaration(self, input, i + 2)) |declaration| {
+                errdefer self.allocator.free(declaration.delimiter);
+                try pending.append(self.allocator, declaration);
+                i = declaration.end;
+                word_start = false;
+                continue;
+            }
+        }
+        if (std.mem.indexOfScalar(u8, ";&|(){}", c) != null) {
+            i += 1;
+            command_start = true;
+            word_start = true;
+            continue;
+        }
+        if (command_start and keyword_at(input, i, "if")) {
+            depth += 1;
+            i += 2;
+            command_start = true;
+            word_start = false;
+            continue;
+        }
+        if (command_start and keyword_at(input, i, "fi")) {
+            depth = if (depth > 0) depth - 1 else 0;
+            i += 2;
+            command_start = false;
+            word_start = false;
+            continue;
+        }
+        inline for (.{ "then", "else", "elif", "do" }) |keyword| {
+            if (command_start and keyword_at(input, i, keyword)) {
+                i += keyword.len;
+                command_start = true;
+                word_start = false;
+                break;
+            }
+        } else {
+            if (c == '!' and command_start) {
+                i += 1;
+                word_start = false;
+                continue;
+            }
+
+            const start = i;
+            while (i < input.len and !is_shell_word_delimiter(input[i])) {
+                if (input[i] == '$' and i + 1 < input.len and input[i + 1] == '(') break;
+                if (input[i] == '\\' and i + 1 < input.len) i += 1;
+                i += 1;
+            }
+            if (i == start) {
+                i += 1;
+            } else if (!(command_start and is_assignment_word(input[start..i]))) {
+                command_start = false;
+            }
+            word_start = false;
+        }
     }
     return depth;
 }
 
-pub fn is_inside_conditional_block(content: []const u8, position: usize) bool {
-    const before = content[0..position];
-    return count_if_fi_Depth(before) > 0;
+pub fn is_inside_conditional_block(self: PkgbuildParser, content: []const u8, position: usize) !bool {
+    return try conditional_depth(self, content[0..@min(position, content.len)]) > 0;
 }
 
 /// A heredoc opened on a command line. Its body starts on the next
@@ -375,37 +599,73 @@ test "strip_comment: empty line" {
 }
 
 test "is_inside_conditional_block: no if/fi returns false" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "pkgname=foo\npkgver=1.0\n";
-    try std.testing.expect(!is_inside_conditional_block(content, content.len));
+    try std.testing.expect(!try is_inside_conditional_block(parser, content, content.len));
 }
 
 test "is_inside_conditional_block: inside an open if block" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "if true; then\n  pkgname=foo\n";
-    try std.testing.expect(is_inside_conditional_block(content, content.len));
+    try std.testing.expect(try is_inside_conditional_block(parser, content, content.len));
 }
 
 test "is_inside_conditional_block: closed by matching fi" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "if true; then\n  pkgname=foo\nfi\npkgver=1.0\n";
-    try std.testing.expect(!is_inside_conditional_block(content, content.len));
+    try std.testing.expect(!try is_inside_conditional_block(parser, content, content.len));
 }
 
 test "is_inside_conditional_block: nested if only closed one level" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "if true; then\n  if true; then\n    pkgname=foo\n  fi\n";
-    try std.testing.expect(is_inside_conditional_block(content, content.len));
+    try std.testing.expect(try is_inside_conditional_block(parser, content, content.len));
 }
 
 test "is_inside_conditional_block: extra fi does not go negative" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "fi\nfi\npkgname=foo\n";
-    try std.testing.expect(!is_inside_conditional_block(content, content.len));
+    try std.testing.expect(!try is_inside_conditional_block(parser, content, content.len));
 }
 
 test "is_inside_conditional_block: word boundary rejects 'ifs' and 'fix'" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "ifs=foo\nfix=1\n";
-    try std.testing.expect(!is_inside_conditional_block(content, content.len));
+    try std.testing.expect(!try is_inside_conditional_block(parser, content, content.len));
 }
 
 test "is_inside_conditional_block: position before the if is not inside" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content = "pkgname=foo\nif true; then\n  pkgrel=1\nfi\n";
     const if_pos = std.mem.indexOf(u8, content, "if").?;
-    try std.testing.expect(!is_inside_conditional_block(content, if_pos));
+    try std.testing.expect(!try is_inside_conditional_block(parser, content, if_pos));
+}
+
+test "is_inside_conditional_block: ignores comments quotes substitutions and heredocs" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\# use this only if the feature exists
+        \\description='if fi'
+        \\message="if fi"
+        \\generated=$(printf 'if')
+        \\legacy=`printf fi`
+        \\cat <<'EOF'
+        \\if this is heredoc prose
+        \\EOF
+        \\pkgname=(demo)
+    ;
+    const position = std.mem.indexOf(u8, content, "pkgname").?;
+    try std.testing.expect(!try is_inside_conditional_block(parser, content, position));
+}
+
+test "is_inside_conditional_block: only command-position keywords affect depth" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\printf '%s' if
+        \\echo fi
+        \\if true; then
+        \\  pkgname=(demo)
+    ;
+    const position = std.mem.indexOf(u8, content, "pkgname").?;
+    try std.testing.expect(try is_inside_conditional_block(parser, content, position));
 }

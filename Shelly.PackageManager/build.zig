@@ -557,6 +557,8 @@ pub fn build(b: *std.Build) void {
             "bare Git protocol source parser preserves location and supports metadata",
             "detached source pairing handles exact renamed and compressed payload names",
             "isExtractableArchive recognizes archive suffixes case-insensitively",
+            "is_inside_conditional_block:",
+            "parse_array: Cachy-style comments do not hide unconditional package names",
             "source PGP status",
             "source PGP pin validation",
             "source PGP verifier validates pinned-untrusted detached signatures without private keys",
