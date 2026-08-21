@@ -2731,68 +2731,72 @@ pub const Manager = struct {
 
     fn onDownloadEvent(ctx: ?*anyopaque, event: downloader.DownloadEvent) void {
         const self: *Manager = @ptrCast(@alignCast(ctx));
+        self.handleDownloadEvent(event) catch return;   
+    }
+
+    fn handleDownloadEvent(
+        self: *Manager,
+        event: downloader.DownloadEvent,
+    ) TransactionError!void {
         const path = event.destination_path orelse "";
+    
         switch (event.event_type) {
             .Start => {
-                
                 const message = std.fmt.allocPrint(
                     self.allocator,
                     "Retrieving package: {s}",
                     .{std.fs.path.basename(path)},
-                ) catch {
-                    self.dispatcher.raiseError(.{
-                        .err = error.OutOfMemory,
-                        .message = "Out of memory while formatting package retrieval message.",
-                    });
-                    return;
-                };
-
+                ) catch return TransactionError.OutOfMemory;
+    
                 defer self.allocator.free(message);
-        
+    
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_start,
                     .message = message,
                 });
             },
+    
             .Progress => if (event.progress) |p| {
                 // CoreDownloader forwards rich byte progress to the logical
                 // download operation. Retain this fallback only for legacy
                 // callers that do not attach a common operation.
-                if (self.dispatcher.operation == null) self.dispatcher.raiseProgress(.{
-                    .progress_type = @intCast(rawLibalpm.ALPM_PROGRESS_ADD_START),
-                    .pkg_name = std.fs.path.basename(path),
-                    .percent = p.percent,
-                    .howmany = 1,
-                    .current = 1,
-                });
+                if (self.dispatcher.operation == null) {
+                    self.dispatcher.raiseProgress(.{
+                        .progress_type = @intCast(rawLibalpm.ALPM_PROGRESS_ADD_START),
+                        .pkg_name = std.fs.path.basename(path),
+                        .percent = p.percent,
+                        .howmany = 1,
+                        .current = 1,
+                    });
+                }
             },
+    
             .Complete => {
                 const message = std.fmt.allocPrint(
                     self.allocator,
                     "Package retrieval completed: {s}",
                     .{std.fs.path.basename(path)},
-                ) catch {
-                    self.dispatcher.raiseError(.{
-                        .err = error.OutOfMemory,
-                        .message = "Out of memory while formatting package retrieval message.",
-                    });
-                    return; 
-                };
-                
+                ) catch return TransactionError.OutOfMemory;
+    
                 defer self.allocator.free(message);
-                
+    
                 self.dispatcher.raiseInformational(.{
                     .event_type = .pkg_retrieve_done,
                     .message = message,
                 });
             },
+    
             .Error => self.dispatcher.raiseError(.{
-                .message = if (event.download_error) |e| @errorName(e) else "download failed",
+                .message = if (event.download_error) |err|
+                    @errorName(err)
+                else
+                    "download failed",
             }),
+    
             .Skipped => {},
         }
     }
-
+    
     fn progressCallback(
         ctx: ?*anyopaque,
         progress: rawLibalpm.alpm_progress_t,
@@ -2815,9 +2819,17 @@ pub const Manager = struct {
         ctx: ?*anyopaque,
         event: [*c]rawLibalpm.alpm_event_t,
     ) callconv(.c) void {
-        if (event == null) return;
-
         const self: *Manager = @ptrCast(@alignCast(ctx));
+    
+        self.handleEvent(event) catch return;
+    }
+
+    fn handleEvent(
+        self: *Manager,
+        event: [*c]rawLibalpm.alpm_event_t,
+    ) TransactionError!void { 
+
+        if (event == null) return;
         const type_value: u32 = @intCast(event.*.type);
         if (type_value < rawLibalpm.ALPM_EVENT_CHECKDEPS_START or type_value > rawLibalpm.ALPM_EVENT_HOOK_RUN_DONE) return;
 
@@ -2898,13 +2910,7 @@ pub const Manager = struct {
                     },
             
                     else => return,
-                }) catch {
-                    self.dispatcher.raiseError(.{
-                        .err = error.OutOfMemory,
-                        .message = "Out of memory while formatting package operation.",
-                    });
-                    return;
-                };
+                }) catch return TransactionError.OutOfMemory;
             
                 defer self.allocator.free(message);
             
@@ -2953,8 +2959,8 @@ pub const Manager = struct {
             },
             else => self.handleInformationMessage(event_type),
         }
-    }
 
+    }
     fn handleInformationMessage(self: *Manager, event_type: libalpm.EventType) void {
         const message = switch (event_type) {
             .checkdeps_start => "Checking dependencies...",
@@ -4932,7 +4938,7 @@ test "handleErrorMessage formats populated file conflict details" {
     ) != null);
 }
 
-test "onDownloadEvent reports out of memory when message allocation fails" {
+test "handleDownloadEvent returns out of memory when message allocation fails" {
     var failing = testing.FailingAllocator.init(testing.allocator, .{
         .fail_index = 0,
     });
@@ -4942,29 +4948,15 @@ test "onDownloadEvent reports out of memory when message allocation fails" {
     mgr.dispatcher = events.Dispatcher.init(testing.allocator);
     defer mgr.dispatcher.deinit();
 
-    var error_cap = ErrorCapture{};
-
-    _ = try mgr.dispatcher.addErrorHandler(.{
-        .function = captureError,
-        .data = @ptrCast(&error_cap),
-    });
-
-    Manager.onDownloadEvent(@ptrCast(&mgr), .{
-        .event_type = .Start,
-        .destination_path = "/tmp/example.pkg.tar.zst",
-    });
+    try testing.expectError(
+        TransactionError.OutOfMemory,
+        mgr.handleDownloadEvent(.{
+            .event_type = .Start,
+            .destination_path = "/tmp/example.pkg.tar.zst",
+        }),
+    );
 
     try testing.expect(failing.has_induced_failure);
-
-    try testing.expectEqual(
-        error.OutOfMemory,
-        error_cap.err orelse return error.TestFailed,
-    );
-
-    try testing.expectEqualStrings(
-        "Out of memory while formatting package retrieval message.",
-        error_cap.text(),
-    );
 }
 
 test "handleErrorMessage emits descriptions for every scalar libalpm error" {
@@ -5143,7 +5135,6 @@ const ErrorCapture = struct {
 fn captureError(data: ?*anyopaque, args: events.ErrorArgs) void {
     const cap: *ErrorCapture = @ptrCast(@alignCast(data));
     cap.count += 1;
-    cap.err = args.err;
     const n = @min(args.message.len, cap.buf.len);
     @memcpy(cap.buf[0..n], args.message[0..n]);
     cap.len = n;

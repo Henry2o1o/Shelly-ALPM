@@ -294,7 +294,7 @@ pub const CoreDownloader = struct {
         var tls_reset_used = false;
         while (true) : (attempt += 1) {
             if (self.isCancelled()) {
-                self.emitEvent(.{ .event_type = .Error, .download_error = DownloadError.Cancelled, .destination_path = destination_path });
+                try self.emitEvent(.{ .event_type = .Error, .download_error = DownloadError.Cancelled, .destination_path = destination_path });
                 return .{ .failure = DownloadError.Cancelled };
             }
             if (attempt > 0) {
@@ -308,7 +308,7 @@ pub const CoreDownloader = struct {
                 return .{ .succes = .{ .destination_path = destination_path } };
             } else |err| {
                 if (err == DownloadError.NotModified) {
-                    self.emitEvent(.{ .event_type = .Skipped, .destination_path = destination_path });
+                    try self.emitEvent(.{ .event_type = .Skipped, .destination_path = destination_path });
                     return .{ .skipped = .{ .destination_path = destination_path, .reason = .NotModified } };
                 }
                 switch (retryAction(err, attempt, self.configuration.max_retries, tls_reset_used)) {
@@ -323,7 +323,7 @@ pub const CoreDownloader = struct {
                         // Preserve the final phase-specific error so callers
                         // can distinguish setup, header, and body stalls.
                         const final_err = err;
-                        self.emitEvent(.{
+                        try self.emitEvent(.{
                             .event_type = .Error,
                             .download_error = final_err,
                             .destination_path = destination_path,
@@ -409,7 +409,7 @@ pub const CoreDownloader = struct {
 
         const total: ?u64 = response.head.content_length;
 
-        self.emitEvent(.{
+        try self.emitEvent(.{
             .event_type = .Start,
             .destination_path = destination_path,
             .progress = .{
@@ -461,7 +461,7 @@ pub const CoreDownloader = struct {
             downloaded += n;
 
             if (self.shouldEmitProgress(downloaded, total, &last_percent, &last_reported)) {
-                self.emitEvent(.{
+                try self.emitEvent(.{
                     .event_type = .Progress,
                     .destination_path = destination_path,
                     .progress = makeProgress(downloaded, total, self.speedBytesPerSec(downloaded, start_ns)),
@@ -493,7 +493,7 @@ pub const CoreDownloader = struct {
         };
         part_exists = false;
 
-        self.emitEvent(.{
+        try self.emitEvent(.{
             .event_type = .Complete,
             .destination_path = destination_path,
             .progress = makeProgress(downloaded, total orelse downloaded, self.speedBytesPerSec(downloaded, start_ns)),
@@ -535,7 +535,7 @@ pub const CoreDownloader = struct {
         return std.math.cast(u64, bps) orelse std.math.maxInt(u64);
     }
 
-    fn emitEvent(self: *const CoreDownloader, event: DownloadEvent) void {
+    fn emitEvent(self: *const CoreDownloader, event: DownloadEvent) !void {
         if (self.quiet and event.event_type == .Error) return;
         if (self.event_callback) |callback| callback(self.event_context, event);
         const operation = self.active_operation orelse
@@ -1275,7 +1275,7 @@ test "quiet mirror candidates suppress error callbacks" {
         }
     }.callback, &callback_called);
 
-    downloader.emitEvent(.{
+    try downloader.emitEvent(.{
         .event_type = .Error,
         .download_error = DownloadError.NetworkError,
     });
@@ -1387,8 +1387,8 @@ test "quiet downloader forwards rich progress to its logical parent" {
     defer downloader.deinit();
     downloader.quiet = true;
     downloader.setParentOperation(&parent);
-    downloader.emitEvent(.{ .event_type = .Start, .destination_path = "demo.pkg.tar.zst" });
-    downloader.emitEvent(.{
+    try downloader.emitEvent(.{ .event_type = .Start, .destination_path = "demo.pkg.tar.zst" });
+    try downloader.emitEvent(.{
         .event_type = .Progress,
         .destination_path = "demo.pkg.tar.zst",
         .progress = .{
@@ -1398,8 +1398,8 @@ test "quiet downloader forwards rich progress to its logical parent" {
             .speed_bytes_per_sec = 256,
         },
     });
-    downloader.emitEvent(.{ .event_type = .Complete, .destination_path = "demo.pkg.tar.zst" });
-    downloader.emitEvent(.{ .event_type = .Error, .download_error = DownloadError.NetworkError });
+    try downloader.emitEvent(.{ .event_type = .Complete, .destination_path = "demo.pkg.tar.zst" });
+    try downloader.emitEvent(.{ .event_type = .Error, .download_error = DownloadError.NetworkError });
 
     const progress = capture.progress orelse return error.MissingProgress;
     try std.testing.expectEqual(operations.Backend.download, progress.envelope.backend);
