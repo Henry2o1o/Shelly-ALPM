@@ -104,6 +104,7 @@ pub const AppImagePage = extern struct {
         apps: []AppImage = &.{},
         updates: []AppImageUpdate = &.{},
         arena: ?*std.heap.ArenaAllocator = null,
+        updates_arena: ?*std.heap.ArenaAllocator = null,
         selected_index: ?usize = null,
         generation: u64 = 0,
         loaded: bool = false,
@@ -111,9 +112,15 @@ pub const AppImagePage = extern struct {
         var offset: c_int = 0;
     };
 
-    const LoadResult = struct {
+    const AppsResult = struct {
         page: *Self,
         apps: []AppImage,
+        arena: *std.heap.ArenaAllocator,
+        generation: u64,
+    };
+
+    const UpdatesResult = struct {
+        page: *Self,
         updates: []AppImageUpdate,
         arena: *std.heap.ArenaAllocator,
         generation: u64,
@@ -204,6 +211,11 @@ pub const AppImagePage = extern struct {
             std.heap.c_allocator.destroy(a);
             p.arena = null;
         }
+        if (p.updates_arena) |a| {
+            a.deinit();
+            std.heap.c_allocator.destroy(a);
+            p.updates_arena = null;
+        }
         p.apps = &.{};
         p.updates = &.{};
         p.selected_index = null;
@@ -217,31 +229,40 @@ pub const AppImagePage = extern struct {
     }
 
     fn load_worker(page: *Self, generation: u64) void {
-        const arena_ptr = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
-        arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-        const alloc = arena_ptr.allocator();
-
-        var threaded: std.Io.Threaded = .init(alloc, .{});
+        var threaded: std.Io.Threaded = .init(std.heap.c_allocator, .{});
         defer threaded.deinit();
 
-        const cli = ShellyCli{ .allocator = alloc, .io = threaded.io() };
-        const apps = cli.get_appimages() catch |err| {
-            std.debug.print("get_appimages failed: {t}\n", .{err});
-            arena_ptr.deinit();
-            std.heap.c_allocator.destroy(arena_ptr);
+        const apps_arena = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
+        apps_arena.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        {
+            const cli = ShellyCli{ .allocator = apps_arena.allocator(), .io = threaded.io() };
+            const apps = cli.get_appimages() catch |err| {
+                std.debug.print("get_appimages failed: {t}\n", .{err});
+                apps_arena.deinit();
+                std.heap.c_allocator.destroy(apps_arena);
+                return;
+            };
+            post_apps_result(page, apps.value, apps_arena, generation);
+        }
+
+        const updates_arena = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch return;
+        updates_arena.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+        const cli = ShellyCli{ .allocator = updates_arena.allocator(), .io = threaded.io() };
+        const updates = cli.get_appimage_updates() catch {
+            updates_arena.deinit();
+            std.heap.c_allocator.destroy(updates_arena);
             return;
         };
-
-        var updates: []AppImageUpdate = &.{};
-        if (cli.get_appimage_updates()) |u| {
-            updates = u.value;
-        } else |_| {}
-
-        post_result(page, apps.value, updates, arena_ptr, generation);
+        if (updates.value.len == 0) {
+            updates_arena.deinit();
+            std.heap.c_allocator.destroy(updates_arena);
+            return;
+        }
+        post_updates_result(page, updates.value, updates_arena, generation);
     }
 
-    fn post_result(page: *Self, apps: []AppImage, updates: []AppImageUpdate, arena: *std.heap.ArenaAllocator, generation: u64) void {
-        const result = std.heap.c_allocator.create(LoadResult) catch {
+    fn post_apps_result(page: *Self, apps: []AppImage, arena: *std.heap.ArenaAllocator, generation: u64) void {
+        const result = std.heap.c_allocator.create(AppsResult) catch {
             arena.deinit();
             std.heap.c_allocator.destroy(arena);
             return;
@@ -249,15 +270,29 @@ pub const AppImagePage = extern struct {
         result.* = .{
             .page = page,
             .apps = apps,
+            .arena = arena,
+            .generation = generation,
+        };
+        _ = glib.idleAdd(&onLoadAppsComplete, result);
+    }
+
+    fn post_updates_result(page: *Self, updates: []AppImageUpdate, arena: *std.heap.ArenaAllocator, generation: u64) void {
+        const result = std.heap.c_allocator.create(UpdatesResult) catch {
+            arena.deinit();
+            std.heap.c_allocator.destroy(arena);
+            return;
+        };
+        result.* = .{
+            .page = page,
             .updates = updates,
             .arena = arena,
             .generation = generation,
         };
-        _ = glib.idleAdd(&onLoadComplete, result);
+        _ = glib.idleAdd(&onLoadUpdatesComplete, result);
     }
 
-    fn onLoadComplete(data: ?*anyopaque) callconv(.c) c_int {
-        const result: *LoadResult = @ptrCast(@alignCast(data.?));
+    fn onLoadAppsComplete(data: ?*anyopaque) callconv(.c) c_int {
+        const result: *AppsResult = @ptrCast(@alignCast(data.?));
         const self = result.page;
         const p = self.priv();
         if (result.generation != p.generation) {
@@ -271,24 +306,58 @@ pub const AppImagePage = extern struct {
             old.deinit();
             std.heap.c_allocator.destroy(old);
         }
+
+        if (p.updates_arena) |old| {
+            old.deinit();
+            std.heap.c_allocator.destroy(old);
+            p.updates_arena = null;
+        }
+
+        p.updates = &.{};
         p.arena = result.arena;
         p.apps = result.apps;
-        p.updates = result.updates;
         std.heap.c_allocator.destroy(result);
 
         gtk.ListBox.removeAll(p.app_list);
         for (p.apps, 0..) |*app, i| {
             const row = make_app_row(app, i);
             gtk.ListBox.append(p.app_list, row);
-            if (findUpdateFor(p.updates, app)) |update| {
-                var buf: [128]u8 = undefined;
-                const text = std.fmt.bufPrintSentinel(&buf, "{s}: {s}", .{ translations._("Update Available"), update.Version }, 0) catch continue;
-                set_row_update_badge(row, text);
-            }
         }
 
         gtk.Widget.setVisible(p.drop_zone, @intFromBool(p.apps.len == 0));
         apply_search_filter(self);
+        return 0;
+    }
+
+    fn onLoadUpdatesComplete(data: ?*anyopaque) callconv(.c) c_int {
+        const result: *UpdatesResult = @ptrCast(@alignCast(data.?));
+        const self = result.page;
+        const p = self.priv();
+        if (result.generation != p.generation) {
+            result.arena.deinit();
+            std.heap.c_allocator.destroy(result.arena);
+            std.heap.c_allocator.destroy(result);
+            return 0;
+        }
+
+        if (p.updates_arena) |old| {
+            old.deinit();
+            std.heap.c_allocator.destroy(old);
+        }
+        p.updates_arena = result.arena;
+        p.updates = result.updates;
+        std.heap.c_allocator.destroy(result);
+
+        var i: usize = 0;
+        var maybe_child = gtk.Widget.getFirstChild(p.app_list.as(gtk.Widget));
+        while (maybe_child) |child| : (maybe_child = gtk.Widget.getNextSibling(child)) {
+            if (i >= p.apps.len) break;
+            defer i += 1;
+            const update = findUpdateFor(p.updates, &p.apps[i]) orelse continue;
+            var buf: [128]u8 = undefined;
+            const text = std.fmt.bufPrintSentinel(&buf, "{s}: {s}", .{ translations._("Update Available"), update.Version }, 0) catch continue;
+            set_row_update_badge(child, text);
+        }
         return 0;
     }
 
