@@ -26,6 +26,15 @@ tests.
 
 - [ ] Installing a package shows progress correctly
 - [ ] Installation completes successfully
+
+### Dynamic AUR Sources
+
+- [ ] `shelly install aur gpu-screen-recorder-ui-git` resolves its `$(sed ...)` source URL and reaches normal Git source acquisition
+- [ ] The PKGBUILD review warns before a `source=()` command substitution executes
+- [ ] Declining the PKGBUILD review executes no source command
+- [ ] A command substitution that resolves to a local source shows a supplemental related-file review before the file is copied
+- [ ] Declining the supplemental review prevents all package lifecycle functions from running
+- [ ] Command substitution in non-source arrays remains a clear unsupported-PKGBUILD failure
 - [ ] Success/failure notifications display appropriately
 - [ ] Dependencies are shown and handled correctly
 - [ ] Disk space warnings appear when needed

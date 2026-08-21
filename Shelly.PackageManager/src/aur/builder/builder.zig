@@ -248,8 +248,64 @@ pub const PackageBuilder = struct {
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
         try security.secureBuilderProcess();
         try self.requireSandboxAvailability();
-        if (self.package_builds[0].hasDynamicAssignments())
+        var resolved_review: ?PreparedPkgbuildReview = null;
+        defer if (resolved_review) |*review| review.deinit();
+        const original_review_digest = self.options.reviewed_pkgbuild_digest;
+        const original_install_scripts = self.options.install_scripts;
+        const original_reviewed_files = self.options.reviewed_files;
+        defer {
+            self.options.reviewed_pkgbuild_digest = original_review_digest;
+            self.options.install_scripts = original_install_scripts;
+            self.options.reviewed_files = original_reviewed_files;
+        }
+        if (self.package_builds[0].hasDynamicAssignments()) {
             try self.resolveDynamicBuilds(operation);
+            const pkgbuild_path = self.options.pkgbuild_path orelse
+                return error.UnreviewedBuilderRequest;
+            const content = try std.Io.Dir.cwd().readFileAlloc(
+                self.io,
+                pkgbuild_path,
+                self.allocator,
+                .limited(32 * 1024 * 1024),
+            );
+            defer self.allocator.free(content);
+            resolved_review = try preparePkgbuildReview(
+                self.allocator,
+                self.io,
+                self.options.start_directory,
+                content,
+                self.package_builds,
+            );
+            const review = &resolved_review.?;
+            const prior_digest = original_review_digest orelse
+                return error.UnreviewedBuilderRequest;
+            if (!std.mem.eql(u8, &prior_digest, &review.digest)) {
+                var answer = try operation.ask(.{
+                    .kind = .review_changes,
+                    .prompt = "Review files discovered by dynamic PKGBUILD source evaluation?",
+                    .review = .{
+                        .subject = self.requested_names[0],
+                        .old_content = content,
+                        .new_content = content,
+                        .findings = review.findings,
+                        .related_files = review.related_files,
+                    },
+                    .default_response = .declined,
+                });
+                defer answer.deinit(self.allocator);
+                if (answer.response != .accepted)
+                    return error.PkgbuildReviewDeclined;
+            }
+            try review.verifyCurrent(
+                self.allocator,
+                self.io,
+                pkgbuild_path,
+                self.options.start_directory,
+            );
+            self.options.reviewed_pkgbuild_digest = review.digest;
+            self.options.install_scripts = review.install_scripts;
+            self.options.reviewed_files = review.reviewed_files;
+        }
         try self.validatePackageFunctions();
         if (!self.options.sources_prepared) try sources.prepareSources(self, operation);
         const shared_execution = self.package_builds[0].execution orelse
@@ -333,7 +389,7 @@ pub const PackageBuilder = struct {
     /// seeded so downstream stages — source acquisition and lifecycle steps —
     /// see fully resolved metadata. Replaces `package_builds` contents in place.
     fn resolveDynamicBuilds(self: *PackageBuilder, operation: *op_context.Operation) !void {
-        var overrides = try steps.evaluateDynamicAssignments(self, operation);
+        var overrides: std.StringHashMap([]const u8) = .init(self.allocator);
         defer {
             var it = overrides.iterator();
             while (it.next()) |entry| {
@@ -343,6 +399,31 @@ pub const PackageBuilder = struct {
             overrides.deinit();
         }
 
+        if (self.package_builds[0].dynamic_assignments.len > 0) {
+            const evaluated = try steps.evaluateDynamicAssignments(self, operation);
+            overrides.deinit();
+            overrides = evaluated;
+            try self.reparseDynamicBuilds(&overrides, null);
+        }
+
+        var array_overrides: steps.DynamicArrayOverrides = .init(self.allocator);
+        defer steps.deinitDynamicArrayOverrides(self.allocator, &array_overrides);
+        if (self.package_builds[0].dynamic_source_assignments.len > 0) {
+            const evaluated = try steps.evaluateDynamicSourceArrays(self, operation);
+            array_overrides.deinit();
+            array_overrides = evaluated;
+            try self.reparseDynamicBuilds(
+                if (overrides.count() > 0) &overrides else null,
+                &array_overrides,
+            );
+        }
+    }
+
+    fn reparseDynamicBuilds(
+        self: *PackageBuilder,
+        overrides: ?*const std.StringHashMap([]const u8),
+        array_overrides: ?*const steps.DynamicArrayOverrides,
+    ) !void {
         const pkgbuild_path = self.options.pkgbuild_path orelse
             return error.UnreviewedBuilderRequest;
         const content = try std.Io.Dir.cwd().readFileAlloc(
@@ -359,7 +440,8 @@ pub const PackageBuilder = struct {
                 .io = self.io,
                 .selected_package_name = requested_name,
                 .package_carch = self.shellybuild_config.build.carch,
-                .dynamic_overrides = &overrides,
+                .dynamic_overrides = overrides,
+                .dynamic_array_overrides = array_overrides,
             }).parser_content(content, self.options.start_directory);
             package_build.deinit(self.allocator);
             package_build.* = reparsed;

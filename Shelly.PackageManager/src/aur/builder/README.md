@@ -17,10 +17,12 @@ PackageBuilder.runWithOperation (builder.zig)
   2. validate build directories              (steps.zig)
   3. open the build log                      (steps.zig)
   4. buildPackage:
-     a. validate package-function shape      (builder.zig)
-     b. acquire + verify + extract sources   (sources.zig)
-     c. run prepare/pkgver/build/check steps (steps.zig)
-     d. per package: run package() step,
+     a. sandbox-evaluate deferred metadata   (steps.zig)
+        and re-review discovered local files (pkgbuild_review.zig)
+     b. validate package-function shape      (builder.zig)
+     c. acquire + verify + extract sources   (sources.zig)
+     d. run prepare/pkgver/build/check steps (steps.zig)
+     e. per package: run package() step,
         assemble + sign the archive          (package_file.zig)
 ```
 
@@ -40,7 +42,7 @@ the active operation/log.
 | `security.zig` | **Privilege guards.** Non-root effective-UID policy, `prctl(NO_NEW_PRIVS)` process lockdown (`setNoNewPrivs` is shared with the sandbox wrapper), randomized unique work directories, and `narrowBuilderError` (anyerror → `BuilderErrors`). |
 | `sandbox.zig` | **Landlock step confinement.** Raw Landlock syscalls (ruleset create/add-rule/restrict-self), the ABI probe, the base and per-build allow-list, the `__sandbox-exec` wrapper protocol (`parseWrapperArguments`/`buildWrappedCommand`), and their unit tests. Steps re-execute through the CLI wrapper so only the untrusted bash children are confined. |
 | `sources.zig` | **Source pipeline.** Copies local files, downloads HTTP sources into the cache, mirror-clones git sources, verifies checksums and PGP signatures (including compressed `.sig` payloads), runs the optional `verify()` step, and safely extracts archives into the staging tree (path traversal, symlink, and size limits). |
-| `steps.zig` | **Step execution.** Build-directory validation, the build log (`BuildLog`), and `runStep` — the bash runner that executes each PKGBUILD function with the prelude environment, messaging/virtual-metadata shell preludes, stream forwarding, `pkgver()` capture, and package-metadata capture. |
+| `steps.zig` | **Step execution.** Build-directory validation, build logging, lifecycle Bash execution, scalar and source-array command-substitution capture, messaging/virtual-metadata preludes, stream forwarding, `pkgver()` capture, and package-metadata capture. Dynamic array output is NUL-delimited and bounded before it becomes parser overrides. |
 | `package_file.zig` | **Package assembly.** `tidy`/strip handling, `.PKGINFO` and `.BUILDINFO` writers, install-script/changelog placement from reviewed contents, `.MTREE` generation, archive creation via the Shelly archive writer, detached OpenPGP signing, and rollback cleanup. |
 | `pkgbuild_review.zig` | **Review snapshot.** `preparePkgbuildReview` hashes the PKGBUILD plus its local/install/auxiliary files into a `Digest` and keeps byte-exact copies (`ReviewedFile`); the builder re-checks this digest immediately before executing anything, so a PKGBUILD changed after approval is rejected. |
 | `pkgbuild_validation.zig` | **Validation facade.** Runs the pkgbuild validator suite (shared validator, homograph, post-install/install-script scanners, local-source checks) over parsed PKGBUILDs and reports findings. |
@@ -73,9 +75,11 @@ accessible across files, so no getters are needed.
   rejects privileged operations with exit code 97 →
   `PrivilegedPackageOperationUnsupported`).
 - **Integrity model:** nothing executes until the reviewed digest matches
-  (`builder.zig` `runWithOperation`); nothing is captured from a package step
-  that the metadata module does not explicitly whitelist
-  (`metadata.zig` `applyPackageMetadataEntry`).
+  (`builder.zig` `runWithOperation`). Deferred source commands execute only
+  after that check and inside the configured build sandbox. A resolved local
+  source changes the review digest and requires a supplemental structured
+  review before source acquisition; the final snapshot is checked again to
+  close review/build races.
 - Every module carries `//!` header docs, and leaf modules carry their unit
   tests in-file.
 

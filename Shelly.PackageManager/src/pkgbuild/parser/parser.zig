@@ -16,6 +16,7 @@ pub const parsed_dep = types.parsed_dep;
 pub const split_entry = types.split_entry;
 pub const kvp = types.kvp;
 pub const dynamic_assignment = types.dynamic_assignment;
+pub const dynamic_array_assignment = types.dynamic_array_assignment;
 pub const execution_step = types.execution_step;
 pub const execution_plan = types.execution_plan;
 
@@ -45,6 +46,10 @@ pub const PkgbuildParser = struct {
     /// assignment, letting a re-parse resolve everything that depends on them.
     /// Null on the initial (analysis) parse.
     dynamic_overrides: ?*const std.StringHashMap([]const u8) = null,
+    /// Sandboxed source-array values produced after the initial review.
+    /// Each map value owns an ordered list of already-expanded Bash array
+    /// elements. Null during the initial static analysis parse.
+    dynamic_array_overrides: ?*const std.StringHashMap([]const []const u8) = null,
 
     /// Public entry point kept on the parser type for existing callers;
     /// implemented in `function_body.zig`.
@@ -104,7 +109,11 @@ pub const PkgbuildParser = struct {
             for (dynamic_assignments) |assignment| assignment.deinit(self.allocator);
             if (dynamic_assignments.len > 0) self.allocator.free(dynamic_assignments);
         }
-        try execution.validate_execution_assignments(self, content);
+        const dynamic_source_assignments = try execution.collect_dynamic_source_assignments(self, content);
+        errdefer {
+            for (dynamic_source_assignments) |assignment| assignment.deinit(self.allocator);
+            if (dynamic_source_assignments.len > 0) self.allocator.free(dynamic_source_assignments);
+        }
         try validation.validate_selected_package(self, content, &vars);
         try validation.validate_architecture_directives(self, content, &vars);
         const package_functions = try validation.inspect_package_functions(self, content, &vars);
@@ -122,7 +131,10 @@ pub const PkgbuildParser = struct {
         else
             null;
 
-        const source = try fields.resolve_arch_array_field(self, content, &vars, "source");
+        const source = if (dynamic_source_assignments.len > 0)
+            try fields.resolve_dynamic_source_array_field(self, content, &vars)
+        else
+            try fields.resolve_arch_array_field(self, content, &vars, "source");
         const local_source_files = try sources.extract_local_source_files(self, source);
         const local_source_contents = try sources.resolve_local_source_contents(self, local_source_files, base_dir);
 
@@ -182,6 +194,7 @@ pub const PkgbuildParser = struct {
             .parsed_check_depends = try dependencies.parse_dependencies(self, check_depends),
             .execution = try execution.resolve_execution_plan(self, content, &vars, base_dir),
             .dynamic_assignments = dynamic_assignments,
+            .dynamic_source_assignments = dynamic_source_assignments,
         };
     }
 
@@ -1407,6 +1420,84 @@ test "parser_content: array command substitution is still rejected" {
             \\package() { :; }
         , null),
     );
+}
+
+test "parser_content: issue 1750 source command substitution is deferred and overridden" {
+    const content =
+        \\pkgname=gpu-screen-recorder-ui-git
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\_pkgname="gpu-screen-recorder-ui"
+        \\url="https://git.dec05eba.com/gpu-screen-recorder-ui"
+        \\_pkgsrc="$_pkgname"
+        \\source=("$_pkgsrc"::"git+$(sed 's&//git\.&//repo.&' <<< "$url")")
+        \\sha256sums=('SKIP')
+        \\package() { :; }
+    ;
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "gpu-screen-recorder-ui-git",
+    };
+    var initial = try parser.parser_content(content, null);
+    defer initial.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), initial.dynamic_source_assignments.len);
+    try std.testing.expect(initial.dynamic_source_assignments[0].has_command_substitution);
+    try std.testing.expectEqual(@as(usize, 1), initial.source.?.len);
+    try std.testing.expectEqualStrings(
+        "gpu-screen-recorder-ui::git+$(sed 's&//git\\.&//repo.&' <<< https://git.dec05eba.com/gpu-screen-recorder-ui)",
+        initial.source.?[0],
+    );
+    try std.testing.expectEqual(@as(usize, 0), initial.local_source_files.?.len);
+
+    var array_overrides: std.StringHashMap([]const []const u8) = .init(std.testing.allocator);
+    defer array_overrides.deinit();
+    try array_overrides.put("source", &.{
+        "gpu-screen-recorder-ui::git+https://repo.dec05eba.com/gpu-screen-recorder-ui",
+    });
+    var resolved = try (PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "gpu-screen-recorder-ui-git",
+        .dynamic_array_overrides = &array_overrides,
+    }).parser_content(content, null);
+    defer resolved.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), resolved.dynamic_source_assignments.len);
+    try std.testing.expectEqualStrings(
+        "gpu-screen-recorder-ui::git+https://repo.dec05eba.com/gpu-screen-recorder-ui",
+        resolved.source.?[0],
+    );
+    try std.testing.expectEqual(@as(usize, 0), resolved.local_source_files.?.len);
+}
+
+test "parser_content: dynamic source keeps assignment and architecture append ordering" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    var info = try parse_test_pkgbuild(parser,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\source=('base.patch')
+        \\source+=(
+        \\  "remote::https://$(printf example.test)/source"
+        \\)
+        \\source_x86_64=("arch::https://$(printf arch.example.test)/source")
+        \\sha256sums=('SKIP' 'SKIP')
+        \\sha256sums_x86_64=('SKIP')
+        \\package() { :; }
+    , null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), info.dynamic_source_assignments.len);
+    try std.testing.expectEqualStrings("source", info.dynamic_source_assignments[0].name);
+    try std.testing.expect(!info.dynamic_source_assignments[0].has_command_substitution);
+    try std.testing.expect(info.dynamic_source_assignments[1].has_command_substitution);
+    try std.testing.expectEqualStrings("source_x86_64", info.dynamic_source_assignments[2].name);
+    try std.testing.expect(info.dynamic_source_assignments[2].has_command_substitution);
+    try std.testing.expectEqual(@as(usize, 1), info.local_source_files.?.len);
+    try std.testing.expectEqualStrings("base.patch", info.local_source_files.?[0]);
 }
 
 test "parser_content: source URL resolves CARCH statically" {

@@ -388,6 +388,196 @@ pub fn evaluateDynamicAssignments(
     return result;
 }
 
+pub const DynamicArrayOverrides = std.StringHashMap([]const []const u8);
+
+pub fn deinitDynamicArrayOverrides(
+    allocator: std.mem.Allocator,
+    overrides: *DynamicArrayOverrides,
+) void {
+    var iterator = overrides.iterator();
+    while (iterator.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        for (entry.value_ptr.*) |item| allocator.free(item);
+        allocator.free(entry.value_ptr.*);
+    }
+    overrides.deinit();
+}
+
+fn containsDynamicArrayName(names: []const []const u8, name: []const u8) bool {
+    for (names) |existing| if (std.mem.eql(u8, existing, name)) return true;
+    return false;
+}
+
+fn parseDynamicArrayOutput(
+    allocator: std.mem.Allocator,
+    names: []const []const u8,
+    output: []const u8,
+) !DynamicArrayOverrides {
+    var result: DynamicArrayOverrides = .init(allocator);
+    errdefer deinitDynamicArrayOverrides(allocator, &result);
+    var fields = std.mem.splitScalar(u8, output, 0);
+    for (names) |name| {
+        const count_text = fields.next() orelse return error.InvalidDynamicArrayOutput;
+        const count = std.fmt.parseInt(usize, count_text, 10) catch
+            return error.InvalidDynamicArrayOutput;
+        if (count > 4096) return error.InvalidDynamicArrayOutput;
+        const items = try allocator.alloc([]const u8, count);
+        var item_count: usize = 0;
+        errdefer {
+            for (items[0..item_count]) |item| allocator.free(item);
+            allocator.free(items);
+        }
+        while (item_count < count) : (item_count += 1) {
+            const value = fields.next() orelse return error.InvalidDynamicArrayOutput;
+            items[item_count] = try allocator.dupe(u8, value);
+        }
+        const key = try allocator.dupe(u8, name);
+        result.put(key, items) catch |err| {
+            allocator.free(key);
+            return err;
+        };
+    }
+    const trailing = fields.next() orelse return error.InvalidDynamicArrayOutput;
+    if (trailing.len != 0 or fields.next() != null)
+        return error.InvalidDynamicArrayOutput;
+    return result;
+}
+
+/// Executes the reviewed source/source_<CARCH> assignments in the same
+/// sandbox used for lifecycle steps and captures their final indexed-array
+/// values without interpreting shell output in-process.
+pub fn evaluateDynamicSourceArrays(
+    self: *PackageBuilder,
+    operation: *op_context.Operation,
+) !DynamicArrayOverrides {
+    const package_build = &self.package_builds[0];
+    const dynamic = package_build.dynamic_source_assignments;
+    const execution = package_build.execution orelse return error.MissingExecutionSteps;
+
+    var result: DynamicArrayOverrides = .init(self.allocator);
+    errdefer deinitDynamicArrayOverrides(self.allocator, &result);
+    if (dynamic.len == 0) return result;
+
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(self.allocator);
+    for (dynamic) |assignment| {
+        if (!containsDynamicArrayName(names.items, assignment.name))
+            try names.append(self.allocator, assignment.name);
+    }
+
+    var script: std.Io.Writer.Allocating = .init(self.allocator);
+    errdefer script.deinit();
+    const writer = &script.writer;
+    try writer.writeAll(execution.shared_prelude);
+    try writer.writeAll("\n");
+    var initialized: std.ArrayList([]const u8) = .empty;
+    defer initialized.deinit(self.allocator);
+    for (dynamic) |assignment| {
+        if (!containsDynamicArrayName(initialized.items, assignment.name)) {
+            try writer.print("unset -v {s}\n", .{assignment.name});
+            try initialized.append(self.allocator, assignment.name);
+        }
+        try writer.writeAll(assignment.statement);
+        try writer.writeAll("\n");
+    }
+    try writer.writeAll(": > \"$1\"\n");
+    for (names.items) |name| {
+        try writer.print(
+            "printf '%s\\0' \"${{#{s}[@]}}\" \"${{{s}[@]}}\" >> \"$1\"\n",
+            .{ name, name },
+        );
+    }
+    const command_body = try script.toOwnedSlice();
+    defer self.allocator.free(command_body);
+
+    const result_path = try std.fs.path.join(
+        self.allocator,
+        &.{ self.options.work_directory, ".shelly-dynamic-source-arrays" },
+    );
+    defer self.allocator.free(result_path);
+    std.Io.Dir.cwd().deleteFile(self.io, result_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    defer std.Io.Dir.cwd().deleteFile(self.io, result_path) catch {};
+
+    try logPhase(self, "dynamic-source-arrays");
+    try operation.checkCancelled();
+    self.failure_location = .{
+        .package_name = package_build.pkg_name,
+        .step_name = "dynamic-source-arrays",
+    };
+
+    var stream_context: StepStreamContext = .{
+        .operation = operation,
+        .package_name = self.requested_names[0],
+        .log = self.active_log,
+    };
+    const effective_options = try metadata.effectivePackageOptions(
+        self.allocator,
+        self.shellybuild_config.package.options,
+        package_build.options orelse &.{},
+    );
+    defer metadata.freeOwnedStrings(self.allocator, effective_options);
+    const argv: []const []const u8 = &.{ "/bin/bash", "-e", "-c", command_body, "shelly-dynamic-source", result_path };
+    const sandbox_enabled = self.shellybuild_config.sandbox.enabled;
+    const wrapped = if (sandbox_enabled) try wrapStepCommand(self, argv) else null;
+    defer if (wrapped) |command| command.deinit(self.allocator);
+    const exit_code = try process_runner.runStreamingWithBuildEnvironmentOperation(
+        self.allocator,
+        self.io,
+        self.environ,
+        buildEnvironment(self, effective_options),
+        if (wrapped) |command| command.argv else argv,
+        self.options.work_directory,
+        null,
+        .{ .function = forwardStepLine, .data = &stream_context },
+        operation,
+    );
+    if (self.active_log) |log| try log.ensureHealthy();
+    if (exit_code != 0) {
+        if (sandbox_enabled) writeSandboxFailureHint(self);
+        return error.StepFailed;
+    }
+
+    const output = try std.Io.Dir.cwd().readFileAlloc(
+        self.io,
+        result_path,
+        self.allocator,
+        .limited(1024 * 1024),
+    );
+    defer self.allocator.free(output);
+    const parsed = try parseDynamicArrayOutput(self.allocator, names.items, output);
+    deinitDynamicArrayOverrides(self.allocator, &result);
+    return parsed;
+}
+
+test "dynamic source array output is bounded and structurally validated" {
+    var valid = try parseDynamicArrayOutput(
+        std.testing.allocator,
+        &.{ "source", "source_x86_64" },
+        "2\x00one\x00\x00" ++ "1\x00arch\x00",
+    );
+    defer deinitDynamicArrayOverrides(std.testing.allocator, &valid);
+    try std.testing.expectEqual(@as(usize, 2), valid.get("source").?.len);
+    try std.testing.expectEqualStrings("one", valid.get("source").?[0]);
+    try std.testing.expectEqualStrings("", valid.get("source").?[1]);
+    try std.testing.expectEqualStrings("arch", valid.get("source_x86_64").?[0]);
+
+    try std.testing.expectError(
+        error.InvalidDynamicArrayOutput,
+        parseDynamicArrayOutput(std.testing.allocator, &.{"source"}, "4097\x00"),
+    );
+    try std.testing.expectError(
+        error.InvalidDynamicArrayOutput,
+        parseDynamicArrayOutput(std.testing.allocator, &.{"source"}, "2\x00one\x00"),
+    );
+    try std.testing.expectError(
+        error.InvalidDynamicArrayOutput,
+        parseDynamicArrayOutput(std.testing.allocator, &.{"source"}, "nope\x00"),
+    );
+}
+
 fn writeSandboxFailureHint(self: *const PackageBuilder) void {
     const log = self.active_log orelse return;
     log.writeRecord(
