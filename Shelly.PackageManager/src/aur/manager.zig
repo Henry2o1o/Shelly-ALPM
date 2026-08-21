@@ -3270,6 +3270,40 @@ test "review digest covers exact local source contents and missing sources fail 
     );
 }
 
+test "review inputs accept an existing local source with spaces in its name" {
+    const license_name = "Microsoft Standard Application License Terms - Standalone (free) Use Terms.pdf";
+    const license_content = "reviewable license terms\n";
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "PKGBUILD",
+        .data = "pkgname=microsoft-edge-stable-bin\n" ++
+            "pkgver=1\n" ++
+            "pkgrel=1\n" ++
+            "arch=('x86_64')\n" ++
+            "source=(\"" ++ license_name ++ "\")\n",
+    });
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = license_name,
+        .data = license_content,
+    });
+
+    const cache_path = try temporary.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(cache_path);
+    const pkgbuild_path = try std.fs.path.join(std.testing.allocator, &.{ cache_path, "PKGBUILD" });
+    defer std.testing.allocator.free(pkgbuild_path);
+    var info = try (pkgbuild_parser.PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+    }).parser(pkgbuild_path);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), info.local_source_files.?.len);
+    try std.testing.expectEqualStrings(license_name, info.local_source_files.?[0]);
+    try std.testing.expectEqualStrings(license_content, info.local_source_contents.get(license_name).?);
+    try requireReviewInputs(std.testing.allocator, std.testing.io, cache_path, &info);
+}
+
 test "Dropbox brace-expanded signature is not treated as a local review input" {
     var temporary = std.testing.tmpDir(.{});
     defer temporary.cleanup();

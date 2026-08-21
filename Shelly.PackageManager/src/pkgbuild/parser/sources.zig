@@ -68,10 +68,6 @@ fn reviewable_local_source_content(content: []const u8) []const u8 {
 }
 
 fn resolve_local_file(self: PkgbuildParser, file_name: []const u8, base_dir: ?[]const u8) !?[]const u8 {
-    for (file_name) |c| {
-        if (std.ascii.isWhitespace(c)) return null;
-    }
-
     const path = if (base_dir) |dir|
         try std.fs.path.join(self.allocator, &.{ dir, file_name })
     else
@@ -120,10 +116,20 @@ fn find_source_rename_delimiter(entry: []const u8) ?usize {
     return null;
 }
 
-test "resolve_local_file: file name containing whitespace returns null" {
+test "resolve_local_file: existing file with whitespace in name returns content" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const expected = "content from spaced file";
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "my source.tar.gz", .data = expected });
+    const base_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(base_dir);
+
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const result = try resolve_local_file(parser, "my source.tar.gz", null);
-    try std.testing.expect(result == null);
+    const result = try resolve_local_file(parser, "my source.tar.gz", base_dir);
+    try std.testing.expect(result != null);
+    defer std.testing.allocator.free(result.?);
+    try std.testing.expectEqualStrings(expected, result.?);
 }
 
 test "resolve_local_file: nonexistent file returns null" {
@@ -265,7 +271,7 @@ test "resolve_local_source_contents: skips nonexistent files" {
     try std.testing.expectEqualStrings("here", result.get("exists.txt").?);
 }
 
-test "resolve_local_source_contents: skips files with whitespace in name" {
+test "resolve_local_source_contents: includes files with whitespace in name" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var vars: std.StringHashMap([]const u8) = .init(std.testing.allocator);
     defer vars.deinit();
@@ -274,10 +280,11 @@ test "resolve_local_source_contents: skips files with whitespace in name" {
     defer tmp.cleanup();
 
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "good.txt", .data = "ok" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "spaced file.txt", .data = "also ok" });
     const base = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(base);
 
-    var files = [_][]const u8{ "good.txt", "bad file.txt" };
+    var files = [_][]const u8{ "good.txt", "spaced file.txt" };
     var result = try resolve_local_source_contents(parser, files[0..], base);
 
     defer {
@@ -289,9 +296,9 @@ test "resolve_local_source_contents: skips files with whitespace in name" {
         result.deinit();
     }
 
-    try std.testing.expectEqual(@as(usize, 1), result.count());
-    try std.testing.expect(result.get("bad file.txt") == null);
+    try std.testing.expectEqual(@as(usize, 2), result.count());
     try std.testing.expectEqualStrings("ok", result.get("good.txt").?);
+    try std.testing.expectEqualStrings("also ok", result.get("spaced file.txt").?);
 }
 
 test "resolve_local_source_contents: all files missing returns empty map" {
