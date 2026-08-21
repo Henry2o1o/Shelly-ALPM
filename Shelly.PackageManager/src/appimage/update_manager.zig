@@ -2347,7 +2347,7 @@ const newDesktopNameAppImage =
     \\#!/bin/sh
     \\if [ "$1" = "--appimage-extract" ]; then
     \\  mkdir -p squashfs-root
-    \\  printf '%s\n' '[Desktop Entry]' 'Name=New Name' 'X-AppImage-Version=2.0.0' 'Exec=editor %U' 'Icon=editor' 'Categories=Utility;' > squashfs-root/editor.desktop
+    \\  printf '%s\n' '[Desktop Entry]' 'Name=New Name' 'X-AppImage-Version=2.0.0' 'Exec=editor %U' 'TryExec=editor' 'Icon=editor' 'Categories=Utility;' > squashfs-root/editor.desktop
     \\  exit 0
     \\fi
     \\exit 0
@@ -3137,6 +3137,13 @@ test "update: sync and automated update produce equivalent metadata" {
     defer std.testing.allocator.free(update_exec);
     try std.testing.expect(std.mem.indexOf(u8, sync_desktop, sync_exec) != null);
     try std.testing.expect(std.mem.indexOf(u8, update_desktop, update_exec) != null);
+
+    const sync_try_exec = try std.fmt.allocPrint(std.testing.allocator, "TryExec={s}\n", .{sync_env.current_path});
+    defer std.testing.allocator.free(sync_try_exec);
+    const update_try_exec = try std.fmt.allocPrint(std.testing.allocator, "TryExec={s}\n", .{update_env.current_path});
+    defer std.testing.allocator.free(update_try_exec);
+    try std.testing.expect(std.mem.indexOf(u8, sync_desktop, sync_try_exec) != null);
+    try std.testing.expect(std.mem.indexOf(u8, update_desktop, update_try_exec) != null);
 
     // Both should use the same icon (the fallback, since the fixture has no
     // actual icon file, only a desktop-file Icon= line that is not installed).

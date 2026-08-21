@@ -780,6 +780,8 @@ pub const AppImageManager = struct {
         const comment: []const u8 = if (metadata.description.len > 0) metadata.description else "application";
         const escaped_exec_path = try escapeDesktopExecArgument(self.allocator, exec_path);
         defer self.allocator.free(escaped_exec_path);
+        const escaped_try_exec_path = try escapeDesktopStringValue(self.allocator, exec_path);
+        defer self.allocator.free(escaped_try_exec_path);
 
         var out: std.Io.Writer.Allocating = .init(self.allocator);
         defer out.deinit();
@@ -792,7 +794,7 @@ pub const AppImageManager = struct {
         var wrote_icon = false;
 
         const append_authoritative = struct {
-            fn call(writer: *std.Io.Writer.Allocating, name: []const u8, description: []const u8, escaped_path: []const u8, icon: []const u8, name_written: *bool, comment_written: *bool, exec_written: *bool, try_exec_written: *bool, icon_written: *bool) !void {
+            fn call(writer: *std.Io.Writer.Allocating, name: []const u8, description: []const u8, escaped_exec: []const u8, escaped_try_exec: []const u8, icon: []const u8, name_written: *bool, comment_written: *bool, exec_written: *bool, try_exec_written: *bool, icon_written: *bool) !void {
                 if (!name_written.*) {
                     try writer.writer.print("Name={s}\n", .{name});
                     name_written.* = true;
@@ -802,11 +804,11 @@ pub const AppImageManager = struct {
                     comment_written.* = true;
                 }
                 if (!exec_written.*) {
-                    try writer.writer.print("Exec=\"{s}\"\n", .{escaped_path});
+                    try writer.writer.print("Exec=\"{s}\"\n", .{escaped_exec});
                     exec_written.* = true;
                 }
                 if (!try_exec_written.*) {
-                    try writer.writer.print("TryExec={s}\n", .{escaped_path});
+                    try writer.writer.print("TryExec={s}\n", .{escaped_try_exec});
                     try_exec_written.* = true;
                 }
                 if (!icon_written.*) {
@@ -822,7 +824,7 @@ pub const AppImageManager = struct {
             var lines = std.mem.splitScalar(u8, contents, '\n');
             while (lines.next()) |line| {
                 if (std.mem.startsWith(u8, line, "[") and !std.mem.eql(u8, line, "[Desktop Entry]")) {
-                    if (in_desktop_entry) try append_authoritative(&out, desktop_name, comment, escaped_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
+                    if (in_desktop_entry) try append_authoritative(&out, desktop_name, comment, escaped_exec_path, escaped_try_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
                     in_desktop_entry = false;
                 }
                 if (std.mem.eql(u8, line, "[Desktop Entry]")) {
@@ -834,7 +836,7 @@ pub const AppImageManager = struct {
                     try out.writer.print("Exec=\"{s}\"{s}{s}\n", .{ escaped_exec_path, if (suffix.len > 0) " " else "", suffix });
                     wrote_exec = true;
                 } else if (in_desktop_entry and std.mem.startsWith(u8, line, "TryExec=")) {
-                    try out.writer.print("TryExec=\"{s}\"\n", .{escaped_exec_path});
+                    try out.writer.print("TryExec={s}\n", .{escaped_try_exec_path});
                     wrote_try_exec = true;
                 } else if (in_desktop_entry and std.mem.startsWith(u8, line, "Icon=")) {
                     try out.writer.print("Icon={s}\n", .{metadata.icon_name});
@@ -851,7 +853,7 @@ pub const AppImageManager = struct {
             }
         }
         if (!saw_desktop_entry) try out.writer.writeAll("[Desktop Entry]\nVersion=1.0\nType=Application\n");
-        try append_authoritative(&out, desktop_name, comment, escaped_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
+        try append_authoritative(&out, desktop_name, comment, escaped_exec_path, escaped_try_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
         if (!saw_desktop_entry) try out.writer.writeAll("Terminal=false\nCategories=Utility;\nStartupNotify=true\n");
         try self.writeBytesAtomically(out.written(), desktop_file_path, "desktop-stage");
     }
@@ -1470,6 +1472,26 @@ fn escapeDesktopExecArgument(allocator: std.mem.Allocator, value: []const u8) ![
     for (value) |character| {
         if (character == '\\' or character == '"') try escaped.append(allocator, '\\');
         try escaped.append(allocator, character);
+    }
+    return escaped.toOwnedSlice(allocator);
+}
+
+fn escapeDesktopStringValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var escaped: std.ArrayList(u8) = .empty;
+    errdefer escaped.deinit(allocator);
+    for (value) |character| {
+        const sequence: ?[]const u8 = switch (character) {
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\t' => "\\t",
+            '\r' => "\\r",
+            else => null,
+        };
+        if (sequence) |bytes| {
+            try escaped.appendSlice(allocator, bytes);
+        } else {
+            try escaped.append(allocator, character);
+        }
     }
     return escaped.toOwnedSlice(allocator);
 }
@@ -2185,9 +2207,70 @@ test "writeDesktopEntry repairs omitted authoritative keys and escapes executabl
     try std.testing.expect(std.mem.indexOf(u8, desktop, "Name=Editor Display\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "Comment=An editor\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "Icon=editor\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "Exec=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "TryExec=\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "TryExec=") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "\\\\\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "\\\\path.AppImage") != null);
+}
+
+test "writeDesktopEntry emits unquoted TryExec for existing and omitted source keys" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+
+    const executable = try std.fs.path.join(std.testing.allocator, &.{ root, "App Images", "Editor.AppImage" });
+    defer std.testing.allocator.free(executable);
+    const expected_try_exec = try std.fmt.allocPrint(std.testing.allocator, "TryExec={s}\n", .{executable});
+    defer std.testing.allocator.free(expected_try_exec);
+    const quoted_try_exec = try std.fmt.allocPrint(std.testing.allocator, "TryExec=\"{s}\"\n", .{executable});
+    defer std.testing.allocator.free(quoted_try_exec);
+
+    const cases = [_]struct {
+        clean_name: []const u8,
+        source_name: []const u8,
+        contents: []const u8,
+    }{
+        .{
+            .clean_name = "editor-existing-tryexec",
+            .source_name = "existing.desktop",
+            .contents = "[Desktop Entry]\nType=Application\nExec=editor %U\nTryExec=editor\n",
+        },
+        .{
+            .clean_name = "editor-omitted-tryexec",
+            .source_name = "omitted.desktop",
+            .contents = "[Desktop Entry]\nType=Application\nExec=editor %U\n",
+        },
+    };
+
+    for (cases) |case| {
+        const source = try std.fs.path.join(std.testing.allocator, &.{ root, case.source_name });
+        defer std.testing.allocator.free(source);
+        try writeTestAppImageDb(source, case.contents);
+        const manager = AppImageManager{
+            .allocator = std.testing.allocator,
+            .io = std.testing.io,
+            .environ = environ,
+            .install_directory = root,
+            .local_db_path = source,
+        };
+        try manager.writeDesktopEntry(case.clean_name, executable, source, .{
+            .name = "Editor",
+            .desktop_name = "Editor",
+            .icon_name = "editor",
+        });
+        const desktop_path = try manager.installedDesktopPath(case.clean_name);
+        defer std.testing.allocator.free(desktop_path);
+        const desktop = try readTestAppImageDb(std.testing.allocator, desktop_path);
+        defer std.testing.allocator.free(desktop);
+        try std.testing.expect(std.mem.indexOf(u8, desktop, expected_try_exec) != null);
+        try std.testing.expect(std.mem.indexOf(u8, desktop, quoted_try_exec) == null);
+    }
 }
 
 test "AppImage classification is case insensitive and extension based" {

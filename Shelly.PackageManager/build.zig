@@ -696,6 +696,8 @@ pub fn build(b: *std.Build) void {
             "installAppImage sanitizes a bundled icon filename containing spaces",
             "cache refresh reports a missing optional utility without failing",
             "installAppImage restores the previous binary when database commit fails",
+            "writeDesktopEntry repairs omitted authoritative keys and escapes executable paths",
+            "writeDesktopEntry emits unquoted TryExec for existing and omitted source keys",
             "update: automated update commits despite cache refresh failure",
             "update follows a symlinked install directory",
             "update: preserves GitHub provider configuration",
