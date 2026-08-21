@@ -52,6 +52,11 @@ pub const Pkgbuild = struct {
     /// re-parses with the results. Empty when none are present or after a
     /// re-parse that seeded every value.
     dynamic_assignments: []dynamic_assignment = &.{},
+    /// Complete top-level source/source_<CARCH> array assignments for an
+    /// array that contains command substitution. The initial parse records
+    /// these as reviewed shell text; the builder evaluates them in its
+    /// sandbox and reparses with array overrides.
+    dynamic_source_assignments: []dynamic_array_assignment = &.{},
 
     pub fn deinit(self: *Pkgbuild, allocator: std.mem.Allocator) void {
         if (self.pkg_name) |v| allocator.free(v);
@@ -190,10 +195,12 @@ pub const Pkgbuild = struct {
         if (self.execution) |plan| plan.deinit(allocator);
         for (self.dynamic_assignments) |assignment| assignment.deinit(allocator);
         if (self.dynamic_assignments.len > 0) allocator.free(self.dynamic_assignments);
+        for (self.dynamic_source_assignments) |assignment| assignment.deinit(allocator);
+        if (self.dynamic_source_assignments.len > 0) allocator.free(self.dynamic_source_assignments);
     }
 
     pub fn hasDynamicAssignments(self: Pkgbuild) bool {
-        return self.dynamic_assignments.len > 0;
+        return self.dynamic_assignments.len > 0 or self.dynamic_source_assignments.len > 0;
     }
 
     pub fn get_full_version(self: Pkgbuild, allocator: std.mem.Allocator) ![]const u8 {
@@ -266,6 +273,22 @@ pub const dynamic_assignment = struct {
     statement: []const u8,
 
     pub fn deinit(self: dynamic_assignment, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.statement);
+    }
+};
+
+/// One complete source-array assignment retained for post-review evaluation.
+/// All assignments for a dynamic array are retained (including preceding
+/// static assignments and `+=`) so Bash reconstructs the array in source
+/// order. `has_command_substitution` distinguishes the statements that need
+/// an explicit review warning.
+pub const dynamic_array_assignment = struct {
+    name: []const u8,
+    statement: []const u8,
+    has_command_substitution: bool,
+
+    pub fn deinit(self: dynamic_array_assignment, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.statement);
     }

@@ -68,12 +68,68 @@ pub fn resolve_file_string(
 }
 
 pub fn resolve_array_field(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8), var_name: []const u8) ![][]const u8 {
+    if (self.dynamic_array_overrides) |overrides| if (overrides.get(var_name)) |items| {
+        const cloned = try self.allocator.alloc([]const u8, items.len);
+        errdefer self.allocator.free(cloned);
+        var cloned_count: usize = 0;
+        errdefer for (cloned[0..cloned_count]) |item| self.allocator.free(item);
+        for (items, cloned) |item, *destination| {
+            destination.* = try self.allocator.dupe(u8, item);
+            cloned_count += 1;
+        }
+        return cloned;
+    };
     const raw = try arrays.parse_array(self, content, var_name);
     defer {
         for (raw) |it| self.allocator.free(it);
         self.allocator.free(raw);
     }
     return dependencies.resolve_variable_references(self, content, vars, raw);
+}
+
+fn resolve_array_field_preserving_commands(
+    self: PkgbuildParser,
+    content: []const u8,
+    vars: *std.StringHashMap([]const u8),
+    var_name: []const u8,
+) ![][]const u8 {
+    if (self.dynamic_array_overrides) |overrides| if (overrides.get(var_name)) |items| {
+        const cloned = try self.allocator.alloc([]const u8, items.len);
+        errdefer self.allocator.free(cloned);
+        var cloned_count: usize = 0;
+        errdefer for (cloned[0..cloned_count]) |item| self.allocator.free(item);
+        for (items, cloned) |item, *destination| {
+            destination.* = try self.allocator.dupe(u8, item);
+            cloned_count += 1;
+        }
+        return cloned;
+    };
+    const raw = try arrays.parse_array(self, content, var_name);
+    defer variables.freeStringSlice(self.allocator, raw);
+    return dependencies.resolve_variable_references_preserving_commands(self, content, vars, raw);
+}
+
+/// Initial-analysis source resolution keeps command substitutions as inert
+/// text. That lets source classification ignore only the unresolved entry
+/// instead of turning its truncated prefix into a bogus local file.
+pub fn resolve_dynamic_source_array_field(
+    self: PkgbuildParser,
+    content: []const u8,
+    vars: *std.StringHashMap([]const u8),
+) ![][]const u8 {
+    const generic = try resolve_array_field_preserving_commands(self, content, vars, "source");
+    errdefer variables.freeStringSlice(self.allocator, generic);
+    const arch_name = try std.fmt.allocPrint(self.allocator, "source_{s}", .{self.package_carch});
+    defer self.allocator.free(arch_name);
+    const architecture = try resolve_array_field_preserving_commands(self, content, vars, arch_name);
+    errdefer variables.freeStringSlice(self.allocator, architecture);
+
+    const combined = try self.allocator.alloc([]const u8, generic.len + architecture.len);
+    @memcpy(combined[0..generic.len], generic);
+    @memcpy(combined[generic.len..], architecture);
+    self.allocator.free(generic);
+    self.allocator.free(architecture);
+    return combined;
 }
 
 /// makepkg appends the active architecture's array to the generic array

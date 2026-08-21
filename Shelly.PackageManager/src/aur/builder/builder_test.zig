@@ -22,6 +22,7 @@ const ShellyBuildConfiguration = @import("../shellybuild.zig").ShellyBuildConfig
 const archive = @import("archive");
 const raw_alpm = @import("../../alpm/bindings.zig").libalpm.alpm;
 const source_pgp_verifier = @import("../../shared/source_pgp_verifier.zig");
+const source_spec = @import("source_spec.zig");
 
 const source_pgp_fingerprint = "2E37DFCC9287C8A2F84B2519241A5B24548FAC70";
 const source_pgp_public_key_base64 = "LS0tLS1CRUdJTiBQR1AgUFVCTElDIEtFWSBCTE9DSy0tLS0tCgptRE1FYW9OTXZ4WUpLd1lCQkFIYVJ3OEJBUWRBM0RFdFI5MXZLRU4zcXVsTmJBWVh2Z2EvRWl5K1VoQTMxeVBKCjcwZGlvbzIwTUZOb1pXeHNlU0JUYjNWeVkyVWdWR1Z6ZENBOGMyOTFjbU5sTFhSbGMzUkFaWGhoYlhCc1pTNXAKYm5aaGJHbGtQb2lRQkJNV0NnQTRGaUVFTGpmZnpKS0h5S0w0U3lVWkpCcGJKRlNQckhBRkFtcURUTDhDR3dNRgpDd2tJQndJR0ZRb0pDQXNDQkJZQ0F3RUNIZ0VDRjRBQUNna1FKQnBiSkZTUHJIQnJnUUVBbVFEdkNMNHZoc01CClgya3Y2V3ZFN1pMVzgyaUZQbkJaR2U1SXpDYWVvdUlCQVBMRC80M2RmbGlxZkVFTzFFZktJQVQ5SjV3cXdldmUKdFRBdXFvVGFRUXNLCj1jbzViCi0tLS0tRU5EIFBHUCBQVUJMSUMgS0VZIEJMT0NLLS0tLS0K";
@@ -723,6 +724,100 @@ test "PackageBuilder resolves top-level command substitution before building" {
     try testing.expectEqualStrings("dynamic-resolved", value);
     try testing.expectEqualStrings("dynamic-resolved", fixture.package_builds[0].variables.get("_greeting").?);
     try testing.expect(!fixture.package_builds[0].hasDynamicAssignments());
+}
+
+test "PackageBuilder resolves issue 1750 source command substitution after review" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=gpu-screen-recorder-ui-git
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\_pkgname="gpu-screen-recorder-ui"
+        \\url="https://git.dec05eba.com/gpu-screen-recorder-ui"
+        \\_pkgsrc="$_pkgname"
+        \\source=("$_pkgsrc"::"git+$(sed 's&//git\.&//repo.&' <<< "$url")")
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/gpu-screen-recorder-ui"
+        \\  printf resolved > "$pkgdir/usr/share/gpu-screen-recorder-ui/source-test"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    try testing.expectEqual(@as(usize, 1), fixture.package_builds[0].dynamic_source_assignments.len);
+
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "PKGBUILD", .data = pkgbuild_content });
+    const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
+    defer allocator.free(pkgbuild_path);
+    var review = try builder_mod.preparePkgbuildReview(
+        allocator,
+        io,
+        fixture.build_dir,
+        pkgbuild_content,
+        fixture.package_builds,
+    );
+    defer review.deinit();
+    try testing.expectEqual(@as(usize, 1), review.findings.len);
+    try testing.expect(std.mem.indexOf(u8, review.findings[0].message, "by the builder after this review") != null);
+    fixture.builder.options.pkgbuild_path = pkgbuild_path;
+    fixture.builder.options.reviewed_pkgbuild_digest = review.digest;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try testing.expectEqual(@as(usize, 0), fixture.package_builds[0].dynamic_source_assignments.len);
+    try testing.expectEqualStrings(
+        "gpu-screen-recorder-ui::git+https://repo.dec05eba.com/gpu-screen-recorder-ui",
+        fixture.package_builds[0].source.?[0],
+    );
+    var parsed_source = try source_spec.ParsedSource.parse(
+        allocator,
+        fixture.package_builds[0].source.?[0],
+    );
+    defer parsed_source.deinit(allocator);
+    try testing.expectEqual(source_spec.SourceKind.git, parsed_source.kind);
+    try testing.expectEqualStrings(
+        "https://repo.dec05eba.com/gpu-screen-recorder-ui",
+        parsed_source.location,
+    );
+}
+
+test "PackageBuilder requires supplemental review for a dynamically discovered local source" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    const pkgbuild_content =
+        \\pkgname=dynamic-local-review
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=("$(printf local.patch)")
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  printf ran > "$startdir/package-ran"
+        \\}
+    ;
+    var fixture = try Fixture.create(allocator, pkgbuild_content, null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "PKGBUILD", .data = pkgbuild_content });
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "local.patch", .data = "review me\n" });
+    const pkgbuild_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "PKGBUILD" });
+    defer allocator.free(pkgbuild_path);
+    var review = try builder_mod.preparePkgbuildReview(
+        allocator,
+        io,
+        fixture.build_dir,
+        pkgbuild_content,
+        fixture.package_builds,
+    );
+    defer review.deinit();
+    try testing.expectEqual(@as(usize, 0), review.related_files.len);
+    fixture.builder.options.pkgbuild_path = pkgbuild_path;
+    fixture.builder.options.reviewed_pkgbuild_digest = review.digest;
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "package-ran", .{}));
 }
 
 test "PackageBuilder rejects a legacy unwritable package tree" {

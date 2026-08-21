@@ -2,6 +2,7 @@
 const std = @import("std");
 const file_inspector = @import("../../local/file_inspector.zig");
 const types = @import("types.zig");
+const shell_scan = @import("shell_scan.zig");
 const PkgbuildParser = @import("parser.zig").PkgbuildParser;
 
 const split_entry = types.split_entry;
@@ -17,6 +18,9 @@ pub fn extract_local_source_files(self: PkgbuildParser, source: [][]const u8) ![
     errdefer files.deinit(self.allocator);
 
     for (source) |line| {
+        // Dynamic source entries remain inert text until the reviewed builder
+        // evaluates them. Never classify a partial expression as a local file.
+        if (shell_scan.contains_command_substitution(line)) continue;
         const entry = split_source_entry(line);
         if (try is_remote_source(entry.location)) continue;
 

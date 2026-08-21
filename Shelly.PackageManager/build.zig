@@ -296,6 +296,11 @@ pub fn build(b: *std.Build) void {
             "install script uses the last duplicate hook definition",
             "install script classifies helpers hooks and top-level code",
             "install script scanner covers top-level helpers and hooks",
+            "parser_content: issue 1750 source command substitution is deferred and overridden",
+            "parser_content: dynamic source keeps assignment and architecture append ordering",
+            "PackageBuilder resolves issue 1750 source command substitution after review",
+            "PackageBuilder requires supplemental review for a dynamically discovered local source",
+            "dynamic source array output is bounded and structurally validated",
         },
     });
     const run_pkgbuild_review_tests = b.addRunArtifact(pkgbuild_review_tests);
@@ -581,6 +586,8 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder init keeps the provided collaborators",
             "non-root builder guard rejects root effective uid",
             "PackageBuilder rejects a PKGBUILD changed after review",
+            "PackageBuilder resolves issue 1750 source command substitution after review",
+            "PackageBuilder requires supplemental review for a dynamically discovered local source",
             "PackageBuilder rejects a legacy unwritable package tree",
             "PackageBuilder cannot perform privileged package filesystem operations",
             "PackageBuilder simulates root ownership without host chown",

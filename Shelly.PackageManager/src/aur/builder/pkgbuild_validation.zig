@@ -123,6 +123,27 @@ pub fn validatePkgbuildInfoWithInstallScript(
             });
             scripts.has_findings = true;
         }
+        for (info.dynamic_source_assignments) |assignment| {
+            if (!assignment.has_command_substitution) continue;
+            const hook = try std.fmt.allocPrint(allocator, "assignment: {s}", .{assignment.name});
+            errdefer allocator.free(hook);
+            const matched_line = try allocator.dupe(u8, assignment.statement);
+            errdefer allocator.free(matched_line);
+            const message = try std.fmt.allocPrint(
+                allocator,
+                "Source assignment '{s}' uses command substitution and will be executed by the builder after this review.",
+                .{assignment.statement},
+            );
+            errdefer allocator.free(message);
+            try scripts.findings.append(allocator, .{
+                .tool = "<pkgbuild>",
+                .severity = .warning,
+                .hook = hook,
+                .matched_line = matched_line,
+                .message = message,
+            });
+            scripts.has_findings = true;
+        }
     }
     var homograph = try (homograph_validator.HomographValidator{ .allocator = allocator }).validate(info.*);
     errdefer homograph.deinit(allocator);
