@@ -11,6 +11,15 @@ pub const DatabaseCommitFn = *const fn (
     destination_path: []const u8,
 ) anyerror!void;
 
+pub const CacheCommandRunFn = *const fn (
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    argv: []const []const u8,
+) anyerror!std.process.RunResult;
+
+const max_cache_command_output = 16 * 1024;
+
 pub const AppImageManager = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -21,6 +30,7 @@ pub const AppImageManager = struct {
     operation_context: ?*operation_api.OperationContext = null,
     owned_dispatcher: ?*events.Dispatcher = null,
     database_commit: DatabaseCommitFn = commitDatabase,
+    cache_command_run: CacheCommandRunFn = runCacheCommand,
 
     pub fn setEventDispatcher(self: *AppImageManager, dispatcher: ?*events.Dispatcher) void {
         self.dispatcher = dispatcher orelse self.owned_dispatcher;
@@ -145,6 +155,7 @@ pub const AppImageManager = struct {
         if (had_existing) std.Io.Dir.cwd().deleteFile(self.io, backup_path) catch |err| {
             self.emitStatusFmt(.warning, "Could not remove the AppImage backup: {s}.", .{@errorName(err)});
         };
+        self.refreshDesktopCachesBestEffort(content.icon_source != null);
 
         self.emitStatusFmt(.success, "Installed AppImage {s}.", .{app_name});
         operation_scope.finish(.success);
@@ -539,29 +550,111 @@ pub const AppImageManager = struct {
         return std.fs.path.join(self.allocator, &.{ icon_dir, dest_icon_name });
     }
 
-    fn updateIconCache(self: AppImageManager, data_home: []const u8) std.mem.Allocator.Error!void {
-        const theme_dir = try std.fs.path.join(self.allocator, &.{ data_home, "icons/hicolor" });
-        defer self.allocator.free(theme_dir);
-        var proc = std.process.spawn(self.io, .{
-            .argv = &.{ "gtk-update-icon-cache", "-f", "-t", theme_dir },
-            .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
-        }) catch |err| switch (err) {
-            error.FileNotFound => return,
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                std.log.warn("Could not run gtk-update-icon-cache for {s}: {s}. Installed icons may not appear in menus until the icon cache is rebuilt.", .{ theme_dir, @errorName(err) });
-                return;
-            },
-        };
-        const term = proc.wait(self.io) catch |err| {
-            std.log.warn("Could not wait for gtk-update-icon-cache for {s}: {s}. Installed icons may not appear in menus until the icon cache is rebuilt.", .{ theme_dir, @errorName(err) });
+    fn updateIconCache(self: AppImageManager, data_home: []const u8) void {
+        const theme_dir = std.fs.path.join(self.allocator, &.{ data_home, "icons/hicolor" }) catch |err| {
+            self.emitCacheWarningFmt(
+                "Could not prepare the icon cache refresh: {s}. Installed icons may not appear in menus until the icon cache is rebuilt.",
+                .{@errorName(err)},
+            );
             return;
         };
-        if (term != .exited or term.exited != 0) {
-            std.log.warn("gtk-update-icon-cache failed for {s}. Installed icons may not appear in menus until the icon cache is rebuilt.", .{theme_dir});
+        defer self.allocator.free(theme_dir);
+        self.runCacheRefresh(
+            "gtk-update-icon-cache",
+            theme_dir,
+            &.{ "gtk-update-icon-cache", "-f", "-t", theme_dir },
+            "Installed icons may not appear in menus until the icon cache is rebuilt.",
+        );
+    }
+
+    pub fn refreshDesktopCachesBestEffort(self: AppImageManager, refresh_icons: bool) void {
+        const data_home = xdg_paths.xdgDataHome(self.allocator, self.environ) catch |err| {
+            self.emitCacheWarningFmt("Could not resolve the user data directory for cache refreshes: {s}.", .{@errorName(err)});
+            return;
+        };
+        defer self.allocator.free(data_home);
+
+        const desktop_dir = std.fs.path.join(self.allocator, &.{ data_home, "applications" }) catch |err| {
+            self.emitCacheWarningFmt(
+                "Could not prepare the desktop database refresh: {s}. Application menu entries may not update until the desktop database is rebuilt.",
+                .{@errorName(err)},
+            );
+            if (refresh_icons) self.updateIconCache(data_home);
+            return;
+        };
+        defer self.allocator.free(desktop_dir);
+        self.updateDesktopDatabase(desktop_dir);
+        if (refresh_icons) self.updateIconCache(data_home);
+    }
+
+    fn runCacheRefresh(
+        self: AppImageManager,
+        tool_name: []const u8,
+        target_path: []const u8,
+        argv: []const []const u8,
+        consequence: []const u8,
+    ) void {
+        const result = self.cache_command_run(self.allocator, self.io, self.environ, argv) catch |err| {
+            if (err == error.StreamTooLong) {
+                self.emitCacheWarningFmt(
+                    "{s} produced more than {d} bytes of output while refreshing {s}. {s}",
+                    .{ tool_name, max_cache_command_output, target_path, consequence },
+                );
+            } else if (err == error.FileNotFound) {
+                self.emitCacheWarningFmt(
+                    "Cache utility {s} is unavailable; {s} was not refreshed. {s}",
+                    .{ tool_name, target_path, consequence },
+                );
+            } else {
+                self.emitCacheWarningFmt(
+                    "Could not run {s} for {s}: {s}. {s}",
+                    .{ tool_name, target_path, @errorName(err), consequence },
+                );
+            }
+            return;
+        };
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        if (result.term == .exited and result.term.exited == 0) return;
+
+        const diagnostic_output = if (std.mem.trim(u8, result.stderr, " \t\r\n").len > 0)
+            result.stderr
+        else
+            result.stdout;
+        sanitizeCacheDiagnostic(diagnostic_output);
+        const diagnostic = std.mem.trim(u8, diagnostic_output, " \t\r\n");
+
+        var term_buffer: [96]u8 = undefined;
+        const term_description = switch (result.term) {
+            .exited => |code| std.fmt.bufPrint(&term_buffer, "exited with status {d}", .{code}) catch "failed",
+            .signal => |signal| std.fmt.bufPrint(&term_buffer, "terminated by signal {d}", .{@intFromEnum(signal)}) catch "failed",
+            .stopped => |signal| std.fmt.bufPrint(&term_buffer, "stopped by signal {d}", .{@intFromEnum(signal)}) catch "failed",
+            .unknown => |status| std.fmt.bufPrint(&term_buffer, "returned unknown status {d}", .{status}) catch "failed",
+        };
+
+        if (diagnostic.len > 0) {
+            self.emitCacheWarningFmt(
+                "{s} {s} while refreshing {s}: {s}. {s}",
+                .{ tool_name, term_description, target_path, diagnostic, consequence },
+            );
+        } else {
+            self.emitCacheWarningFmt(
+                "{s} {s} while refreshing {s}. {s}",
+                .{ tool_name, term_description, target_path, consequence },
+            );
         }
+    }
+
+    fn emitCacheWarningFmt(self: AppImageManager, comptime format: []const u8, args: anytype) void {
+        const message = std.fmt.allocPrint(self.allocator, format, args) catch {
+            std.log.warn("A desktop integration cache refresh failed, but the AppImage operation completed.", .{});
+            self.emitStatus(.warning, "A desktop integration cache refresh failed, but the AppImage operation completed.");
+            return;
+        };
+        defer self.allocator.free(message);
+        std.log.warn("{s}", .{message});
+        self.emitStatus(.warning, message);
     }
 
     fn parseExecSuffix(exec_value: []const u8) []const u8 {
@@ -589,6 +682,7 @@ pub const AppImageManager = struct {
         var integration = try self.beginDesktopIntegration(metadata, final_exec_path, source_desktop_path, icon_source);
         defer integration.deinit();
         try integration.finish();
+        self.refreshDesktopCachesBestEffort(icon_source != null);
     }
 
     pub const DesktopIntegration = struct {
@@ -658,12 +752,6 @@ pub const AppImageManager = struct {
         }
         try self.writeDesktopEntry(clean_name, final_exec_path, source_desktop_path, metadata);
 
-        const data_home = try xdg_paths.xdgDataHome(self.allocator, self.environ);
-        defer self.allocator.free(data_home);
-        const desktop_dir = try std.fs.path.join(self.allocator, &.{ data_home, "applications" });
-        defer self.allocator.free(desktop_dir);
-        try self.updateDesktopDatabase(desktop_dir);
-        if (icon_source != null) try self.updateIconCache(data_home);
         return integration;
     }
 
@@ -692,6 +780,8 @@ pub const AppImageManager = struct {
         const comment: []const u8 = if (metadata.description.len > 0) metadata.description else "application";
         const escaped_exec_path = try escapeDesktopExecArgument(self.allocator, exec_path);
         defer self.allocator.free(escaped_exec_path);
+        const escaped_try_exec_path = try escapeDesktopStringValue(self.allocator, exec_path);
+        defer self.allocator.free(escaped_try_exec_path);
 
         var out: std.Io.Writer.Allocating = .init(self.allocator);
         defer out.deinit();
@@ -704,7 +794,7 @@ pub const AppImageManager = struct {
         var wrote_icon = false;
 
         const append_authoritative = struct {
-            fn call(writer: *std.Io.Writer.Allocating, name: []const u8, description: []const u8, escaped_path: []const u8, icon: []const u8, name_written: *bool, comment_written: *bool, exec_written: *bool, try_exec_written: *bool, icon_written: *bool) !void {
+            fn call(writer: *std.Io.Writer.Allocating, name: []const u8, description: []const u8, escaped_exec: []const u8, escaped_try_exec: []const u8, icon: []const u8, name_written: *bool, comment_written: *bool, exec_written: *bool, try_exec_written: *bool, icon_written: *bool) !void {
                 if (!name_written.*) {
                     try writer.writer.print("Name={s}\n", .{name});
                     name_written.* = true;
@@ -714,11 +804,11 @@ pub const AppImageManager = struct {
                     comment_written.* = true;
                 }
                 if (!exec_written.*) {
-                    try writer.writer.print("Exec=\"{s}\"\n", .{escaped_path});
+                    try writer.writer.print("Exec=\"{s}\"\n", .{escaped_exec});
                     exec_written.* = true;
                 }
                 if (!try_exec_written.*) {
-                    try writer.writer.print("TryExec={s}\n", .{escaped_path});
+                    try writer.writer.print("TryExec={s}\n", .{escaped_try_exec});
                     try_exec_written.* = true;
                 }
                 if (!icon_written.*) {
@@ -734,7 +824,7 @@ pub const AppImageManager = struct {
             var lines = std.mem.splitScalar(u8, contents, '\n');
             while (lines.next()) |line| {
                 if (std.mem.startsWith(u8, line, "[") and !std.mem.eql(u8, line, "[Desktop Entry]")) {
-                    if (in_desktop_entry) try append_authoritative(&out, desktop_name, comment, escaped_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
+                    if (in_desktop_entry) try append_authoritative(&out, desktop_name, comment, escaped_exec_path, escaped_try_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
                     in_desktop_entry = false;
                 }
                 if (std.mem.eql(u8, line, "[Desktop Entry]")) {
@@ -746,7 +836,7 @@ pub const AppImageManager = struct {
                     try out.writer.print("Exec=\"{s}\"{s}{s}\n", .{ escaped_exec_path, if (suffix.len > 0) " " else "", suffix });
                     wrote_exec = true;
                 } else if (in_desktop_entry and std.mem.startsWith(u8, line, "TryExec=")) {
-                    try out.writer.print("TryExec=\"{s}\"\n", .{escaped_exec_path});
+                    try out.writer.print("TryExec={s}\n", .{escaped_try_exec_path});
                     wrote_try_exec = true;
                 } else if (in_desktop_entry and std.mem.startsWith(u8, line, "Icon=")) {
                     try out.writer.print("Icon={s}\n", .{metadata.icon_name});
@@ -763,7 +853,7 @@ pub const AppImageManager = struct {
             }
         }
         if (!saw_desktop_entry) try out.writer.writeAll("[Desktop Entry]\nVersion=1.0\nType=Application\n");
-        try append_authoritative(&out, desktop_name, comment, escaped_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
+        try append_authoritative(&out, desktop_name, comment, escaped_exec_path, escaped_try_exec_path, metadata.icon_name, &wrote_name, &wrote_comment, &wrote_exec, &wrote_try_exec, &wrote_icon);
         if (!saw_desktop_entry) try out.writer.writeAll("Terminal=false\nCategories=Utility;\nStartupNotify=true\n");
         try self.writeBytesAtomically(out.written(), desktop_file_path, "desktop-stage");
     }
@@ -796,18 +886,13 @@ pub const AppImageManager = struct {
         try std.Io.Dir.rename(.cwd(), staging_path, .cwd(), destination_path, self.io);
     }
 
-    fn updateDesktopDatabase(self: AppImageManager, desktop_dir: []const u8) !void {
-        var proc = std.process.spawn(self.io, .{
-            .argv = &.{ "update-desktop-database", desktop_dir },
-            .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
-        }) catch |err| switch (err) {
-            error.FileNotFound => return,
-            else => return err,
-        };
-        const term = try proc.wait(self.io);
-        if (term != .exited or term.exited != 0) return error.DesktopDatabaseRefreshFailed;
+    fn updateDesktopDatabase(self: AppImageManager, desktop_dir: []const u8) void {
+        self.runCacheRefresh(
+            "update-desktop-database",
+            desktop_dir,
+            &.{ "update-desktop-database", desktop_dir },
+            "Application menu entries may not update until the desktop database is rebuilt.",
+        );
     }
 
     pub fn getAppImageUpdateInfo(self: AppImageManager, appimage_path: []const u8) ![]const u8 {
@@ -1071,6 +1156,8 @@ pub const AppImageManager = struct {
             self.removeAppConfigDirectories(desktop_app_name);
         }
 
+        self.refreshDesktopCachesBestEffort(true);
+
         self.emitStatusFmt(.success, "Removed AppImage {s}.", .{app_name});
         return true;
     }
@@ -1175,6 +1262,7 @@ pub const AppImageManager = struct {
                 success = false;
                 continue;
             };
+            self.refreshDesktopCachesBestEffort(content.icon_source != null);
         }
 
         self.emitStatus(
@@ -1252,9 +1340,6 @@ pub const AppImageManager = struct {
 
             std.Io.Dir.cwd().deleteFile(self.io, df_path) catch |err| {
                 std.log.warn("Failed to remove desktop entry {s}: {s}", .{ df_path, @errorName(err) });
-            };
-            self.updateDesktopDatabase(desktop_dir) catch |err| {
-                std.log.warn("Could not refresh desktop database after removal: {s}", .{@errorName(err)});
             };
         }
 
@@ -1391,6 +1476,26 @@ fn escapeDesktopExecArgument(allocator: std.mem.Allocator, value: []const u8) ![
     return escaped.toOwnedSlice(allocator);
 }
 
+fn escapeDesktopStringValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var escaped: std.ArrayList(u8) = .empty;
+    errdefer escaped.deinit(allocator);
+    for (value) |character| {
+        const sequence: ?[]const u8 = switch (character) {
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\t' => "\\t",
+            '\r' => "\\r",
+            else => null,
+        };
+        if (sequence) |bytes| {
+            try escaped.appendSlice(allocator, bytes);
+        } else {
+            try escaped.append(allocator, character);
+        }
+    }
+    return escaped.toOwnedSlice(allocator);
+}
+
 fn pathIsInside(root: []const u8, candidate: []const u8) bool {
     return candidate.len > root.len and
         std.mem.startsWith(u8, candidate, root) and
@@ -1482,12 +1587,35 @@ pub fn commitDatabase(
     try std.Io.Dir.rename(.cwd(), staging_path, .cwd(), destination_path, io);
 }
 
+pub fn runCacheCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    argv: []const []const u8,
+) !std.process.RunResult {
+    var environment = try environ.createMap(allocator);
+    defer environment.deinit();
+    return std.process.run(allocator, io, .{
+        .argv = argv,
+        .environ_map = &environment,
+        .stdout_limit = .limited(max_cache_command_output),
+        .stderr_limit = .limited(max_cache_command_output),
+    });
+}
+
 pub fn failDatabaseCommit(
     _: std.Io,
     _: []const u8,
     _: []const u8,
 ) anyerror!void {
     return error.InjectedDatabaseCommitFailure;
+}
+
+fn sanitizeCacheDiagnostic(output: []u8) void {
+    for (output) |*character| {
+        if ((character.* < ' ' and character.* != '\n' and character.* != '\t') or character.* == 0x7f)
+            character.* = ' ';
+    }
 }
 
 const validTestAppImage =
@@ -1514,6 +1642,84 @@ const symlinkLayoutTestAppImage =
     \\fi
     \\exit 0
 ;
+
+const spacedIconTestAppImage =
+    \\#!/bin/sh
+    \\if [ "$1" = "--appimage-extract" ]; then
+    \\  mkdir -p squashfs-root/usr/share/icons/hicolor/256x256/apps
+    \\  printf '%s\n' '[Desktop Entry]' 'Name=Weather App' 'Exec=weather' 'Icon=Weather Icon' > squashfs-root/weather.desktop
+    \\  printf '%s\n' 'icon-data' > 'squashfs-root/usr/share/icons/hicolor/256x256/apps/Weather Icon.png'
+    \\  exit 0
+    \\fi
+    \\exit 0
+;
+
+fn successfulCacheCommand(
+    allocator: std.mem.Allocator,
+    _: std.Io,
+    _: std.process.Environ,
+    _: []const []const u8,
+) !std.process.RunResult {
+    const stdout = try allocator.dupe(u8, "");
+    errdefer allocator.free(stdout);
+    return .{
+        .term = .{ .exited = 0 },
+        .stdout = stdout,
+        .stderr = try allocator.dupe(u8, ""),
+    };
+}
+
+fn failingCacheCommand(
+    allocator: std.mem.Allocator,
+    _: std.Io,
+    _: std.process.Environ,
+    argv: []const []const u8,
+) !std.process.RunResult {
+    const stdout = try allocator.dupe(u8, "");
+    errdefer allocator.free(stdout);
+    const stderr_message = if (std.mem.eql(u8, argv[0], "gtk-update-icon-cache"))
+        "Invalid icon filename\x1b: Weather Icon.png\n"
+    else
+        "Invalid desktop entry: broken.desktop\n";
+    return .{
+        .term = .{ .exited = 1 },
+        .stdout = stdout,
+        .stderr = try allocator.dupe(u8, stderr_message),
+    };
+}
+
+fn missingCacheCommand(
+    _: std.mem.Allocator,
+    _: std.Io,
+    _: std.process.Environ,
+    _: []const []const u8,
+) !std.process.RunResult {
+    return error.FileNotFound;
+}
+
+const CacheWarningCapture = struct {
+    warning_count: usize = 0,
+    saw_icon_diagnostic: bool = false,
+    saw_desktop_diagnostic: bool = false,
+    saw_missing_utility: bool = false,
+    saw_unsafe_control_character: bool = false,
+
+    fn handle(data: ?*anyopaque, args: events.StatusArgs) void {
+        if (args.kind != .warning) return;
+        const self: *@This() = @ptrCast(@alignCast(data.?));
+        self.warning_count += 1;
+        self.saw_icon_diagnostic = self.saw_icon_diagnostic or
+            (std.mem.indexOf(u8, args.message, "gtk-update-icon-cache") != null and
+                std.mem.indexOf(u8, args.message, "Weather Icon.png") != null);
+        self.saw_desktop_diagnostic = self.saw_desktop_diagnostic or
+            (std.mem.indexOf(u8, args.message, "update-desktop-database") != null and
+                std.mem.indexOf(u8, args.message, "broken.desktop") != null);
+        self.saw_missing_utility = self.saw_missing_utility or
+            std.mem.indexOf(u8, args.message, "is unavailable") != null;
+        self.saw_unsafe_control_character = self.saw_unsafe_control_character or
+            std.mem.indexOfScalar(u8, args.message, 0x1b) != null;
+    }
+};
 
 test "installAppImage preserves an existing install when staged validation fails" {
     var tmp = std.testing.tmpDir(.{});
@@ -1787,6 +1993,130 @@ test "installAppImage reads desktop metadata and icons through standard AppImage
     try std.testing.expectEqualStrings("icon-data\n", icon);
 }
 
+test "installAppImage commits and reports diagnostics when cache refreshes fail" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    const source_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "source" });
+    defer std.testing.allocator.free(source_dir);
+    const install_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "install" });
+    defer std.testing.allocator.free(install_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, source_dir);
+
+    const source_path = try std.fs.path.join(std.testing.allocator, &.{ source_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(source_path);
+    const installed_path = try std.fs.path.join(std.testing.allocator, &.{ install_dir, "Editor.AppImage" });
+    defer std.testing.allocator.free(installed_path);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ root, "config", "appimages.db" });
+    defer std.testing.allocator.free(db_path);
+    try writeTestAppImageDb(source_path, symlinkLayoutTestAppImage);
+
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+    var dispatcher = events.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    var capture: CacheWarningCapture = .{};
+    _ = try dispatcher.addStatusHandler(.{ .function = CacheWarningCapture.handle, .data = &capture });
+
+    const manager = AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = environ,
+        .install_directory = install_dir,
+        .local_db_path = db_path,
+        .dispatcher = &dispatcher,
+        .cache_command_run = failingCacheCommand,
+    };
+
+    try std.testing.expect(try manager.installAppImage(source_path));
+    try std.Io.Dir.cwd().access(std.testing.io, installed_path, .{});
+
+    const desktop_path = try std.fs.path.join(std.testing.allocator, &.{ root, "data", "applications", "editor.desktop" });
+    defer std.testing.allocator.free(desktop_path);
+    try std.Io.Dir.cwd().access(std.testing.io, desktop_path, .{});
+    const icon_path = try std.fs.path.join(std.testing.allocator, &.{ root, "data", "icons", "hicolor", "256x256", "apps", "editor.png" });
+    defer std.testing.allocator.free(icon_path);
+    try std.Io.Dir.cwd().access(std.testing.io, icon_path, .{});
+
+    const apps = try manager.getAppImagesFromLocalDb();
+    defer manager.freeAppImages(apps);
+    try std.testing.expectEqual(@as(usize, 1), apps.len);
+    try std.testing.expectEqual(@as(usize, 2), capture.warning_count);
+    try std.testing.expect(capture.saw_desktop_diagnostic);
+    try std.testing.expect(capture.saw_icon_diagnostic);
+    try std.testing.expect(!capture.saw_unsafe_control_character);
+}
+
+test "installAppImage sanitizes a bundled icon filename containing spaces" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    const source_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "source" });
+    defer std.testing.allocator.free(source_dir);
+    const install_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "install" });
+    defer std.testing.allocator.free(install_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, source_dir);
+
+    const source_path = try std.fs.path.join(std.testing.allocator, &.{ source_dir, "Weather App.AppImage" });
+    defer std.testing.allocator.free(source_path);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ root, "config", "appimages.db" });
+    defer std.testing.allocator.free(db_path);
+    try writeTestAppImageDb(source_path, spacedIconTestAppImage);
+
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+    const manager = AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = environ,
+        .install_directory = install_dir,
+        .local_db_path = db_path,
+        .cache_command_run = successfulCacheCommand,
+    };
+
+    try std.testing.expect(try manager.installAppImage(source_path));
+    const icon_path = try std.fs.path.join(std.testing.allocator, &.{ root, "data", "icons", "hicolor", "256x256", "apps", "weather-app.png" });
+    defer std.testing.allocator.free(icon_path);
+    try std.Io.Dir.cwd().access(std.testing.io, icon_path, .{});
+}
+
+test "cache refresh reports a missing optional utility without failing" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+    var dispatcher = events.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+    var capture: CacheWarningCapture = .{};
+    _ = try dispatcher.addStatusHandler(.{ .function = CacheWarningCapture.handle, .data = &capture });
+    const manager = AppImageManager{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .environ = environ,
+        .install_directory = root,
+        .local_db_path = root,
+        .dispatcher = &dispatcher,
+        .cache_command_run = missingCacheCommand,
+    };
+
+    manager.refreshDesktopCachesBestEffort(false);
+    try std.testing.expectEqual(@as(usize, 1), capture.warning_count);
+    try std.testing.expect(capture.saw_missing_utility);
+}
+
 test "installAppImage restores the previous binary when database commit fails" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1877,9 +2207,70 @@ test "writeDesktopEntry repairs omitted authoritative keys and escapes executabl
     try std.testing.expect(std.mem.indexOf(u8, desktop, "Name=Editor Display\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "Comment=An editor\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "Icon=editor\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "Exec=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "TryExec=\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "TryExec=") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "\\\\\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "\\\\path.AppImage") != null);
+}
+
+test "writeDesktopEntry emits unquoted TryExec for existing and omitted source keys" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.testing.io, &path_buf);
+    const root = try std.testing.allocator.dupe(u8, path_buf[0..len]);
+    defer std.testing.allocator.free(root);
+    var environ = try createTestAppImageEnviron(std.testing.allocator, root);
+    defer environ.block.deinit(std.testing.allocator);
+
+    const executable = try std.fs.path.join(std.testing.allocator, &.{ root, "App Images", "Editor.AppImage" });
+    defer std.testing.allocator.free(executable);
+    const expected_try_exec = try std.fmt.allocPrint(std.testing.allocator, "TryExec={s}\n", .{executable});
+    defer std.testing.allocator.free(expected_try_exec);
+    const quoted_try_exec = try std.fmt.allocPrint(std.testing.allocator, "TryExec=\"{s}\"\n", .{executable});
+    defer std.testing.allocator.free(quoted_try_exec);
+
+    const cases = [_]struct {
+        clean_name: []const u8,
+        source_name: []const u8,
+        contents: []const u8,
+    }{
+        .{
+            .clean_name = "editor-existing-tryexec",
+            .source_name = "existing.desktop",
+            .contents = "[Desktop Entry]\nType=Application\nExec=editor %U\nTryExec=editor\n",
+        },
+        .{
+            .clean_name = "editor-omitted-tryexec",
+            .source_name = "omitted.desktop",
+            .contents = "[Desktop Entry]\nType=Application\nExec=editor %U\n",
+        },
+    };
+
+    for (cases) |case| {
+        const source = try std.fs.path.join(std.testing.allocator, &.{ root, case.source_name });
+        defer std.testing.allocator.free(source);
+        try writeTestAppImageDb(source, case.contents);
+        const manager = AppImageManager{
+            .allocator = std.testing.allocator,
+            .io = std.testing.io,
+            .environ = environ,
+            .install_directory = root,
+            .local_db_path = source,
+        };
+        try manager.writeDesktopEntry(case.clean_name, executable, source, .{
+            .name = "Editor",
+            .desktop_name = "Editor",
+            .icon_name = "editor",
+        });
+        const desktop_path = try manager.installedDesktopPath(case.clean_name);
+        defer std.testing.allocator.free(desktop_path);
+        const desktop = try readTestAppImageDb(std.testing.allocator, desktop_path);
+        defer std.testing.allocator.free(desktop);
+        try std.testing.expect(std.mem.indexOf(u8, desktop, expected_try_exec) != null);
+        try std.testing.expect(std.mem.indexOf(u8, desktop, quoted_try_exec) == null);
+    }
 }
 
 test "AppImage classification is case insensitive and extension based" {

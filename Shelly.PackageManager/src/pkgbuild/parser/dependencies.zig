@@ -71,6 +71,14 @@ fn strip_dangling_operator(dep: []const u8) []const u8 {
 }
 
 pub fn resolve_variable_references(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8), items: [][]const u8) ![][]const u8 {
+    return resolve_variable_references_mode(self, content, vars, items, false);
+}
+
+pub fn resolve_variable_references_preserving_commands(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8), items: [][]const u8) ![][]const u8 {
+    return resolve_variable_references_mode(self, content, vars, items, true);
+}
+
+fn resolve_variable_references_mode(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8), items: [][]const u8, preserve_commands: bool) ![][]const u8 {
     var resolved: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (resolved.items) |it| self.allocator.free(it);
@@ -85,13 +93,16 @@ pub fn resolve_variable_references(self: PkgbuildParser, content: []const u8, va
                 self.allocator.free(referenced_items);
             }
 
-            const nested = try resolve_variable_references(self, content, vars, referenced_items);
+            const nested = try resolve_variable_references_mode(self, content, vars, referenced_items, preserve_commands);
             defer self.allocator.free(nested);
             for (nested) |it| {
                 try resolved.append(self.allocator, it);
             }
         } else {
-            const resolved_item = try expansion.resolve_string(self, item, vars);
+            const resolved_item = if (preserve_commands)
+                try expansion.resolve_step_string(self, item, vars)
+            else
+                try expansion.resolve_string(self, item, vars);
             try resolved.append(self.allocator, resolved_item);
         }
     }
