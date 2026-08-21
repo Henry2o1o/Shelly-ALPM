@@ -277,6 +277,28 @@ test "package_names_content discovers and resolves every split package member" {
     }
 }
 
+test "parser_content: Cachy-style package names survive if prose in comments" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\# This reads the database if it exists
+        \\# Use this only if the GPU is supported
+        \\pkgbase=linux-cachyos
+        \\pkgname=("$pkgbase")
+        \\[ "$build_debug" = yes ] && pkgname+=("$pkgbase-dbg")
+        \\pkgname+=("$pkgbase-headers")
+        \\if [ "$build_zfs" = yes ]; then
+        \\pkgname+=("$pkgbase-zfs")
+        \\fi
+        \\arch=('x86_64')
+    ;
+    var names = try parser.package_names_content(content);
+    defer names.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), names.items.len);
+    try std.testing.expectEqualStrings("linux-cachyos", names.items[0]);
+    try std.testing.expectEqualStrings("linux-cachyos-headers", names.items[1]);
+}
+
 test "package_names_content discovers a resolved scalar package name" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     var names = try parser.package_names_content(
@@ -500,6 +522,42 @@ test "parser_content: flutter-3382-bin resolves dependencies declared in package
     try std.testing.expectEqual(@as(usize, 7), info.depends.?.len);
     try std.testing.expectEqualStrings("unionfs-fuse", info.depends.?[6]);
     try std.testing.expectEqualStrings("unionfs-fuse", info.parsed_depends.?[6].name);
+}
+
+test "parser_content: galaxybudsclient case conversion resolves package metadata" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "galaxybudsclient-bin.install",
+        .data = "post_install() { :; }\n",
+    });
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "galaxybudsclient.desktop",
+        .data = "[Desktop Entry]\nName=Galaxy Buds Client\n",
+    });
+    const base_dir = try temporary.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(base_dir);
+
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\_program_name=GalaxyBudsClient
+        \\_pkgname="${_program_name,,}"
+        \\pkgname="${_pkgname}-bin"
+        \\pkgver=5.2.1
+        \\pkgrel=1
+        \\arch=('x86_64')
+        \\install="${pkgname}.install"
+        \\source=("${_pkgname}.desktop")
+        \\sha256sums=('SKIP')
+    ;
+    var info = try parse_test_pkgbuild(parser, content, base_dir);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("galaxybudsclient-bin", info.pkg_name.?);
+    try std.testing.expectEqualStrings("galaxybudsclient-bin.install", info.install_file.?);
+    try std.testing.expectEqualStrings("galaxybudsclient.desktop", info.source.?[0]);
+    try std.testing.expectEqualStrings("GalaxyBudsClient", info.variables.get("_program_name").?);
+    try std.testing.expectEqualStrings("galaxybudsclient", info.variables.get("_pkgname").?);
 }
 
 test "parser_content: selected split package isolates package-scoped dependencies" {

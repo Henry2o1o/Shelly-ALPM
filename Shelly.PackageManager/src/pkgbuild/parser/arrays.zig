@@ -15,8 +15,12 @@ pub fn parse_array(self: PkgbuildParser, content: []const u8, variable_name: []c
     while (find_next_array_start(content, variable_name, search_from)) |m| {
         search_from = m.after_paren;
 
-        if (shell_scan.is_inside_conditional_block(content, m.start)) {
-            std.debug.print("[Shelly] Skipping conditional {s}+=() at offset {d}\n", .{ variable_name, m.start });
+        if (try shell_scan.is_inside_conditional_block(self, content, m.start)) {
+            std.debug.print("[Shelly] Skipping conditional {s}{s}() at offset {d}\n", .{
+                variable_name,
+                if (m.append) "+=" else "=",
+                m.start,
+            });
             continue;
         }
 
@@ -662,4 +666,27 @@ test "parse_array: conditional block is skipped" {
     }
 
     try std.testing.expectEqual(@as(usize, 0), items.len);
+}
+
+test "parse_array: Cachy-style comments do not hide unconditional package names" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\# Use this only if the GPU supports it
+        \\# Install metadata files if they exist
+        \\pkgname=(linux-cachyos)
+        \\[ "$build_debug" = yes ] && pkgname+=(linux-cachyos-dbg)
+        \\pkgname+=(linux-cachyos-headers)
+        \\if [ "$build_zfs" = yes ]; then
+        \\pkgname+=(linux-cachyos-zfs)
+        \\fi
+    ;
+    const items = try parse_array(parser, content, "pkgname");
+    defer {
+        for (items) |item| std.testing.allocator.free(item);
+        std.testing.allocator.free(items);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), items.len);
+    try std.testing.expectEqualStrings("linux-cachyos", items[0]);
+    try std.testing.expectEqualStrings("linux-cachyos-headers", items[1]);
 }

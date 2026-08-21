@@ -214,7 +214,7 @@ fn collect_top_level_array_names(
         const line_end = std.mem.indexOfScalarPos(u8, content, offset, '\n') orelse content.len;
         const line = std.mem.trimEnd(u8, content[offset..line_end], "\r");
         if (array_assignment_name(line)) |name| {
-            if (!shell_scan.is_inside_conditional_block(content, offset) and !seen.contains(name)) {
+            if (!try shell_scan.is_inside_conditional_block(self, content, offset) and !seen.contains(name)) {
                 const owned = try self.allocator.dupe(u8, name);
                 names.append(self.allocator, owned) catch |err| {
                     self.allocator.free(owned);

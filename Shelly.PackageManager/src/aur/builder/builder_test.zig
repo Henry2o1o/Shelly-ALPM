@@ -368,6 +368,49 @@ fn writeBase64Fixture(
     try directory.writeFile(io, .{ .sub_path = sub_path, .data = decoded });
 }
 
+/// Creates the small ar-plus-tar structure used by Debian binary packages.
+/// Keeping it local makes source-extraction tests independent of upstream
+/// downloads while exercising the same nested data.tar.xz flow as binary AUR
+/// recipes such as visual-studio-code-bin.
+fn writeDebFixture(fixture: *Fixture, sub_path: []const u8) !void {
+    const allocator = fixture.allocator;
+    const io = testing.io;
+    try fixture.temporary.dir.createDirPath(io, "deb-fixture");
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "deb-fixture/debian-binary",
+        .data = "2.0\n",
+    });
+
+    const fixture_directory = try std.fs.path.join(
+        allocator,
+        &.{ fixture.build_dir, "deb-fixture" },
+    );
+    defer allocator.free(fixture_directory);
+    const control_archive = try std.fs.path.join(
+        allocator,
+        &.{ fixture_directory, "control.tar.xz" },
+    );
+    defer allocator.free(control_archive);
+    const data_archive = try std.fs.path.join(
+        allocator,
+        &.{ fixture_directory, "data.tar.xz" },
+    );
+    defer allocator.free(data_archive);
+    const deb_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, sub_path });
+    defer allocator.free(deb_path);
+
+    try archive.writeFixture(allocator, control_archive, .xz, &.{});
+    try archive.writeFixture(allocator, data_archive, .xz, &.{
+        .{ .path = "usr/share/deb-source-demo/payload", .contents = "from deb\n" },
+    });
+    try runTestCommand(
+        allocator,
+        io,
+        &.{ "/usr/bin/ar", "rc", deb_path, "debian-binary", "control.tar.xz", "data.tar.xz" },
+        fixture_directory,
+    );
+}
+
 fn prepareSourcePgpHome(fixture: *Fixture) ![:0]u8 {
     const allocator = fixture.allocator;
     const io = testing.io;
@@ -1611,6 +1654,70 @@ test "PackageBuilder extracts source archives into srcdir" {
     try fixture.temporary.dir.access(io, "src/payload.tar.gz", .{});
     try fixture.temporary.dir.access(io, "src/demo/source.txt", .{});
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
+}
+
+test "PackageBuilder extracts Debian sources before package steps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=deb-source-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('code_1_amd64.deb')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  bsdtar -xf data.tar.xz -C "$pkgdir/"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try writeDebFixture(&fixture, "code_1_amd64.deb");
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/code_1_amd64.deb", .{});
+    try fixture.temporary.dir.access(io, "src/debian-binary", .{});
+    try fixture.temporary.dir.access(io, "src/control.tar.xz", .{});
+    try fixture.temporary.dir.access(io, "src/data.tar.xz", .{});
+    const payload = try fixture.temporary.dir.readFileAlloc(
+        io,
+        "pkg/deb-source-demo/usr/share/deb-source-demo/payload",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(payload);
+    try testing.expectEqualStrings("from deb\n", payload);
+}
+
+test "PackageBuilder honors noextract for Debian sources" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=deb-noextract-demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('opaque.deb')
+        \\noextract=('opaque.deb')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  test ! -e "$srcdir/data.tar.xz"
+        \\  install -Dm644 "$srcdir/opaque.deb" "$pkgdir/usr/share/deb-noextract-demo/opaque.deb"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try writeDebFixture(&fixture, "opaque.deb");
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/opaque.deb", .{});
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src/data.tar.xz", .{}));
+    try fixture.temporary.dir.access(io, "pkg/deb-noextract-demo/usr/share/deb-noextract-demo/opaque.deb", .{});
 }
 
 test "PackageBuilder downloads renamed file sources before build steps" {
