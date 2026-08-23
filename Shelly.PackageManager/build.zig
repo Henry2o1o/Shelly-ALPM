@@ -275,6 +275,9 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "backend dispatchers share one operation event stream",
             "ALPM and AUR questions use the shared response hook",
+            "common ALPM optional dependency choices preserve every selected index",
+            "install_packages preserves every optional dependency selection after an installed first choice",
+            "install_packages marks every selected optional dependency with dependency reason",
         },
     });
     const run_adapter_tests = b.addRunArtifact(adapter_tests);

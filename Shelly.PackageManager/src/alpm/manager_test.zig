@@ -390,6 +390,65 @@ const SyncTestWorkspace = struct {
         try file_writer.interface.flush();
     }
 
+    fn createOptionalDependencySyncDatabase(self: *const SyncTestWorkspace, allocator: std.mem.Allocator) !void {
+        const sync_dir = try std.fmt.allocPrint(allocator, "{s}/sync", .{self.db_path});
+        defer allocator.free(sync_dir);
+        try std.Io.Dir.cwd().createDirPath(self.io, sync_dir);
+
+        const database_path = try std.fmt.allocPrint(allocator, "{s}/seafoam-labs.db", .{sync_dir});
+        defer allocator.free(database_path);
+
+        const parent_desc =
+            "%FILENAME%\noptional-parent-1.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\noptional-parent\n\n" ++
+            "%BASE%\noptional-parent\n\n" ++
+            "%VERSION%\n1.0-1\n\n" ++
+            "%DESC%\nPackage with several optional dependencies\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n" ++
+            "%OPTDEPENDS%\ninstalled-option: already installed\noptional-one: first new option\noptional-two>=1: second new option\n\n";
+        const installed_desc =
+            "%FILENAME%\ninstalled-option-1.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\ninstalled-option\n\n" ++
+            "%BASE%\ninstalled-option\n\n" ++
+            "%VERSION%\n1.0-1\n\n" ++
+            "%DESC%\nAlready installed option\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n";
+        const first_desc =
+            "%FILENAME%\noptional-one-1.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\noptional-one\n\n" ++
+            "%BASE%\noptional-one\n\n" ++
+            "%VERSION%\n1.0-1\n\n" ++
+            "%DESC%\nFirst new option\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n";
+        const second_desc =
+            "%FILENAME%\noptional-two-1.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\noptional-two\n\n" ++
+            "%BASE%\noptional-two\n\n" ++
+            "%VERSION%\n1.0-1\n\n" ++
+            "%DESC%\nSecond new option\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n";
+
+        var file = try std.Io.Dir.cwd().createFile(self.io, database_path, .{});
+        defer file.close(self.io);
+        var write_buffer: [8192]u8 = undefined;
+        var file_writer = file.writer(self.io, &write_buffer);
+        var archive_writer: std.tar.Writer = .{ .underlying_writer = &file_writer.interface };
+        try archive_writer.writeFileBytes("optional-parent-1.0-1/desc", parent_desc, .{ .mode = 0o644 });
+        try archive_writer.writeFileBytes("installed-option-1.0-1/desc", installed_desc, .{ .mode = 0o644 });
+        try archive_writer.writeFileBytes("optional-one-1.0-1/desc", first_desc, .{ .mode = 0o644 });
+        try archive_writer.writeFileBytes("optional-two-1.0-1/desc", second_desc, .{ .mode = 0o644 });
+        try archive_writer.finishPedantically();
+        try file_writer.interface.flush();
+    }
+
     // Removes the entire temp tree (config + downloaded databases) and frees the
     // owned path strings. Safe to call regardless of how far `create` got.
     fn cleanup(self: *SyncTestWorkspace, allocator: std.mem.Allocator) void {
@@ -1813,6 +1872,127 @@ test "install_packages exposes its prepared plan and decline prevents downloads"
     const archive_path = try std.fmt.allocPrint(allocator, "{s}/remote-provider-2.0-1-any.pkg.tar", .{cache_path});
     defer allocator.free(archive_path);
     try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, archive_path, .{}));
+}
+
+test "install_packages preserves every optional dependency selection after an installed first choice" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "installed-option", "1.0-1");
+    try workspace.createOptionalDependencySyncDatabase(allocator);
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{workspace.root});
+    defer allocator.free(cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\nArchitecture = auto\nSigLevel = Never\nDBPath = {s}\nCacheDir = {s}\n\n" ++
+            "[seafoam-labs]\nServer = file://{s}/mirror\n",
+        .{ workspace.db_path, cache_path, workspace.root },
+    );
+    defer allocator.free(config);
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
+    defer mgr.deinit();
+    const Capture = struct {
+        saw_optional_question: bool = false,
+        saw_plan: bool = false,
+
+        fn answer(data: ?*anyopaque, question: operations.Question) operations.QuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            if (question.kind == .select_optional_dependencies) {
+                testing.expectEqual(@as(usize, 3), question.options.len) catch unreachable;
+                testing.expectEqualStrings("installed-option", question.options[0].id) catch unreachable;
+                testing.expect(question.options[0].is_installed) catch unreachable;
+                self.saw_optional_question = true;
+                return .{ .choices = &.{ 0, 1, 2 } };
+            }
+            if (question.kind != .confirm_transaction) return .accepted;
+
+            const plan = question.transaction_plan orelse return .declined;
+            var saw_parent = false;
+            var saw_first = false;
+            var saw_second = false;
+            for (plan.packages) |package| {
+                if (std.mem.eql(u8, package.name, "optional-parent")) {
+                    testing.expectEqual(operations.TransactionPackageRole.requested, package.role) catch unreachable;
+                    saw_parent = true;
+                } else if (std.mem.eql(u8, package.name, "optional-one")) {
+                    testing.expectEqual(operations.TransactionPackageRole.optional_dependency, package.role) catch unreachable;
+                    saw_first = true;
+                } else if (std.mem.eql(u8, package.name, "optional-two")) {
+                    testing.expectEqual(operations.TransactionPackageRole.optional_dependency, package.role) catch unreachable;
+                    saw_second = true;
+                } else if (std.mem.eql(u8, package.name, "installed-option")) {
+                    unreachable;
+                }
+            }
+            testing.expectEqual(@as(usize, 3), plan.packages.len) catch unreachable;
+            testing.expect(saw_parent and saw_first and saw_second) catch unreachable;
+            self.saw_plan = true;
+            return .declined;
+        }
+    };
+    var capture: Capture = .{};
+    var context = operations.OperationContext.init(allocator, io);
+    defer context.deinit();
+    context.setQuestionHandler(.{ .function = Capture.answer, .data = &capture });
+    mgr.setOperationContext(&context);
+
+    var package_names = [_][:0]const u8{"optional-parent"};
+    try testing.expectError(error.Cancelled, mgr.install_packages(&package_names, .{}));
+    try testing.expect(capture.saw_optional_question);
+    try testing.expect(capture.saw_plan);
+}
+
+test "install_packages marks every selected optional dependency with dependency reason" {
+    // libalpm requires root even for DBONLY commits into a temporary database.
+    if (builtin.os.tag != .linux or std.os.linux.geteuid() != 0) return;
+
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.addLocalPackage(allocator, "installed-option", "1.0-1");
+    try workspace.createOptionalDependencySyncDatabase(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
+    defer mgr.deinit();
+    try testing.expectEqual(@as(c_int, 0), libalpm.alpm.alpm_option_set_hookdirs(mgr.handle, null));
+
+    const Responder = struct {
+        fn answer(_: ?*anyopaque, question: operations.Question) operations.QuestionResponse {
+            return if (question.kind == .select_optional_dependencies)
+                .{ .choices = &.{ 0, 1, 2 } }
+            else
+                .accepted;
+        }
+    };
+    var context = operations.OperationContext.init(allocator, io);
+    defer context.deinit();
+    context.setQuestionHandler(.{ .function = Responder.answer });
+    mgr.setOperationContext(&context);
+
+    var package_names = [_][:0]const u8{"optional-parent"};
+    try mgr.install_packages(&package_names, .{ .dbonly = true });
+
+    const parent = (try mgr.get_single_installed_package("optional-parent")) orelse return error.TestFailed;
+    const first = (try mgr.get_single_installed_package("optional-one")) orelse return error.TestFailed;
+    const second = (try mgr.get_single_installed_package("optional-two")) orelse return error.TestFailed;
+    try testing.expectEqual(libalpm.PackageReason.Explicit, parent.install_reason());
+    try testing.expectEqual(libalpm.PackageReason.Dependency, first.install_reason());
+    try testing.expectEqual(libalpm.PackageReason.Dependency, second.install_reason());
 }
 
 // ---------------------------------------------------------------------------

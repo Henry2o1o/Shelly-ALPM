@@ -799,8 +799,8 @@ pub const Manager = struct {
         }
         if (packages.items.len == 0) return TransactionError.PackageFetchFailed;
 
-        // Ask once per package. The event response's `pkg` is the selected optional
-        // dependency; callers may answer repeatedly as each package is inspected.
+        // Ask once per package. Shared callers return every selected option index;
+        // legacy handlers may still return a single package name in `pkg`.
         const initial_count = packages.items.len;
         for (packages.items[0..initial_count]) |pkg| {
             var names: std.ArrayList([]const u8) = .empty;
@@ -830,21 +830,41 @@ pub const Manager = struct {
                 .options = names.items,
                 .provider_options = options.items,
             });
-            const selected = response.pkg orelse continue;
-            const selected_z = try self.allocator.dupeZ(u8, selected);
-            defer self.allocator.free(selected_z);
-            if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(rawLibalpm.alpm_get_localdb(self.handle)), selected_z.ptr) != null) continue;
-            var node = sync_databases;
-            while (node != null) : (node = node.*.next) {
-                const db_data: ?*anyopaque = node.*.data;
-                const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
-                const database = libalpm.Database.from(db_ptr) orelse continue;
-                if (!database.allowUsage(.install)) continue;
-                const selected_pkg = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db_ptr), selected_z.ptr) orelse continue;
-                try packages.append(self.allocator, selected_pkg);
-                if (libalpm.str(rawLibalpm.alpm_pkg_get_name(selected_pkg))) |resolved_name|
-                    try optional_names.append(self.allocator, resolved_name);
-                break;
+            var selected_names: std.ArrayList([]const u8) = .empty;
+            defer selected_names.deinit(self.allocator);
+            for (response.selected_indices) |index| {
+                if (index >= names.items.len) continue;
+                try selected_names.append(self.allocator, names.items[index]);
+            }
+            if (response.selected_indices.len == 0) {
+                if (response.pkg) |selected| try selected_names.append(self.allocator, selected);
+            }
+
+            for (selected_names.items) |selected| {
+                const selected_z = try self.allocator.dupeZ(u8, selected);
+                defer self.allocator.free(selected_z);
+                if (rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(rawLibalpm.alpm_get_localdb(self.handle)), selected_z.ptr) != null) continue;
+                var node = sync_databases;
+                while (node != null) : (node = node.*.next) {
+                    const db_data: ?*anyopaque = node.*.data;
+                    const db_ptr: *rawLibalpm.alpm_db_t = @ptrCast(@alignCast(db_data orelse continue));
+                    const database = libalpm.Database.from(db_ptr) orelse continue;
+                    if (!database.allowUsage(.install)) continue;
+                    const selected_pkg = rawLibalpm.alpm_find_satisfier(rawLibalpm.alpm_db_get_pkgcache(db_ptr), selected_z.ptr) orelse continue;
+                    var already_scheduled = false;
+                    for (packages.items) |scheduled| {
+                        if (scheduled == selected_pkg) {
+                            already_scheduled = true;
+                            break;
+                        }
+                    }
+                    if (!already_scheduled) {
+                        try packages.append(self.allocator, selected_pkg);
+                        if (libalpm.str(rawLibalpm.alpm_pkg_get_name(selected_pkg))) |resolved_name|
+                            try optional_names.append(self.allocator, resolved_name);
+                    }
+                    break;
+                }
             }
         }
 
