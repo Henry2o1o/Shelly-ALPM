@@ -2391,7 +2391,17 @@ pub const Manager = struct {
         try self.download_prepared_packages();
     }
 
+    fn stalePartSweep(self: *Manager, max_age: std.Io.Duration) void {
+        var cache_directories = self.get_cache_directories() catch return;
+        defer cache_directories.deinit(self.allocator);
+
+        for (cache_directories.items) |cache_directory| {
+            stalePartSweepDirectory(self.allocator, self.io(), cache_directory, max_age);
+        }
+    }
+
     fn download_prepared_packages(self: *Manager) TransactionError!void {
+        self.stalePartSweep(std.Io.Duration.fromSeconds(500));
         const download_future = std.Io.Future(downloader.DownloadError!void);
 
         var futures: std.ArrayList(download_future) = .empty;
@@ -3158,6 +3168,30 @@ fn syncDatabaseDirectory(io: std.Io, path: []const u8) !void {
     try directory_file.sync(io);
 }
 
+fn stalePartSweepDirectory(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    cache_directory: []const u8,
+    max_age: std.Io.Duration,
+) void {
+    var dir = std.Io.Dir.cwd().openDir(io, cache_directory, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var walker = dir.walk(allocator) catch return;
+    defer walker.deinit();
+
+    const now = std.Io.Timestamp.now(io, .real).nanoseconds;
+    while (walker.next(io) catch return) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.indexOf(u8, entry.path, ".part.") == null) continue;
+
+        const stat = dir.statFile(io, entry.path, .{}) catch continue;
+        if (stat.mtime.nanoseconds > now) continue;
+        const age_ns = now - stat.mtime.nanoseconds;
+        if (age_ns < max_age.nanoseconds) continue;
+        dir.deleteFile(io, entry.path) catch {};
+    }
+}
+
 fn mirrorDownloadConfiguration(
     configured_server_count: usize,
     address_family_policy: downloader.AddressFamilyPolicy,
@@ -3233,6 +3267,39 @@ test "database batch barrier synchronizes its directory" {
     var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const path_length = try temporary.dir.realPath(io, &path_buffer);
     try syncDatabaseDirectory(io, path_buffer[0..path_length]);
+}
+
+test "stale part sweep removes only expired partial downloads" {
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.createDirPath(io, "nested");
+
+    const old_part = "nested/package.pkg.tar.zst.part.old";
+    const fresh_part = "package.pkg.tar.zst.part.fresh";
+    const old_complete = "package.pkg.tar.zst";
+    for ([_][]const u8{ old_part, fresh_part, old_complete }) |path| {
+        var file = try temporary.dir.createFile(io, path, .{});
+        file.close(io);
+    }
+
+    const now = std.Io.Timestamp.now(io, .real);
+    const old_timestamp = now.subDuration(std.Io.Duration.fromSeconds(600));
+    try temporary.dir.setTimestamps(io, old_part, .{ .modify_timestamp = .{ .new = old_timestamp } });
+    try temporary.dir.setTimestamps(io, old_complete, .{ .modify_timestamp = .{ .new = old_timestamp } });
+
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path_length = try temporary.dir.realPath(io, &path_buffer);
+    stalePartSweepDirectory(
+        std.testing.allocator,
+        io,
+        path_buffer[0..path_length],
+        std.Io.Duration.fromSeconds(500),
+    );
+
+    try std.testing.expectError(error.FileNotFound, temporary.dir.statFile(io, old_part, .{}));
+    _ = try temporary.dir.statFile(io, fresh_part, .{});
+    _ = try temporary.dir.statFile(io, old_complete, .{});
 }
 
 test "process-wide address-family default is configurable" {
