@@ -1728,6 +1728,8 @@ test "PackageBuilder extracts source archives into srcdir" {
         \\sha256sums=('SKIP')
         \\build() {
         \\  test "$(cat "$srcdir/demo/source.txt")" = extracted
+        \\  test "$(cat "$srcdir/demo/bin/tool")" = linked
+        \\  test "$(cat "$srcdir/demo/current")" = linked
         \\}
         \\package() {
         \\  mkdir -p "$pkgdir/usr/share/demo"
@@ -1739,6 +1741,9 @@ test "PackageBuilder extracts source archives into srcdir" {
     defer allocator.free(archive_path);
     try archive.writeFixture(allocator, archive_path, .gzip, &.{
         .{ .path = "demo/source.txt", .contents = "extracted\n" },
+        .{ .path = "demo/lib/tool", .contents = "linked\n", .permissions = 0o755 },
+        .{ .path = "demo/bin/tool", .link_target = "../lib/tool" },
+        .{ .path = "demo/current", .link_target = "bin/tool" },
     });
     fixture.builder.options.sources_prepared = false;
     try fixture.temporary.dir.deleteTree(io, "src");
@@ -1748,7 +1753,107 @@ test "PackageBuilder extracts source archives into srcdir" {
     try testing.expectEqual(@as(usize, 1), artifacts.len);
     try fixture.temporary.dir.access(io, "src/payload.tar.gz", .{});
     try fixture.temporary.dir.access(io, "src/demo/source.txt", .{});
+    const nested_link = try fixture.temporary.dir.statFile(io, "src/demo/bin/tool", .{ .follow_symlinks = false });
+    try testing.expectEqual(std.Io.File.Kind.sym_link, nested_link.kind);
+    const chained_link = try fixture.temporary.dir.statFile(io, "src/demo/current", .{ .follow_symlinks = false });
+    try testing.expectEqual(std.Io.File.Kind.sym_link, chained_link.kind);
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
+}
+
+test "PackageBuilder rebases Zoom absolute source archive link inside srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=zoom
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('zoom.pkg.tar.xz')
+        \\sha256sums=('SKIP')
+        \\build() {
+        \\  test "$(cat "$srcdir/usr/bin/zoom")" = launcher
+        \\}
+        \\package() {
+        \\  cp -dpr --no-preserve=ownership opt usr "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "zoom.pkg.tar.xz" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .xz, &.{
+        .{ .path = "opt/zoom/ZoomLauncher", .contents = "launcher\n", .permissions = 0o755 },
+        .{ .path = "usr/bin/zoom", .link_target = "/opt/zoom/ZoomLauncher" },
+    });
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+
+    var target_buffer: [256]u8 = undefined;
+    const source_target_len = try fixture.temporary.dir.readLink(io, "src/usr/bin/zoom", &target_buffer);
+    try testing.expectEqualStrings("../../opt/zoom/ZoomLauncher", target_buffer[0..source_target_len]);
+    const package_target_len = try fixture.temporary.dir.readLink(io, "pkg/zoom/usr/bin/zoom", &target_buffer);
+    try testing.expectEqualStrings("../../opt/zoom/ZoomLauncher", target_buffer[0..package_target_len]);
+}
+
+test "PackageBuilder rejects source archive links that escape the extraction root" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.tar.gz')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.tar.gz" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "demo/bin/tool", .link_target = "../../../escape-marker" },
+    });
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "escape-marker", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
+test "PackageBuilder rejects source archive link destination collisions" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.tar.gz')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.tar.gz" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "demo/target", .contents = "original\n" },
+        .{ .path = "demo/target", .link_target = "other" },
+    });
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
 }
 
 test "PackageBuilder extracts Debian sources before package steps" {

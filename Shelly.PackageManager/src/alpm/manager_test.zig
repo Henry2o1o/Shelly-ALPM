@@ -325,12 +325,28 @@ const SyncTestWorkspace = struct {
         name: []const u8,
         version: []const u8,
     ) ![]u8 {
+        return self.createPackageArchiveWithDependencies(allocator, name, version, &.{});
+    }
+
+    fn createPackageArchiveWithDependencies(
+        self: *const SyncTestWorkspace,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        version: []const u8,
+        dependencies: []const []const u8,
+    ) ![]u8 {
         const package_path = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}-{s}-any.pkg.tar",
             .{ self.root, name, version },
         );
         errdefer allocator.free(package_path);
+
+        var dependency_lines: std.ArrayList(u8) = .empty;
+        defer dependency_lines.deinit(allocator);
+        for (dependencies) |dependency| {
+            try dependency_lines.print(allocator, "depend = {s}\n", .{dependency});
+        }
 
         const pkginfo = try std.fmt.allocPrint(
             allocator,
@@ -344,8 +360,9 @@ const SyncTestWorkspace = struct {
                 "packager = Shelly test suite\n" ++
                 "size = 0\n" ++
                 "arch = any\n" ++
-                "license = MIT\n",
-            .{ name, name, version, name },
+                "license = MIT\n" ++
+                "{s}",
+            .{ name, name, version, name, dependency_lines.items },
         );
         defer allocator.free(pkginfo);
 
@@ -2013,6 +2030,75 @@ test "install_local_packages reports an unreadable package archive" {
         mgr.install_local_packages(&paths, .{}),
     );
     try testing.expect(capture.len != 0);
+}
+
+test "install_local_packages predownloads repository dependencies before commit" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var workspace = try SyncTestWorkspace.create(allocator, io);
+    defer workspace.cleanup(allocator);
+    try workspace.createSyncDatabase(allocator);
+
+    const provider_path = try workspace.createPackageArchive(allocator, "remote-provider", "2.0-1");
+    defer allocator.free(provider_path);
+
+    const local_path = try workspace.createPackageArchiveWithDependencies(
+        allocator,
+        "aur-style-package",
+        "1.0-1",
+        &.{"remote-provider"},
+    );
+    defer allocator.free(local_path);
+
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{workspace.root});
+    defer allocator.free(cache_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_path);
+
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\n" ++
+            "Architecture = auto\n" ++
+            "SigLevel = Never\n" ++
+            "DBPath = {s}\n" ++
+            "CacheDir = {s}\n" ++
+            "\n" ++
+            "[seafoam-labs]\n" ++
+            "Server = file://{s}\n",
+        .{ workspace.db_path, cache_path, workspace.root },
+    );
+    defer allocator.free(config);
+    {
+        var config_file = try std.Io.Dir.cwd().createFile(io, workspace.config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+    }
+
+    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
+    defer mgr.deinit();
+
+    const UnexpectedFetchCapture = struct {
+        saw_unexpected_fetch: bool = false,
+
+        fn capture(data: ?*anyopaque, args: events.ErrorArgs) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            if (std.mem.indexOf(u8, args.message, "Unexpected libalpm fetch request") != null) {
+                self.saw_unexpected_fetch = true;
+            }
+        }
+    };
+    var capture: UnexpectedFetchCapture = .{};
+    _ = try mgr.dispatcher.addErrorHandler(.{ .function = UnexpectedFetchCapture.capture, .data = &capture });
+
+    var paths = [_][]const u8{local_path};
+    try mgr.install_local_packages(&paths, .{ .downloadonly = true });
+
+    const cached_provider = try std.fmt.allocPrint(allocator, "{s}/remote-provider-2.0-1-any.pkg.tar", .{cache_path});
+    defer allocator.free(cached_provider);
+    _ = try std.Io.Dir.cwd().statFile(io, cached_provider, .{});
+    try testing.expect(!capture.saw_unexpected_fetch);
 }
 
 test "install_local_packages installs multiple archives in a DB-only transaction" {
