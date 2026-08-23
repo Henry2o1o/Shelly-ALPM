@@ -68,7 +68,11 @@ pub fn resolve_execution_plan(
                 );
                 defer self.allocator.free(scoped_name);
 
-                if (try function_body.extract_function_body(content, scoped_name)) |body| {
+                if (try function_body.selected_scoped_package_body(
+                    self,
+                    content,
+                    vars,
+                )) |body| {
                     try append_execution_step(self, &steps, scoped_name, body, &package_vars);
                     continue;
                 }
