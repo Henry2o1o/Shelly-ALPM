@@ -1529,6 +1529,8 @@ pub const Manager = struct {
             return TransactionError.PrepareFailed;
         }
 
+        try self.predownloadPreparedPackages(flags);
+
         data = null;
         if (rawLibalpm.alpm_trans_commit(self.handle, &data) != 0) {
             self.handleErrorMessage(@intCast(rawLibalpm.alpm_errno(self.handle)), data) catch {
@@ -2433,6 +2435,11 @@ pub const Manager = struct {
         while (packages != null) : (packages = packages.*.next) {
             const data = packages.*.data orelse continue;
             const package = libalpm.Package{ .ptr = @ptrCast(@alignCast(data)) };
+
+            // File-origin packages are already available at their caller-supplied
+            // path. Only dependencies selected from a sync database need to be
+            // copied into libalpm's package cache before commit.
+            if (rawLibalpm.alpm_pkg_get_origin(package.ptr) != rawLibalpm.ALPM_PKG_FROM_SYNCDB) continue;
 
             const database = package.database() orelse {
                 failed = true;
