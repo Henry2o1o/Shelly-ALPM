@@ -400,6 +400,208 @@ const SyncTestWorkspace = struct {
     }
 };
 
+/// A fully local repository fixture for database-signature synchronization.
+/// Source files deliberately use restrictive modes so successful syncs prove
+/// that destination permissions do not inherit either source modes or umask.
+const SignatureSyncWorkspace = struct {
+    io: std.Io,
+    root: []const u8,
+    config_path: []const u8,
+    db_path: []const u8,
+    mirror_path: []const u8,
+
+    fn create(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        signature_level: []const u8,
+        include_signature: bool,
+    ) !SignatureSyncWorkspace {
+        const anchor: u8 = 0;
+        var prng = std.Random.DefaultPrng.init(@intFromPtr(&anchor));
+        const root = try std.fmt.allocPrint(allocator, "/tmp/shelly-signature-sync-test-{x}", .{prng.random().int(u32)});
+        errdefer allocator.free(root);
+        const config_path = try std.fmt.allocPrint(allocator, "{s}/pacman.conf", .{root});
+        errdefer allocator.free(config_path);
+        const db_path = try std.fmt.allocPrint(allocator, "{s}/db", .{root});
+        errdefer allocator.free(db_path);
+        const mirror_path = try std.fmt.allocPrint(allocator, "{s}/mirror", .{root});
+        errdefer allocator.free(mirror_path);
+        const gpg_path = try std.fmt.allocPrint(allocator, "{s}/gnupg", .{root});
+        defer allocator.free(gpg_path);
+
+        std.Io.Dir.cwd().deleteTree(io, root) catch {};
+        try std.Io.Dir.cwd().createDirPath(io, db_path);
+        try std.Io.Dir.cwd().createDirPath(io, mirror_path);
+        try std.Io.Dir.cwd().createDirPath(io, gpg_path);
+
+        const database_path = try std.fmt.allocPrint(allocator, "{s}/seafoam-labs.db", .{mirror_path});
+        defer allocator.free(database_path);
+        {
+            var file = try std.Io.Dir.cwd().createFile(io, database_path, .{});
+            defer file.close(io);
+            var write_buffer: [4096]u8 = undefined;
+            var file_writer = file.writer(io, &write_buffer);
+            var archive_writer: std.tar.Writer = .{ .underlying_writer = &file_writer.interface };
+            try archive_writer.writeFileBytes(
+                "fixture-1.0-1/desc",
+                "%FILENAME%\nfixture-1.0-1-any.pkg.tar.zst\n\n" ++
+                    "%NAME%\nfixture\n\n" ++
+                    "%VERSION%\n1.0-1\n\n" ++
+                    "%DESC%\nDatabase signature synchronization fixture\n\n" ++
+                    "%CSIZE%\n1\n\n" ++
+                    "%ISIZE%\n1\n\n" ++
+                    "%ARCH%\nany\n\n",
+                .{ .mode = 0o644 },
+            );
+            try archive_writer.finishPedantically();
+            try file_writer.interface.flush();
+            try file.setPermissions(io, .fromMode(0o600));
+        }
+
+        if (include_signature) {
+            const signature_path = try std.fmt.allocPrint(allocator, "{s}.sig", .{database_path});
+            defer allocator.free(signature_path);
+            var signature = try std.Io.Dir.cwd().createFile(io, signature_path, .{});
+            defer signature.close(io);
+            try signature.writeStreamingAll(io, "deliberately-invalid-detached-signature");
+            try signature.setPermissions(io, .fromMode(0o600));
+        }
+
+        const config = try std.fmt.allocPrint(
+            allocator,
+            "[options]\n" ++
+                "Architecture = x86_64\n" ++
+                "DBPath = {s}\n" ++
+                "GPGDir = {s}\n" ++
+                "SigLevel = {s}\n" ++
+                "\n" ++
+                "[seafoam-labs]\n" ++
+                "Server = file://{s}\n",
+            .{ db_path, gpg_path, signature_level, mirror_path },
+        );
+        defer allocator.free(config);
+        var config_file = try std.Io.Dir.cwd().createFile(io, config_path, .{});
+        defer config_file.close(io);
+        try config_file.writeStreamingAll(io, config);
+
+        return .{
+            .io = io,
+            .root = root,
+            .config_path = config_path,
+            .db_path = db_path,
+            .mirror_path = mirror_path,
+        };
+    }
+
+    fn syncPath(self: *const SignatureSyncWorkspace, allocator: std.mem.Allocator, suffix: []const u8) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{s}/sync/seafoam-labs.db{s}", .{ self.db_path, suffix });
+    }
+
+    fn cleanup(self: *SignatureSyncWorkspace, allocator: std.mem.Allocator) void {
+        std.Io.Dir.cwd().deleteTree(self.io, self.root) catch {};
+        allocator.free(self.mirror_path);
+        allocator.free(self.db_path);
+        allocator.free(self.config_path);
+        allocator.free(self.root);
+    }
+};
+
+test "optional database signatures are retained beside world-readable databases" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var workspace = try SignatureSyncWorkspace.create(allocator, io, "Required DatabaseOptional", true);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
+    defer mgr.deinit();
+    try mgr.sync_for_update_check(true);
+
+    const database_path = try workspace.syncPath(allocator, "");
+    defer allocator.free(database_path);
+    const signature_path = try workspace.syncPath(allocator, ".sig");
+    defer allocator.free(signature_path);
+    const database_stat = try std.Io.Dir.cwd().statFile(io, database_path, .{});
+    const signature_stat = try std.Io.Dir.cwd().statFile(io, signature_path, .{});
+    try testing.expectEqual(@as(u32, 0o644), database_stat.permissions.toMode() & 0o7777);
+    try testing.expectEqual(@as(u32, 0o644), signature_stat.permissions.toMode() & 0o7777);
+
+    const sync_directory = try std.fmt.allocPrint(allocator, "{s}/sync", .{workspace.db_path});
+    defer allocator.free(sync_directory);
+    const directory_stat = try std.Io.Dir.cwd().statFile(io, sync_directory, .{});
+    try testing.expectEqual(@as(u32, 0o755), directory_stat.permissions.toMode() & 0o7777);
+}
+
+test "optional missing database signature succeeds and removes a stale sibling" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var workspace = try SignatureSyncWorkspace.create(allocator, io, "Required DatabaseOptional", false);
+    defer workspace.cleanup(allocator);
+
+    const sync_directory = try std.fmt.allocPrint(allocator, "{s}/sync", .{workspace.db_path});
+    defer allocator.free(sync_directory);
+    try std.Io.Dir.cwd().createDirPath(io, sync_directory);
+    try std.Io.Dir.cwd().setFilePermissions(io, sync_directory, .fromMode(0o700), .{});
+    const signature_path = try workspace.syncPath(allocator, ".sig");
+    defer allocator.free(signature_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = signature_path, .data = "stale-signature" });
+
+    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
+    defer mgr.deinit();
+    try mgr.sync_for_update_check(true);
+
+    const database_path = try workspace.syncPath(allocator, "");
+    defer allocator.free(database_path);
+    const database_stat = try std.Io.Dir.cwd().statFile(io, database_path, .{});
+    try testing.expectEqual(@as(u32, 0o644), database_stat.permissions.toMode() & 0o7777);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, signature_path, .{}));
+    const directory_stat = try std.Io.Dir.cwd().statFile(io, sync_directory, .{});
+    try testing.expectEqual(@as(u32, 0o755), directory_stat.permissions.toMode() & 0o7777);
+}
+
+test "required missing database signature fails without leaving a database" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var workspace = try SignatureSyncWorkspace.create(allocator, io, "Required", false);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
+    defer mgr.deinit();
+    try testing.expectError(error.UpdateFetchFailed, mgr.sync_for_update_check(true));
+
+    const database_path = try workspace.syncPath(allocator, "");
+    defer allocator.free(database_path);
+    const signature_path = try workspace.syncPath(allocator, ".sig");
+    defer allocator.free(signature_path);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, database_path, .{}));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, signature_path, .{}));
+}
+
+test "invalid optional database signature is fatal and cleaned up" {
+    const allocator = testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var workspace = try SignatureSyncWorkspace.create(allocator, io, "Required DatabaseOptional", true);
+    defer workspace.cleanup(allocator);
+
+    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
+    defer mgr.deinit();
+    try testing.expectError(error.SyncDbFailed, mgr.sync(true));
+
+    const database_path = try workspace.syncPath(allocator, "");
+    defer allocator.free(database_path);
+    const signature_path = try workspace.syncPath(allocator, ".sig");
+    defer allocator.free(signature_path);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, database_path, .{}));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, signature_path, .{}));
+}
+
 test "Manager.init registers the configured sync database" {
     const allocator = testing.allocator;
 
@@ -529,7 +731,7 @@ test "Manager.sync downloads the configured database into DBPath/sync" {
     defer threaded.deinit();
     const io = threaded.io();
 
-    var workspace = try SyncTestWorkspace.create(allocator, io);
+    var workspace = try SignatureSyncWorkspace.create(allocator, io, "Never", false);
     defer workspace.cleanup(allocator);
 
     const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
@@ -538,8 +740,7 @@ test "Manager.sync downloads the configured database into DBPath/sync" {
     // Force the download so the result never depends on a pre-existing cache.
     try mgr.sync(true);
 
-    // sync creates "<DBPath>/sync" and download_database stores each database
-    // there under its bare repository name (no extension).
+    // sync creates "<DBPath>/sync" and stores the configured database there.
     const sync_dir = try std.fmt.allocPrint(allocator, "{s}/sync", .{workspace.db_path});
     defer allocator.free(sync_dir);
     _ = try std.Io.Dir.cwd().statFile(io, sync_dir, .{});
@@ -1377,7 +1578,7 @@ test "get_available_packages returns packages after a successful sync" {
     defer threaded.deinit();
     const io = threaded.io();
 
-    var workspace = try SyncTestWorkspace.create(allocator, io);
+    var workspace = try SignatureSyncWorkspace.create(allocator, io, "Never", false);
     defer workspace.cleanup(allocator);
 
     const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
@@ -1389,7 +1590,7 @@ test "get_available_packages returns packages after a successful sync" {
     const packages = try mgr.get_available_packages();
     defer libalpm.OwnedPackage.deinitSlice(allocator, packages);
 
-    // A real repository always exposes packages, each with a readable name.
+    // The local fixture exposes one package with a readable name.
     try testing.expect(packages.len > 0);
     for (packages) |package| {
         _ = package.name() orelse return error.TestFailed;
@@ -1873,7 +2074,7 @@ test "get_updates_available returns an empty list when no packages are installed
     defer threaded.deinit();
     const io = threaded.io();
 
-    var workspace = try SyncTestWorkspace.create(allocator, io);
+    var workspace = try SignatureSyncWorkspace.create(allocator, io, "Never", false);
     defer workspace.cleanup(allocator);
 
     const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
