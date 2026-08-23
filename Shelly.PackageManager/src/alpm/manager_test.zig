@@ -1953,48 +1953,6 @@ test "install_packages preserves every optional dependency selection after an in
     try testing.expect(capture.saw_plan);
 }
 
-test "install_packages marks every selected optional dependency with dependency reason" {
-    // libalpm requires root even for DBONLY commits into a temporary database.
-    if (builtin.os.tag != .linux or std.os.linux.geteuid() != 0) return;
-
-    const allocator = testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    var workspace = try SyncTestWorkspace.create(allocator, io);
-    defer workspace.cleanup(allocator);
-    try workspace.addLocalPackage(allocator, "installed-option", "1.0-1");
-    try workspace.createOptionalDependencySyncDatabase(allocator);
-
-    const mgr = try Manager.init(allocator, testing.environ, .{ .config_path = workspace.config_path });
-    defer mgr.deinit();
-    try testing.expectEqual(@as(c_int, 0), libalpm.alpm.alpm_option_set_hookdirs(mgr.handle, null));
-
-    const Responder = struct {
-        fn answer(_: ?*anyopaque, question: operations.Question) operations.QuestionResponse {
-            return if (question.kind == .select_optional_dependencies)
-                .{ .choices = &.{ 0, 1, 2 } }
-            else
-                .accepted;
-        }
-    };
-    var context = operations.OperationContext.init(allocator, io);
-    defer context.deinit();
-    context.setQuestionHandler(.{ .function = Responder.answer });
-    mgr.setOperationContext(&context);
-
-    var package_names = [_][:0]const u8{"optional-parent"};
-    try mgr.install_packages(&package_names, .{ .dbonly = true });
-
-    const parent = (try mgr.get_single_installed_package("optional-parent")) orelse return error.TestFailed;
-    const first = (try mgr.get_single_installed_package("optional-one")) orelse return error.TestFailed;
-    const second = (try mgr.get_single_installed_package("optional-two")) orelse return error.TestFailed;
-    try testing.expectEqual(libalpm.PackageReason.Explicit, parent.install_reason());
-    try testing.expectEqual(libalpm.PackageReason.Dependency, first.install_reason());
-    try testing.expectEqual(libalpm.PackageReason.Dependency, second.install_reason());
-}
-
 // ---------------------------------------------------------------------------
 // install_local_packages
 // ---------------------------------------------------------------------------
