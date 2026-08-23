@@ -2563,6 +2563,56 @@ test "PackageBuilder enforces makepkg package function contracts" {
     );
 }
 
+test "PackageBuilder supports CachyOS generated split package functions" {
+    const allocator = testing.allocator;
+    const content =
+        \\pkgbase=linux-cachyos
+        \\pkgname=("$pkgbase" "$pkgbase-headers")
+        \\pkgver=7.2.0
+        \\pkgrel=1
+        \\pkgdesc='CachyOS kernel'
+        \\arch=('any')
+        \\_package() {
+        \\  pkgdesc="The $pkgdesc kernel and modules"
+        \\  depends=('kmod')
+        \\  mkdir -p "$pkgdir/usr/lib/modules/cachyos"
+        \\}
+        \\_package-headers() {
+        \\  pkgdesc="Headers for the $pkgdesc kernel"
+        \\  depends=("$pkgbase")
+        \\  mkdir -p "$pkgdir/usr/lib/modules/cachyos/build"
+        \\}
+        \\for _p in "${pkgname[@]}"; do
+        \\  eval "package_$_p() {
+        \\    $(declare -f "_package${_p#$pkgbase}")
+        \\    _package${_p#$pkgbase}
+        \\  }"
+        \\done
+    ;
+    const requested = [_][]const u8{ "linux-cachyos", "linux-cachyos-headers" };
+    var fixture = try Fixture.createMany(allocator, content, &requested, null);
+    defer fixture.destroy();
+
+    for (fixture.package_builds) |package_build| {
+        try testing.expect(package_build.has_selected_package_function);
+        try testing.expect(package_build.has_complete_split_functions);
+    }
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 2), artifacts.len);
+
+    const kernel_info = try readPkgInfo(allocator, artifacts[0].path);
+    defer allocator.free(kernel_info);
+    try testing.expect(std.mem.indexOf(u8, kernel_info, "pkgdesc = The CachyOS kernel kernel and modules\n") != null);
+    try testing.expect(std.mem.indexOf(u8, kernel_info, "depend = kmod\n") != null);
+
+    const headers_info = try readPkgInfo(allocator, artifacts[1].path);
+    defer allocator.free(headers_info);
+    try testing.expect(std.mem.indexOf(u8, headers_info, "pkgdesc = Headers for the CachyOS kernel kernel\n") != null);
+    try testing.expect(std.mem.indexOf(u8, headers_info, "depend = linux-cachyos\n") != null);
+}
+
 test "PackageBuilder rejects wrong metadata types and skips unsupported split architectures" {
     const allocator = testing.allocator;
     var wrong_type = try Fixture.create(allocator,
