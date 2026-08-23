@@ -21,6 +21,7 @@ pub const DownloadEventType = enum {
 
 pub const DownloadError = error{
     HttpError,
+    NotFound,
     NetworkError,
     FileError,
     InvalidUrl,
@@ -64,6 +65,10 @@ pub const DownloadConfiguration = struct {
     verify_ssl: bool = true,
     parallel_downloads: u8 = 10,
     file_durability: FileDurability = .sync_before_rename,
+    /// When set, completed downloads are normalized to this exact mode. The
+    /// default preserves the downloader's historical umask-dependent behavior
+    /// for consumers such as AppImage downloads.
+    final_permissions: ?std.Io.File.Permissions = null,
 
     pub fn default() DownloadConfiguration {
         return .{ .user_agent = "ShellyPackageManager/2.0" };
@@ -308,6 +313,14 @@ pub const CoreDownloader = struct {
                 return .{ .succes = .{ .destination_path = destination_path } };
             } else |err| {
                 if (err == DownloadError.NotModified) {
+                    self.normalizeExistingPermissions(destination_path) catch |permission_err| {
+                        try self.emitEvent(.{
+                            .event_type = .Error,
+                            .download_error = permission_err,
+                            .destination_path = destination_path,
+                        });
+                        return .{ .failure = permission_err };
+                    };
                     try self.emitEvent(.{ .event_type = .Skipped, .destination_path = destination_path });
                     return .{ .skipped = .{ .destination_path = destination_path, .reason = .NotModified } };
                 }
@@ -341,7 +354,10 @@ pub const CoreDownloader = struct {
 
         if (std.ascii.eqlIgnoreCase(uri.scheme, "file")) {
             const path = parseFileUri(url) catch return DownloadError.InvalidUrl;
-            copyFile(self.io, path, destination_path) catch return DownloadError.FailedDownload;
+            copyFile(self.io, path, destination_path, self.configuration.final_permissions) catch |err| switch (err) {
+                error.FileNotFound => return DownloadError.NotFound,
+                else => return DownloadError.FailedDownload,
+            };
             return;
         }
 
@@ -395,6 +411,7 @@ pub const CoreDownloader = struct {
 
         const status = response.head.status;
         if (status == .not_modified) return DownloadError.NotModified;
+        if (status == .not_found) return DownloadError.NotFound;
         switch (status.class()) {
             .success => {},
             .server_error => {
@@ -479,6 +496,13 @@ pub const CoreDownloader = struct {
             }
         }
 
+        if (self.configuration.final_permissions) |permissions| {
+            file.setPermissions(self.io, permissions) catch |err| {
+                self.logErr("Failed to set permissions on temporary file {s}: {}", .{ part_path, err });
+                return DownloadError.FileError;
+            };
+        }
+
         if (self.configuration.file_durability == .sync_before_rename) {
             file.sync(self.io) catch |err| {
                 self.logErr("Failed to sync temporary file {s}: {}", .{ part_path, err });
@@ -498,6 +522,19 @@ pub const CoreDownloader = struct {
             .destination_path = destination_path,
             .progress = makeProgress(downloaded, total orelse downloaded, self.speedBytesPerSec(downloaded, start_ns)),
         });
+    }
+
+    fn normalizeExistingPermissions(self: *CoreDownloader, destination_path: []const u8) DownloadError!void {
+        const permissions = self.configuration.final_permissions orelse return;
+        var file = std.Io.Dir.cwd().openFile(self.io, destination_path, .{ .mode = .read_write }) catch |err| {
+            self.logErr("Failed to open {s} while normalizing permissions: {}", .{ destination_path, err });
+            return DownloadError.FileError;
+        };
+        defer file.close(self.io);
+        file.setPermissions(self.io, permissions) catch |err| {
+            self.logErr("Failed to normalize permissions on {s}: {}", .{ destination_path, err });
+            return DownloadError.FileError;
+        };
     }
 
     /// Decides whether a `Progress` event should be emitted, throttling to
@@ -850,6 +887,7 @@ fn copyFile(
     io: std.Io,
     source_path: []const u8,
     destination_path: []const u8,
+    final_permissions: ?std.Io.File.Permissions,
 ) !void {
     var source = try std.Io.Dir.cwd().openFile(io, source_path, .{});
     defer source.close(io);
@@ -865,6 +903,7 @@ fn copyFile(
 
     _ = try reader.interface.streamRemaining(&writer.interface);
     try writer.interface.flush();
+    if (final_permissions) |permissions| try destination.setPermissions(io, permissions);
 }
 
 // Unit tests for downloader.zig
@@ -879,6 +918,7 @@ test "DownloadConfiguration.default() returns correct default values" {
     try std.testing.expectEqual(true, config.verify_ssl);
     try std.testing.expectEqual(@as(u8, 10), config.parallel_downloads);
     try std.testing.expectEqual(FileDurability.sync_before_rename, config.file_durability);
+    try std.testing.expect(config.final_permissions == null);
 }
 
 test "connect timeout uses the configured duration" {
@@ -956,6 +996,7 @@ test "isRetryable returns true for NetworkError and Timeout" {
 
 test "isRetryable returns false for other errors" {
     try std.testing.expect(!isRetryable(DownloadError.HttpError));
+    try std.testing.expect(!isRetryable(DownloadError.NotFound));
     try std.testing.expect(!isRetryable(DownloadError.FileError));
     try std.testing.expect(!isRetryable(DownloadError.InvalidUrl));
     try std.testing.expect(!isRetryable(DownloadError.RetryExceeded));
@@ -1024,6 +1065,7 @@ test "mapReceiveHeadError maps other errors to NetworkError" {
 
 const TestServerMode = enum {
     stall_headers,
+    not_found,
     reuse_with_not_modified,
 };
 
@@ -1063,6 +1105,17 @@ const TestHttpServer = struct {
 
         switch (self.mode) {
             .stall_headers => try self.io.sleep(std.Io.Duration.fromSeconds(10), .awake),
+            .not_found => {
+                var read_buffer: [2048]u8 = undefined;
+                var stream_reader = stream.reader(self.io, &read_buffer);
+                try consumeTestRequest(&stream_reader.interface);
+                try writer.writeAll(
+                    "HTTP/1.1 404 Not Found\r\n" ++
+                        "Content-Length: 0\r\n" ++
+                        "Connection: close\r\n\r\n",
+                );
+                try writer.flush();
+            },
             .reuse_with_not_modified => {
                 var read_buffer: [2048]u8 = undefined;
                 var stream_reader = stream.reader(self.io, &read_buffer);
@@ -1135,6 +1188,7 @@ test "downloadToFile copies a file URI to the destination" {
         var source_file = try temporary.dir.createFile(io, "nutcase.db", .{});
         defer source_file.close(io);
         try source_file.writeStreamingAll(io, "nutcase repository database");
+        try source_file.setPermissions(io, .fromMode(0o600));
     }
 
     var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -1159,6 +1213,7 @@ test "downloadToFile copies a file URI to the destination" {
 
     var downloader = CoreDownloader.init(std.testing.allocator, io, .{
         .max_retries = 0,
+        .final_permissions = .fromMode(0o644),
     });
     defer downloader.deinit();
     downloader.quiet = true;
@@ -1176,6 +1231,35 @@ test "downloadToFile copies a file URI to the destination" {
     );
     defer std.testing.allocator.free(contents);
     try std.testing.expectEqualStrings("nutcase repository database", contents);
+    const downloaded_stat = try std.Io.Dir.cwd().statFile(io, destination_path, .{});
+    try std.testing.expectEqual(@as(u32, 0o644), downloaded_stat.permissions.toMode() & 0o7777);
+}
+
+test "downloadToFile reports HTTP 404 as NotFound" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = try TestHttpServer.init(io, .not_found);
+    defer server.deinit();
+    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
+    defer _ = server_future.cancel(io) catch {};
+
+    const url = try server.url(std.testing.allocator);
+    defer std.testing.allocator.free(url);
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
+    defer std.testing.allocator.free(destination);
+
+    var downloader = CoreDownloader.init(std.testing.allocator, io, timeoutTestConfiguration());
+    defer downloader.deinit();
+    downloader.quiet = true;
+    switch (downloader.downloadToFile(url, destination, true)) {
+        .failure => |err| try std.testing.expectEqual(DownloadError.NotFound, err),
+        else => return error.ExpectedNotFound,
+    }
+    try server_future.await(io);
 }
 
 test "response header timeout interrupts a server that never responds" {
@@ -1240,6 +1324,12 @@ test "shared session reuses one connection across a bodyless 304 response" {
         .succes => {},
         else => return error.ExpectedSuccessfulDownload,
     }
+    {
+        var destination_file = try std.Io.Dir.cwd().openFile(io, destination, .{ .mode = .read_write });
+        defer destination_file.close(io);
+        try destination_file.setPermissions(io, .fromMode(0o600));
+    }
+    config.final_permissions = .fromMode(0o644);
 
     var second = session.downloader(config);
     defer second.deinit();
@@ -1247,6 +1337,8 @@ test "shared session reuses one connection across a bodyless 304 response" {
         .skipped => |skipped| try std.testing.expectEqual(SkippedReason.NotModified, skipped.reason),
         else => return error.ExpectedNotModified,
     }
+    const repaired_stat = try std.Io.Dir.cwd().statFile(io, destination, .{});
+    try std.testing.expectEqual(@as(u32, 0o644), repaired_stat.permissions.toMode() & 0o7777);
 
     var third = session.downloader(config);
     defer third.deinit();

@@ -426,7 +426,11 @@ pub fn build(b: *std.Build) void {
         .name = "alpm-sync-test",
         .root_module = mod,
         .filters = &.{
-            "database signature downloads are reserved for required signatures",
+            "database signature policy distinguishes disabled optional and required",
+            "optional database signatures are retained beside world-readable databases",
+            "optional missing database signature succeeds and removes a stale sibling",
+            "required missing database signature fails without leaving a database",
+            "invalid optional database signature is fatal and cleaned up",
             "Manager.sync downloads the configured database into DBPath/sync",
             "Manager.sync exposes cancellable logical database downloads during mirror failover",
         },

@@ -14,9 +14,17 @@ const libalpm = bindings.libalpm; // typed aliases (Handle, Database, Config, ..
 const rawLibalpm = bindings.libalpm.alpm;
 const single_server_setup_timeout_seconds: u32 = 3;
 const multi_server_setup_timeout_seconds: u32 = 1;
+const database_file_permissions = std.Io.File.Permissions.fromMode(0o644);
+const database_directory_permissions = std.Io.File.Permissions.fromMode(0o755);
 var default_download_address_family_policy = std.atomic.Value(u8).init(
     @intFromEnum(downloader.AddressFamilyPolicy.prefer_ipv4),
 );
+
+const DatabaseSignaturePolicy = enum {
+    disabled,
+    optional,
+    required,
+};
 
 pub const ConfigError = error{
     InitFailed,
@@ -362,8 +370,8 @@ pub const Manager = struct {
         defer operation_scope.finish(.success);
         errdefer operation_scope.fail();
         try self.checkOperationCancelled();
-        var required_signatures = std.StringHashMap(bool).init(self.allocator);
-        defer required_signatures.deinit();
+        var signature_policies = std.StringHashMap(DatabaseSignaturePolicy).init(self.allocator);
+        defer signature_policies.deinit();
         self.package_download = false;
         var databases: libalpm.DatabaseList = rawLibalpm.alpm_get_syncdbs(self.handle);
         if (databases == null) return TransactionError.SyncDbFailed;
@@ -374,7 +382,7 @@ pub const Manager = struct {
             var db_struct: libalpm.Database = .{ .ptr = @ptrCast(@alignCast(db)) };
             if (!db_struct.allowUsage(.sync)) continue;
             const db_name: []const u8 = db_struct.name() orelse continue;
-            required_signatures.put(db_name, databaseSignatureRequired(db_struct.sigLevel())) catch {
+            signature_policies.put(db_name, databaseSignaturePolicy(db_struct.sigLevel())) catch {
                 return TransactionError.SyncDbFailed;
             };
             var servers = db_struct.servers();
@@ -389,9 +397,14 @@ pub const Manager = struct {
         };
         defer self.allocator.free(syncDirectory);
 
-        //Dropping the response as we don't care if it was successful or not just that it was done.
-        // This will never come back to bite me right?
-        if (std.Io.Dir.cwd().createDirPath(self.io(), syncDirectory)) |_| {} else |_| {}
+        std.Io.Dir.cwd().createDirPath(self.io(), syncDirectory) catch |err| {
+            std.log.err("failed to create database sync directory {s}: {}", .{ syncDirectory, err });
+            return TransactionError.SyncDbFailed;
+        };
+        std.Io.Dir.cwd().setFilePermissions(self.io(), syncDirectory, database_directory_permissions, .{}) catch |err| {
+            std.log.err("failed to set database sync directory permissions on {s}: {}", .{ syncDirectory, err });
+            return TransactionError.SyncDbFailed;
+        };
 
         const database_future = std.Io.Future(downloader.DownloadError!void);
         var futures: std.ArrayList(database_future) = .empty;
@@ -414,9 +427,9 @@ pub const Manager = struct {
         while (dict_iterator.next()) |entry| {
             const database_name = entry.key_ptr.*;
             const urls = entry.value_ptr.*;
-            const signature_required = required_signatures.get(database_name) orelse false;
-            const future = self.io().concurrent(download_database, .{ self, &download_session, database_name, urls, syncDirectory, force, signature_required }) catch {
-                self.download_database(&download_session, database_name, urls, syncDirectory, force, signature_required) catch {
+            const signature_policy = signature_policies.get(database_name) orelse .disabled;
+            const future = self.io().concurrent(download_database, .{ self, &download_session, database_name, urls, syncDirectory, force, signature_policy }) catch {
+                self.download_database(&download_session, database_name, urls, syncDirectory, force, signature_policy) catch {
                     failed = true;
                 };
                 continue;
@@ -2213,7 +2226,7 @@ pub const Manager = struct {
         urls: std.ArrayList([]const u8),
         sync_directory: []const u8,
         force_download: bool,
-        signature_required: bool,
+        signature_policy: DatabaseSignaturePolicy,
     ) downloader.DownloadError!void {
         const download_config = databaseDownloadConfiguration(
             urls.items.len,
@@ -2238,44 +2251,51 @@ pub const Manager = struct {
             const db_url = std.fmt.allocPrint(self.allocator, "{s}/{s}.db", .{ url_base, database_name }) catch continue;
             defer self.allocator.free(db_url);
 
-            switch (downloader_instance.downloadToFile(db_url, dest, force_download)) {
-                .succes => {
-                    if (!signature_required) {
-                        // An optional signature must not keep a completed database
-                        // sync alive. Remove any signature belonging to an older
-                        // database so libalpm cannot validate mismatched files.
-                        std.Io.Dir.cwd().deleteFile(self.io(), sig_dest) catch {};
-                        download_scope.succeed();
-                        return;
-                    }
-                    const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
-                    defer self.allocator.free(sig_url);
-                    // Required database signatures are fetched here and
-                    // validated by the sync verification pass below.
-                    downloader_instance.quiet = true;
-                    const signature_result = downloader_instance.downloadToFile(sig_url, sig_dest, force_download);
-                    downloader_instance.quiet = false;
-                    try propagateSignatureCancellation(signature_result);
-                    download_scope.succeed();
-                    return;
+            const database_updated = switch (downloader_instance.downloadToFile(db_url, dest, force_download)) {
+                .succes => true,
+                .skipped => false,
+                .failure => |err| {
+                    if (err == downloader.DownloadError.Cancelled) return err;
+                    last_failure = err;
+                    continue;
                 },
-                .skipped => {
-                    if (!signature_required) {
-                        download_scope.succeed();
-                        return;
-                    }
-                    const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
-                    defer self.allocator.free(sig_url);
-                    downloader_instance.quiet = true;
-                    const signature_result = downloader_instance.downloadToFile(sig_url, sig_dest, false);
-                    downloader_instance.quiet = false;
-                    try propagateSignatureCancellation(signature_result);
+            };
+
+            if (signature_policy == .disabled) {
+                // A replaced unsigned database must not retain a signature for
+                // its predecessor. An unchanged database can keep its existing
+                // sibling because libalpm will not inspect it under this policy.
+                if (database_updated) std.Io.Dir.cwd().deleteFile(self.io(), sig_dest) catch {};
+                download_scope.succeed();
+                return;
+            }
+
+            const sig_url = std.fmt.allocPrint(self.allocator, "{s}.sig", .{db_url}) catch return;
+            defer self.allocator.free(sig_url);
+            downloader_instance.quiet = true;
+            const signature_result = downloader_instance.downloadToFile(sig_url, sig_dest, if (database_updated) force_download else false);
+            downloader_instance.quiet = false;
+            switch (signature_result) {
+                .succes, .skipped => {
                     download_scope.succeed();
                     return;
                 },
                 .failure => |err| {
                     if (err == downloader.DownloadError.Cancelled) return err;
+                    if (err == downloader.DownloadError.NotFound and signature_policy == .optional) {
+                        // Optional means an absent signature is accepted, not
+                        // that available signatures should be discarded.
+                        std.Io.Dir.cwd().deleteFile(self.io(), sig_dest) catch {};
+                        download_scope.succeed();
+                        return;
+                    }
                     last_failure = err;
+                    // Do not leave a freshly downloaded database paired with a
+                    // stale signature while trying the next mirror.
+                    if (database_updated) {
+                        std.Io.Dir.cwd().deleteFile(self.io(), dest) catch {};
+                        std.Io.Dir.cwd().deleteFile(self.io(), sig_dest) catch {};
+                    }
                     continue;
                 },
             }
@@ -2285,9 +2305,10 @@ pub const Manager = struct {
         return final_error;
     }
 
-    fn databaseSignatureRequired(level: i32) bool {
-        return level & rawLibalpm.ALPM_SIG_DATABASE != 0 and
-            level & rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL == 0;
+    fn databaseSignaturePolicy(level: i32) DatabaseSignaturePolicy {
+        if (level & rawLibalpm.ALPM_SIG_DATABASE == 0) return .disabled;
+        if (level & rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL != 0) return .optional;
+        return .required;
     }
 
     /// Downloads every repository package selected by a prepared transaction
@@ -3293,6 +3314,7 @@ fn databaseDownloadConfiguration(
 ) downloader.DownloadConfiguration {
     var config = mirrorDownloadConfiguration(configured_server_count, address_family_policy);
     config.file_durability = .caller_managed;
+    config.final_permissions = database_file_permissions;
     return config;
 }
 
@@ -3328,6 +3350,7 @@ test "multi-mirror repositories receive a one second setup timeout" {
 test "database downloads defer file durability to the batch barrier" {
     const config = databaseDownloadConfiguration(4, .prefer_ipv4);
     try std.testing.expectEqual(downloader.FileDurability.caller_managed, config.file_durability);
+    try std.testing.expectEqual(@as(u32, 0o644), config.final_permissions.?.toMode() & 0o7777);
 }
 
 test "database batch barrier synchronizes its directory" {
@@ -4557,10 +4580,10 @@ test "onDownloadEvent handles missing paths and missing progress payloads" {
     try testing.expect(progress_cap.args == null);
 }
 
-test "database signature downloads are reserved for required signatures" {
-    try testing.expect(!Manager.databaseSignatureRequired(0));
-    try testing.expect(Manager.databaseSignatureRequired(rawLibalpm.ALPM_SIG_DATABASE));
-    try testing.expect(!Manager.databaseSignatureRequired(
+test "database signature policy distinguishes disabled optional and required" {
+    try testing.expectEqual(DatabaseSignaturePolicy.disabled, Manager.databaseSignaturePolicy(0));
+    try testing.expectEqual(DatabaseSignaturePolicy.required, Manager.databaseSignaturePolicy(rawLibalpm.ALPM_SIG_DATABASE));
+    try testing.expectEqual(DatabaseSignaturePolicy.optional, Manager.databaseSignaturePolicy(
         rawLibalpm.ALPM_SIG_DATABASE | rawLibalpm.ALPM_SIG_DATABASE_OPTIONAL,
     ));
 }
