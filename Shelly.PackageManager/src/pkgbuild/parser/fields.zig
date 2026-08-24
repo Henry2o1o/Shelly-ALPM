@@ -68,6 +68,8 @@ pub fn resolve_file_string(
 }
 
 pub fn resolve_array_field(self: PkgbuildParser, content: []const u8, vars: *std.StringHashMap([]const u8), var_name: []const u8) ![][]const u8 {
+    if (self.dynamic_array_unsets) |unsets| if (unsets.contains(var_name))
+        return self.allocator.alloc([]const u8, 0);
     if (self.dynamic_array_overrides) |overrides| if (overrides.get(var_name)) |items| {
         const cloned = try self.allocator.alloc([]const u8, items.len);
         errdefer self.allocator.free(cloned);
@@ -93,6 +95,8 @@ fn resolve_array_field_preserving_commands(
     vars: *std.StringHashMap([]const u8),
     var_name: []const u8,
 ) ![][]const u8 {
+    if (self.dynamic_array_unsets) |unsets| if (unsets.contains(var_name))
+        return self.allocator.alloc([]const u8, 0);
     if (self.dynamic_array_overrides) |overrides| if (overrides.get(var_name)) |items| {
         const cloned = try self.allocator.alloc([]const u8, items.len);
         errdefer self.allocator.free(cloned);
