@@ -222,7 +222,7 @@ pub fn containsString(values: []const []const u8, needle: []const u8) bool {
 
 pub fn isExtractableArchive(name: []const u8) bool {
     const suffixes = [_][]const u8{
-        ".tar", ".tar.gz", ".tgz", ".tar.zst", ".tar.xz", ".txz", ".tar.bz2", ".tbz", ".tbz2", ".zip", ".deb",
+        ".tar", ".tar.gz", ".tgz", ".tar.zst", ".tar.xz", ".txz", ".tar.bz2", ".tbz", ".tbz2", ".zip", ".vsix", ".deb",
     };
     for (suffixes) |suffix| if (std.ascii.endsWithIgnoreCase(name, suffix)) return true;
     return false;
@@ -405,6 +405,8 @@ test "isExtractableArchive recognizes archive suffixes case-insensitively" {
     try std.testing.expect(isExtractableArchive("pkg.tar.gz"));
     try std.testing.expect(isExtractableArchive("pkg.TAR.ZST"));
     try std.testing.expect(isExtractableArchive("pkg.zip"));
+    try std.testing.expect(isExtractableArchive("pkg.vsix"));
+    try std.testing.expect(isExtractableArchive("pkg.VSIX"));
     try std.testing.expect(isExtractableArchive("pkg.tbz2"));
     try std.testing.expect(isExtractableArchive("pkg.deb"));
     try std.testing.expect(isExtractableArchive("pkg.DEB"));
