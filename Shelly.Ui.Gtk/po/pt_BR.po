@@ -13,24 +13,24 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
 msgid "No installable addons available"
-msgstr ""
+msgstr "Nenhum addon instalável disponível"
 
 msgid "Close"
 msgstr "Fechar"
 
 #| msgid "Saving update configuration"
 msgid "Keep configuration"
-msgstr ""
+msgstr "Manter configuração"
 
 msgid "App data and settings will be kept."
 msgstr ""
 
 #| msgid "Saving update configuration"
 msgid "Remove configuration"
-msgstr ""
+msgstr "Remover configuração"
 
 msgid "App data will be permanently removed."
-msgstr ""
+msgstr "Os dados do aplicativo serão removidos permanentemente"
 
 msgid "Confirm"
 msgstr "Confirmar"
@@ -64,7 +64,7 @@ msgid "Source Files"
 msgstr "Arquivos de fonte"
 
 msgid "polkit is required"
-msgstr ""
+msgstr "polkit é necessário"
 
 msgid ""
 "Shelly's GUI needs <b>polkit</b> installed and running to authorize "
@@ -75,6 +75,13 @@ msgid ""
 "<a href=\"https://www.seafoam-labs.org/shelly-alpm/docs/polkit/\">seafoam-"
 "labs.org/shelly-alpm/docs/polkit</a>"
 msgstr ""
+"A GUI do Shelly precisa do <b>polkit</b> instalado e em execução para autorizar "
+"ações privilegiadas, mas não foi encontrada no barramento de memória do sistema. "
+"\n"
+"Instale e habilite-o e tente novamente \n"
+"\n"
+"<a href=\"https://www.seafoam-labs.org/shelly-alpm/docs/polkit/\">seafoam-"
+"labs.org/shelly-alpm/docs/polkit</a>"
 
 msgid "Review PKGBUILD"
 msgstr "Revisar PKGBUILD"
@@ -318,7 +325,7 @@ msgid "Repairs Flatpak Installation (Experimental)"
 msgstr "Repara a instalação Flatpak atual (experimental)"
 
 msgid "About"
-msgstr ""
+msgstr "Sobre"
 
 msgid "Shelly"
 msgstr ""
@@ -414,37 +421,39 @@ msgstr ""
 "internet e tente novamente"
 
 msgid "Search standard repositories, AUR and Flatpak"
-msgstr ""
+msgstr "Pesquise repositórios padrão, AUR e Flatpak"
 
 msgid "Standard"
-msgstr ""
+msgstr "Padrão"
 
 msgid "Show results from the configured ALPM sync databases"
-msgstr ""
+msgstr "Mostrar resultados dos bancos de dados de sincronização ALPM configurados"
 
 msgid "AUR"
 msgstr "AUR"
 
 msgid "Show results from the Arch User Repository"
-msgstr ""
+msgstr "Mostrar resultados do Arch User Repository"
 
 msgid "Flatpak"
 msgstr "Flatpak"
 
 msgid "Show results from the configured Flatpak remotes"
-msgstr ""
+msgstr "Mostrar resultados dos remotos Flatpak configurados"
 
 #| msgid "Source Files"
 msgid "Source"
-msgstr ""
+msgstr "Fonte"
 
 msgid "Search everywhere"
-msgstr ""
+msgstr "Procurar em todos os lugares"
 
 msgid ""
 "Search standard repositories, the AUR and Flatpak at once. Type a name to "
 "begin."
 msgstr ""
+"Pesquise por repositórios padrão, o AUR e o Flatpak de uma só vez. Digite um nome para "
+"começar."
 
 msgid "General"
 msgstr "Geral"
@@ -1139,28 +1148,28 @@ msgstr "Adicionando o remoto"
 
 #| msgid "Removing Flatpak"
 msgid "Remove this Flatpak?"
-msgstr ""
+msgstr "Remover esse Flatpak?"
 
 #| msgid "Removing Flatpak"
 msgid "Remove Flatpak"
-msgstr ""
+msgstr "Remover Flatpak"
 
 msgid "Removing Flatpak"
 msgstr "Removendo Flatpak"
 
 msgid "App ID"
-msgstr ""
+msgstr "ID do aplicativo"
 
 #| msgid "Remove"
 msgid "Remote"
-msgstr ""
+msgstr "Remoto"
 
 #| msgid "Development"
 msgid "Developer"
-msgstr ""
+msgstr "Desenvolvedor"
 
 msgid "Type"
-msgstr ""
+msgstr "Tipo"
 
 msgid "Download Size"
 msgstr "Tamanho do download"
@@ -1175,7 +1184,7 @@ msgid "No"
 msgstr "Não"
 
 msgid "Keywords"
-msgstr ""
+msgstr "Palavras-chave"
 
 #| msgid "e.g., flathub"
 msgid "Flathub"
@@ -1252,26 +1261,26 @@ msgstr "Instalando pacotes"
 
 #| msgid "Operation failed"
 msgid "Search failed"
-msgstr ""
+msgstr "Falha na pesquisa"
 
 #| msgid "Installation failed."
 msgid "Installation in progress"
-msgstr ""
+msgstr "Instalação em andamento"
 
 #| msgid "No packages selected"
 msgid "No sources selected"
-msgstr ""
+msgstr "Nenhuma fonte selecionada"
 
 msgid "Enable at least one source filter above."
-msgstr ""
+msgstr "Habilite pelo menos um filtro de origem acima."
 
 #| msgid "Installing packages"
 msgid "Install Packages"
-msgstr ""
+msgstr "Instalar pacotes"
 
 #| msgid "Remove the selected packages?"
 msgid "Install the selected packages?"
-msgstr ""
+msgstr "Instalar os pacotes selecionados?"
 
 msgid "Failed to save settings"
 msgstr "Falha ao salvar configurações"
@@ -1280,28 +1289,28 @@ msgid "Settings saved"
 msgstr "Configurações salvas"
 
 msgid "Installing Flatpak support"
-msgstr ""
+msgstr "Instalando suporte ao Flatpak"
 
 msgid "Installing AppImage support"
-msgstr ""
+msgstr "Instalando o suporte ao AppImage"
 
 msgid "Failed to start Flatpak support installation"
-msgstr ""
+msgstr "Falha ao iniciar a instalação de suporte ao Flatpak"
 
 msgid "Failed to start AppImage support installation"
-msgstr ""
+msgstr "Falha ao iniciar a instalação de suporte ao AppImage"
 
 msgid "Flatpak support installation failed"
-msgstr ""
+msgstr "Falha na instalação do suporte ao Flatpak"
 
 msgid "AppImage support installation failed"
-msgstr ""
+msgstr "Falha na instalação do suporte ao AppImage"
 
 msgid "Flatpak support enabled"
-msgstr ""
+msgstr "Suporte ao Flatpak habilitado"
 
 msgid "AppImage support enabled"
-msgstr ""
+msgstr "Suporte ao AppImage ativado"
 
 msgid "No changelog entries found"
 msgstr "Nenhuma entrada de changelog encontrada"
@@ -1313,7 +1322,7 @@ msgid "Failed to load changelog"
 msgstr "Falha ao carregar o histórico de alterações"
 
 msgid "Changelog"
-msgstr ""
+msgstr "Histórico de alterações"
 
 msgid "Select Tray Icon"
 msgstr "Selecionar ícone da bandeja"
@@ -1452,19 +1461,19 @@ msgid "Removing"
 msgstr "Removendo"
 
 msgid "Checking keyring"
-msgstr ""
+msgstr "Verificando o chaveiro"
 
 msgid "Checking integrity"
-msgstr ""
+msgstr "Verificando a integridade"
 
 msgid "Loading packages"
-msgstr ""
+msgstr "Carregando pacotes"
 
 msgid "Checking conflicts"
-msgstr ""
+msgstr "Verificando conflitos"
 
 msgid "Checking disk space"
-msgstr ""
+msgstr "Verificando o espaço em disco"
 
 msgid "Working"
 msgstr "Trabalhando"
@@ -1496,7 +1505,7 @@ msgstr ""
 "tente novamente."
 
 msgid "Update this package"
-msgstr ""
+msgstr "Atualizar esse pacote"
 
 msgid "of"
 msgstr "de"
@@ -1550,7 +1559,7 @@ msgstr ""
 "instalado. Os dados são procurados em fontes externas."
 
 msgid "Installing Flatpak and AppImage support"
-msgstr ""
+msgstr "Instalando suporte ao Flatpak e ao AppImage"
 
 msgid "Settings"
 msgstr "Configurações"
