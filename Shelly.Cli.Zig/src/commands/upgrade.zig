@@ -191,6 +191,7 @@ fn buildAllUpgradePlan(
         try context.stdout.flush();
 
         var result = collector.collect(context, backend, invocation) catch |err| {
+            if (isUnavailableFlatpak(backend, err)) continue;
             if (backend == .flatpak) {
                 if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
                     try output.writeWarning(context, message);
@@ -506,6 +507,7 @@ fn runSelected(
     for (all_backends) |backend| {
         if (!backendEnabled(invocation, backend)) continue;
         runner.run(context, operation_context, backend, invocation) catch |err| {
+            if (isUnavailableFlatpak(backend, err)) continue;
             if (backend == .flatpak) {
                 if (Zigalpm.flatpak.errors.unavailableMessage(err)) |message| {
                     reportBackendSkipped(operation_context, message);
@@ -520,6 +522,11 @@ fn runSelected(
 }
 
 const all_backends = [_]Backend{ .standard, .aur, .flatpak, .appimage };
+
+fn isUnavailableFlatpak(backend: Backend, err: anyerror) bool {
+    return backend == .flatpak and
+        err == Zigalpm.flatpak.errors.Error.FlatpakBackendUnavailable;
+}
 
 fn runStandard(
     context: *runtime.RuntimeContext,
@@ -1239,6 +1246,52 @@ test "combined upgrade plan defaults to approval, supports decline, and no-confi
     try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Proceed with all upgrades?") == null);
 }
 
+test "combined upgrade plan silently skips an unavailable Flatpak backend" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
+        "upgrade",
+        "all",
+        "--no-repo",
+        "--no-aur",
+        "--no-appimage",
+        "--no-confirm",
+    });
+    try std.testing.expect(outcome == .dispatch);
+
+    const Unavailable = struct {
+        fn collect(
+            _: @This(),
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !list_updates.Result {
+            try std.testing.expectEqual(Backend.flatpak, backend);
+            return error.FlatpakBackendUnavailable;
+        }
+    };
+
+    const preview = try prepareAllUpgradePreviewWithCollector(
+        &tc.context,
+        &outcome.dispatch,
+        Unavailable{},
+    );
+    try std.testing.expect(!preview.has_updates);
+    try std.testing.expect(!preview.proceed);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "Install shelly-flatpak-backend and Flatpak",
+    ) == null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "Everything is up to date.",
+    ) != null);
+}
+
 test "upgrade preview size formatting preserves negative net changes" {
     const formatted = try fmt.formatSignedSize(std.testing.allocator, .megabytes, -1048576);
     defer std.testing.allocator.free(formatted);
@@ -1414,7 +1467,7 @@ test "upgrade all continues after a failed backend and returns failure" {
     ) != null);
 }
 
-test "upgrade all treats an unavailable Flatpak backend as a warning" {
+test "upgrade all silently skips an unavailable Flatpak backend" {
     var tc: test_support.TestContext = .{};
     tc.init();
     defer tc.deinit();
@@ -1453,11 +1506,88 @@ test "upgrade all treats an unavailable Flatpak backend as a warning" {
         u8,
         tc.stdout.writer.buffered(),
         "Install shelly-flatpak-backend and Flatpak",
-    ) != null);
+    ) == null);
     try std.testing.expect(std.mem.indexOf(
         u8,
         tc.stdout.writer.buffered(),
         ":: All upgrades complete.",
+    ) != null);
+}
+
+test "upgrade all warns for an incompatible Flatpak backend" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+
+    const Calls = struct {
+        fn run(
+            _: @This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            if (backend == .flatpak)
+                return error.FlatpakBackendIncompatible;
+        }
+    };
+
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        try executeWithRunner(&tc.context, &outcome.dispatch, Calls{}),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "Upgrade Shelly and shelly-flatpak-backend together",
+    ) != null);
+}
+
+test "upgrade all reports a broken Flatpak backend as a failure" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(
+        tc.arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "all", "--no-confirm" },
+    );
+    try std.testing.expect(outcome == .dispatch);
+
+    const Calls = struct {
+        fn run(
+            _: @This(),
+            _: *runtime.RuntimeContext,
+            _: *Zigalpm.OperationContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !void {
+            if (backend == .flatpak)
+                return error.FlatpakBackendCreateFailed;
+        }
+    };
+
+    try std.testing.expectEqual(
+        @as(u8, 1),
+        try executeWithRunner(&tc.context, &outcome.dispatch, Calls{}),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "Flatpak upgrade step failed: FlatpakBackendCreateFailed",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "One or more upgrade steps failed",
     ) != null);
 }
 
