@@ -148,6 +148,10 @@ tests.
 
 ### Sandboxed AUR Builds (Landlock)
 Requires a kernel with Landlock enabled (check `cat /sys/kernel/security/lsm`).
+- [ ] A split PKGBUILD that conditionally appends an enabled member to
+  `pkgname` builds that member when no `--package` selection is supplied
+- [ ] `shelly build --package <dynamic-member> PKGBUILD` builds only that
+  enabled member and rejects it when its condition evaluates false
 - [ ] With `[sandbox] enabled = true` in `shellybuild.conf`, a PKGBUILD whose
   `build()` runs `ls "$HOME"` fails that listing with "Permission denied" in
   the step output while the build itself completes
