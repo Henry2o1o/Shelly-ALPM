@@ -162,7 +162,12 @@ pub const TransactionLog = struct {
                 .information, .success => self.writeEntry(self.allocator, .info, source, status.message),
                 .warning => self.writeEntry(self.allocator, .warning, source, status.message),
             },
-            .failure => |failure| self.writeEntry(self.allocator, .exception, source, failure.message),
+            .failure => |failure| self.writeEntry(
+                self.allocator,
+                if (failure.recoverable) .warning else .exception,
+                source,
+                failure.message,
+            ),
             .completed => |completed| {
                 if (envelope.parent_id != null) return;
                 const message: []const u8 = switch (completed.status) {

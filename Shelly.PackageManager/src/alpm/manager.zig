@@ -2175,8 +2175,12 @@ pub const Manager = struct {
         if (self.handle != null) {
             const refresh_result = rawLibalpm.alpm_release(self.handle);
             if (refresh_result != 0) {
+                self.dispatcher.raiseError(.{
+                    .message = "Failed to release the ALPM handle while reloading package databases",
+                });
                 return TransactionError.RefreshFailed;
             }
+            self.handle = null;
         }
 
         self.sync_dbs.clearRetainingCapacity();
@@ -2184,6 +2188,13 @@ pub const Manager = struct {
         var err2: rawLibalpm.alpm_errno_t = 0;
         self.handle = rawLibalpm.alpm_initialize(self.config.root_directory, self.config.database_path, &err2);
         if (self.handle == null) {
+            var message_buffer: [512]u8 = undefined;
+            const message = std.fmt.bufPrint(
+                &message_buffer,
+                "Failed to reinitialize ALPM while reloading package databases: {s}",
+                .{std.mem.span(rawLibalpm.alpm_strerror(err2))},
+            ) catch "Failed to reinitialize ALPM while reloading package databases";
+            self.dispatcher.raiseError(.{ .message = message });
             return TransactionError.RefreshFailed;
         }
 
@@ -3661,6 +3672,54 @@ test "OperationScope emits one generic ALPM error when no detail was reported" {
 
     try testing.expectEqual(@as(usize, 1), capture.failures);
     try testing.expectEqualStrings("ALPM operation failed", capture.last_message);
+}
+
+test "OperationScope turns best-effort ALPM failures into contextual recoverable errors" {
+    const Capture = struct {
+        failures: usize = 0,
+        contextual: bool = false,
+        recoverable: bool = false,
+
+        fn event(data: ?*anyopaque, value: operation_api.Event) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            switch (value) {
+                .failure => |failure| {
+                    self.failures += 1;
+                    self.contextual = std.mem.eql(
+                        u8,
+                        failure.message,
+                        "Failed to remove build-only dependencies: ALPM operation failed",
+                    );
+                    self.recoverable = failure.recoverable;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var context = operation_api.OperationContext.init(testing.allocator, threaded.io());
+    defer context.deinit();
+    var capture: Capture = .{};
+    const subscription = try context.subscribe(.{ .function = Capture.event, .data = &capture });
+    defer _ = context.unsubscribe(subscription);
+
+    var manager: Manager = undefined;
+    manager.handle = null;
+    manager.dispatcher = events.Dispatcher.init(testing.allocator);
+    defer manager.dispatcher.deinit();
+    manager.operation_context = &context;
+
+    var recoverable_errors = manager.dispatcher.beginRecoverableErrors("Failed to remove build-only dependencies");
+    defer recoverable_errors.deinit();
+    var scope = OperationScope.init(&manager, .remove, "build-tool");
+    scope.attach();
+    scope.fail();
+
+    try testing.expectEqual(@as(usize, 1), capture.failures);
+    try testing.expect(capture.contextual);
+    try testing.expect(capture.recoverable);
 }
 
 test "nested OperationScopes do not duplicate a detailed ALPM error" {

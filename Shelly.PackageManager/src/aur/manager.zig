@@ -893,7 +893,6 @@ pub const Manager = struct {
 
     fn installPackagesImpl(self: *Self, package_names: []const []const u8) !PackageResult {
         try self.checkCancelled();
-        try self.alpm.refresh();
 
         var failures: std.ArrayList(PackageFailure) = .empty;
         errdefer {
@@ -1365,6 +1364,8 @@ pub const Manager = struct {
         if (installed.items.len == 0) return;
 
         self.raisePackageProgress(.aur_cleanup_start, package_name, current, total, "Removing build-only dependencies");
+        var recoverable_errors = self.alpm.dispatcher.beginRecoverableErrors("Failed to remove build-only dependencies");
+        defer recoverable_errors.deinit();
         self.removeRepoPackages(installed.items, .{}, true) catch {};
         self.raisePackageProgress(.aur_cleanup_done, package_name, current, total, "");
     }
@@ -1425,15 +1426,15 @@ pub const Manager = struct {
         }
         if (repo_names.items.len > 0) {
             self.raiseBuildLine(parent, "Installing optional dependencies from repositories", false);
+            var recoverable_errors = self.alpm.dispatcher.beginRecoverableErrors("Failed to configure repository optional dependencies");
+            defer recoverable_errors.deinit();
             if (self.installRepoPackagesConst(repo_names.items, .{})) |_| {
                 for (repo_names.items) |name| {
                     const name_z = try self.allocator.dupeZ(u8, name);
                     defer self.allocator.free(name_z);
                     self.alpm.update_package_reason(name_z, .Dependency) catch {};
                 }
-            } else |err| {
-                self.raiseBestEffortFailure(parent, "Failed to install repository optional dependencies", err);
-            }
+            } else |_| {}
         }
         const previous = self.skip_optional_dependency_prompt;
         self.skip_optional_dependency_prompt = true;
@@ -1447,6 +1448,8 @@ pub const Manager = struct {
                 self.dispatcher.raiseError(.{ .message = message });
                 continue;
             };
+            var recoverable_errors = self.alpm.dispatcher.beginRecoverableErrors("Failed to configure optional AUR dependency");
+            defer recoverable_errors.deinit();
             self.installPackages(&.{chosen}) catch continue;
             const chosen_z = try self.allocator.dupeZ(u8, chosen);
             defer self.allocator.free(chosen_z);
@@ -2324,6 +2327,7 @@ const OperationScope = struct {
     previous: ?*operation_api.Operation = null,
     previous_alpm: ?*operation_api.Operation = null,
     previous_rpc: ?*const operation_api.Operation = null,
+    initial_alpm_error_generation: usize,
     attached: bool = false,
 
     fn init(manager: *Manager, kind: operation_api.OperationKind, subject: ?[]const u8) OperationScope {
@@ -2332,6 +2336,7 @@ const OperationScope = struct {
             .previous = manager.dispatcher.operation,
             .previous_alpm = manager.alpm.dispatcher.operation,
             .previous_rpc = manager.aur_client.parent_operation,
+            .initial_alpm_error_generation = manager.alpm.dispatcher.errorGeneration(),
         };
         if (scope.previous) |parent| {
             scope.operation = parent.child(.{ .backend = .aur, .kind = kind, .subject = subject });
@@ -2352,13 +2357,27 @@ const OperationScope = struct {
 
     fn fail(self: *OperationScope) void {
         if (self.operation) |*operation| {
-            if (!operation.isCancelled()) operation.reportError(
-                error.AurOperationFailed,
-                "AUR operation failed",
-                "aur",
-                null,
-                false,
-            );
+            if (!operation.isCancelled()) {
+                if (self.manager.alpm.dispatcher.recoverableErrorContext()) |context| {
+                    if (self.manager.alpm.dispatcher.errorGeneration() == self.initial_alpm_error_generation) {
+                        operation.reportError(
+                            error.AurOperationFailed,
+                            context,
+                            "aur",
+                            null,
+                            true,
+                        );
+                    }
+                } else {
+                    operation.reportError(
+                        error.AurOperationFailed,
+                        "AUR operation failed",
+                        "aur",
+                        null,
+                        false,
+                    );
+                }
+            }
         }
         const status: operation_api.CompletionStatus = if (self.operation) |*operation|
             if (operation.isCancelled()) .cancelled else .failed
@@ -4170,6 +4189,7 @@ test "build-only dependencies are removed after a failed build" {
     });
 
     const Capture = struct {
+        alpm_sync_starts: usize = 0,
         build_starts: usize = 0,
         failures: usize = 0,
         dependency_completed: usize = 0,
@@ -4182,6 +4202,13 @@ test "build-only dependencies are removed after a failed build" {
             const envelope = switch (event) {
                 inline else => |payload| payload.envelope,
             };
+            if (envelope.backend == .alpm and envelope.kind == .sync) {
+                switch (event) {
+                    .started => self.alpm_sync_starts += 1,
+                    else => {},
+                }
+                return;
+            }
             if (envelope.backend != .aur or envelope.kind != .install or envelope.parent_id != null) return;
 
             switch (event) {
@@ -4239,6 +4266,9 @@ test "build-only dependencies are removed after a failed build" {
     const package_names = [_][]const u8{"failpkg"};
     try std.testing.expectError(error.BuildFailed, manager.installPackages(&package_names));
 
+    // A newly constructed AUR manager must not tear down and recreate its
+    // already-current ALPM handle before resolving dependencies.
+    try std.testing.expectEqual(@as(usize, 0), capture.alpm_sync_starts);
     // The dependency was built and installed as part of the operation...
     try std.testing.expectEqual(@as(usize, 2), capture.build_starts);
     try std.testing.expectEqual(@as(usize, 1), capture.dependency_completed);

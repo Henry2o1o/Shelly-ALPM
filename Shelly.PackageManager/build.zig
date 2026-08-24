@@ -278,6 +278,7 @@ pub fn build(b: *std.Build) void {
             "common ALPM optional dependency choices preserve every selected index",
             "install_packages preserves every optional dependency selection after an installed first choice",
             "AUR optional dependency prompts identify their package",
+            "OperationScope turns best-effort ALPM failures into contextual recoverable errors",
         },
     });
     const run_adapter_tests = b.addRunArtifact(adapter_tests);
@@ -446,6 +447,8 @@ pub fn build(b: *std.Build) void {
             "invalid optional database signature is fatal and cleaned up",
             "Manager.sync downloads the configured database into DBPath/sync",
             "Manager.sync exposes cancellable logical database downloads during mirror failover",
+            "refresh reloads an externally replaced sync database cache",
+            "refresh reports a detailed reinitialization failure",
         },
     });
     const run_alpm_sync_tests = b.addRunArtifact(alpm_sync_tests);
