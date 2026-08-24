@@ -23,7 +23,7 @@ msgid "Keep configuration"
 msgstr "Manter configuração"
 
 msgid "App data and settings will be kept."
-msgstr ""
+msgstr "Os dados e as configurações do aplicativo serão mantidos."
 
 #| msgid "Saving update configuration"
 msgid "Remove configuration"
@@ -370,7 +370,7 @@ msgid "Repository"
 msgstr "Repositório"
 
 msgid "Install Date"
-msgstr ""
+msgstr "Data de instalação"
 
 msgid "Had an issue loading your packages. Check if you have a db lock."
 msgstr ""
