@@ -21,6 +21,7 @@ const all_command_path = "shelly upgrade all";
 const appimage_command_path = "shelly upgrade appimage";
 const aur_command_path = "shelly upgrade aur";
 const flatpak_command_path = "shelly upgrade flatpak";
+const auto_confirm_cache_clean_option = "--auto-confirm-cache-clean";
 
 const UpgradeError = error{
     BackendFailed,
@@ -92,7 +93,9 @@ pub fn dispatch(
             };
             if (!preview.proceed or !preview.has_updates) return 0;
         }
-        const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
+        const elevated_arguments = try elevatedUpgradeArguments(context, invocation);
+        defer context.allocator.free(elevated_arguments);
+        const elevated_exit = elevation.relaunchIfNeeded(context, elevated_arguments) catch |err| {
             try context.stderr.print("Unable to elevate upgrade: {t}\n", .{err});
             return 1;
         };
@@ -597,13 +600,11 @@ fn runStandard(
     var cache_operation = operation_context.begin(.{ .backend = .alpm, .kind = .cleanup });
     var cache_completion: Zigalpm.OperationCompletionStatus = .failed;
     defer cache_operation.finish(cache_completion);
-    var answer = try cache_operation.ask(.{
-        .kind = .confirmation,
-        .prompt = "Would you like to remove extra cache entries?",
-        .default_response = .accepted,
-    });
-    defer answer.deinit(context.allocator);
-    const clean_up = answer.response == .accepted;
+    const clean_up = try confirmCacheClean(
+        context.allocator,
+        &cache_operation,
+        autoConfirmCacheClean(context, invocation),
+    );
     if (clean_up) {
         var cleaner = Zigalpm.CacheManager.init(context.allocator, context.io, .{ .cache_directory = manager.config.cache_directory, .handle = manager.handle });
         cleaner.setOperationContext(operation_context);
@@ -1055,12 +1056,224 @@ fn stringValue(configuration: *const config_model.Config, key: []const u8) ?[]co
     return value.string;
 }
 
+fn boolValue(configuration: *const config_model.Config, key: []const u8) ?bool {
+    const value = configuration.values.get(key) orelse return null;
+    if (value != .bool) return null;
+    return value.bool;
+}
+
+fn autoConfirmCacheClean(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) bool {
+    if (!upgradesAll(invocation)) return false;
+    if (optionEnabled(invocation, auto_confirm_cache_clean_option)) return true;
+    const configuration = config_manager.Manager.init(context).read() catch return false;
+    return configuredAutoConfirmCacheClean(&configuration, invocation);
+}
+
+fn elevatedUpgradeArguments(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) ![]const []const u8 {
+    return upgradeArgumentsWithCacheCleanPolicy(
+        context.allocator,
+        invocation.arguments,
+        autoConfirmCacheClean(context, invocation),
+    );
+}
+
+fn upgradeArgumentsWithCacheCleanPolicy(
+    allocator: std.mem.Allocator,
+    arguments: []const []const u8,
+    auto_confirm: bool,
+) ![]const []const u8 {
+    const already_present = for (arguments) |argument| {
+        if (std.mem.eql(u8, argument, auto_confirm_cache_clean_option)) break true;
+    } else false;
+    const extra_count: usize = if (auto_confirm and !already_present) 1 else 0;
+    const result = try allocator.alloc([]const u8, arguments.len + extra_count);
+    @memcpy(result[0..arguments.len], arguments);
+    if (extra_count == 1) result[arguments.len] = auto_confirm_cache_clean_option;
+    return result;
+}
+
+fn configuredAutoConfirmCacheClean(
+    configuration: *const config_model.Config,
+    invocation: *const parser.Invocation,
+) bool {
+    return upgradesAll(invocation) and
+        (boolValue(configuration, "AutoConfirmCacheClean") orelse false);
+}
+
+fn confirmCacheClean(
+    allocator: std.mem.Allocator,
+    cache_operation: *const Zigalpm.Operation,
+    auto_confirm: bool,
+) !bool {
+    if (auto_confirm) return true;
+    var answer = try cache_operation.ask(.{
+        .kind = .confirmation,
+        .prompt = "Would you like to remove extra cache entries?",
+        .default_response = .accepted,
+    });
+    defer answer.deinit(allocator);
+    return answer.response == .accepted;
+}
+
 fn isUpgradePath(path: []const u8) bool {
     return std.mem.eql(u8, path, standard_command_path) or
         std.mem.eql(u8, path, all_command_path) or
         std.mem.eql(u8, path, appimage_command_path) or
         std.mem.eql(u8, path, aur_command_path) or
         std.mem.eql(u8, path, flatpak_command_path);
+}
+
+test "cache clean auto-confirm is limited to aggregate upgrades" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    const aggregate = try parser.parse(arena.allocator(), &manifest, &.{ "upgrade", "all" });
+    try std.testing.expect(aggregate == .dispatch);
+    const aggregate_alias = try parser.parse(
+        arena.allocator(),
+        &manifest,
+        &.{ "upgrade", "standard", "--all" },
+    );
+    try std.testing.expect(aggregate_alias == .dispatch);
+    const standalone = try parser.parse(arena.allocator(), &manifest, &.{ "upgrade", "standard" });
+    try std.testing.expect(standalone == .dispatch);
+
+    var configuration = try config_model.Config.defaults(arena.allocator());
+    try std.testing.expect(!configuredAutoConfirmCacheClean(&configuration, &aggregate.dispatch));
+    try std.testing.expect(try configuration.set(
+        arena.allocator(),
+        "AutoConfirmCacheClean",
+        "true",
+    ));
+    try std.testing.expect(configuredAutoConfirmCacheClean(&configuration, &aggregate.dispatch));
+    try std.testing.expect(configuredAutoConfirmCacheClean(&configuration, &aggregate_alias.dispatch));
+    try std.testing.expect(!configuredAutoConfirmCacheClean(&configuration, &standalone.dispatch));
+
+    const missing: config_model.Config = .{ .values = .empty };
+    try std.testing.expect(!configuredAutoConfirmCacheClean(&missing, &aggregate.dispatch));
+}
+
+test "aggregate upgrade carries cache clean policy across elevation" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var absolute_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const absolute_length = try temporary.dir.realPath(std.testing.io, &absolute_buffer);
+
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    var environment = std.process.Environ.Map.init(tc.arena.allocator());
+    try environment.put("HOME", "/home/tester");
+    try environment.put("XDG_CONFIG_HOME", absolute_buffer[0..absolute_length]);
+    tc.context.environment = &environment;
+    try std.testing.expect(try config_manager.Manager.init(&tc.context).update(
+        "AutoConfirmCacheClean",
+        "true",
+    ));
+
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const original = try parser.parse(tc.arena.allocator(), &manifest, &.{ "upgrade", "all" });
+    try std.testing.expect(original == .dispatch);
+    const elevated_arguments = try elevatedUpgradeArguments(&tc.context, &original.dispatch);
+    defer tc.context.allocator.free(elevated_arguments);
+    try std.testing.expectEqual(@as(usize, 3), elevated_arguments.len);
+    try std.testing.expectEqualStrings(
+        auto_confirm_cache_clean_option,
+        elevated_arguments[elevated_arguments.len - 1],
+    );
+
+    const elevated = try parser.parse(tc.arena.allocator(), &manifest, elevated_arguments);
+    try std.testing.expect(elevated == .dispatch);
+    try std.testing.expect(optionEnabled(
+        &elevated.dispatch,
+        auto_confirm_cache_clean_option,
+    ));
+
+    var elevated_tc: test_support.TestContext = .{};
+    elevated_tc.init();
+    defer elevated_tc.deinit();
+    try std.testing.expect(autoConfirmCacheClean(&elevated_tc.context, &elevated.dispatch));
+}
+
+test "disabled cache clean policy does not alter elevated arguments" {
+    const original = [_][]const u8{ "upgrade", "all" };
+    const elevated = try upgradeArgumentsWithCacheCleanPolicy(
+        std.testing.allocator,
+        &original,
+        false,
+    );
+    defer std.testing.allocator.free(elevated);
+    try std.testing.expectEqualSlices([]const u8, &original, elevated);
+}
+
+test "bare aggregate upgrade carries cache clean policy across elevation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+
+    const original = try parser.parse(arena.allocator(), &manifest, &.{});
+    try std.testing.expect(original == .dispatch);
+    try std.testing.expect(upgradesAll(&original.dispatch));
+
+    const elevated_arguments = try upgradeArgumentsWithCacheCleanPolicy(
+        arena.allocator(),
+        original.dispatch.arguments,
+        true,
+    );
+    const elevated = try parser.parse(arena.allocator(), &manifest, elevated_arguments);
+    try std.testing.expect(elevated == .dispatch);
+    try std.testing.expect(upgradesAll(&elevated.dispatch));
+    try std.testing.expect(optionEnabled(
+        &elevated.dispatch,
+        auto_confirm_cache_clean_option,
+    ));
+}
+
+test "cache clean auto-confirm bypasses only the cache question" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var operation_context = Zigalpm.OperationContext.init(arena.allocator(), std.testing.io);
+    defer operation_context.deinit();
+
+    const Responder = struct {
+        calls: usize = 0,
+        response: Zigalpm.OperationQuestionResponse = .declined,
+
+        fn answer(
+            data: ?*anyopaque,
+            question: Zigalpm.OperationQuestion,
+        ) Zigalpm.OperationQuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            std.testing.expect(question.kind == .confirmation) catch unreachable;
+            std.testing.expectEqualStrings(
+                "Would you like to remove extra cache entries?",
+                question.prompt,
+            ) catch unreachable;
+            self.calls += 1;
+            return self.response;
+        }
+    };
+    var responder: Responder = .{};
+    operation_context.setQuestionHandler(.{ .function = Responder.answer, .data = &responder });
+    var cache_operation = operation_context.begin(.{ .backend = .alpm, .kind = .cleanup });
+    defer cache_operation.finish(.success);
+
+    try std.testing.expect(try confirmCacheClean(arena.allocator(), &cache_operation, true));
+    try std.testing.expectEqual(@as(usize, 0), responder.calls);
+
+    try std.testing.expect(!try confirmCacheClean(arena.allocator(), &cache_operation, false));
+    try std.testing.expectEqual(@as(usize, 1), responder.calls);
+
+    responder.response = .accepted;
+    try std.testing.expect(try confirmCacheClean(arena.allocator(), &cache_operation, false));
+    try std.testing.expectEqual(@as(usize, 2), responder.calls);
 }
 
 test "standard upgrade preview runs only before non-root elevation" {
