@@ -609,7 +609,7 @@ fn renderStandard(
         .groups => {
             var rows: std.ArrayList([]const []const u8) = .empty;
             for (result.groups) |group_name| try rows.append(context.allocator, try row(context.allocator, &.{group_name}));
-            try table.write(context.allocator, context.stdout, &.{"Group"}, rows.items, output.supportsAnsi(context));
+            try table.write(context, &.{"Group"}, rows.items);
             try context.stdout.writeByte('\n');
         },
         .detail => try writePackageDetail(context, result.detail.?),
@@ -621,7 +621,7 @@ fn renderStandard(
                     package.name,
                     try formatSize(context.allocator, size_display, package.size),
                 }));
-                try table.write(context.allocator, context.stdout, &.{ "Name", "Size" }, rows.items, output.supportsAnsi(context));
+                try table.write(context, &.{ "Name", "Size" }, rows.items);
                 try context.stdout.writeByte('\n');
             }
             if (result.packages.len > 0) {
@@ -634,11 +634,9 @@ fn renderStandard(
                     truncate(package.description, 50),
                 }));
                 try table.write(
-                    context.allocator,
-                    context.stdout,
+                    context,
                     &.{ "Name", "Repository", "Version", "Size", "Description" },
                     rows.items,
-                    output.supportsAnsi(context),
                 );
                 try context.stdout.writeByte('\n');
             }
@@ -717,11 +715,9 @@ fn renderAur(
         }));
     }
     try table.write(
-        context.allocator,
-        context.stdout,
+        context,
         &.{ "Name", "Version", "Maintainer/Repository", "Last Updated/Build Date", "Description" },
         rows.items,
-        output.supportsAnsi(context),
     );
     try context.stdout.writeByte('\n');
     try context.stdout.print("Total results: {d}\n", .{result.packages.len + result.standard_packages.len});
@@ -792,11 +788,9 @@ fn renderFlatpak(
         try joined(context.allocator, package.permissions),
     }));
     try table.write(
-        context.allocator,
-        context.stdout,
+        context,
         &.{ "Name", "AppId", "Summary", "Remote", "Download Size", "Installed Size", "Permissions" },
         rows.items,
-        output.supportsAnsi(context),
     );
     try context.stdout.writeByte('\n');
 }
@@ -1382,6 +1376,39 @@ test "AUR standard merge and Flatpak paging are serialized without subprocesses"
     try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "Installed Size") != null);
     try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "shared=network") != null);
     try std.testing.expect(std.mem.indexOf(u8, tc.stdout.writer.buffered(), "sockets=wayland") != null);
+}
+
+test "interactive AUR search table stays within terminal width" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    var environment = std.process.Environ.Map.init(tc.arena.allocator());
+    try environment.put("COLUMNS", "80");
+    tc.context.environment = &environment;
+    tc.context.stdout_is_tty = true;
+
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const invocation = try parser.parse(tc.arena.allocator(), &manifest, &.{ "search", "aur", "codelldb-bin" });
+    const Fixture = struct {
+        fn search(_: @This(), _: *runtime.RuntimeContext, _: *const parser.Invocation) !Result {
+            return .{ .aur = .{ .packages = &.{.{
+                .name = "codelldb-bin",
+                .version = "1.12.3-1",
+                .maintainer = "dmitmel",
+                .last_modified = 1_777_000_000,
+                .description = "A native debugger extension for VSCode based on LLDB. Also known as CodeLLDB.",
+            }} } };
+        }
+    };
+    try std.testing.expectEqual(@as(u8, 0), try executeWithRunner(&tc.context, &invocation.dispatch, Fixture{}));
+
+    const rendered = tc.stdout.writer.buffered();
+    var lines = std.mem.splitScalar(u8, rendered, '\n');
+    while (lines.next()) |line|
+        try std.testing.expect((try std.unicode.utf8CountCodepoints(line)) <= 79);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "codelldb-bin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "VSCode") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Total results: 1") != null);
 }
 
 test "AUR pkgbuild search displays fetched content and structured output" {
