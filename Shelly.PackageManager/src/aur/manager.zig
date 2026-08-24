@@ -912,7 +912,10 @@ pub const Manager = struct {
         if (plans.items.len > 0) {
             try self.requireInstallPlanApprovals(plans.items);
             for (plans.items) |*plan|
-                plan.selected_optional = try self.selectOptionalDependencies(&plan.prepared.info);
+                plan.selected_optional = try self.selectOptionalDependencies(
+                    plan.prepared.package_name,
+                    &plan.prepared.info,
+                );
             try self.confirmInstallPlans(plans.items);
         }
 
@@ -1366,7 +1369,11 @@ pub const Manager = struct {
         self.raisePackageProgress(.aur_cleanup_done, package_name, current, total, "");
     }
 
-    fn selectOptionalDependencies(self: *Self, info: *const PkgbuildInfo) ![][]const u8 {
+    fn selectOptionalDependencies(
+        self: *Self,
+        package_name: []const u8,
+        info: *const PkgbuildInfo,
+    ) ![][]const u8 {
         if (self.skip_optional_dependency_prompt) return self.allocator.alloc([]const u8, 0);
         const raw_options = info.opt_depends orelse return self.allocator.alloc([]const u8, 0);
         var options: std.ArrayList(events.ProviderOption) = .empty;
@@ -1383,9 +1390,15 @@ pub const Manager = struct {
             });
         }
         if (options.items.len == 0) return self.allocator.alloc([]const u8, 0);
+        const question = try std.fmt.allocPrint(
+            self.allocator,
+            "Select optional dependencies for {s}",
+            .{package_name},
+        );
+        defer self.allocator.free(question);
         const response = self.dispatcher.ask(.{
             .question_type = .select_optional_dependencies,
-            .question = "Select optional dependencies",
+            .question = question,
             .options = options.items,
         });
         var selected: std.ArrayList([]const u8) = .empty;
@@ -3124,6 +3137,104 @@ test "helper cache identity recognizes installed split-package members" {
     try std.testing.expect(cloneIdentityMatches("demo-suite", &package_names, "demo-ui"));
     try std.testing.expect(cloneIdentityMatches("demo-suite", &package_names, "demo-suite"));
     try std.testing.expect(!cloneIdentityMatches("demo-suite", &package_names, "unrelated"));
+}
+
+test "AUR optional dependency prompts identify their package" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const root = try temporary.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const cache_root = try std.fs.path.join(allocator, &.{ root, "cache" });
+    defer allocator.free(cache_root);
+    const alpm_root = try std.fs.path.join(allocator, &.{ root, "alpm-root" });
+    defer allocator.free(alpm_root);
+    const db_path = try std.fs.path.join(allocator, &.{ root, "db" });
+    defer allocator.free(db_path);
+    const package_cache = try std.fs.path.join(allocator, &.{ root, "packages" });
+    defer allocator.free(package_cache);
+    const shellybuild_system_path = try std.fs.path.join(allocator, &.{ root, "missing-system-shellybuild.conf" });
+    defer allocator.free(shellybuild_system_path);
+    const shellybuild_user_path = try std.fs.path.join(allocator, &.{ root, "missing-user-shellybuild.conf" });
+    defer allocator.free(shellybuild_user_path);
+    try std.Io.Dir.cwd().createDirPath(io, cache_root);
+    try std.Io.Dir.cwd().createDirPath(io, alpm_root);
+    try std.Io.Dir.cwd().createDirPath(io, db_path);
+    try std.Io.Dir.cwd().createDirPath(io, package_cache);
+
+    const config_path = try std.fs.path.join(allocator, &.{ root, "pacman.conf" });
+    defer allocator.free(config_path);
+    const config = try std.fmt.allocPrint(
+        allocator,
+        "[options]\nArchitecture = auto\nSigLevel = Never\nRootDir = {s}\nDBPath = {s}\nCacheDir = {s}\n",
+        .{ alpm_root, db_path, package_cache },
+    );
+    defer allocator.free(config);
+    try writeFixtureFile(io, config_path, config, false);
+
+    var manager = try Manager.init(allocator, std.testing.environ, .{
+        .config_path = config_path,
+        .cache_root = cache_root,
+        .shellybuild_configuration_paths = .{
+            .system = shellybuild_system_path,
+            .user = shellybuild_user_path,
+        },
+    });
+    defer manager.deinit();
+
+    const expected_prompts = [_][]const u8{
+        "Select optional dependencies for editor-git",
+        "Select optional dependencies for media-player-bin",
+    };
+    const Capture = struct {
+        expected_prompts: []const []const u8,
+        calls: usize = 0,
+        prompts_match: bool = true,
+
+        fn answer(data: ?*anyopaque, question: events.QuestionArgs) events.QuestionResponse {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            if (question.question_type != .select_optional_dependencies or
+                self.calls >= self.expected_prompts.len or
+                !std.mem.eql(u8, question.question, self.expected_prompts[self.calls]))
+            {
+                self.prompts_match = false;
+            }
+            self.calls += 1;
+            return .{};
+        }
+    };
+    var capture = Capture{ .expected_prompts = &expected_prompts };
+    manager.dispatcher.setQuestionHandler(.{
+        .function = Capture.answer,
+        .data = &capture,
+    });
+
+    var editor_options = [_][]const u8{"editor-docs: Offline documentation"};
+    var editor_info = PkgbuildInfo{
+        .opt_depends = editor_options[0..],
+        .variables = std.StringHashMap([]const u8).init(allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(allocator),
+    };
+    defer editor_info.variables.deinit();
+    defer editor_info.local_source_contents.deinit();
+    const editor_selected = try manager.selectOptionalDependencies("editor-git", &editor_info);
+    defer allocator.free(editor_selected);
+
+    var player_options = [_][]const u8{"media-codecs: Additional codec support"};
+    var player_info = PkgbuildInfo{
+        .opt_depends = player_options[0..],
+        .variables = std.StringHashMap([]const u8).init(allocator),
+        .local_source_contents = std.StringHashMap([]const u8).init(allocator),
+    };
+    defer player_info.variables.deinit();
+    defer player_info.local_source_contents.deinit();
+    const player_selected = try manager.selectOptionalDependencies("media-player-bin", &player_info);
+    defer allocator.free(player_selected);
+
+    try std.testing.expectEqual(expected_prompts.len, capture.calls);
+    try std.testing.expect(capture.prompts_match);
 }
 
 test "prepared non-chroot split package builds use the custom builder" {

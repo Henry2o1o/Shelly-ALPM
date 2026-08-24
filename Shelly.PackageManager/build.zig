@@ -277,6 +277,7 @@ pub fn build(b: *std.Build) void {
             "ALPM and AUR questions use the shared response hook",
             "common ALPM optional dependency choices preserve every selected index",
             "install_packages preserves every optional dependency selection after an installed first choice",
+            "AUR optional dependency prompts identify their package",
         },
     });
     const run_adapter_tests = b.addRunArtifact(adapter_tests);
