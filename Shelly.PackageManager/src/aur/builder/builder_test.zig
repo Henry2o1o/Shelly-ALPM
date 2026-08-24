@@ -2032,6 +2032,48 @@ test "PackageBuilder extracts source archives into srcdir" {
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
 }
 
+test "PackageBuilder extracts VSIX sources into srcdir" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=codelldb-bin
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.vsix')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/lib/codelldb"
+        \\  cp "$srcdir/extension/adapter/codelldb" "$pkgdir/usr/lib/codelldb/codelldb"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.createDirPath(io, "vsix-fixture/extension/adapter");
+    try fixture.temporary.dir.writeFile(io, .{
+        .sub_path = "vsix-fixture/extension/adapter/codelldb",
+        .data = "debug adapter\n",
+    });
+    const fixture_directory = try std.fs.path.join(allocator, &.{ fixture.build_dir, "vsix-fixture" });
+    defer allocator.free(fixture_directory);
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.vsix" });
+    defer allocator.free(archive_path);
+    try runTestCommand(
+        allocator,
+        io,
+        &.{ "/usr/bin/bsdtar", "--format", "zip", "-cf", archive_path, "extension" },
+        fixture_directory,
+    );
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/payload.vsix", .{});
+    try fixture.temporary.dir.access(io, "src/extension/adapter/codelldb", .{});
+    try fixture.temporary.dir.access(io, "pkg/codelldb-bin/usr/lib/codelldb/codelldb", .{});
+}
+
 test "PackageBuilder rebases Zoom absolute source archive link inside srcdir" {
     const allocator = testing.allocator;
     const io = testing.io;
