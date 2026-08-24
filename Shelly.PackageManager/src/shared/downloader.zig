@@ -397,9 +397,6 @@ pub const CoreDownloader = struct {
         };
         defer req.deinit();
 
-        req.accept_encoding[@intFromEnum(std.http.ContentEncoding.gzip)] = false;
-        req.accept_encoding[@intFromEnum(std.http.ContentEncoding.deflate)] = false;
-
         var redirect_buffer: [8 * 1024]u8 = undefined;
         var response = sendAndReceiveHeadWithTimeout(
             &req,
@@ -1119,8 +1116,15 @@ const TestServerMode = enum {
     stall_headers,
     stall_body,
     not_found,
+    x_gzip_ignoring_identity,
     reuse_with_not_modified,
 };
+
+const test_x_gzip_body =
+    "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x2b\x4a" ++
+    "\x2d\xc8\x2f\xce\x2c\xc9\x2f\xaa\x54\x48\x49\x2c" ++
+    "\x49\x4c\x4a\x2c\x4e\x05\x00\x82\xd8\xef\x91\x13" ++
+    "\x00\x00\x00";
 
 const TestHttpServer = struct {
     io: std.Io,
@@ -1181,6 +1185,20 @@ const TestHttpServer = struct {
                 );
                 try writer.flush();
             },
+            .x_gzip_ignoring_identity => {
+                var read_buffer: [2048]u8 = undefined;
+                var stream_reader = stream.reader(self.io, &read_buffer);
+                try consumeTestRequestExpectIdentityEncoding(&stream_reader.interface);
+                try writer.print(
+                    "HTTP/1.1 200 OK\r\n" ++
+                        "Content-Length: {d}\r\n" ++
+                        "Content-Encoding: x-gzip\r\n" ++
+                        "Connection: close\r\n\r\n",
+                    .{test_x_gzip_body.len},
+                );
+                try writer.writeAll(test_x_gzip_body);
+                try writer.flush();
+            },
             .reuse_with_not_modified => {
                 var read_buffer: [2048]u8 = undefined;
                 var stream_reader = stream.reader(self.io, &read_buffer);
@@ -1223,6 +1241,25 @@ fn consumeTestRequest(reader: *std.Io.Reader) !void {
         const line = (try reader.takeDelimiter('\n')) orelse return error.EndOfStream;
         if (std.mem.eql(u8, line, "\r")) return;
     }
+}
+
+fn consumeTestRequestExpectIdentityEncoding(reader: *std.Io.Reader) !void {
+    var saw_identity_encoding = false;
+    while (true) {
+        const line = (try reader.takeDelimiter('\n')) orelse return error.EndOfStream;
+        if (std.mem.eql(u8, line, "\r")) break;
+
+        const trimmed = std.mem.trimEnd(u8, line, "\r");
+        const separator = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+        const name = trimmed[0..separator];
+        const value = std.mem.trim(u8, trimmed[separator + 1 ..], " \t");
+        if (std.ascii.eqlIgnoreCase(name, "accept-encoding") and
+            std.ascii.eqlIgnoreCase(value, "identity"))
+        {
+            saw_identity_encoding = true;
+        }
+    }
+    if (!saw_identity_encoding) return error.ExpectedIdentityAcceptEncoding;
 }
 
 fn testDestinationPath(
@@ -1325,6 +1362,42 @@ test "downloadToFile reports HTTP 404 as NotFound" {
         else => return error.ExpectedNotFound,
     }
     try server_future.await(io);
+}
+
+test "downloadToFile preserves unsolicited x-gzip response bytes" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = try TestHttpServer.init(io, .x_gzip_ignoring_identity);
+    defer server.deinit();
+    var server_future = try io.concurrent(TestHttpServer.serve, .{&server});
+    defer _ = server_future.cancel(io) catch {};
+
+    const url = try server.url(std.testing.allocator);
+    defer std.testing.allocator.free(url);
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const destination = try testDestinationPath(std.testing.allocator, io, &temporary);
+    defer std.testing.allocator.free(destination);
+
+    var downloader = CoreDownloader.init(std.testing.allocator, io, timeoutTestConfiguration());
+    defer downloader.deinit();
+    downloader.quiet = true;
+    switch (downloader.downloadToFile(url, destination, true)) {
+        .succes => {},
+        else => return error.ExpectedSuccessfulDownload,
+    }
+    try server_future.await(io);
+
+    const contents = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        destination,
+        std.testing.allocator,
+        .limited(1024),
+    );
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualSlices(u8, test_x_gzip_body, contents);
 }
 
 test "response header timeout interrupts a server that never responds" {
