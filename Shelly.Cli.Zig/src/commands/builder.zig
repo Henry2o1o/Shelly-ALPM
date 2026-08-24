@@ -16,14 +16,12 @@ pub fn dispatch(
     invocation: *const parser.Invocation,
 ) !?u8 {
     if (!std.mem.eql(u8, invocation.command.path, command_path)) return null;
-    if (syncDepsRequested(invocation) and !invocation.globals.ui_mode and !elevation.isRoot()) {
-        if (syncDepsNeeded(context, invocation)) {
-            const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
-                try context.stderr.print("Unable to elevate build dependency installation: {t}\n", .{err});
-                return 1;
-            };
-            if (elevated_exit) |exit_code| return exit_code;
-        }
+    if (shouldElevateSyncDeps(invocation, elevation.isRoot())) {
+        const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
+            try context.stderr.print("Unable to elevate build dependency installation: {t}\n", .{err});
+            return 1;
+        };
+        if (elevated_exit) |exit_code| return exit_code;
     }
     return try executeWithRunner(context, invocation, Real{});
 }
@@ -37,38 +35,8 @@ fn syncDepsRequested(invocation: *const parser.Invocation) bool {
         !optionEnabled(invocation, "--coordinator-child");
 }
 
-/// Read-only pre-elevation check. Resolves dependencies against the local
-/// and sync databases exactly as they exist on disk — no syncing, no writes
-/// — so a build with nothing missing never pays the elevation prompt. Any
-/// failure conservatively reports that elevation is needed; the elevated
-/// coordinator syncs and re-resolves authoritatively.
-fn syncDepsNeeded(context: *runtime.RuntimeContext, invocation: *const parser.Invocation) bool {
-    return checkSyncDepsNeeded(context, invocation) catch true;
-}
-
-fn checkSyncDepsNeeded(
-    context: *runtime.RuntimeContext,
-    invocation: *const parser.Invocation,
-) !bool {
-    var request = try parseBuildRequest(context, invocation);
-    defer request.deinit(context);
-
-    const manager = try Zigalpm.AlpmManager.init(
-        context.allocator,
-        context.environ,
-        .{ .use_root = false },
-    );
-    defer manager.deinit();
-
-    var backend_context: AlpmResolverContext = .{ .manager = manager };
-    var plan = try resolveSyncDependencies(
-        context.allocator,
-        request.package_builds,
-        request.no_check,
-        backend_context.backend(),
-    );
-    defer plan.deinit(context.allocator);
-    return plan.repo_dependencies.len > 0 or plan.aur_dependencies.len > 0;
+fn shouldElevateSyncDeps(invocation: *const parser.Invocation, running_as_root: bool) bool {
+    return syncDepsRequested(invocation) and !running_as_root;
 }
 
 fn executeWithRunner(
@@ -158,11 +126,10 @@ const Real = struct {
 
         var requested_names: std.ArrayList([]const u8) = .empty;
         defer requested_names.deinit(context.allocator);
+        const build_all_members = !hasPackageSelection(invocation);
         for (invocation.options) |option| {
             if (!std.mem.eql(u8, option.name, "--package")) continue;
             const requested_name = option.value orelse return error.MissingPackageName;
-            if (!containsString(names.items, requested_name))
-                return error.SelectedPackageNotFound;
             if (!containsString(requested_names.items, requested_name))
                 try requested_names.append(context.allocator, requested_name);
         }
@@ -182,10 +149,11 @@ const Real = struct {
         }
 
         for (requested_names.items, package_builds) |name, *pkgbuild| {
+            const parse_name = if (containsString(names.items, name)) name else names.items[0];
             pkgbuild.* = try (Zigalpm.pkgbuild.Parser{
                 .allocator = context.allocator,
                 .io = context.io,
-                .selected_package_name = name,
+                .selected_package_name = parse_name,
                 .package_carch = shellybuild.build.carch,
             }).parser_content(pkgbuild_content, build_directory);
 
@@ -288,6 +256,7 @@ const Real = struct {
                 .reviewed_pkgbuild_digest = expected_digest,
                 .install_scripts = review.install_scripts,
                 .reviewed_files = review.reviewed_files,
+                .build_all_members = build_all_members,
                 .sources_prepared = false,
             },
             context.environ,
@@ -383,8 +352,6 @@ fn parseBuildRequest(
     for (invocation.options) |option| {
         if (!std.mem.eql(u8, option.name, "--package")) continue;
         const requested_name = option.value orelse return error.MissingPackageName;
-        if (!containsString(names.items, requested_name))
-            return error.SelectedPackageNotFound;
         if (!containsString(requested_names.items, requested_name))
             try requested_names.append(context.allocator, requested_name);
     }
@@ -400,10 +367,11 @@ fn parseBuildRequest(
     errdefer for (package_builds[0..parsed_count]) |*pkgbuild|
         pkgbuild.deinit(context.allocator);
     for (requested_names.items, package_builds) |name, *pkgbuild| {
+        const parse_name = if (containsString(names.items, name)) name else names.items[0];
         pkgbuild.* = try (Zigalpm.pkgbuild.Parser{
             .allocator = context.allocator,
             .io = context.io,
-            .selected_package_name = name,
+            .selected_package_name = parse_name,
             .package_carch = shellybuild.build.carch,
         }).parser_content(pkgbuild_content, build_directory);
         parsed_count += 1;
@@ -591,8 +559,25 @@ fn resolveSyncDependencies(
         aur.deinit(allocator);
     }
 
+    var provided: std.ArrayList(resolver.ProvidedPackage) = .empty;
+    defer {
+        for (provided.items) |package| allocator.free(package.version);
+        provided.deinit(allocator);
+    }
+    for (package_builds) |package_build| {
+        const name = package_build.pkg_name orelse continue;
+        const full_version = try package_build.get_full_version(allocator);
+        provided.append(allocator, .{
+            .name = name,
+            .version = full_version,
+        }) catch |err| {
+            allocator.free(full_version);
+            return err;
+        };
+    }
+
     for (package_builds) |*package_build| {
-        var resolution = try resolver.resolve(allocator, package_build, no_check, backend);
+        var resolution = try resolver.resolveWithProvided(allocator, package_build, no_check, backend, provided.items);
         defer resolution.deinit(allocator);
         for (resolution.repo_packages) |dependency| {
             if (findRepoDependency(repo.items, dependency.name)) |index| {
@@ -719,6 +704,12 @@ fn optionValue(invocation: *const parser.Invocation, name: []const u8) ?[]const 
     for (invocation.options) |option|
         if (std.mem.eql(u8, option.name, name)) return option.value;
     return null;
+}
+
+fn hasPackageSelection(invocation: *const parser.Invocation) bool {
+    for (invocation.options) |option|
+        if (std.mem.eql(u8, option.name, "--package")) return true;
+    return false;
 }
 
 fn containsString(values: []const []const u8, wanted: []const u8) bool {
@@ -907,24 +898,25 @@ test "build request parsing selects members and honors check overrides" {
         &manifest,
         &.{ "build", "--no-confirm", "--package", "demo-missing", pkgbuild_path },
     );
-    try std.testing.expectError(
-        error.SelectedPackageNotFound,
-        parseBuildRequest(&test_context.context, &missing.dispatch),
-    );
+    var deferred_request = try parseBuildRequest(&test_context.context, &missing.dispatch);
+    try std.testing.expectEqual(@as(usize, 1), deferred_request.parsed_count);
+    try std.testing.expectEqualStrings("demo", deferred_request.package_builds[0].pkg_name.?);
+    deferred_request.deinit(&test_context.context);
 }
 
-test "pre-elevation check conservatively reports missing PKGBUILD paths" {
+test "package selection intent distinguishes implicit all from explicit members" {
     const spec = @import("../cli/spec.zig");
-    var test_context: test_support.TestContext = .{};
-    test_context.init();
-    defer test_context.deinit();
-    const manifest = try spec.Manifest.load(test_context.arena.allocator());
-    const outcome = try parser.parse(
-        test_context.arena.allocator(),
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const all = try parser.parse(arena.allocator(), &manifest, &.{"build"});
+    const selected = try parser.parse(
+        arena.allocator(),
         &manifest,
-        &.{ "build", "--no-confirm", "/nonexistent/shelly-sync-deps-fixture/PKGBUILD" },
+        &.{ "build", "--package", "demo-addon" },
     );
-    try std.testing.expect(syncDepsNeeded(&test_context.context, &outcome.dispatch));
+    try std.testing.expect(!hasPackageSelection(&all.dispatch));
+    try std.testing.expect(hasPackageSelection(&selected.dispatch));
 }
 
 test "sync deps options parse under both spellings" {
@@ -938,6 +930,10 @@ test "sync deps options parse under both spellings" {
     try std.testing.expect(syncDepsRequested(&long_form.dispatch));
     try std.testing.expect(syncDepsRequested(&short_form.dispatch));
     try std.testing.expect(!syncDepsRequested(&plain.dispatch));
+    try std.testing.expect(shouldElevateSyncDeps(&long_form.dispatch, false));
+    try std.testing.expect(shouldElevateSyncDeps(&short_form.dispatch, false));
+    try std.testing.expect(!shouldElevateSyncDeps(&long_form.dispatch, true));
+    try std.testing.expect(!shouldElevateSyncDeps(&plain.dispatch, false));
 }
 
 test "coordinator child builds never re-enter the sync deps coordinator" {
@@ -952,6 +948,7 @@ test "coordinator child builds never re-enter the sync deps coordinator" {
     });
     try std.testing.expect(optionEnabled(&outcome.dispatch, "--sync-deps"));
     try std.testing.expect(!syncDepsRequested(&outcome.dispatch));
+    try std.testing.expect(!shouldElevateSyncDeps(&outcome.dispatch, false));
 }
 
 test "invoking user build arguments drop sync deps flags and keep everything else" {
@@ -968,6 +965,15 @@ test "invoking user build arguments drop sync deps flags and keep everything els
     const child = try buildChildArguments(allocator, &arguments);
     defer allocator.free(child);
     const expected = [_][]const u8{ "build", "--no-check", "--package", "demo", "/tmp/PKGBUILD" };
+    try std.testing.expectEqualStrings(&expected, child);
+}
+
+test "sync deps child preserves implicit all-members selection" {
+    const allocator = std.testing.allocator;
+    const arguments = [_][]const u8{ "build", "--sync-deps", "/tmp/PKGBUILD" };
+    const child = try buildChildArguments(allocator, &arguments);
+    defer allocator.free(child);
+    const expected = [_][]const u8{ "build", "/tmp/PKGBUILD" };
     try std.testing.expectEqualStrings(&expected, child);
 }
 
@@ -994,6 +1000,8 @@ const fake_sync_deps_backend = struct {
 const sync_deps_pkgbuild =
     \\pkgbase=demo
     \\pkgname=(demo-cli demo-docs)
+    \\pkgver=1
+    \\pkgrel=1
     \\arch=('any')
     \\makedepends=('cmake>=3')
     \\checkdepends=('meson')
@@ -1003,7 +1011,7 @@ const sync_deps_pkgbuild =
     \\}
     \\
     \\package_demo-docs() {
-    \\    depends=('cmake>=3')
+    \\    depends=('demo-cli=1-1' 'cmake>=3')
     \\}
 ;
 
