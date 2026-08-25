@@ -11,6 +11,7 @@
 const std = @import("std");
 const testing = std.testing;
 const builtin = @import("builtin");
+const package_options = @import("package_options");
 
 const builder_mod = @import("builder.zig");
 const PackageBuilder = builder_mod.PackageBuilder;
@@ -1452,8 +1453,10 @@ test "PackageBuilder emits makepkg-compatible BUILDINFO and MTREE metadata" {
     const digest_hex = std.fmt.bytesToHex(pkgbuild_digest, .lower);
     const digest_line = try std.fmt.allocPrint(allocator, "pkgbuild_sha256sum = {s}\n", .{digest_hex});
     defer allocator.free(digest_line);
+    const buildtool_line = try std.fmt.allocPrint(allocator, "buildtoolver = {s}\n", .{package_options.version});
+    defer allocator.free(buildtool_line);
     try testing.expect(std.mem.indexOf(u8, build_info, digest_line) != null);
-    try testing.expect(std.mem.indexOf(u8, build_info, "buildtoolver = 3.0.6\n") != null);
+    try testing.expect(std.mem.indexOf(u8, build_info, buildtool_line) != null);
     try testing.expect(std.mem.indexOf(u8, build_info, "buildenv = !distcc\n") != null);
     try testing.expect(std.mem.indexOf(u8, build_info, "buildenv = (!distcc") == null);
     try testing.expect(std.mem.indexOf(u8, build_info, "options = strip\n") != null);
