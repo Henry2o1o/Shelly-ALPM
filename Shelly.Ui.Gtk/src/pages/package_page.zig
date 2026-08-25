@@ -677,6 +677,7 @@ pub const PackagePage = extern struct {
         self.update_selection_ui();
         _ = gtk.Widget.grabFocus(p.search_entry.as(gtk.Widget));
         const thread = std.Thread.spawn(.{}, load_worker, .{ self, p.generation, p.show_hidden }) catch return;
+        gtk.Widget.setVisible(p.no_results_overlay.as(gtk.Widget), 0);
         thread.detach();
     }
 
@@ -880,6 +881,7 @@ pub const PackagePage = extern struct {
         _ = gtk.SelectionModel.selectItem(p.selection.as(gtk.SelectionModel), 0, 1);
 
         hide_loading(page);
+
         return 0;
     }
 
@@ -895,6 +897,7 @@ pub const PackagePage = extern struct {
         const p = self.priv();
         gtk.Spinner.setSpinning(p.loading_spinner, 0);
         gtk.Widget.setVisible(p.loading_overlay.as(gtk.Widget), 0);
+        self.update_no_results();
     }
 
     const template_children = .{
