@@ -7,6 +7,7 @@ const colors = @import("colors.zig");
 const Color = colors.Color;
 const fmt = @import("format.zig");
 const review_output = @import("review.zig");
+const terminal = @import("terminal.zig");
 const runtime = @import("../runtime/context.zig");
 const parser = @import("../cli/parser.zig");
 
@@ -37,6 +38,16 @@ const FinalizedBar = struct {
     name: []const u8,
     action: []const u8,
 };
+
+const ProgressLayout = struct {
+    label_width: usize,
+    gap_width: usize,
+    bar_width: usize,
+};
+
+const percentage_width: usize = 5;
+const baseline_terminal_width: usize = 80;
+const minimum_label_width: usize = 12;
 
 /// Runs a backend operation through the common non-UI lifecycle. Package
 /// commands only supply their opening message and runner; event rendering,
@@ -209,7 +220,11 @@ pub const Renderer = struct {
             .progress => |progress| try self.writeProgress(progress),
             .status => |status| try self.writeStatus(status),
             .failure => |failure| {
-                try self.writeColoredLine(.red, "error: {s}", .{failure.message});
+                if (failure.recoverable) {
+                    try self.writeColoredLine(.yellow, "warning: {s}", .{failure.message});
+                } else {
+                    try self.writeColoredLine(.red, "error: {s}", .{failure.message});
+                }
             },
             .completed => |completed| try self.completeOperation(completed.envelope.operation_id),
             .started => {},
@@ -424,27 +439,24 @@ pub const Renderer = struct {
 
     fn writeBarLine(self: *Renderer, bar: Bar) !void {
         const width = terminalWidth(self.context);
-        const percentage_width: usize = 5;
-        const minimum_bar_width = @max(@as(usize, 1), self.settings.bar_width);
-        const half_width = width / 2;
-        const bar_width = @max(minimum_bar_width, if (half_width > percentage_width) half_width - percentage_width else 1);
+        const layout = progressLayout(width, self.settings.bar_width);
 
         var left_buffer = std.Io.Writer.Allocating.init(self.context.allocator);
         defer left_buffer.deinit();
         try left_buffer.writer.print("({d:.0}/{d:.0}) {s} {s}", .{ bar.current, bar.total, bar.action, bar.name });
-        var left = left_buffer.writer.buffered();
+        const left = terminalPrefix(left_buffer.writer.buffered(), layout.label_width);
 
-        var bar_buffer = std.Io.Writer.Allocating.init(self.context.allocator);
-        defer bar_buffer.deinit();
-        try renderBar(&bar_buffer.writer, bar.percentage, self.frame, self.settings.progress_style, bar_width, !self.animate);
-        const rendered_bar = bar_buffer.writer.buffered();
-        const right_len = bar_width + percentage_width;
-        const available = if (width > right_len) width - right_len else 1;
-        if (left.len + 1 > available) left = left[0..@min(left.len, available -| 1)];
-        const padding = @max(@as(usize, 1), width -| left.len -| right_len);
-        try self.context.stdout.writeAll(left);
-        try self.context.stdout.splatByteAll(' ', padding);
-        try self.context.stdout.print("{s} {d: >3}%\n", .{ rendered_bar, bar.percentage });
+        try self.context.stdout.writeAll(left.bytes);
+        try self.context.stdout.splatByteAll(' ', layout.label_width - left.columns + layout.gap_width);
+        try renderBar(
+            self.context.stdout,
+            bar.percentage,
+            self.frame,
+            self.settings.progress_style,
+            layout.bar_width,
+            !self.animate,
+        );
+        try self.context.stdout.print(" {d: >3}%\n", .{bar.percentage});
     }
 
     fn writeColoredLine(self: *Renderer, color: Color, comptime format: []const u8, args: anytype) !void {
@@ -497,6 +509,7 @@ pub const Renderer = struct {
         defer self.drawBars() catch self.write_failed.store(true, .release);
         return switch (question.kind) {
             .confirmation => if (try self.confirm(question.prompt, true)) .accepted else .declined,
+            .import_pgp_key => if (try self.confirm(question.prompt, false)) .accepted else .declined,
             .confirm_transaction => blk: {
                 try self.renderTransactionPlan(question);
                 const default_approved = defaultResponse(question) == .accepted;
@@ -841,13 +854,122 @@ test "Flatpak progress references retain application identity and context" {
 }
 
 fn terminalWidth(context: *const runtime.RuntimeContext) usize {
-    if (context.environment) |environment| {
-        if (environment.get("COLUMNS")) |columns| {
-            const parsed = std.fmt.parseInt(usize, columns, 10) catch 80;
-            return @max(@as(usize, 20), parsed -| 1);
+    return terminal.usableWidth(context, baseline_terminal_width, percentage_width);
+}
+
+fn progressLayout(terminal_width: usize, configured_bar_width: usize) ProgressLayout {
+    const content_width = terminal_width -| percentage_width;
+    if (content_width == 0) return .{ .label_width = 0, .gap_width = 0, .bar_width = 0 };
+    if (content_width == 1) return .{ .label_width = 0, .gap_width = 0, .bar_width = 1 };
+
+    const gap_width: usize = 1;
+    const available = content_width - gap_width;
+    // Terminal columns already reflect window resizing and font/DPI scaling.
+    // Treat the configured width as its preference at 80 columns, then scale
+    // it with the live cell count while preserving useful room for the label.
+    const preferred = @max(
+        @as(usize, 1),
+        ((configured_bar_width *| terminal_width) +| baseline_terminal_width / 2) / baseline_terminal_width,
+    );
+    const maximum = if (available > minimum_label_width)
+        available - minimum_label_width
+    else
+        @max(@as(usize, 1), available / 3);
+    const bar_width = @min(preferred, maximum);
+    return .{
+        .label_width = available - bar_width,
+        .gap_width = gap_width,
+        .bar_width = bar_width,
+    };
+}
+
+const TerminalPrefix = struct {
+    bytes: []const u8,
+    columns: usize,
+};
+
+fn terminalPrefix(value: []const u8, maximum_columns: usize) TerminalPrefix {
+    var byte_index: usize = 0;
+    var columns: usize = 0;
+    while (byte_index < value.len and columns < maximum_columns) : (columns += 1) {
+        const sequence_length = std.unicode.utf8ByteSequenceLength(value[byte_index]) catch 1;
+        const length: usize = @intCast(sequence_length);
+        if (byte_index + length > value.len) {
+            byte_index += 1;
+            continue;
         }
+        _ = std.unicode.utf8Decode(value[byte_index..][0..length]) catch {
+            byte_index += 1;
+            continue;
+        };
+        byte_index += length;
     }
-    return 79;
+    return .{ .bytes = value[0..byte_index], .columns = columns };
+}
+
+test "single-pane progress layout scales with terminal width" {
+    const narrow = progressLayout(39, 24);
+    const baseline = progressLayout(79, 24);
+    const wide = progressLayout(159, 24);
+
+    try std.testing.expectEqual(@as(usize, 12), narrow.bar_width);
+    try std.testing.expectEqual(@as(usize, 24), baseline.bar_width);
+    try std.testing.expectEqual(@as(usize, 48), wide.bar_width);
+    try std.testing.expectEqual(@as(usize, 39), narrow.label_width + narrow.gap_width + narrow.bar_width + percentage_width);
+    try std.testing.expectEqual(@as(usize, 79), baseline.label_width + baseline.gap_width + baseline.bar_width + percentage_width);
+    try std.testing.expectEqual(@as(usize, 159), wide.label_width + wide.gap_width + wide.bar_width + percentage_width);
+
+    const configured = progressLayout(79, 32);
+    try std.testing.expectEqual(@as(usize, 32), configured.bar_width);
+
+    const tiny = progressLayout(6, 24);
+    try std.testing.expectEqual(@as(usize, 6), tiny.label_width + tiny.gap_width + tiny.bar_width + percentage_width);
+}
+
+test "single-pane label truncation preserves UTF-8 boundaries" {
+    const prefix = terminalPrefix("pkg-éclair", 6);
+    try std.testing.expectEqualStrings("pkg-éc", prefix.bytes);
+    try std.testing.expectEqual(@as(usize, 6), prefix.columns);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(prefix.bytes));
+}
+
+test "single-pane rendered progress line fits detected width" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var environment = std.process.Environ.Map.init(arena.allocator());
+    try environment.put("COLUMNS", "40");
+    var context: runtime.RuntimeContext = .{
+        .allocator = arena.allocator(),
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+        .environment = &environment,
+    };
+    var renderer: Renderer = .{
+        .context = &context,
+        .settings = .{ .bar_width = 24 },
+        .no_confirm = true,
+        .animate = false,
+        .owned_data = std.heap.ArenaAllocator.init(arena.allocator()),
+    };
+    defer renderer.deinit();
+
+    try renderer.writeBarLine(.{
+        .operation_id = 1,
+        .name = "a-very-long-package-name.pkg.tar.zst",
+        .action = "PackageDownload",
+        .current = 50,
+        .total = 100,
+        .percentage = 50,
+    });
+    const rendered = stdout.writer.buffered();
+    try std.testing.expectEqual(@as(usize, 40), rendered.len);
+    try std.testing.expectEqual(@as(u8, '\n'), rendered[rendered.len - 1]);
+    try std.testing.expect(std.mem.endsWith(u8, rendered, "  50%\n"));
 }
 
 fn renderBar(
@@ -884,6 +1006,7 @@ fn renderBar(
 fn automaticResponse(kind: Zigalpm.OperationQuestionKind) Zigalpm.OperationQuestionResponse {
     return switch (kind) {
         .confirmation, .confirm_transaction, .review_changes => .accepted,
+        .import_pgp_key => .declined,
         .select_one, .select_provider => .{ .choice = 0 },
         .select_many, .select_optional_dependencies => .{ .choices = &.{} },
     };
@@ -941,6 +1064,8 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
 
     try renderer.begin("Synchronizing package databases...");
     var operation = operation_context.begin(.{ .backend = .download, .kind = .download, .subject = "extra.db" });
+    operation.reportError(error.TestRecoverableFailure, "optional cleanup failed", "test", null, true);
+    operation.reportError(error.TestFatalFailure, "required transaction failed", "test", null, false);
     operation.status(.information, "Download started", "download.start", null);
     operation.progress(.{ .completed = 50, .total = 100, .percentage = 50, .stage = "download" });
     operation.progress(.{ .completed = 100, .total = 100, .percentage = 100, .stage = "download" });
@@ -982,6 +1107,8 @@ test "redirected single-pane output suppresses intermediate progress and finaliz
     try std.testing.expect(std.mem.indexOf(u8, rendered, "100%") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Download started") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Download completed") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "warning: optional cleanup failed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "error: required transaction failed") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Scriptlet: post-install output") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Hook: Refreshing system state") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, ":: pacnew stored @ /etc/demo.conf.pacnew") != null);
@@ -1074,6 +1201,7 @@ test "single-pane clears unknown-length bars on completion and suppresses AUR me
 
 test "single-pane no-confirm uses the shared automatic question policy" {
     try std.testing.expect(automaticResponse(.confirmation) == .accepted);
+    try std.testing.expect(automaticResponse(.import_pgp_key) == .declined);
     try std.testing.expectEqual(@as(usize, 0), automaticResponse(.select_provider).choice);
     try std.testing.expectEqual(@as(usize, 0), automaticResponse(.select_optional_dependencies).choices.len);
 }

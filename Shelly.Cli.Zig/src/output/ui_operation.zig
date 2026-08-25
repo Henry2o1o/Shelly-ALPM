@@ -112,7 +112,10 @@ pub const Reporter = struct {
                 status.message,
             ),
             .progress => |progress| try output.writeOperationProgressFrame(self.context, progress),
-            .failure => |failure| try output.writeErrorFrame(self.context, failure.message),
+            .failure => |failure| if (failure.recoverable)
+                try output.writeWarningFrame(self.context, failure.message)
+            else
+                try output.writeErrorFrame(self.context, failure.message),
             .started, .completed => {},
         }
         try flush(self.context);
@@ -160,6 +163,7 @@ pub const QuestionResponder = struct {
     ) Zigalpm.OperationQuestionResponse {
         switch (question.kind) {
             .confirmation => output.writeYesNoQuestionFrame(self.context, question) catch return .declined,
+            .import_pgp_key => output.writeYesNoQuestionFrame(self.context, question) catch return .declined,
             .confirm_transaction => output.writeTransactionQuestionFrame(self.context, question) catch return .declined,
             .review_changes => output.writePkgbuildQuestionFrame(self.context, question) catch return .declined,
             .select_one, .select_provider => output.writeProviderQuestionFrame(self.context, question) catch return .{ .choice = 0 },
@@ -386,10 +390,14 @@ fn hasSecurityFindings(question: Zigalpm.OperationQuestion) bool {
 fn automaticResponse(kind: Zigalpm.OperationQuestionKind) Zigalpm.OperationQuestionResponse {
     return switch (kind) {
         .confirmation, .confirm_transaction => .accepted,
-        .review_changes => .declined,
+        .import_pgp_key, .review_changes => .declined,
         .select_one, .select_provider => .{ .choice = 0 },
         .select_many, .select_optional_dependencies => .{ .choices = &.{} },
     };
+}
+
+test "non-interactive UI declines source key imports" {
+    try std.testing.expect(automaticResponse(.import_pgp_key) == .declined);
 }
 
 pub fn flush(context: *runtime.RuntimeContext) !void {
@@ -428,6 +436,9 @@ test "UI operation reporter preserves percentages for every progress frame shape
     var appimage = operation_context.begin(.{ .backend = .appimage, .kind = .download, .subject = "demo.AppImage" });
     appimage.progress(.{ .bytes_completed = 25, .bytes_total = 100 });
     appimage.finish(.success);
+    var cleanup = operation_context.begin(.{ .backend = .alpm, .kind = .cleanup, .subject = "build dependencies" });
+    cleanup.reportError(error.TestRecoverableFailure, "optional cleanup failed", "test", null, true);
+    cleanup.finish(.failed);
 
     var frame_iterator = std.mem.splitSequence(u8, stdout.writer.buffered(), "[/JSON]\n");
     const expected = [_][]const []const u8{
@@ -448,6 +459,12 @@ test "UI operation reporter preserves percentages for every progress frame shape
             "\"$kind\":\"appimage.progress\"",
             "\"Status\":\"demo.AppImage\"",
             "\"Percentage\":25",
+        },
+        &.{
+            "\"$kind\":\"alpm.info\"",
+            "\"EventType\":\"WarningOutput\"",
+            "\"Message\":\"optional cleanup failed\"",
+            "\"Level\":\"Warning\"",
         },
     };
     for (expected) |needles| {

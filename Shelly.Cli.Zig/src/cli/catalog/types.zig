@@ -18,6 +18,7 @@ pub const Action = enum {
     config,
     run,
     keyring,
+    build,
 
     pub fn name(self: Action) []const u8 {
         return switch (self) {
@@ -45,6 +46,7 @@ pub const Action = enum {
             .config => 'C',
             .run => 'X',
             .keyring => 'K',
+            .build => 'A',
         };
     }
 
@@ -64,9 +66,10 @@ pub const Action = enum {
             .backup => "Back up explicitly installed packages as type-grouped TOML.",
             .utility => "Repair Shelly directory ownership, manage pacfiles, or generate CLI documentation and shell completions.",
             .mark => "Manage IgnorePkg and HoldPkg package marks, or change an installed package's explicit/dependency reason.",
-            .keyring => "Initialize, inspect, refresh, populate, receive, or locally sign keys in the pacman keyring.",
+            .keyring => "Manage pacman package-signing keys and user PKGBUILD source-signing keys.",
             .config => "Read and modify Shelly configuration.",
             .run => "Launch or stop a Flatpak or AppImage application.",
+            .build => "Builds a PKGBUILD into an installable package",
         };
     }
 
@@ -82,7 +85,7 @@ pub const Action = enum {
     }
 
     pub fn bareCodeMeansHelp(self: Action) bool {
-        return self == .keyring;
+        return self == .keyring or self == .build;
     }
 };
 

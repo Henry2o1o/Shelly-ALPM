@@ -20,6 +20,7 @@ const sync = @import("catalog/sync.zig");
 const update = @import("catalog/update.zig");
 const upgrade = @import("catalog/upgrade.zig");
 const utility = @import("catalog/utility.zig");
+const builder = @import("catalog/builder.zig");
 
 pub const Action = core.Action;
 pub const Argument = core.Argument;
@@ -32,12 +33,22 @@ pub const version = build_options.version;
 pub const informational_version = version;
 pub const root_description = "Shelly — a native, unified package manager for Arch Linux repository packages, the AUR, Flatpaks, and AppImages. A bare value searches standard repositories and the AUR, then prompts for a package to install.";
 
+fn hiddenGlobalFlag(name: []const u8, description: []const u8) Option {
+    var option = core.globalFlag(name, &.{}, description);
+    option.hidden = true;
+    return option;
+}
+
 pub const root_options = [_]Option{
     core.voidOption("--help", &.{ "-?", "-h", "/?", "/h" }, "Show command-specific help and usage information", true, true),
     core.voidOption("--version", &.{"-V"}, "Show version information", false, true),
     core.globalFlag("--no-confirm", &.{"-n"}, "Use safe automatic answers instead of prompting"),
     core.globalFlag("--ui-mode", &.{"-U"}, "Emit framed output for the Shelly UI"),
     core.globalFlag("--json", &.{"-j"}, "Output structured JSON where the command supports it"),
+    hiddenGlobalFlag(
+        "--auto-confirm-cache-clean",
+        "Preserve the invoking user's cache-clean policy across elevation",
+    ),
 };
 
 pub const root_arguments = [_]Argument{.{
@@ -59,7 +70,7 @@ pub const types = [_]Type{
     .{ .name = "flatpak", .code = 'f', .description = "Flatpak applications and runtimes" },
     .{ .name = "appimage", .code = 'i', .description = "AppImage applications" },
     .{ .name = "utility", .code = 'u', .description = "System and Shelly utility operations" },
-    .{ .name = "keyring", .code = 'k', .description = "Pacman keyring operations" },
+    .{ .name = "keyring", .code = 'k', .description = "Package and source-signing keyring operations" },
     .{ .name = "all", .code = 'x', .description = "All supported package backends" },
 };
 
@@ -80,7 +91,8 @@ pub const variants = search.variants ++
     update.variants ++
     config.variants ++
     keyring.variants ++
-    run.variants;
+    run.variants ++
+    builder.variants;
 
 pub const shared_modifiers = [_]SharedModifier{
     .{
