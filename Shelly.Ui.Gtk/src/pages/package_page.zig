@@ -42,6 +42,8 @@ pub const PackagePage = extern struct {
         repository_column: *gtk.ColumnViewColumn,
         install_date_column: *gtk.ColumnViewColumn,
         check_column: *gtk.ColumnViewColumn,
+        no_results_overlay: *gtk.Widget,
+        no_results_label: *gtk.Label,
         selection: *gtk.SingleSelection,
         list_store: *gio.ListStore,
         loading_overlay: *gtk.Box,
@@ -599,6 +601,14 @@ pub const PackagePage = extern struct {
         return @intFromBool(contains_ignore_case(pkg.getName(), needle) or contains_ignore_case(pkg.getDescription(), needle));
     }
 
+    fn update_no_results(self: *Self) void {
+        const p = self.priv();
+        const selection = p.selection;
+        const loaded = gio.ListModel.getNItems(p.list_store.as(gio.ListModel));
+        const visible = loaded > 0 and gio.ListModel.getNItems(selection.as(gio.ListModel)) == 0;
+        gtk.Widget.setVisible(p.no_results_overlay.as(gtk.Widget), @intFromBool(visible));
+    }
+
     fn contains_ignore_case(haystack: []const u8, needle: []const u8) bool {
         if (needle.len > haystack.len) return false;
         var i: usize = 0;
@@ -621,6 +631,7 @@ pub const PackagePage = extern struct {
         p.search_len = len;
 
         gtk.Filter.changed(p.filter.as(gtk.Filter), .different);
+        self.update_no_results();
     }
 
     fn on_selection_changed(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
@@ -913,6 +924,8 @@ pub const PackagePage = extern struct {
         .{ "show_hidden_check", @offsetOf(Private, "show_hidden_check") },
         .{ "show_explicit_only", @offsetOf(Private, "show_explicit_only_check") },
         .{ "show_detail_pane", @offsetOf(Private, "show_detail_pane_check") },
+        .{ "no_results_overlay", @offsetOf(Private, "no_results_overlay") },
+        .{ "no_results_label", @offsetOf(Private, "no_results_label") },
     };
 
     pub const Class = extern struct {
