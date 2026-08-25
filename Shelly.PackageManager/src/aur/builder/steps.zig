@@ -286,6 +286,14 @@ pub const DynamicMetadataOverrides = struct {
     unset_scalars: DynamicScalarUnsets,
     arrays: DynamicArrayOverrides,
     unset_arrays: DynamicArrayUnsets,
+
+    pub fn deinit(self: *DynamicMetadataOverrides, allocator: std.mem.Allocator) void {
+        deinitDynamicScalarOverrides(allocator, &self.scalars);
+        deinitDynamicScalarUnsets(allocator, &self.unset_scalars);
+        deinitDynamicArrayOverrides(allocator, &self.arrays);
+        deinitDynamicArrayUnsets(allocator, &self.unset_arrays);
+        self.* = undefined;
+    }
 };
 
 pub fn deinitDynamicScalarOverrides(

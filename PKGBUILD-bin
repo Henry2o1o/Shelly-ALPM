@@ -16,7 +16,7 @@ source=(
 
 sha256sums=('1c696140104d7f51eaa5fe6488b32f4a0d441944c1f127ad9507399b156f8ce6'
             '46907ce81348430aefbb27cd865cc2470aba9087d352a5f1c3cfb9d576f34f16'
-            'd5aec1ae73240028be1cf7db166dcb562641211d638d18313f82fab60e4db462')
+            '0aff9177498bd94e90c937076d15ac76116c628ec3504a7c1b8c9ea086336ca6')
 
 package_shelly-bin() {
   pkgdesc="Shelly: A Modern Arch Package Manager (prebuilt binary)"
