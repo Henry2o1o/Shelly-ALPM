@@ -134,10 +134,11 @@ jobs:
           cp publish/shelly-cli/_shelly     publish/shelly-ui/
           tar -czf publish/Shelly-ALPM-linux-x64.tar.gz -C publish/shelly-ui .
 
-      - name: Copy standalone completions
+      - name: Copy standalone release files
         run: |
           cp publish/shelly-cli/shelly.fish publish/shelly.fish
           cp publish/shelly-cli/_shelly     publish/_shelly
+          cp shellybuild.conf publish/shellybuild.conf
 
       - name: Generate SHA256 checksums
         run: |
@@ -146,8 +147,8 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/}
           curl -sL "https://github.com/ZoeyErinBauer/Shelly-ALPM/archive/${VERSION}.tar.gz" -o "source-${VERSION}.tar.gz"
           sha256sum "source-${VERSION}.tar.gz" | sed "s/source-${VERSION}.tar.gz/${VERSION}.tar.gz/" > SHA256SUMS.txt
-          # Add binary tarballs and completions checksums.
-          sha256sum Shelly-ALPM-linux-x64.tar.gz Shelly-CLI-linux-x64.tar.gz Shelly-Flatpak-Backend-linux-x64.tar.gz Shelly-Key-linux-x64.tar.gz shelly.fish _shelly >> SHA256SUMS.txt
+          # Add binary tarballs, completions, and builder configuration checksums.
+          sha256sum Shelly-ALPM-linux-x64.tar.gz Shelly-CLI-linux-x64.tar.gz Shelly-Flatpak-Backend-linux-x64.tar.gz Shelly-Key-linux-x64.tar.gz shelly.fish _shelly shellybuild.conf >> SHA256SUMS.txt
           rm "source-${VERSION}.tar.gz"
           cat SHA256SUMS.txt
 
@@ -161,6 +162,7 @@ jobs:
             publish/Shelly-Key-linux-x64.tar.gz
             publish/shelly.fish
             publish/_shelly
+            publish/shellybuild.conf
             publish/SHA256SUMS.txt
           draft: false
           prerelease: false
