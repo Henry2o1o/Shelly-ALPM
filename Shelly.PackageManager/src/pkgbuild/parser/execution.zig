@@ -547,18 +547,28 @@ fn extract_helper_definitions(self: PkgbuildParser, content: []const u8) ![]u8 {
     errdefer output.deinit(self.allocator);
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        const name = functionName(line) orelse continue;
-        if (isExecutionFunction(name)) continue;
-        const body = try function_body.extract_function_body(content, name) orelse continue;
-        try output.appendSlice(self.allocator, name);
-        try output.appendSlice(self.allocator, "() {\n");
-        try output.appendSlice(self.allocator, body);
-        try output.appendSlice(self.allocator, "\n}\n");
+        const header = functionHeader(line) orelse continue;
+        if (isExecutionFunction(header.name)) continue;
+        const definition = try function_body.extract_function_definition(content, header.name) orelse continue;
+        try output.appendSlice(self.allocator, header.name);
+        try output.appendSlice(self.allocator, switch (definition.delimiter) {
+            .brace => "() {\n",
+            .subshell => "() (\n",
+        });
+        try output.appendSlice(self.allocator, definition.body);
+        try output.appendSlice(self.allocator, switch (definition.delimiter) {
+            .brace => "\n}\n",
+            .subshell => "\n)\n",
+        });
     }
     return output.toOwnedSlice(self.allocator);
 }
 
-fn functionName(line: []const u8) ?[]const u8 {
+const helper_function_header = struct {
+    name: []const u8,
+};
+
+fn functionHeader(line: []const u8) ?helper_function_header {
     var rest = std.mem.trimStart(u8, line, " \t\r");
     if (std.mem.startsWith(u8, rest, "function "))
         rest = std.mem.trimStart(u8, rest["function ".len..], " \t");
@@ -569,8 +579,8 @@ fn functionName(line: []const u8) ?[]const u8 {
     rest = std.mem.trimStart(u8, rest[end..], " \t");
     if (!std.mem.startsWith(u8, rest, "()")) return null;
     rest = std.mem.trimStart(u8, rest[2..], " \t");
-    if (rest.len == 0 or rest[0] != '{') return null;
-    return name;
+    if (rest.len == 0 or (rest[0] != '{' and rest[0] != '(')) return null;
+    return .{ .name = name };
 }
 
 fn isExecutionFunction(name: []const u8) bool {
