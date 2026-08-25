@@ -1207,6 +1207,80 @@ test "parser_content: execution steps skip functions the PKGBUILD does not defin
     try std.testing.expectEqualStrings("install -Dm755 target/demo \"$pkgdir/usr/bin/demo\"", steps[1].body);
 }
 
+test "parser_content: Darkly-style subshell lifecycle functions produce execution steps" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=darkly
+        \\pkgver=0.5.39
+        \\pkgrel=1
+        \\arch=('x86_64' 'aarch64')
+        \\build_dir=build_kf6
+        \\depends_kf6=('kdecoration' 'qt6-declarative' 'libplasma')
+        \\depends_kf5=('kcmutils5' 'kirigami2')
+        \\depends=("${depends_kf6[@]}" "${depends_kf5[@]}")
+        \\build() (
+        \\  local cmake_options=(
+        \\    -B $build_dir
+        \\    -S "Darkly-${pkgver}"
+        \\    -DBUILD_TESTING=OFF
+        \\  )
+        \\  cmake "${cmake_options[@]}"
+        \\  cmake --build $build_dir
+        \\)
+        \\package() (
+        \\  DESTDIR="$pkgdir" cmake --install $build_dir
+        \\  rm -rf "$pkgdir/usr/lib/cmake"
+        \\)
+    ;
+    var info = try parse_test_pkgbuild(parser, content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expect(info.execution != null);
+    try std.testing.expectEqual(@as(usize, 2), info.execution.?.steps.len);
+    try std.testing.expectEqualStrings("build", info.execution.?.steps[0].name);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        info.execution.?.steps[0].body,
+        "cmake --build $build_dir",
+    ) != null);
+    try std.testing.expectEqualStrings("package", info.execution.?.steps[1].name);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        info.execution.?.steps[1].body,
+        "cmake --install $build_dir",
+    ) != null);
+    try std.testing.expect(info.has_build_function);
+    try std.testing.expect(info.has_generic_package_function);
+}
+
+test "parser_content: subshell helper definitions preserve subshell semantics" {
+    const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
+    const content =
+        \\pkgname=demo
+        \\helper() (
+        \\  cd nested
+        \\  generate
+        \\)
+        \\build() (
+        \\  helper
+        \\)
+        \\package() { install -Dm755 demo "$pkgdir/usr/bin/demo"; }
+    ;
+    var info = try parse_test_pkgbuild(parser, content, null);
+    defer info.deinit(std.testing.allocator);
+
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        info.execution.?.shared_helpers,
+        "helper() (\ncd nested\n  generate\n)",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        info.execution.?.shared_helpers,
+        "helper() {",
+    ) == null);
+}
+
 test "parser_content: execution steps is null when no known functions are defined" {
     const parser = PkgbuildParser{ .allocator = std.testing.allocator, .io = std.testing.io };
     const content =
