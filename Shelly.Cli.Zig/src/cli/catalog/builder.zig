@@ -22,6 +22,7 @@ pub const variants = [_]types.Variant{.{
     .description = "Builds a PKGBUILD into an installable package",
     .options = &.{
         flag("--reviewed", &.{"-r"}, "Marks the package as reviewed"),
+        flag("--makesrcinfo", &.{}, "Generates SRCINFO on standard output and exits"),
         flag("--sync-deps", &.{"-s"}, "Installs missing dependencies"),
         flag("--check", &.{"-c"}, "Performs check on PKGBUILD and installs check depends"),
         flag("--no-check", &.{}, "Skips the PKGBUILD check() function"),

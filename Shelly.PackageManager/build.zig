@@ -314,6 +314,7 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder requires supplemental review for a dynamically discovered local source",
             "dynamic indexed array output preserves values and unsets with structural bounds",
             "dynamic scalar output preserves values, newlines, empty strings, and unsets",
+            ".SRCINFO writer preserves global package and architecture scopes",
         },
     });
     const run_pkgbuild_review_tests = b.addRunArtifact(pkgbuild_review_tests);
