@@ -13,6 +13,7 @@ const security = @import("security.zig");
 const steps = @import("steps.zig");
 const sources = @import("sources.zig");
 const package_file = @import("package_file.zig");
+const srcinfo = @import("../srcinfo.zig");
 
 pub const pkgbuild_validation = @import("pkgbuild_validation.zig");
 pub const PkgbuildValidation = pkgbuild_validation.PkgbuildValidation;
@@ -265,6 +266,94 @@ pub const PackageBuilder = struct {
         return artifacts;
     }
 
+    /// Resolves reviewed top-level PKGBUILD metadata in the normal lifecycle
+    /// sandbox and writes SRCINFO without acquiring sources or invoking
+    /// verify(), prepare(), pkgver(), build(), check(), or package().
+    pub fn writeSrcinfoWithOperation(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+        writer: *std.Io.Writer,
+    ) !void {
+        const reviewed_digest = self.options.reviewed_pkgbuild_digest orelse
+            return error.UnreviewedBuilderRequest;
+        const pkgbuild_path = self.options.pkgbuild_path orelse
+            return error.UnreviewedBuilderRequest;
+        const current_pkgbuild = try std.Io.Dir.cwd().readFileAlloc(
+            self.io,
+            pkgbuild_path,
+            self.allocator,
+            .limited(32 * 1024 * 1024),
+        );
+        defer self.allocator.free(current_pkgbuild);
+        var current_review = try preparePkgbuildReview(
+            self.allocator,
+            self.io,
+            self.options.start_directory,
+            current_pkgbuild,
+            self.package_builds,
+        );
+        defer current_review.deinit();
+        if (!std.mem.eql(u8, &reviewed_digest, &current_review.digest))
+            return error.ReviewedPkgbuildChanged;
+        if (!package_file.installScriptsMatch(self, current_review.install_scripts))
+            return error.ReviewedPkgbuildChanged;
+        if (!package_file.reviewedFilesMatch(self, current_review.reviewed_files))
+            return error.ReviewedPkgbuildChanged;
+
+        if (self.active_operation != null) return error.BuildAlreadyRunning;
+        self.active_operation = operation;
+        defer self.active_operation = null;
+        try security.secureBuilderProcess();
+        try self.requireSandboxAvailability();
+
+        var evaluated = try self.resolveEvaluatedBuilds(operation);
+        defer evaluated.deinit(self.allocator);
+        var resolved_review = try preparePkgbuildReview(
+            self.allocator,
+            self.io,
+            self.options.start_directory,
+            current_pkgbuild,
+            self.package_builds,
+        );
+        defer resolved_review.deinit();
+        if (!std.mem.eql(u8, &reviewed_digest, &resolved_review.digest)) {
+            var answer = try operation.ask(.{
+                .kind = .review_changes,
+                .prompt = "Review files discovered by sandboxed PKGBUILD evaluation?",
+                .review = .{
+                    .subject = self.requested_names[0],
+                    .old_content = current_pkgbuild,
+                    .new_content = current_pkgbuild,
+                    .findings = resolved_review.findings,
+                    .related_files = resolved_review.related_files,
+                },
+                .default_response = .declined,
+            });
+            defer answer.deinit(self.allocator);
+            if (answer.response != .accepted) return error.PkgbuildReviewDeclined;
+        }
+        try resolved_review.verifyCurrent(
+            self.allocator,
+            self.io,
+            pkgbuild_path,
+            self.options.start_directory,
+        );
+        try self.validatePackageFunctions();
+        try srcinfo.writePkgbuild(
+            self.allocator,
+            self.io,
+            writer,
+            current_pkgbuild,
+            .{
+                .package_carch = self.shellybuild_config.build.carch,
+                .dynamic_overrides = if (evaluated.scalars.count() > 0) &evaluated.scalars else null,
+                .dynamic_unsets = if (evaluated.unset_scalars.count() > 0) &evaluated.unset_scalars else null,
+                .dynamic_array_overrides = &evaluated.arrays,
+                .dynamic_array_unsets = if (evaluated.unset_arrays.count() > 0) &evaluated.unset_arrays else null,
+            },
+        );
+    }
+
     fn buildPackage(self: *PackageBuilder, operation: *op_context.Operation) ![]BuildArtifact {
         try security.secureBuilderProcess();
         try self.requireSandboxAvailability();
@@ -284,7 +373,8 @@ pub const PackageBuilder = struct {
         // execution plan. Path-less unit fixtures retain their lightweight
         // static-only behavior.
         if (self.options.pkgbuild_path != null and self.package_builds[0].execution != null) {
-            try self.resolveEvaluatedBuilds(operation);
+            var evaluated = try self.resolveEvaluatedBuilds(operation);
+            defer evaluated.deinit(self.allocator);
             const pkgbuild_path = self.options.pkgbuild_path orelse
                 return error.UnreviewedBuilderRequest;
             const content = try std.Io.Dir.cwd().readFileAlloc(
@@ -412,37 +502,25 @@ pub const PackageBuilder = struct {
     /// resulting scalar and indexed-array state. This makes
     /// source acquisition and lifecycle steps share one coherent top-level
     /// shell state. Replaces `package_builds` contents in place.
-    fn resolveEvaluatedBuilds(self: *PackageBuilder, operation: *op_context.Operation) !void {
-        var overrides: std.StringHashMap([]const u8) = .init(self.allocator);
-        defer steps.deinitDynamicScalarOverrides(self.allocator, &overrides);
-        var unset_overrides: steps.DynamicScalarUnsets = .init(self.allocator);
-        defer steps.deinitDynamicScalarUnsets(self.allocator, &unset_overrides);
-        var array_overrides: steps.DynamicArrayOverrides = .init(self.allocator);
-        defer steps.deinitDynamicArrayOverrides(self.allocator, &array_overrides);
-        var unset_array_overrides: steps.DynamicArrayUnsets = .init(self.allocator);
-        defer steps.deinitDynamicArrayUnsets(self.allocator, &unset_array_overrides);
-
-        const evaluated = try steps.evaluateDynamicMetadata(self, operation);
-        overrides.deinit();
-        overrides = evaluated.scalars;
-        unset_overrides.deinit();
-        unset_overrides = evaluated.unset_scalars;
-        array_overrides.deinit();
-        array_overrides = evaluated.arrays;
-        unset_array_overrides.deinit();
-        unset_array_overrides = evaluated.unset_arrays;
+    fn resolveEvaluatedBuilds(
+        self: *PackageBuilder,
+        operation: *op_context.Operation,
+    ) !steps.DynamicMetadataOverrides {
+        var evaluated = try steps.evaluateDynamicMetadata(self, operation);
+        errdefer evaluated.deinit(self.allocator);
         try self.resolveEvaluatedRequestedNames(
-            if (overrides.count() > 0) &overrides else null,
-            if (unset_overrides.count() > 0) &unset_overrides else null,
-            &array_overrides,
-            if (unset_array_overrides.count() > 0) &unset_array_overrides else null,
+            if (evaluated.scalars.count() > 0) &evaluated.scalars else null,
+            if (evaluated.unset_scalars.count() > 0) &evaluated.unset_scalars else null,
+            &evaluated.arrays,
+            if (evaluated.unset_arrays.count() > 0) &evaluated.unset_arrays else null,
         );
         try self.reparseEvaluatedBuilds(
-            if (overrides.count() > 0) &overrides else null,
-            if (unset_overrides.count() > 0) &unset_overrides else null,
-            &array_overrides,
-            if (unset_array_overrides.count() > 0) &unset_array_overrides else null,
+            if (evaluated.scalars.count() > 0) &evaluated.scalars else null,
+            if (evaluated.unset_scalars.count() > 0) &evaluated.unset_scalars else null,
+            &evaluated.arrays,
+            if (evaluated.unset_arrays.count() > 0) &evaluated.unset_arrays else null,
         );
+        return evaluated;
     }
 
     /// Keeps explicit package selections stable when top-level shell state
