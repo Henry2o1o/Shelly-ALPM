@@ -16,6 +16,8 @@ pub fn dispatch(
     invocation: *const parser.Invocation,
 ) !?u8 {
     if (!std.mem.eql(u8, invocation.command.path, command_path)) return null;
+    if (optionEnabled(invocation, "--makesrcinfo"))
+        return try executeMakeSrcinfo(context, invocation);
     if (shouldElevateSyncDeps(invocation, elevation.isRoot())) {
         const elevated_exit = elevation.relaunchIfNeeded(context, invocation.arguments) catch |err| {
             try context.stderr.print("Unable to elevate build dependency installation: {t}\n", .{err});
@@ -70,6 +72,157 @@ fn executeWithRunner(
     );
     return if (succeeded) 0 else 1;
 }
+
+fn executeMakeSrcinfo(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+) !u8 {
+    if (hasPackageSelection(invocation)) {
+        try context.stderr.writeAll("--makesrcinfo always describes the complete pkgbase and cannot be combined with --package.\n");
+        try context.stderr.flush();
+        return 1;
+    }
+
+    var generated: std.Io.Writer.Allocating = .init(context.allocator);
+    defer generated.deinit();
+    var runner: SrcinfoReal = .{ .writer = &generated.writer };
+
+    const stdout = context.stdout;
+    context.stdout = context.stderr;
+    const succeeded = standard_single_pane.output(
+        context,
+        "Preparing PKGBUILD metadata...",
+        invocation.globals.no_confirm,
+        &runner,
+        invocation,
+        "SRCINFO generated.",
+        "SRCINFO generation failed.",
+    ) catch |err| {
+        context.stdout = stdout;
+        return err;
+    };
+    context.stdout = stdout;
+    if (!succeeded) return 1;
+    try context.stdout.writeAll(generated.writer.buffered());
+    try context.stdout.flush();
+    return 0;
+}
+
+const SrcinfoReal = struct {
+    writer: *std.Io.Writer,
+
+    pub fn run(
+        self: *SrcinfoReal,
+        context: *runtime.RuntimeContext,
+        operation_context: *Zigalpm.OperationContext,
+        invocation: *const parser.Invocation,
+    ) !void {
+        var request = try parseBuildRequest(context, invocation);
+        defer request.deinit(context);
+
+        const pkgbuild_content = try std.Io.Dir.cwd().readFileAlloc(
+            context.io,
+            request.pkgbuild_path,
+            context.allocator,
+            .limited(32 * 1024 * 1024),
+        );
+        defer context.allocator.free(pkgbuild_content);
+        var review = try Zigalpm.builder.preparePkgbuildReview(
+            context.allocator,
+            context.io,
+            request.build_directory,
+            pkgbuild_content,
+            request.package_builds,
+        );
+        defer review.deinit();
+
+        var operation = operation_context.begin(.{
+            .backend = .aur,
+            .kind = .build,
+            .subject = request.pkgbuild_path,
+        });
+        var completion: Zigalpm.OperationCompletionStatus = .failed;
+        defer operation.finish(completion);
+
+        if (!optionEnabled(invocation, "--reviewed")) {
+            var answer = try operation.ask(.{
+                .kind = .review_changes,
+                .prompt = "Generate SRCINFO from this PKGBUILD?",
+                .review = .{
+                    .subject = request.pkgbuild_path,
+                    .findings = review.findings,
+                    .old_content = "",
+                    .new_content = pkgbuild_content,
+                    .related_files = review.related_files,
+                },
+                .default_response = if (review.findings.len == 0) .accepted else .declined,
+            });
+            defer answer.deinit(context.allocator);
+            if (answer.response != .accepted) {
+                completion = .cancelled;
+                return error.Cancelled;
+            }
+        }
+        try review.verifyCurrent(
+            context.allocator,
+            context.io,
+            request.pkgbuild_path,
+            request.build_directory,
+        );
+
+        const requested_names = try context.allocator.alloc([]const u8, request.package_builds.len);
+        defer context.allocator.free(requested_names);
+        for (request.package_builds, requested_names) |package_build, *name|
+            name.* = package_build.pkg_name orelse return error.MissingPackageName;
+        const package_base = request.package_builds[0].variables.get("pkgbase") orelse
+            requested_names[0];
+        const work_directory = if (request.shellybuild.destinations.build) |build_root|
+            try Zigalpm.builder.uniqueWorkDirectory(
+                context.allocator,
+                context.io,
+                build_root,
+                package_base,
+            )
+        else
+            try context.allocator.dupe(u8, request.build_directory);
+        defer context.allocator.free(work_directory);
+        const ephemeral_work_directory = request.shellybuild.destinations.build != null;
+        if (ephemeral_work_directory)
+            try std.Io.Dir.cwd().createDirPath(context.io, work_directory);
+        defer if (ephemeral_work_directory)
+            std.Io.Dir.cwd().deleteTree(context.io, work_directory) catch {};
+
+        const builder = try PackageBuilder.init(
+            context.allocator,
+            request.package_builds,
+            operation_context,
+            request.shellybuild.*,
+            requested_names,
+            .{
+                .start_directory = request.build_directory,
+                .work_directory = work_directory,
+                .package_destination = request.build_directory,
+                .source_destination = request.build_directory,
+                .log_destination = request.build_directory,
+                .pkgbuild_path = request.pkgbuild_path,
+                .clean_after_success = true,
+                .overwrite = false,
+                .run_check = false,
+                .run_verify = false,
+                .reviewed_pkgbuild_digest = review.digest,
+                .install_scripts = review.install_scripts,
+                .reviewed_files = review.reviewed_files,
+                .build_all_members = true,
+                .sources_prepared = false,
+            },
+            context.environ,
+            context.io,
+        );
+        defer builder.deinit();
+        try builder.writeSrcinfoWithOperation(&operation, self.writer);
+        completion = .success;
+    }
+};
 
 const Real = struct {
     pub fn run(
@@ -933,7 +1086,7 @@ test "coordinator build options preserve selected packages and reviewed digest" 
 
 fn testEnvironWithHome(allocator: std.mem.Allocator, home: []const u8) !std.process.Environ {
     var map = std.process.Environ.Map.init(allocator);
-    errdefer map.deinit();
+    defer map.deinit();
     try map.put("HOME", home);
     return .{ .block = try map.createPosixBlock(allocator, .{}) };
 }
@@ -1004,6 +1157,60 @@ test "package selection intent distinguishes implicit all from explicit members"
     );
     try std.testing.expect(!hasPackageSelection(&all.dispatch));
     try std.testing.expect(hasPackageSelection(&selected.dispatch));
+}
+
+test "makesrcinfo emits clean stdout and never runs lifecycle functions" {
+    const spec = @import("../cli/spec.zig");
+    var test_context: test_support.TestContext = .{};
+    test_context.init();
+    defer test_context.deinit();
+
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const path_length = try temporary.dir.realPath(std.testing.io, &path_buffer);
+    const directory_path = try test_context.arena.allocator().dupe(u8, path_buffer[0..path_length]);
+    const pkgbuild_path = try std.fs.path.join(test_context.arena.allocator(), &.{ directory_path, "PKGBUILD" });
+    const marker_path = try std.fs.path.join(test_context.arena.allocator(), &.{ directory_path, "lifecycle-ran" });
+    const pkgbuild_content = try std.fmt.allocPrint(
+        test_context.arena.allocator(),
+        "pkgname=demo\npkgver=1\npkgrel=1\npkgdesc=$(printf 'Dynamic description')\narch=(any)\n" ++
+            "pkgver() {{ touch '{s}'; printf 2; }}\n" ++
+            "build() {{ touch '{s}'; }}\n" ++
+            "package() {{ touch '{s}'; }}\n",
+        .{ marker_path, marker_path, marker_path },
+    );
+    var pkgbuild = try std.Io.Dir.cwd().createFile(std.testing.io, pkgbuild_path, .{ .permissions = .default_file });
+    try pkgbuild.writeStreamingAll(std.testing.io, pkgbuild_content);
+    pkgbuild.close(std.testing.io);
+
+    const environ = try testEnvironWithHome(std.testing.allocator, directory_path);
+    defer environ.block.deinit(std.testing.allocator);
+    test_context.context.environ = environ;
+    const manifest = try spec.Manifest.load(test_context.arena.allocator());
+    const outcome = try parser.parse(
+        test_context.arena.allocator(),
+        &manifest,
+        &.{ "build", "--makesrcinfo", "--reviewed", "--no-confirm", pkgbuild_path },
+    );
+    try std.testing.expect(optionEnabled(&outcome.dispatch, "--makesrcinfo"));
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        try executeMakeSrcinfo(&test_context.context, &outcome.dispatch),
+    );
+    try std.testing.expectEqualStrings(
+        "pkgbase = demo\n\tpkgdesc = Dynamic description\n\tpkgver = 1\n\tpkgrel = 1\n\tarch = any\n\npkgname = demo\n",
+        test_context.stdout.writer.buffered(),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        test_context.stderr.writer.buffered(),
+        "SRCINFO generated.",
+    ) != null);
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(std.testing.io, marker_path, .{}),
+    );
 }
 
 test "sync deps options parse under both spellings" {

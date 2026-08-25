@@ -152,6 +152,13 @@ tests.
 
 ### Sandboxed AUR Builds (Landlock)
 Requires a kernel with Landlock enabled (check `cat /sys/kernel/security/lsm`).
+- [ ] `shelly build --makesrcinfo --reviewed PKGBUILD > .SRCINFO` matches
+  `makepkg --printsrcinfo`, including split-package and architecture-specific
+  fields
+- [ ] `--makesrcinfo` writes progress/review output to stderr and only SRCINFO
+  to stdout
+- [ ] `--makesrcinfo` does not run `pkgver()`, `verify()`, `prepare()`,
+  `build()`, `check()`, or `package()`, and does not create package artifacts
 - [ ] A split PKGBUILD that conditionally appends an enabled member to
   `pkgname` builds that member when no `--package` selection is supplied
 - [ ] `shelly build --package <dynamic-member> PKGBUILD` builds only that

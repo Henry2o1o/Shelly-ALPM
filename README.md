@@ -153,6 +153,13 @@ CLI provides the same core functionality as the UI but in a scriptable, terminal
 
 Full documentation can be viewed on the [Shelly CLI Reference](https://www.seafoam-labs.org/shelly-alpm/docs/cli-reference/) page.
 
+Generate makepkg-compatible SRCINFO from a reviewed PKGBUILD without running
+its build lifecycle:
+
+```bash
+shelly build --makesrcinfo --reviewed PKGBUILD > .SRCINFO
+```
+
 ### CLI Configuration
 
 Shelly-CLI uses a JSON configuration file to customize its behavior. On the first run, it automatically creates a
