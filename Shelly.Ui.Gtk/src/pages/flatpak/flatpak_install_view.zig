@@ -47,6 +47,8 @@ pub const FlatpakInstallView = extern struct {
         loading_overlay: *gtk.Box,
         loading_spinner: *gtk.Spinner,
         loading_label: *gtk.Label,
+        no_results_overlay: *gtk.Box,
+        no_results_label: *gtk.Label,
         overlay_panel: *gtk.Box,
         overlay_back_button: *gtk.Button,
         overlay_icon: *gtk.Image,
@@ -972,6 +974,15 @@ pub const FlatpakInstallView = extern struct {
         @memcpy(p.search_text[0..len], text[0..len]);
         p.search_len = len;
         if (p.filter) |filter| gtk.Filter.changed(filter.as(gtk.Filter), .different);
+        self.update_no_results();
+    }
+
+    fn update_no_results(self: *Self) void {
+        const p = self.priv();
+        const selection = p.selection orelse return;
+        const loaded = if (p.model) |m| gio.ListModel.getNItems(m.as(gio.ListModel)) else 0;
+        const visible = loaded > 0 and gio.ListModel.getNItems(selection.as(gio.ListModel)) == 0;
+        gtk.Widget.setVisible(p.no_results_overlay.as(gtk.Widget), @intFromBool(visible));
     }
 
     pub fn apply_category(self: *Self, category: Category) void {
@@ -1180,6 +1191,8 @@ pub const FlatpakInstallView = extern struct {
         .{ "list_flatpaks", @offsetOf(Private, "list_flatpaks") },
         .{ "loading_overlay", @offsetOf(Private, "loading_overlay") },
         .{ "loading_spinner", @offsetOf(Private, "loading_spinner") },
+        .{ "no_results_overlay", @offsetOf(Private, "no_results_overlay") },
+        .{ "no_results_label", @offsetOf(Private, "no_results_label") },
         .{ "loading_label", @offsetOf(Private, "loading_label") },
         .{ "overlay_panel", @offsetOf(Private, "overlay_panel") },
         .{ "overlay_back_button", @offsetOf(Private, "overlay_back_button") },
