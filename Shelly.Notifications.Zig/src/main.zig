@@ -425,7 +425,6 @@ fn runSession(init: std.process.Init) !void {
         worker_thread.join();
     }
 
-    var tick_count: u64 = 0;
     while (true) {
         _ = service.tickTimeout(.{
             .duration = .{
@@ -436,14 +435,6 @@ fn runSession(init: std.process.Init) !void {
             log_loop.err("tick error: {any}; D-Bus connection lost, reconnecting", .{e});
             return e;
         };
-
-        tick_count += 1;
-        if (tick_count % 120 == 0) {
-            _ = service.nameHasOwner("org.freedesktop.DBus") catch |e| {
-                log_loop.err("bus liveness check failed: {any}; reconnecting", .{e});
-                return e;
-            };
-        }
 
         if (updates.takeRefresh()) {
             menu_ctrl.invalidate() catch |e| log_loop.err("invalidate: {any}", .{e});
