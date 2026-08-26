@@ -90,29 +90,388 @@ fn has_generated_helper_dispatch(content: []const u8) bool {
 
 pub fn extract_function_body(content: []const u8, function_name: []const u8) !?[]const u8 {
     const header_match = try match_at_line_start(content, 0, function_name);
-    const start = header_match orelse return null;
+    const header = header_match orelse return null;
 
+    const end = switch (header.delimiter) {
+        .brace => find_brace_body_end(content, header.body_start),
+        .subshell => try find_subshell_body_end(content, header.body_start),
+    };
+    const substring = content[header.body_start..end];
+    return std.mem.trim(u8, substring, " \t\n\r");
+}
+
+pub const function_body_delimiter = enum {
+    brace,
+    subshell,
+};
+
+pub const function_definition = struct {
+    body: []const u8,
+    delimiter: function_body_delimiter,
+};
+
+/// Returns both the function body and the compound-command form used to
+/// declare it. Consumers that reconstruct helper functions need the latter to
+/// preserve subshell semantics.
+pub fn extract_function_definition(
+    content: []const u8,
+    function_name: []const u8,
+) !?function_definition {
+    const header = (try match_at_line_start(content, 0, function_name)) orelse return null;
+    const end = switch (header.delimiter) {
+        .brace => find_brace_body_end(content, header.body_start),
+        .subshell => try find_subshell_body_end(content, header.body_start),
+    };
+    return .{
+        .body = std.mem.trim(u8, content[header.body_start..end], " \t\n\r"),
+        .delimiter = header.delimiter,
+    };
+}
+
+const function_header = struct {
+    body_start: usize,
+    delimiter: function_body_delimiter,
+};
+
+fn find_brace_body_end(content: []const u8, start: usize) usize {
     var depth: usize = 1;
     var i = start;
-    var closed = false;
-    while (i < content.len and depth > 0) {
-        const c = content[i];
-        if (c == '{') {
+    while (i < content.len and depth > 0) : (i += 1) {
+        if (content[i] == '{') {
             depth += 1;
-        } else if (c == '}') {
+        } else if (content[i] == '}') {
             depth -= 1;
-            if (depth == 0) closed = true;
+            if (depth == 0) return i;
+        }
+    }
+    return content.len;
+}
+
+const max_pending_heredocs = 16;
+const max_nested_case_statements = 32;
+const function_scan_error = error{ TooManyHeredocs, TooManyCaseStatements };
+
+const pending_heredoc = struct {
+    delimiter_token: []const u8,
+    strip_tabs: bool,
+    end: usize,
+};
+
+/// Finds the closing parenthesis of a Bash subshell compound command. Unlike
+/// a byte-counting scan, this skips quoted text, comments, heredoc bodies, and
+/// nested substitutions, and does not mistake `case` pattern terminators for
+/// the end of the function.
+fn find_subshell_body_end(content: []const u8, start: usize) function_scan_error!usize {
+    var depth: usize = 1;
+    var case_depths: [max_nested_case_statements]usize = undefined;
+    var case_count: usize = 0;
+    var command_start = true;
+    var word_start = true;
+    var pending: [max_pending_heredocs]pending_heredoc = undefined;
+    var pending_count: usize = 0;
+    var i = start;
+
+    while (i < content.len) {
+        const c = content[i];
+
+        if (c == '\n') {
+            i += 1;
+            command_start = true;
+            word_start = true;
+            if (pending_count > 0) {
+                i = skip_heredoc_bodies(content, i, pending[0..pending_count]);
+                pending_count = 0;
+            }
+            continue;
+        }
+        if (std.ascii.isWhitespace(c)) {
+            i += 1;
+            word_start = true;
+            continue;
+        }
+        if (c == '#' and word_start) {
+            i = std.mem.indexOfScalarPos(u8, content, i, '\n') orelse content.len;
+            continue;
+        }
+        if (c == '\\' and i + 1 < content.len) {
+            i += 2;
+            word_start = false;
+            continue;
+        }
+        if (c == '\'') {
+            i = skip_single_quote(content, i + 1);
+            command_start = false;
+            word_start = false;
+            continue;
+        }
+        if (c == '"') {
+            i = try skip_double_quote(content, i + 1);
+            command_start = false;
+            word_start = false;
+            continue;
+        }
+        if (c == '`') {
+            i = skip_backtick(content, i + 1);
+            command_start = false;
+            word_start = false;
+            continue;
+        }
+
+        // Arithmetic contexts may contain shift operators (`<<`) and
+        // parentheses that are unrelated to shell compound commands.
+        if (c == '$' and i + 2 < content.len and content[i + 1] == '(' and content[i + 2] == '(') {
+            i = try skip_arithmetic(content, i + 3, 2);
+            command_start = false;
+            word_start = false;
+            continue;
+        }
+        if (c == '(' and i + 1 < content.len and content[i + 1] == '(') {
+            i = try skip_arithmetic(content, i + 2, 2);
+            command_start = false;
+            word_start = false;
+            continue;
+        }
+
+        if (c == '<' and i + 1 < content.len and content[i + 1] == '<' and
+            (i + 2 >= content.len or content[i + 2] != '<'))
+        {
+            if (parse_heredoc_declaration(content, i + 2)) |declaration| {
+                if (pending_count == pending.len) return error.TooManyHeredocs;
+                pending[pending_count] = declaration;
+                pending_count += 1;
+                i = declaration.end;
+                word_start = false;
+                continue;
+            }
+        }
+
+        if (c == '(') {
+            depth += 1;
+            i += 1;
+            command_start = true;
+            word_start = true;
+            continue;
+        }
+        if (c == ')') {
+            // A `case` pattern's terminating ')' is not paired with an
+            // opening parenthesis. It is only special at the current
+            // compound-command level; nested subshells still balance normally.
+            if (case_count > 0 and case_depths[case_count - 1] == depth) {
+                i += 1;
+                command_start = true;
+                word_start = true;
+                continue;
+            }
+            depth -= 1;
+            if (depth == 0) return i;
+            i += 1;
+            command_start = true;
+            word_start = true;
+            continue;
+        }
+
+        if (std.mem.indexOfScalar(u8, ";&|{}", c) != null) {
+            i += 1;
+            command_start = true;
+            word_start = true;
+            continue;
+        }
+
+        const token_start = i;
+        while (i < content.len and !is_shell_token_delimiter(content[i])) {
+            if (content[i] == '\\' and i + 1 < content.len) i += 1;
+            i += 1;
+        }
+        if (i == token_start) {
+            i += 1;
+            word_start = false;
+            continue;
+        }
+
+        const token = content[token_start..i];
+        if (command_start and std.mem.eql(u8, token, "case")) {
+            if (case_count == case_depths.len) return error.TooManyCaseStatements;
+            case_depths[case_count] = depth;
+            case_count += 1;
+            command_start = false;
+        } else if (command_start and std.mem.eql(u8, token, "esac")) {
+            if (case_count > 0) case_count -= 1;
+            command_start = false;
+        } else if (command_start and is_assignment_word(token)) {
+            // Assignment prefixes do not consume command position.
+        } else if (is_command_prefix_keyword(token)) {
+            command_start = true;
+        } else {
+            command_start = false;
+        }
+        word_start = false;
+    }
+
+    return content.len;
+}
+
+fn skip_single_quote(content: []const u8, start: usize) usize {
+    const close = std.mem.indexOfScalarPos(u8, content, start, '\'') orelse return content.len;
+    return close + 1;
+}
+
+fn skip_double_quote(content: []const u8, start: usize) function_scan_error!usize {
+    var i = start;
+    while (i < content.len) {
+        if (content[i] == '\\' and i + 1 < content.len) {
+            i += 2;
+            continue;
+        }
+        if (content[i] == '"') return i + 1;
+        if (content[i] == '`') {
+            i = skip_backtick(content, i + 1);
+            continue;
+        }
+        if (content[i] == '$' and i + 2 < content.len and content[i + 1] == '(' and content[i + 2] == '(') {
+            i = try skip_arithmetic(content, i + 3, 2);
+            continue;
+        }
+        if (content[i] == '$' and i + 1 < content.len and content[i + 1] == '(') {
+            const close = try find_subshell_body_end(content, i + 2);
+            i = if (close < content.len) close + 1 else close;
+            continue;
         }
         i += 1;
     }
-
-    const end: usize = if (closed) i - 1 else i;
-    const substring = content[start..end];
-    const trimmed = std.mem.trim(u8, substring, " \t\n\r");
-    return trimmed;
+    return content.len;
 }
 
-fn match_at_line_start(content: []const u8, start: usize, name: []const u8) !?usize {
+fn skip_backtick(content: []const u8, start: usize) usize {
+    var i = start;
+    while (i < content.len) {
+        if (content[i] == '\\' and i + 1 < content.len) {
+            i += 2;
+            continue;
+        }
+        if (content[i] == '`') return i + 1;
+        i += 1;
+    }
+    return content.len;
+}
+
+fn skip_arithmetic(content: []const u8, start: usize, initial_depth: usize) function_scan_error!usize {
+    var depth = initial_depth;
+    var i = start;
+    while (i < content.len and depth > 0) {
+        if (content[i] == '\\' and i + 1 < content.len) {
+            i += 2;
+            continue;
+        }
+        if (content[i] == '\'') {
+            i = skip_single_quote(content, i + 1);
+            continue;
+        }
+        if (content[i] == '"') {
+            i = try skip_double_quote(content, i + 1);
+            continue;
+        }
+        if (content[i] == '(') {
+            depth += 1;
+        } else if (content[i] == ')') {
+            depth -= 1;
+        }
+        i += 1;
+    }
+    return i;
+}
+
+fn is_shell_token_delimiter(c: u8) bool {
+    return std.ascii.isWhitespace(c) or std.mem.indexOfScalar(u8, ";&|(){}<>\"'`", c) != null;
+}
+
+fn is_assignment_word(word: []const u8) bool {
+    const equals = std.mem.indexOfScalar(u8, word, '=') orelse return false;
+    if (equals == 0 or !(std.ascii.isAlphabetic(word[0]) or word[0] == '_')) return false;
+    for (word[1..equals]) |c| if (!shell_scan.is_word(c)) return false;
+    return true;
+}
+
+fn is_command_prefix_keyword(token: []const u8) bool {
+    inline for (.{ "then", "else", "elif", "do", "in" }) |keyword|
+        if (std.mem.eql(u8, token, keyword)) return true;
+    return false;
+}
+
+fn parse_heredoc_declaration(content: []const u8, start: usize) ?pending_heredoc {
+    var i = start;
+    var strip_tabs = false;
+    if (i < content.len and content[i] == '-') {
+        strip_tabs = true;
+        i += 1;
+    }
+    while (i < content.len and (content[i] == ' ' or content[i] == '\t')) i += 1;
+    const token_start = i;
+    var quote: u8 = 0;
+    while (i < content.len) {
+        const c = content[i];
+        if (quote != 0) {
+            if (c == quote) quote = 0;
+            i += 1;
+            continue;
+        }
+        if (c == '\'' or c == '"') {
+            quote = c;
+            i += 1;
+            continue;
+        }
+        if (c == '\\' and i + 1 < content.len) {
+            i += 2;
+            continue;
+        }
+        if (is_shell_token_delimiter(c) or c == '$' or c == '#') break;
+        i += 1;
+    }
+    if (i == token_start) return null;
+    return .{
+        .delimiter_token = content[token_start..i],
+        .strip_tabs = strip_tabs,
+        .end = i,
+    };
+}
+
+fn skip_heredoc_bodies(content: []const u8, start: usize, pending: []const pending_heredoc) usize {
+    var i = start;
+    for (pending) |declaration| {
+        while (i < content.len) {
+            const line_end = std.mem.indexOfScalarPos(u8, content, i, '\n') orelse content.len;
+            var line = std.mem.trimEnd(u8, content[i..line_end], "\r");
+            if (declaration.strip_tabs) line = std.mem.trimStart(u8, line, "\t");
+            i = if (line_end < content.len) line_end + 1 else line_end;
+            if (heredoc_delimiter_matches(line, declaration.delimiter_token)) break;
+        }
+    }
+    return i;
+}
+
+fn heredoc_delimiter_matches(line: []const u8, token: []const u8) bool {
+    var line_i: usize = 0;
+    var token_i: usize = 0;
+    var quote: u8 = 0;
+    while (token_i < token.len) : (token_i += 1) {
+        const c = token[token_i];
+        if (quote != 0) {
+            if (c == quote) {
+                quote = 0;
+                continue;
+            }
+        } else if (c == '\'' or c == '"') {
+            quote = c;
+            continue;
+        } else if (c == '\\' and token_i + 1 < token.len) {
+            token_i += 1;
+        }
+        if (line_i >= line.len or line[line_i] != token[token_i]) return false;
+        line_i += 1;
+    }
+    return line_i == line.len;
+}
+
+fn match_at_line_start(content: []const u8, start: usize, name: []const u8) !?function_header {
     var pos = start;
     while (pos < content.len) {
         const is_line_start = (pos == 0) or (content[pos - 1] == '\n');
@@ -128,7 +487,7 @@ fn match_at_line_start(content: []const u8, start: usize, name: []const u8) !?us
     return null;
 }
 
-fn matchLineStart(c: []const u8, p: usize, n: []const u8) ?usize {
+fn matchLineStart(c: []const u8, p: usize, n: []const u8) ?function_header {
     var i = shell_scan.skip_ws(c, p);
     if (std.mem.startsWith(u8, c[i..], "function")) {
         const after_kw = i + "function".len;
@@ -146,16 +505,18 @@ fn matchLineStart(c: []const u8, p: usize, n: []const u8) ?usize {
     if (i >= c.len or c[i] != ')') return null;
     i += 1;
     i = shell_scan.skip_ws(c, i);
-    if (i >= c.len or c[i] != '{') return null;
+    if (i >= c.len or (c[i] != '{' and c[i] != '(')) return null;
+    const delimiter: function_body_delimiter = if (c[i] == '{') .brace else .subshell;
     i += 1;
-    return i;
+    return .{ .body_start = i, .delimiter = delimiter };
 }
 
 test "match_at_line_start: bare function call syntax, no keyword" {
     const content = "myFunction() {\n  return;\n}";
     const result = try match_at_line_start(content, 0, "myFunction");
     try std.testing.expect(result != null);
-    try std.testing.expectEqual(@as(usize, 14), result.?); // index just past the '{'
+    try std.testing.expectEqual(@as(usize, 14), result.?.body_start); // index just past the '{'
+    try std.testing.expectEqual(function_body_delimiter.brace, result.?.delimiter);
 }
 
 test "match_at_line_start: with 'function' keyword prefix" {
@@ -191,6 +552,13 @@ test "match_at_line_start: whitespace and newlines between tokens are tolerated"
     ;
     const result = try match_at_line_start(content, 0, "myFunction");
     try std.testing.expect(result != null);
+}
+
+test "parser_content: subshell body and function keyword are recognized" {
+    const content = "function myFunction () (\n  return\n)";
+    const result = try match_at_line_start(content, 0, "myFunction");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(function_body_delimiter.subshell, result.?.delimiter);
 }
 
 test "extract_function_body: simple body with no nesting" {
@@ -236,6 +604,71 @@ test "extract_function_body: unclosed brace consumes to end of content" {
     const result = try extract_function_body(content, "myFunction");
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("return 1;", result.?);
+}
+
+test "parser_content: simple subshell function body" {
+    const content =
+        \\build() (
+        \\  cmake -B build
+        \\  cmake --build build
+        \\)
+        \\package() { install -Dm755 demo "$pkgdir/usr/bin/demo"; }
+    ;
+    const result = try extract_function_body(content, "build");
+    try std.testing.expectEqualStrings("cmake -B build\n  cmake --build build", result.?);
+}
+
+test "parser_content: subshell scan ignores nested shell syntax" {
+    const content =
+        \\build() (
+        \\  local values=(one "(two)")
+        \\  echo 'single ) quote' "double ) quote"
+        \\  echo "$(printf "%s" ")")"
+        \\  total=$((1 + (2 * 3)))
+        \\  ((total <<= 1))
+        \\  # a comment containing ) does not close the body
+        \\  (cd nested && run_build)
+        \\  case "$target" in
+        \\    one|two) echo "matched)" ;;
+        \\    *) echo fallback ;;
+        \\  esac
+        \\  echo "$(case "$target" in one) echo nested ;; *) echo other ;; esac)"
+        \\  echo finished
+        \\)
+        \\package() { echo package; }
+    ;
+    const result = (try extract_function_body(content, "build")).?;
+    try std.testing.expect(std.mem.indexOf(u8, result, "local values=(one") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "case \"$target\" in") != null);
+    try std.testing.expect(std.mem.endsWith(u8, result, "echo finished"));
+    try std.testing.expect(std.mem.indexOf(u8, result, "package()") == null);
+}
+
+test "parser_content: subshell scan skips quoted heredoc bodies" {
+    const content =
+        \\package() (
+        \\  install -d "$pkgdir/usr/share/demo"
+        \\  cat <<'EOF' > "$pkgdir/usr/share/demo/template"
+        \\this unmatched text is data: ))))
+        \\EOF
+        \\  install -Dm644 metadata "$pkgdir/usr/share/demo/metadata"
+        \\)
+        \\after=top-level
+    ;
+    const result = (try extract_function_body(content, "package")).?;
+    try std.testing.expect(std.mem.indexOf(u8, result, "this unmatched text is data") != null);
+    try std.testing.expect(std.mem.endsWith(u8, result, "\"$pkgdir/usr/share/demo/metadata\""));
+    try std.testing.expect(std.mem.indexOf(u8, result, "after=top-level") == null);
+}
+
+test "parser_content: unclosed subshell consumes to end of content" {
+    const content = "build() (\n  return 1;";
+    const result = try extract_function_body(content, "build");
+    try std.testing.expectEqualStrings("return 1;", result.?);
+}
+
+test "parser_content: non-compound function delimiters remain unsupported" {
+    try std.testing.expect((try extract_function_body("build() [ echo invalid ]", "build")) == null);
 }
 
 test "selected_scoped_package_body: resolves CachyOS generated split helper" {
