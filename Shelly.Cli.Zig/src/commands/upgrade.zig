@@ -121,6 +121,23 @@ const RealPlanCollector = struct {
     }
 };
 
+/// Reports whether the optional Flatpak backend can run at all. Planning must
+/// stay quiet about Flatpak when it is not installed, so availability is
+/// checked before the step ever gets announced.
+const RealFlatpakProbe = struct {
+    fn installed(_: RealFlatpakProbe) bool {
+        return Zigalpm.flatpak.backendStatus() != .unavailable;
+    }
+};
+
+/// Probe for callers whose own collector drives the Flatpak step, so the plan
+/// loop must not consult the process-wide backend loader.
+const InstalledFlatpakProbe = struct {
+    fn installed(_: InstalledFlatpakProbe) bool {
+        return true;
+    }
+};
+
 const UpgradePlan = struct {
     results: std.ArrayList(list_updates.Result) = .empty,
 
@@ -149,7 +166,7 @@ fn prepareAllUpgradePreview(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) !PreviewResult {
-    return prepareAllUpgradePreviewWithCollector(context, invocation, RealPlanCollector{});
+    return prepareAllUpgradePlanWith(context, invocation, RealPlanCollector{}, RealFlatpakProbe{});
 }
 
 fn prepareAllUpgradePreviewWithCollector(
@@ -157,7 +174,16 @@ fn prepareAllUpgradePreviewWithCollector(
     invocation: *const parser.Invocation,
     collector: anytype,
 ) anyerror!PreviewResult {
-    var plan = try buildAllUpgradePlan(context, invocation, collector);
+    return prepareAllUpgradePlanWith(context, invocation, collector, InstalledFlatpakProbe{});
+}
+
+fn prepareAllUpgradePlanWith(
+    context: *runtime.RuntimeContext,
+    invocation: *const parser.Invocation,
+    collector: anytype,
+    probe: anytype,
+) anyerror!PreviewResult {
+    var plan = try buildAllUpgradePlan(context, invocation, collector, probe);
     defer plan.deinit(context.allocator);
 
     if (plan.isEmpty()) {
@@ -182,6 +208,7 @@ fn buildAllUpgradePlan(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
     collector: anytype,
+    probe: anytype,
 ) anyerror!UpgradePlan {
     var plan: UpgradePlan = .{};
     errdefer plan.deinit(context.allocator);
@@ -190,6 +217,10 @@ fn buildAllUpgradePlan(
     try context.stdout.flush();
     for (all_backends) |backend| {
         if (!backendEnabled(invocation, backend)) continue;
+        // Flatpak is optional. When the backend is not installed there is
+        // nothing to plan, so the step stays unmentioned instead of printing
+        // a collecting line that can never produce a result.
+        if (backend == .flatpak and !probe.installed()) continue;
         try context.stdout.print("{s}\n", .{collectingMessage(backend)});
         try context.stdout.flush();
 
@@ -1497,6 +1528,68 @@ test "combined upgrade plan silently skips an unavailable Flatpak backend" {
         u8,
         tc.stdout.writer.buffered(),
         "Install shelly-flatpak-backend and Flatpak",
+    ) == null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "Everything is up to date.",
+    ) != null);
+}
+
+test "combined upgrade plan does not announce Flatpak when the backend is not installed" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const outcome = try parser.parse(tc.arena.allocator(), &manifest, &.{
+        "upgrade",
+        "all",
+        "--no-repo",
+        "--no-aur",
+        "--no-appimage",
+        "--no-confirm",
+    });
+    try std.testing.expect(outcome == .dispatch);
+
+    const Probe = struct {
+        fn installed(_: @This()) bool {
+            return false;
+        }
+    };
+    const Calls = struct {
+        backends: std.ArrayList(Backend) = .empty,
+
+        fn collect(
+            self: *@This(),
+            _: *runtime.RuntimeContext,
+            backend: Backend,
+            _: *const parser.Invocation,
+        ) !list_updates.Result {
+            try self.backends.append(std.testing.allocator, backend);
+            return .{ .flatpak = .{ .items = &.{} } };
+        }
+    };
+    var calls: Calls = .{};
+    defer calls.backends.deinit(std.testing.allocator);
+
+    const preview = try prepareAllUpgradePlanWith(
+        &tc.context,
+        &outcome.dispatch,
+        &calls,
+        Probe{},
+    );
+    try std.testing.expect(!preview.has_updates);
+    try std.testing.expect(!preview.proceed);
+    try std.testing.expectEqual(@as(usize, 0), calls.backends.items.len);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "Collecting Flatpak Apps",
+    ) == null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        tc.stdout.writer.buffered(),
+        "No Flatpak apps to upgrade.",
     ) == null);
     try std.testing.expect(std.mem.indexOf(
         u8,
