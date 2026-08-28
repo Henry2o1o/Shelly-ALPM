@@ -396,6 +396,44 @@ const SyncTestWorkspace = struct {
             "%ISIZE%\n1\n\n" ++
             "%ARCH%\nany\n\n" ++
             "%PROVIDES%\nvirtual-feature=2\n\n";
+        const shadowing_provider_desc =
+            "%FILENAME%\nalpha-provider-2.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\nalpha-provider\n\n" ++
+            "%BASE%\nalpha-provider\n\n" ++
+            "%VERSION%\n2.0-1\n\n" ++
+            "%DESC%\nProvider ordered before the literal package\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n" ++
+            "%PROVIDES%\nliteral-target=2\n\n";
+        const literal_desc =
+            "%FILENAME%\nliteral-target-3.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\nliteral-target\n\n" ++
+            "%BASE%\nliteral-target\n\n" ++
+            "%VERSION%\n3.0-1\n\n" ++
+            "%DESC%\nLiteral package that must outrank providers\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n";
+        const version_provider_desc =
+            "%FILENAME%\nversion-provider-2.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\nversion-provider\n\n" ++
+            "%BASE%\nversion-provider\n\n" ++
+            "%VERSION%\n2.0-1\n\n" ++
+            "%DESC%\nProvider used when a literal package is too old\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n" ++
+            "%PROVIDES%\nversioned-target=2\n\n";
+        const old_literal_desc =
+            "%FILENAME%\nversioned-target-1.0-1-any.pkg.tar\n\n" ++
+            "%NAME%\nversioned-target\n\n" ++
+            "%BASE%\nversioned-target\n\n" ++
+            "%VERSION%\n1.0-1\n\n" ++
+            "%DESC%\nLiteral package below the requested version\n\n" ++
+            "%CSIZE%\n1\n\n" ++
+            "%ISIZE%\n1\n\n" ++
+            "%ARCH%\nany\n\n";
 
         var file = try std.Io.Dir.cwd().createFile(self.io, database_path, .{});
         defer file.close(self.io);
@@ -403,6 +441,10 @@ const SyncTestWorkspace = struct {
         var file_writer = file.writer(self.io, &write_buffer);
         var archive_writer: std.tar.Writer = .{ .underlying_writer = &file_writer.interface };
         try archive_writer.writeFileBytes("remote-provider-2.0-1/desc", provider_desc, .{ .mode = 0o644 });
+        try archive_writer.writeFileBytes("alpha-provider-2.0-1/desc", shadowing_provider_desc, .{ .mode = 0o644 });
+        try archive_writer.writeFileBytes("literal-target-3.0-1/desc", literal_desc, .{ .mode = 0o644 });
+        try archive_writer.writeFileBytes("version-provider-2.0-1/desc", version_provider_desc, .{ .mode = 0o644 });
+        try archive_writer.writeFileBytes("versioned-target-1.0-1/desc", old_literal_desc, .{ .mode = 0o644 });
         try archive_writer.finishPedantically();
         try file_writer.interface.flush();
     }
@@ -2480,6 +2522,19 @@ test "dependency query APIs resolve exact, versioned, and virtual remote package
     const provided_satisfier = try mgr.find_remote_satisfier_for_dependency_details("virtual-feature>=2");
     try testing.expectEqualStrings("remote-provider", provided_satisfier.real_name);
     try testing.expect(provided_satisfier.via_provides);
+
+    const literal_satisfier = try mgr.find_remote_satisfier_for_dependency_details("literal-target");
+    try testing.expectEqualStrings("literal-target", literal_satisfier.real_name);
+    try testing.expect(!literal_satisfier.via_provides);
+
+    const versioned_literal = try mgr.find_remote_satisfier_for_dependency_details("literal-target>=3");
+    try testing.expectEqualStrings("literal-target", versioned_literal.real_name);
+    try testing.expect(!versioned_literal.via_provides);
+
+    const fallback_provider = try mgr.find_remote_satisfier_for_dependency_details("versioned-target>=2");
+    try testing.expectEqualStrings("version-provider", fallback_provider.real_name);
+    try testing.expect(fallback_provider.via_provides);
+
     try testing.expectError(error.PkgNotFound, mgr.get_package_from_provides("missing-feature"));
     try testing.expectError(error.PkgNotFound, mgr.find_remote_satisfier_for_dependency("missing-feature"));
     try testing.expectError(error.PkgNotFound, mgr.find_remote_satisfier_for_dependency_details("missing-feature"));
