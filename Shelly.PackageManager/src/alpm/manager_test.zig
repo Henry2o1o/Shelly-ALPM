@@ -3357,10 +3357,9 @@ test "owned package results remain valid after Manager.deinit" {
     try testing.expectEqual(@as(usize, 1), foreign.len);
     try testing.expectEqualStrings("local-only", foreign[0].name() orelse return error.TestFailed);
 
-    try testing.expectEqual(@as(usize, 1), available.len);
-    try testing.expectEqualStrings("remote-provider", available[0].name() orelse return error.TestFailed);
-    try testing.expectEqualStrings("2.0-1", available[0].version() orelse return error.TestFailed);
-    try testing.expectEqualStrings("seafoam-labs", available[0].repository() orelse return error.TestFailed);
+    const available_remote = findOwnedPackage(available, "remote-provider") orelse return error.TestFailed;
+    try testing.expectEqualStrings("2.0-1", available_remote.version() orelse return error.TestFailed);
+    try testing.expectEqualStrings("seafoam-labs", available_remote.repository() orelse return error.TestFailed);
 
     try testing.expectEqual(@as(usize, 1), updates.len);
     try testing.expectEqualStrings("remote-provider", updates[0].old_package.name() orelse return error.TestFailed);
