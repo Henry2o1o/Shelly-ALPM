@@ -15,6 +15,7 @@ const elevation = @import("../runtime/elevation.zig");
 const xdg = @import("../runtime/xdg.zig");
 const spec = @import("../cli/spec.zig");
 const news = @import("news.zig");
+const aur_url = @import("../config/aur_url.zig");
 
 const standard_command_path = "shelly upgrade standard";
 const all_command_path = "shelly upgrade all";
@@ -117,7 +118,11 @@ const RealPlanCollector = struct {
         backend: Backend,
         invocation: *const parser.Invocation,
     ) !list_updates.Result {
-        return list_updates.collectUpdates(context, listUpdatesBackend(backend), optionEnabled(invocation, "--show-hidden"), optionEnabled(invocation, "--no-devel"));
+        return list_updates.collectUpdates(
+            context,
+            listUpdatesBackend(backend),
+            list_updates.checkOptions(invocation),
+        );
     }
 };
 
@@ -658,7 +663,9 @@ fn runAur(
     const executable = try std.process.executablePathAlloc(context.io, context.allocator);
     defer context.allocator.free(executable);
     const build_command = std.mem.trimEnd(u8, executable, " (deleted)");
+    const aur_base = try aur_url.resolveFor(context, invocation);
     const manager = try Zigalpm.AurManager.init(context.allocator, context.environ, .{
+        .aur_git_base_url = aur_base,
         .root = true,
         .check = checkOverride(invocation),
         .sign = signOverride(invocation),
@@ -1107,9 +1114,16 @@ fn elevatedUpgradeArguments(
     context: *runtime.RuntimeContext,
     invocation: *const parser.Invocation,
 ) ![]const []const u8 {
+    const carries_aur = std.mem.eql(u8, invocation.command.path, aur_command_path) or
+        std.mem.eql(u8, invocation.command.path, all_command_path);
+    const aur_arguments = if (carries_aur)
+        try aur_url.argumentsWithEffectiveBase(context, invocation)
+    else
+        invocation.arguments;
+    defer if (carries_aur) context.allocator.free(aur_arguments);
     return upgradeArgumentsWithCacheCleanPolicy(
         context.allocator,
-        invocation.arguments,
+        aur_arguments,
         autoConfirmCacheClean(context, invocation),
     );
 }
@@ -1214,7 +1228,15 @@ test "aggregate upgrade carries cache clean policy across elevation" {
     try std.testing.expect(original == .dispatch);
     const elevated_arguments = try elevatedUpgradeArguments(&tc.context, &original.dispatch);
     defer tc.context.allocator.free(elevated_arguments);
-    try std.testing.expectEqual(@as(usize, 3), elevated_arguments.len);
+    try std.testing.expectEqual(@as(usize, 5), elevated_arguments.len);
+    try std.testing.expectEqualStrings(
+        aur_url.option_name,
+        elevated_arguments[elevated_arguments.len - 3],
+    );
+    try std.testing.expectEqualStrings(
+        aur_url.default_base,
+        elevated_arguments[elevated_arguments.len - 2],
+    );
     try std.testing.expectEqualStrings(
         auto_confirm_cache_clean_option,
         elevated_arguments[elevated_arguments.len - 1],
@@ -1231,6 +1253,27 @@ test "aggregate upgrade carries cache clean policy across elevation" {
     elevated_tc.init();
     defer elevated_tc.deinit();
     try std.testing.expect(autoConfirmCacheClean(&elevated_tc.context, &elevated.dispatch));
+}
+
+test "upgrade carries AUR URL override across elevation" {
+    var tc: test_support.TestContext = .{};
+    tc.init();
+    defer tc.deinit();
+
+    const manifest = try spec.Manifest.load(tc.arena.allocator());
+    const original = try parser.parse(tc.arena.allocator(), &manifest, &.{
+        "upgrade", "all", "--aur-url", "https://atoll.seafoam-labs.org",
+    });
+    try std.testing.expect(original == .dispatch);
+    const elevated_arguments = try elevatedUpgradeArguments(&tc.context, &original.dispatch);
+    defer tc.context.allocator.free(elevated_arguments);
+
+    const elevated = try parser.parse(tc.arena.allocator(), &manifest, elevated_arguments);
+    try std.testing.expect(elevated == .dispatch);
+    try std.testing.expectEqualStrings(
+        "https://atoll.seafoam-labs.org",
+        aur_url.overrideValue(&elevated.dispatch).?,
+    );
 }
 
 test "disabled cache clean policy does not alter elevated arguments" {
