@@ -61,8 +61,22 @@ pub const OwnershipOverride = struct {
 pub const VirtualMetadata = struct {
     default_ownership: VirtualOwnership = .{},
     ownership_overrides: []const OwnershipOverride = &.{},
+    ownership_overrides_sorted: bool = false,
 
     pub fn ownershipForPath(self: VirtualMetadata, path: []const u8) VirtualOwnership {
+        if (self.ownership_overrides_sorted) {
+            var low: usize = 0;
+            var high = self.ownership_overrides.len;
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                switch (std.mem.order(u8, path, self.ownership_overrides[middle].path)) {
+                    .lt => high = middle,
+                    .gt => low = middle + 1,
+                    .eq => return self.ownership_overrides[middle].ownership,
+                }
+            }
+            return self.default_ownership;
+        }
         for (self.ownership_overrides) |override| {
             if (std.mem.eql(u8, override.path, path)) return override.ownership;
         }
