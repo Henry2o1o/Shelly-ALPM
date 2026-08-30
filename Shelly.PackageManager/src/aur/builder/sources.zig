@@ -649,8 +649,18 @@ fn extractSourceArchive(
     archive_path: []const u8,
     destination_root: []const u8,
 ) !void {
+    const DirectoryTimestamp = struct {
+        path: []u8,
+        mtime: std.Io.Timestamp,
+    };
+
     var reader = try archive.Reader.initAll(self.allocator, archive_path);
     defer reader.deinit();
+    var directory_timestamps: std.ArrayList(DirectoryTimestamp) = .empty;
+    defer {
+        for (directory_timestamps.items) |timestamp| self.allocator.free(timestamp.path);
+        directory_timestamps.deinit(self.allocator);
+    }
     var buffer: [64 * 1024]u8 = undefined;
     var entry_count: usize = 0;
     var total_size: u64 = 0;
@@ -668,7 +678,17 @@ fn extractSourceArchive(
         const destination = try std.fs.path.join(self.allocator, &.{ destination_root, relative });
         defer self.allocator.free(destination);
         switch (entry.kind) {
-            .directory => try ensureSafeArchivePath(self, destination_root, relative, true),
+            .directory => {
+                try ensureSafeArchivePath(self, destination_root, relative, true);
+                if (entry.mtime) |mtime| {
+                    const owned_path = try self.allocator.dupe(u8, destination);
+                    errdefer self.allocator.free(owned_path);
+                    try directory_timestamps.append(self.allocator, .{
+                        .path = owned_path,
+                        .mtime = mtime,
+                    });
+                }
+            },
             .regular_file => {
                 try ensureSafeArchivePath(self, destination_root, relative, false);
                 try rejectSymlinkDestination(self.io, destination);
@@ -688,6 +708,10 @@ fn extractSourceArchive(
                         return error.SourceArchiveTooLarge;
                     try writer.interface.writeAll(buffer[0..amount]);
                 }
+                try writer.interface.flush();
+                if (entry.mtime) |mtime| try output.setTimestamps(self.io, .{
+                    .modify_timestamp = .{ .new = mtime },
+                });
             },
             .symbolic_link => {
                 const target = entry.link_target orelse return error.UnsafeSourceArchiveLink;
@@ -696,9 +720,27 @@ fn extractSourceArchive(
                 try ensureSafeArchivePath(self, destination_root, relative, false);
                 try rejectExistingDestination(self.io, destination);
                 try std.Io.Dir.cwd().symLink(self.io, safe_target, destination, .{});
+                if (entry.mtime) |mtime| try std.Io.Dir.cwd().setTimestamps(
+                    self.io,
+                    destination,
+                    .{
+                        .follow_symlinks = false,
+                        .modify_timestamp = .{ .new = mtime },
+                    },
+                );
             },
             .other => return error.UnsupportedSourceArchiveEntry,
         }
+    }
+
+    // Creating children changes directory mtimes. Restore recorded directory
+    // timestamps only after the complete tree exists. Archive order is retained
+    // so a repeated directory entry keeps the metadata from its last occurrence.
+    for (directory_timestamps.items) |timestamp| {
+        try std.Io.Dir.cwd().setTimestamps(self.io, timestamp.path, .{
+            .follow_symlinks = false,
+            .modify_timestamp = .{ .new = timestamp.mtime },
+        });
     }
 }
 

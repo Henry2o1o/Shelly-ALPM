@@ -19,6 +19,7 @@ pub const Error = error{
     ArchiveWriteFailed,
     ArchiveCloseFailed,
     InvalidEntryPath,
+    InvalidEntryTimestamp,
     EntryTooLarge,
     UnsupportedCompression,
     UnsupportedFileType,
@@ -40,6 +41,7 @@ pub const Entry = struct {
     permissions: u32,
     uid: i64,
     gid: i64,
+    mtime: ?std.Io.Timestamp,
     link_target: ?[]const u8,
 };
 
@@ -387,6 +389,7 @@ pub const Reader = struct {
             .permissions = @intCast(c.archive_entry_perm(entry)),
             .uid = @intCast(c.archive_entry_uid(entry)),
             .gid = @intCast(c.archive_entry_gid(entry)),
+            .mtime = try entryMtime(entry),
             .link_target = if (c.archive_entry_symlink_utf8(entry)) |target|
                 std.mem.span(target)
             else if (c.archive_entry_symlink(entry)) |target|
@@ -419,6 +422,15 @@ pub const Reader = struct {
         try requireStatus(c.archive_read_data_skip(self.handle));
     }
 };
+
+fn entryMtime(entry: *c.struct_archive_entry) !?std.Io.Timestamp {
+    if (c.archive_entry_mtime_is_set(entry) == 0) return null;
+    const nanoseconds = c.archive_entry_mtime_nsec(entry);
+    if (nanoseconds < 0 or nanoseconds >= std.time.ns_per_s)
+        return Error.InvalidEntryTimestamp;
+    const seconds: i96 = @intCast(c.archive_entry_mtime(entry));
+    return .{ .nanoseconds = seconds * std.time.ns_per_s + @as(i96, @intCast(nanoseconds)) };
+}
 
 fn requireStatus(status: c_int) !void {
     if (status < c.ARCHIVE_WARN) return Error.ArchiveReadFailed;
@@ -455,9 +467,11 @@ pub const FixtureCompression = enum { none, gzip, zstd, xz };
 
 pub const FixtureEntry = struct {
     path: [:0]const u8,
+    kind: EntryKind = .regular_file,
     contents: []const u8 = "",
     permissions: u32 = 0o644,
     link_target: ?[:0]const u8 = null,
+    mtime: ?std.Io.Timestamp = null,
 };
 
 pub fn writeFixture(
@@ -479,7 +493,15 @@ pub fn writeFixture(
         .xz => c.archive_write_add_filter_xz(handle),
     };
     if (filter_status < c.ARCHIVE_WARN) return Error.ArchiveWriteFailed;
-    if (c.archive_write_set_format_pax_restricted(handle) < c.ARCHIVE_WARN)
+    const needs_full_pax = for (entries) |fixture| {
+        const mtime = fixture.mtime orelse continue;
+        if (@mod(mtime.nanoseconds, std.time.ns_per_s) != 0) break true;
+    } else false;
+    const format_status = if (needs_full_pax)
+        c.archive_write_set_format_pax(handle)
+    else
+        c.archive_write_set_format_pax_restricted(handle);
+    if (format_status < c.ARCHIVE_WARN)
         return Error.ArchiveWriteFailed;
     if (c.archive_write_open_filename(handle, path_z.ptr) < c.ARCHIVE_WARN)
         return Error.ArchiveWriteFailed;
@@ -488,18 +510,50 @@ pub fn writeFixture(
     for (entries) |fixture| {
         const entry = c.archive_entry_new() orelse return Error.ArchiveCreateFailed;
         defer c.archive_entry_free(entry);
+        const kind: EntryKind = if (fixture.link_target != null) .symbolic_link else fixture.kind;
         c.archive_entry_set_pathname(entry, fixture.path.ptr);
-        c.archive_entry_set_filetype(entry, if (fixture.link_target != null) ae_iflnk else ae_ifreg);
+        c.archive_entry_set_filetype(entry, switch (kind) {
+            .regular_file => ae_ifreg,
+            .directory => ae_ifdir,
+            .symbolic_link => ae_iflnk,
+            .other => return Error.UnsupportedFileType,
+        });
         c.archive_entry_set_perm(entry, @intCast(fixture.permissions));
-        c.archive_entry_set_size(entry, if (fixture.link_target != null) 0 else @intCast(fixture.contents.len));
-        if (fixture.link_target) |target| c.archive_entry_set_symlink(entry, target.ptr);
+        c.archive_entry_set_size(entry, if (kind == .regular_file) @intCast(fixture.contents.len) else 0);
+        if (kind == .symbolic_link) {
+            const target = fixture.link_target orelse return Error.ArchiveWriteFailed;
+            c.archive_entry_set_symlink(entry, target.ptr);
+        }
+        if (fixture.mtime) |mtime| setEntryMtime(entry, mtime.nanoseconds);
         if (c.archive_write_header(handle, entry) < c.ARCHIVE_WARN)
             return Error.ArchiveWriteFailed;
-        if (fixture.link_target == null and fixture.contents.len != 0) {
+        if (kind == .regular_file and fixture.contents.len != 0) {
             const amount = c.archive_write_data(handle, fixture.contents.ptr, fixture.contents.len);
             if (amount < 0 or amount != fixture.contents.len) return Error.ArchiveWriteFailed;
         }
     }
+}
+
+test "archive reader exposes exact entry modification timestamps" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/timestamp.tar",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(path);
+    const expected: std.Io.Timestamp = .{ .nanoseconds = 1_234_567_890_123_456_789 };
+    try writeFixture(testing.allocator, path, .none, &.{
+        .{ .path = "timestamped", .contents = "payload", .mtime = expected },
+    });
+
+    var reader = try Reader.initAll(testing.allocator, path);
+    defer reader.deinit();
+    const entry = (try reader.next()).?;
+    try testing.expectEqual(expected.nanoseconds, entry.mtime.?.nanoseconds);
 }
 
 test "archive writer preserves tree modes and symlinks while forcing root ownership" {

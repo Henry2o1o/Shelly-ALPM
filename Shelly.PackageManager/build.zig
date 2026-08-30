@@ -659,6 +659,7 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder leaves packages unsigned when signing is disabled",
             "PackageBuilder rejects a source checksum mismatch without committing srcdir",
             "PackageBuilder extracts source archives into srcdir",
+            "PackageBuilder preserves source archive modification timestamps",
             "PackageBuilder extracts VSIX sources into srcdir",
             "PackageBuilder rebases Zoom absolute source archive link inside srcdir",
             "PackageBuilder rejects source archive links that escape the extraction root",

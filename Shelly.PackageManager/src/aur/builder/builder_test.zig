@@ -2458,6 +2458,53 @@ test "PackageBuilder extracts source archives into srcdir" {
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
 }
 
+test "PackageBuilder preserves source archive modification timestamps" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('payload.tar.gz')
+        \\sha256sums=('SKIP')
+        \\build() {
+        \\  test ! "$srcdir/demo/generated.c" -ot "$srcdir/demo/source.tree"
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/demo/generated.c" "$pkgdir/usr/share/demo/generated.c"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.tar.gz" });
+    defer allocator.free(archive_path);
+    const shared_mtime: std.Io.Timestamp = .{ .nanoseconds = 1_234_567_890 * std.time.ns_per_s };
+    const link_mtime: std.Io.Timestamp = .{ .nanoseconds = shared_mtime.nanoseconds + 7 * std.time.ns_per_s };
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "demo", .kind = .directory, .permissions = 0o755, .mtime = shared_mtime },
+        // Keep the generated target before its prerequisite to reproduce the
+        // ordering that made flite1 regenerate us_pos_cart.c.
+        .{ .path = "demo/generated.c", .contents = "generated\n", .mtime = shared_mtime },
+        .{ .path = "demo/source.tree", .contents = "source\n", .mtime = shared_mtime },
+        .{ .path = "demo/current", .link_target = "generated.c", .mtime = link_mtime },
+    });
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    const directory = try fixture.temporary.dir.statFile(io, "src/demo", .{ .follow_symlinks = false });
+    const generated = try fixture.temporary.dir.statFile(io, "src/demo/generated.c", .{ .follow_symlinks = false });
+    const prerequisite = try fixture.temporary.dir.statFile(io, "src/demo/source.tree", .{ .follow_symlinks = false });
+    const link = try fixture.temporary.dir.statFile(io, "src/demo/current", .{ .follow_symlinks = false });
+    try testing.expectEqual(shared_mtime.nanoseconds, directory.mtime.nanoseconds);
+    // Updating the link itself must not follow it and change generated.c.
+    try testing.expectEqual(shared_mtime.nanoseconds, generated.mtime.nanoseconds);
+    try testing.expectEqual(shared_mtime.nanoseconds, prerequisite.mtime.nanoseconds);
+    try testing.expectEqual(link_mtime.nanoseconds, link.mtime.nanoseconds);
+}
+
 test "PackageBuilder extracts VSIX sources into srcdir" {
     const allocator = testing.allocator;
     const io = testing.io;
