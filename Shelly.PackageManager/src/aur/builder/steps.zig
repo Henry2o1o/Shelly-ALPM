@@ -1110,7 +1110,7 @@ const virtualMetadataShellPrelude =
     \\}
     \\__shelly_record_ownership() {
     \\  local __shelly_operation=$1 __shelly_specification=$2 __shelly_target=$3 __shelly_follow=${4:-1}
-    \\  local __shelly_root __shelly_canonical __shelly_parent __shelly_inode
+    \\  local __shelly_root __shelly_canonical __shelly_parent __shelly_identity __shelly_birth
     \\  __shelly_root=$(/usr/bin/realpath -e -- "$pkgdir") || { __shelly_metadata_reject; return $?; }
     \\  if [ "$__shelly_follow" -eq 1 ]; then
     \\    __shelly_canonical=$(/usr/bin/realpath -e -- "$__shelly_target") || { __shelly_metadata_reject; return $?; }
@@ -1124,11 +1124,13 @@ const virtualMetadataShellPrelude =
     \\    *) __shelly_metadata_reject; return $? ;;
     \\  esac
     \\  if [ "$__shelly_follow" -eq 1 ]; then
-    \\    __shelly_inode=$(/usr/bin/stat -Lc '%i' -- "$__shelly_canonical") || { __shelly_metadata_reject; return $?; }
+    \\    __shelly_identity=$(/usr/bin/stat -Lc '%Hd:%Ld:%i:%.9W' -- "$__shelly_canonical") || { __shelly_metadata_reject; return $?; }
     \\  else
-    \\    __shelly_inode=$(/usr/bin/stat -c '%i' -- "$__shelly_canonical") || { __shelly_metadata_reject; return $?; }
+    \\    __shelly_identity=$(/usr/bin/stat -c '%Hd:%Ld:%i:%.9W' -- "$__shelly_canonical") || { __shelly_metadata_reject; return $?; }
     \\  fi
-    \\  printf '%s\0%s\0%s\0%s\0' "$__shelly_operation" "$__shelly_inode" "$__shelly_specification" "$__shelly_canonical" >> "$__shelly_virtual_ownership_log" || return 97
+    \\  __shelly_birth=${__shelly_identity##*:}
+    \\  [ "$__shelly_birth" != '0.000000000' ] || { __shelly_metadata_reject; return $?; }
+    \\  printf '%s\0%s\0%s\0%s\0' "$__shelly_operation" "$__shelly_identity" "$__shelly_specification" "$__shelly_canonical" >> "$__shelly_virtual_ownership_log" || return 97
     \\}
     \\__shelly_record_ownership_recursive() {
     \\  local __shelly_operation=$1 __shelly_specification=$2 __shelly_target=$3 __shelly_follow=${4:-1}

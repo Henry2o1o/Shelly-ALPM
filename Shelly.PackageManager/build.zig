@@ -633,6 +633,7 @@ pub fn build(b: *std.Build) void {
             "PackageBuilder simulates root ownership without host chown",
             "PackageBuilder preserves non-root virtual ownership and special modes",
             "PackageBuilder virtual ownership follows identities and recursive snapshots",
+            "virtual ownership identities distinguish reused inode numbers",
             "PackageBuilder isolates virtual ownership between split members",
             "PackageBuilder rejects malformed virtual ownership",
             "PackageBuilder rejects unresolved and out-of-package virtual ownership",

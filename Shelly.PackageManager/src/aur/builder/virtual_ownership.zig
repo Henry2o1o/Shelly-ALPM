@@ -12,21 +12,29 @@ const archive = @import("archive");
 const max_journal_bytes = 16 * 1024 * 1024;
 const max_records = 100_000;
 
+const FileIdentity = struct {
+    device_major: u32,
+    device_minor: u32,
+    inode: u64,
+    birth_seconds: i64,
+    birth_nanoseconds: u32,
+};
+
 pub const Tracker = struct {
     allocator: std.mem.Allocator,
-    by_inode: std.AutoHashMap(u64, archive.VirtualOwnership),
+    by_identity: std.AutoHashMap(FileIdentity, archive.VirtualOwnership),
 
     pub fn init(allocator: std.mem.Allocator) Tracker {
-        return .{ .allocator = allocator, .by_inode = .init(allocator) };
+        return .{ .allocator = allocator, .by_identity = .init(allocator) };
     }
 
     pub fn deinit(self: *Tracker) void {
-        self.by_inode.deinit();
+        self.by_identity.deinit();
         self.* = undefined;
     }
 
     pub fn hasNonDefaultOwnership(self: *const Tracker) bool {
-        var values = self.by_inode.valueIterator();
+        var values = self.by_identity.valueIterator();
         while (values.next()) |ownership| {
             if (ownership.uid != 0 or ownership.gid != 0) return true;
         }
@@ -68,13 +76,11 @@ pub const Tracker = struct {
             }
             if (record_count >= max_records) return error.VirtualOwnershipJournalTooLarge;
             record_count += 1;
-            const inode_text = try nextField(contents, &offset);
+            const identity = try parseFileIdentity(try nextField(contents, &offset));
             const specification = try nextField(contents, &offset);
             const target_path = try nextField(contents, &offset);
             try validateTargetPath(canonical_package_root, target_path);
-            const inode = std.fmt.parseUnsigned(u64, inode_text, 10) catch
-                return error.InvalidVirtualOwnershipJournal;
-            const current = tracker.by_inode.get(inode) orelse archive.VirtualOwnership{};
+            const current = tracker.by_identity.get(identity) orelse archive.VirtualOwnership{};
             const updated = if (std.mem.eql(u8, operation, "C"))
                 try applyChownSpecification(current, specification, passwd, group)
             else if (std.mem.eql(u8, operation, "G"))
@@ -84,7 +90,7 @@ pub const Tracker = struct {
                 }
             else
                 return error.InvalidVirtualOwnershipJournal;
-            try tracker.by_inode.put(inode, updated);
+            try tracker.by_identity.put(identity, updated);
         }
         if (!terminated) return error.InvalidVirtualOwnershipJournal;
         return tracker;
@@ -108,8 +114,8 @@ pub const Tracker = struct {
         var walker = try directory.walk(self.allocator);
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
-            const stat = try entry.dir.statFile(io, entry.basename, .{ .follow_symlinks = false });
-            const ownership = self.by_inode.get(stat.inode) orelse continue;
+            const identity = try fileIdentityAt(self.allocator, entry.dir, entry.basename);
+            const ownership = self.by_identity.get(identity) orelse continue;
             if (ownership.uid == 0 and ownership.gid == 0) continue;
             const owned_path = try self.allocator.dupe(u8, entry.path);
             errdefer self.allocator.free(owned_path);
@@ -128,6 +134,66 @@ pub const Tracker = struct {
         };
     }
 };
+
+fn parseFileIdentity(encoded: []const u8) !FileIdentity {
+    var fields = std.mem.splitScalar(u8, encoded, ':');
+    const device_major = std.fmt.parseUnsigned(u32, fields.next() orelse return error.InvalidVirtualOwnershipJournal, 10) catch
+        return error.InvalidVirtualOwnershipJournal;
+    const device_minor = std.fmt.parseUnsigned(u32, fields.next() orelse return error.InvalidVirtualOwnershipJournal, 10) catch
+        return error.InvalidVirtualOwnershipJournal;
+    const inode = std.fmt.parseUnsigned(u64, fields.next() orelse return error.InvalidVirtualOwnershipJournal, 10) catch
+        return error.InvalidVirtualOwnershipJournal;
+    const birth = fields.next() orelse return error.InvalidVirtualOwnershipJournal;
+    if (fields.next() != null) return error.InvalidVirtualOwnershipJournal;
+    const separator = std.mem.indexOfScalar(u8, birth, '.') orelse
+        return error.InvalidVirtualOwnershipJournal;
+    const seconds = std.fmt.parseInt(i64, birth[0..separator], 10) catch
+        return error.InvalidVirtualOwnershipJournal;
+    const nanoseconds_text = birth[separator + 1 ..];
+    if (nanoseconds_text.len != 9) return error.InvalidVirtualOwnershipJournal;
+    const nanoseconds = std.fmt.parseUnsigned(u32, nanoseconds_text, 10) catch
+        return error.InvalidVirtualOwnershipJournal;
+    if (seconds <= 0 or nanoseconds >= std.time.ns_per_s)
+        return error.VirtualOwnershipIdentityUnavailable;
+    return .{
+        .device_major = device_major,
+        .device_minor = device_minor,
+        .inode = inode,
+        .birth_seconds = seconds,
+        .birth_nanoseconds = nanoseconds,
+    };
+}
+
+fn fileIdentityAt(
+    allocator: std.mem.Allocator,
+    directory: std.Io.Dir,
+    basename: []const u8,
+) !FileIdentity {
+    const linux = std.os.linux;
+    const basename_z = try allocator.dupeZ(u8, basename);
+    defer allocator.free(basename_z);
+    var statx = std.mem.zeroes(linux.Statx);
+    switch (linux.errno(linux.statx(
+        directory.handle,
+        basename_z.ptr,
+        linux.AT.NO_AUTOMOUNT | linux.AT.SYMLINK_NOFOLLOW,
+        .{ .INO = true, .BTIME = true },
+        &statx,
+    ))) {
+        .SUCCESS => {},
+        else => return error.VirtualOwnershipIdentityUnavailable,
+    }
+    if (!statx.mask.INO or !statx.mask.BTIME or statx.btime.sec <= 0 or
+        statx.btime.nsec >= std.time.ns_per_s)
+        return error.VirtualOwnershipIdentityUnavailable;
+    return .{
+        .device_major = statx.dev_major,
+        .device_minor = statx.dev_minor,
+        .inode = statx.ino,
+        .birth_seconds = statx.btime.sec,
+        .birth_nanoseconds = statx.btime.nsec,
+    };
+}
 
 pub const OwnedMetadata = struct {
     allocator: std.mem.Allocator,
@@ -258,4 +324,13 @@ test "virtual ownership specifications preserve unspecified fields" {
         archive.VirtualOwnership{ .uid = 0, .gid = 84 },
         try applyChownSpecification(.{}, ":service", passwd, group),
     );
+}
+
+test "virtual ownership identities distinguish reused inode numbers" {
+    const first = try parseFileIdentity("8:1:42:1700000000.000000001");
+    const replacement = try parseFileIdentity("8:1:42:1700000000.000000002");
+    var ownership = std.AutoHashMap(FileIdentity, archive.VirtualOwnership).init(std.testing.allocator);
+    defer ownership.deinit();
+    try ownership.put(first, .{ .uid = 42, .gid = 84 });
+    try std.testing.expect(ownership.get(replacement) == null);
 }
