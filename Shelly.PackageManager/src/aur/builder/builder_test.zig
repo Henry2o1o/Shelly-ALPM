@@ -1390,7 +1390,7 @@ test "PackageBuilder simulates root ownership without host chown" {
     try testing.expect(saw_installed);
 }
 
-test "PackageBuilder rejects unsupported virtual ownership" {
+test "PackageBuilder accepts non-root virtual ownership as root" {
     const allocator = testing.allocator;
     var fixture = try Fixture.create(allocator,
         \\pkgname=demo
@@ -1400,6 +1400,38 @@ test "PackageBuilder rejects unsupported virtual ownership" {
         \\  mkdir -p "$pkgdir/usr/share/demo"
         \\  touch "$pkgdir/usr/share/demo/data"
         \\  chown 42:84 "$pkgdir/usr/share/demo/data"
+        \\  chgrp 50 "$pkgdir/usr/share/demo/data"
+        \\  install --mode=0775 --owner=42 -g50 /dev/null "$pkgdir/usr/share/demo/installed"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+
+    var reader = try archive.Reader.init(allocator, artifacts[0].path);
+    defer reader.deinit();
+    var saw_data = false;
+    var saw_installed = false;
+    while (try reader.next()) |entry| {
+        if (std.mem.eql(u8, entry.path, "usr/share/demo/data")) saw_data = true;
+        if (std.mem.eql(u8, entry.path, "usr/share/demo/installed")) saw_installed = true;
+        try testing.expectEqual(@as(i64, 0), entry.uid);
+        try testing.expectEqual(@as(i64, 0), entry.gid);
+    }
+    try testing.expect(saw_data);
+    try testing.expect(saw_installed);
+}
+
+test "PackageBuilder rejects malformed virtual ownership" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  install --owner= /dev/null "$pkgdir/usr/share/demo/installed"
         \\}
     , null, null);
     defer fixture.destroy();
@@ -2647,6 +2679,86 @@ test "PackageBuilder runs relative VCS paths from srcdir before pkgver" {
     const refreshed = try std.Io.Dir.cwd().readFileAlloc(io, refreshed_path, allocator, .unlimited);
     defer allocator.free(refreshed);
     try testing.expectEqualStrings("refreshed\n", refreshed);
+}
+
+test "PackageBuilder verifies real checksums for pinned VCS sources" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var remote = std.testing.tmpDir(.{});
+    defer remote.cleanup();
+    const remote_path = try remote.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(remote_path);
+    try remote.dir.writeFile(io, .{ .sub_path = "source-marker", .data = "checked out\n" });
+    try remote.dir.writeFile(io, .{ .sub_path = ".gitattributes", .data = "source-marker export-ignore\n" });
+    try runTestCommand(allocator, io, &.{ "git", "init", "-b", "main" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "config", "user.email", "shelly-tests@example.invalid" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "config", "user.name", "Shelly Tests" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "add", "source-marker", ".gitattributes" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "commit", "-m", "fixture" }, remote_path);
+    try runTestCommand(allocator, io, &.{ "git", "tag", "1" }, remote_path);
+
+    // Modern makepkg disables repository export attributes in its acquisition
+    // mirror so checksum generation cannot omit or rewrite tracked content.
+    try remote.dir.writeFile(io, .{
+        .sub_path = ".git/info/attributes",
+        .data = "* -export-subst -export-ignore\n",
+    });
+    var archive_result = try process_runner.run(
+        allocator,
+        io,
+        &.{ "git", "archive", "--format=tar", "1" },
+        remote_path,
+        null,
+    );
+    try remote.dir.deleteFile(io, ".git/info/attributes");
+    defer archive_result.deinit(allocator);
+    try testing.expectEqual(@as(u8, 0), archive_result.exit_code);
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(archive_result.stdout, &digest, .{});
+    const expected_checksum = std.fmt.bytesToHex(digest, .lower);
+
+    // Legitimate AUR pattern (e.g. lib32-orc): a pinned VCS source with a
+    // real checksum entry. makepkg hashes the deterministic archive for tags
+    // and commits, rather than requiring every VCS checksum entry to be SKIP.
+    const pkgbuild = try std.fmt.allocPrint(allocator,
+        \\pkgname=shelly-git
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('shelly-git::git+file://{s}#tag=1')
+        \\sha256sums=('{s}')
+        \\package() {{
+        \\  cd "$pkgname"
+        \\  mkdir -p "$pkgdir/usr/share/shelly"
+        \\  cp source-marker "$pkgdir/usr/share/shelly/source-marker"
+        \\}}
+    , .{ remote_path, expected_checksum });
+    defer allocator.free(pkgbuild);
+    var fixture = try Fixture.create(allocator, pkgbuild, null, null);
+    defer fixture.destroy();
+    const work_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "work" });
+    defer allocator.free(work_path);
+    const source_cache = try std.fs.path.join(allocator, &.{ fixture.build_dir, "source-cache" });
+    defer allocator.free(source_cache);
+    const package_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "packages" });
+    defer allocator.free(package_destination);
+    const log_destination = try std.fs.path.join(allocator, &.{ fixture.build_dir, "logs" });
+    defer allocator.free(log_destination);
+    fixture.builder.options.work_directory = work_path;
+    fixture.builder.options.source_destination = source_cache;
+    fixture.builder.options.package_destination = package_destination;
+    fixture.builder.options.log_destination = log_destination;
+    fixture.builder.options.sources_prepared = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+
+    const configured_checksum = @constCast(fixture.builder.package_builds[0].sha_256_sums.?[0]);
+    const original_nibble = configured_checksum[0];
+    defer configured_checksum[0] = original_nibble;
+    configured_checksum[0] = if (original_nibble == '0') '1' else '0';
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
 }
 
 test "PackageBuilder applies generic patch arrays and propagates dynamic pkgver" {

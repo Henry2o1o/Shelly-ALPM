@@ -1061,7 +1061,10 @@ const messagingShellPrelude =
 
 /// Bash functions used only for package() and package_<name>(). They simulate
 /// the common fakeroot ownership operations without changing host ownership.
-/// The archive writer independently records root ownership for every entry.
+/// Any requested owner/group is accepted and then discarded, because the
+/// archive writer independently records root ownership for every entry under
+/// Shelly's package-ownership policy. Malformed ownership invocations are
+/// still rejected.
 const virtualMetadataShellPrelude =
     \\__shelly_metadata_reject() {
     \\  printf '%s\n' 'shelly: unsupported privileged package metadata operation' >&2
@@ -1070,12 +1073,6 @@ const virtualMetadataShellPrelude =
     \\mknod() {
     \\  printf '%s\n' 'shelly: package steps cannot create device nodes' >&2
     \\  return 1
-    \\}
-    \\__shelly_root_identity() {
-    \\  case "$1" in
-    \\    root|0|root:root|root:0|0:root|0:0) return 0 ;;
-    \\    *) return 1 ;;
-    \\  esac
     \\}
     \\chown() {
     \\  while [ "$#" -gt 0 ]; do
@@ -1087,7 +1084,7 @@ const virtualMetadataShellPrelude =
     \\    esac
     \\  done
     \\  [ "$#" -ge 2 ] || { __shelly_metadata_reject; return $?; }
-    \\  __shelly_root_identity "$1" || { __shelly_metadata_reject; return $?; }
+    \\  [ -n "$1" ] && [ "$1" != ':' ] || { __shelly_metadata_reject; return $?; }
     \\  return 0
     \\}
     \\chgrp() {
@@ -1100,17 +1097,24 @@ const virtualMetadataShellPrelude =
     \\    esac
     \\  done
     \\  [ "$#" -ge 2 ] || { __shelly_metadata_reject; return $?; }
-    \\  case "$1" in root|0) return 0 ;; *) __shelly_metadata_reject; return $? ;; esac
+    \\  [ -n "$1" ] || { __shelly_metadata_reject; return $?; }
+    \\  return 0
     \\}
     \\install() {
     \\  local -a shelly_install_args=()
     \\  while [ "$#" -gt 0 ]; do
     \\    case "$1" in
+    \\      --)
+    \\        shelly_install_args+=("$@"); break ;;
     \\      -o|--owner|-g|--group)
     \\        [ "$#" -ge 2 ] || { __shelly_metadata_reject; return $?; }
-    \\        case "$2" in root|0) shift 2 ;; *) __shelly_metadata_reject; return $? ;; esac ;;
+    \\        [ -n "$2" ] || { __shelly_metadata_reject; return $?; }
+    \\        shift 2 ;;
     \\      --owner=*|--group=*)
-    \\        case "${1#*=}" in root|0) shift ;; *) __shelly_metadata_reject; return $? ;; esac ;;
+    \\        [ -n "${1#*=}" ] || { __shelly_metadata_reject; return $?; }
+    \\        shift ;;
+    \\      -o?*|-g?*)
+    \\        shift ;;
     \\      *) shelly_install_args+=("$1"); shift ;;
     \\    esac
     \\  done
