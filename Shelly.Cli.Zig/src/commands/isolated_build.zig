@@ -1,8 +1,8 @@
 //! Operation-scoped systemd-nspawn backend for `shelly build --isolated`.
 //!
-//! The host checkout is copied into a root-owned staging tree.  The checkout,
-//! host home, host package database, and runtime sockets are never bind
-//! mounted into the container.
+//! Reviewed host inputs are materialized in a root-owned staging tree. The
+//! checkout, host home, host package database, and runtime sockets are never
+//! bind mounted into the container.
 
 const std = @import("std");
 
@@ -10,7 +10,8 @@ pub const build_uid = "1000";
 pub const build_user = "shelly-build";
 pub const guest_source = "/build/source";
 pub const guest_artifacts = "/build/artifacts";
-pub const guest_executable = "/run/shelly/shelly";
+const guest_executable_relative = "usr/local/libexec/shelly/shelly";
+pub const guest_executable = "/" ++ guest_executable_relative;
 
 const operation_parent = "/var/lib/shelly/build-roots/v1/operations";
 
@@ -108,8 +109,8 @@ pub const Root = struct {
 
         const home_path = try self.rootJoin("home/shelly-build");
         defer self.allocator.free(home_path);
-        const run_path = try self.rootJoin("run/shelly");
-        defer self.allocator.free(run_path);
+        const executable_directory = try self.rootJoin("usr/local/libexec/shelly");
+        defer self.allocator.free(executable_directory);
         const work_path = try self.rootJoin("build/work");
         defer self.allocator.free(work_path);
         const sources_path = try self.rootJoin("build/sources");
@@ -117,7 +118,7 @@ pub const Root = struct {
         const logs_path = try self.rootJoin("build/logs");
         defer self.allocator.free(logs_path);
         try std.Io.Dir.cwd().createDirPath(self.io, home_path);
-        try std.Io.Dir.cwd().createDirPath(self.io, run_path);
+        try std.Io.Dir.cwd().createDirPath(self.io, executable_directory);
         try std.Io.Dir.cwd().createDirPath(self.io, work_path);
         try std.Io.Dir.cwd().createDirPath(self.io, sources_path);
         try std.Io.Dir.cwd().createDirPath(self.io, logs_path);
@@ -174,7 +175,10 @@ pub const Root = struct {
     }
 
     pub fn stageExecutable(self: *Root, executable: []const u8) !void {
-        const destination = try self.rootJoin("run/shelly/shelly");
+        // nspawn mounts a fresh tmpfs on /run, so coordinator payloads staged
+        // there would be hidden before execve(). /usr/local remains part of
+        // the operation-scoped root and is not exported from the guest.
+        const destination = try self.rootJoin(guest_executable_relative);
         defer self.allocator.free(destination);
         try std.Io.Dir.copyFile(.cwd(), executable, .cwd(), destination, self.io, .{});
         try std.Io.Dir.cwd().setFilePermissions(self.io, destination, .fromMode(0o755), .{});
@@ -364,6 +368,8 @@ test "nspawn invocation is unprivileged namespaced and contains no host binds" {
     try std.testing.expect(containsArgument(argv, "--private-users=pick"));
     try std.testing.expect(containsArgument(argv, "--private-users-ownership=map"));
     try std.testing.expect(containsArgument(argv, "shelly-build"));
+    try std.testing.expect(containsArgument(argv, guest_executable));
+    try std.testing.expect(!std.mem.startsWith(u8, guest_executable, "/run/"));
     for (argv) |argument| {
         try std.testing.expect(!std.mem.startsWith(u8, argument, "--bind"));
         try std.testing.expect(!std.mem.eql(u8, argument, "makepkg"));
