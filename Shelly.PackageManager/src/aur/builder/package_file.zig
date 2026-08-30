@@ -274,6 +274,7 @@ pub fn reviewedFilesMatch(
     for (current_files) |current| {
         const reviewed = findReviewedFile(self, current.name) orelse return false;
         if (!std.mem.eql(u8, reviewed.contents, current.contents)) return false;
+        if (reviewed.permissions != current.permissions) return false;
     }
     return true;
 }

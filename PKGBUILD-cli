@@ -84,6 +84,7 @@ package_shelly-cli() {
     'sudo'
   )
   optdepends=(
+    'arch-install-scripts: provision fresh roots for --isolated builds'
     'base-devel: build and install AUR packages'
     'devtools: build AUR packages in a clean chroot'
     'desktop-file-utils: update AppImage desktop entries'
