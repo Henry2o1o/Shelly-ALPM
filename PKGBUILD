@@ -121,6 +121,7 @@ package_shelly() {
       'json-glib'
   )
   optdepends=(
+      'arch-install-scripts: provision fresh roots for --isolated builds'
       'fish: Fish shell completions'
       'zsh: Zsh shell completions'
       'libstarfish: dependency viewer for arch packages'
