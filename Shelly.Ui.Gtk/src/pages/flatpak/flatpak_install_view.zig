@@ -77,6 +77,7 @@ pub const FlatpakInstallView = extern struct {
         filter: ?*gtk.CustomFilter,
         selection: ?*gtk.SingleSelection,
         selected_app: ?*AppstreamAppObject,
+        selected_app_position: c_uint,
 
         loaded: bool,
         disposed: bool,
@@ -321,9 +322,10 @@ pub const FlatpakInstallView = extern struct {
     fn onAppActivated(_: *gtk.GridView, position: c_uint, self: *Self) callconv(.c) void {
         const selection = self.priv().selection orelse return;
         const item: *gobject.Object = @ptrCast(@alignCast(gio.ListModel.getItem(selection.as(gio.ListModel), position) orelse return));
+        std.debug.print("position: {}", .{position});
         defer item.unref();
         const app = gobject.ext.cast(AppstreamAppObject, item) orelse return;
-        self.showDetails(app);
+        self.showDetails(app, position);
     }
 
     fn onBackClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
@@ -435,17 +437,31 @@ pub const FlatpakInstallView = extern struct {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx));
         if (!success) return;
 
-        gtk.Widget.setVisible(self.priv().overlay_install_button.as(gtk.Widget), 0);
-        gtk.Widget.setVisible(self.priv().overlay_uninstall_button.as(gtk.Widget), 1);
+        self.setOverlayInstallState(true);
     }
 
     fn onTransactionCompleteRemove(ctx: *anyopaque, success: bool) void {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx));
         if (!success) return;
 
-        gtk.Widget.setVisible(self.priv().overlay_install_button.as(gtk.Widget), 1);
-        gtk.Widget.setVisible(self.priv().overlay_uninstall_button.as(gtk.Widget), 0);
+        self.setOverlayInstallState(false);
     }
+
+    /// Technically this could introduce issues in the future with a non-global lockout
+    /// The index could change when selected setting the wrong page
+    /// Would need a refactor when we get there
+    /// But okay for now as that is a larger WIP item
+    fn setOverlayInstallState(self: *Self, installed: bool) void {
+        const selection = self.priv().selection orelse return;
+
+        const item: *gobject.Object = @ptrCast(@alignCast(gio.ListModel.getItem(selection.as(gio.ListModel), self.priv().selected_app_position) orelse return));
+        const app = gobject.ext.cast(AppstreamAppObject, item) orelse return;
+        app.setInstalled(installed);
+
+        gtk.Widget.setVisible(self.priv().overlay_install_button.as(gtk.Widget), !installed);
+        gtk.Widget.setVisible(self.priv().overlay_uninstall_button.as(gtk.Widget), installed);
+    }
+
     fn onRemoteSelected(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         if (self.priv().suppress_remote_notify) return;
         self.requestSelectedRemoteInfo();
@@ -571,10 +587,11 @@ pub const FlatpakInstallView = extern struct {
         self.clearDetails();
     }
 
-    fn showDetails(self: *Self, app: *AppstreamAppObject) void {
+    fn showDetails(self: *Self, app: *AppstreamAppObject, position: c_uint) void {
         const p = self.priv();
         self.clearDetails();
         p.selected_app = app;
+        p.selected_app_position = position;
         _ = app.as(gobject.Object).ref();
 
         gtk.Label.setLabel(p.overlay_name_label, if (app.getName().len > 0) app.getName() else app.getId());

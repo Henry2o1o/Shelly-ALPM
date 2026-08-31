@@ -55,7 +55,7 @@ pub const AppstreamAppObject = extern struct {
         return self;
     }
 
-    pub fn getApp(self: *const Self) *const flatpak.AppstreamApp {
+    pub fn getApp(self: *const Self) *flatpak.AppstreamApp {
         return &@constCast(self).priv().app;
     }
 
