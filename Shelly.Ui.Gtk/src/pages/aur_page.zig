@@ -733,7 +733,7 @@ pub const AurPage = extern struct {
         self.start_load(.search);
     }
 
-    fn on_installed_toggled(self: *Self) callconv(.c) void {
+    fn restore_current_view(self: *Self) void {
         const p = self.priv();
         
         if (p.installed_mode) {
@@ -750,7 +750,6 @@ pub const AurPage = extern struct {
     fn on_installed_toggled(self: *Self) callconv(.c) void {
         const p = self.priv();
         p.installed_mode = gtk.CheckButton.getActive(p.installed_toggle) != 0;
-
         restore_current_view(self);
     }
 
