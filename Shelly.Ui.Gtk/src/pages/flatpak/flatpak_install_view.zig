@@ -6,6 +6,7 @@ const glib = bindings.glib;
 const gtk = bindings.gtk;
 const gdk = bindings.gdk;
 const gobject = bindings.gobject;
+const runtime = @import("../../services/runtime.zig");
 const support = @import("../support.zig");
 const flatpak = @import("../../models/flatpak.zig");
 const search = @import("../../helpers/search.zig");
@@ -25,6 +26,7 @@ const AddonsDialog = @import("../../dialog/page/addons.zig").AddonsDialog;
 const VersionHistoryDialog = @import("../../dialog/page/version_history.zig").VersionHistoryDialog;
 const Entry = @import("../../dialog/page/version_history.zig").Entry;
 const Flatpak = @import("../../models/flatpak.zig").Flatpak;
+const FlatpakRemoveDialog = @import("../../dialog/page/flatpak_remove_dialog.zig").FlatpakRemoveDialog;
 const translations = @import("../../helpers/translations.zig");
 
 extern fn g_get_user_data_dir() [*:0]const u8;
@@ -371,24 +373,79 @@ pub const FlatpakInstallView = extern struct {
     fn onUninstallClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const p = self.priv();
         const app = p.selected_app orelse return;
-        const remotes = app.getRemotes();
-        const selected: usize = @intCast(gtk.DropDown.getSelected(p.overlay_remote_selection));
-        if (selected >= remotes.len) return;
-        const remote = remotes[selected];
-        std.log.info("Flatpak Remove: app={s} remote={s} scope={s}", .{
-            app.getId(),
-            remote.Name,
-            if (remote.Scope == .user) "user" else "system",
-        });
+
+        std.log.info("Flatpak Remove: app={s}", .{app.getId()});
+
+        var remove_config = false;
+        if (runtime.config) |cfg_service| {
+            if (cfg_service.get()) |cfg| {
+                remove_config = cfg.PackageManagementRemoveConfigs;
+            } else |_| {}
+        }
+
+        var buf: [512]u8 = undefined;
+        const message = std.fmt.bufPrintSentinel(
+            &buf,
+            "{s} {s}?",
+            .{ translations._("Remove"), app.getName() },
+            0,
+        ) catch translations._("Remove this Flatpak?");
+
+        const dialog = FlatpakRemoveDialog.new(translations._("Remove Flatpak"), message, &onRemoveResponse, self);
+        dialog.setButtons(translations._("Remove"), translations._("Cancel"));
+        dialog.setDefaultRemoveConfig(remove_config);
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.showLockout(dialog.as(gtk.Widget));
+            dialog.focusConfirm();
+        }
+    }
+
+    fn onRemoveResponse(ctx: ?*anyopaque, confirmed: bool, remove_config: bool) void {
+        const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx.?));
+        if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
+
+        _ = confirmed;
+
+        const p = self.priv();
+        const pkg = p.selected_app orelse return;
+
+        const argv = ShellyCommands.removeFlatpak(std.heap.c_allocator, pkg.getId(), remove_config) catch {
+            return;
+        };
+        defer std.heap.c_allocator.free(argv);
+
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(std.heap.c_allocator);
+        names.append(std.heap.c_allocator, pkg.getName()) catch {};
+
+        if (support.getWindow(ShellyWindow, self)) |win| {
+            win.startTransaction(.{
+                .title = translations._("Removing Flatpak"),
+                .argv = argv,
+                .packages = names.items,
+                .on_complete = &onTransactionCompleteRemove,
+                .privileged = false,
+                .ctx = self,
+            });
+        }
     }
 
     fn onTransactionComplete(ctx: *anyopaque, success: bool) void {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx));
         if (!success) return;
 
-        gtk.Widget.setSensitive(self.priv().overlay_install_button.as(gtk.Widget), 1);
+        gtk.Widget.setVisible(self.priv().overlay_install_button.as(gtk.Widget), 0);
+        gtk.Widget.setVisible(self.priv().overlay_uninstall_button.as(gtk.Widget), 1);
     }
 
+    fn onTransactionCompleteRemove(ctx: *anyopaque, success: bool) void {
+        const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx));
+        if (!success) return;
+
+        gtk.Widget.setVisible(self.priv().overlay_install_button.as(gtk.Widget), 1);
+        gtk.Widget.setVisible(self.priv().overlay_uninstall_button.as(gtk.Widget), 0);
+    }
     fn onRemoteSelected(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         if (self.priv().suppress_remote_notify) return;
         self.requestSelectedRemoteInfo();
@@ -424,7 +481,7 @@ pub const FlatpakInstallView = extern struct {
             if (addon_remote.scope == .user) "user" else "system",
         });
 
-        const argv = ShellyCommands.install_flatpak_ex(std.heap.c_allocator, addon.Id, addon_remote.scope, addon_remote.name, true) catch return;
+        const argv = ShellyCommands.installFlatpakEx(std.heap.c_allocator, addon.Id, addon_remote.scope, addon_remote.name, true) catch return;
         defer std.mem.Allocator.free(std.heap.c_allocator, argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
