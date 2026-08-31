@@ -106,7 +106,7 @@ pub const FlatpakRemotesView = extern struct {
         defer threaded.deinit();
 
         const cli = ShellyCli{ .allocator = alloc, .io = threaded.io() };
-        const parsed = cli.get_remotes() catch {
+        const parsed = cli.getRemotes() catch {
             postResult(page, &.{}, arena_ptr, generation);
             return;
         };

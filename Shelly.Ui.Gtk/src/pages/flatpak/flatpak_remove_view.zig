@@ -341,7 +341,7 @@ pub const FlatpakRemoveView = extern struct {
         defer threaded.deinit();
 
         const cli = ShellyCli{ .allocator = alloc, .io = threaded.io() };
-        const parsed = cli.get_installed_flatpaks() catch |err| {
+        const parsed = cli.getInstalledFlatpaks() catch |err| {
             std.debug.print("get_installed_flatpaks failed: {t}\n", .{err});
             postResult(page, &.{}, arena_ptr, generation);
             return;

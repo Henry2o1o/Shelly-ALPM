@@ -24,6 +24,7 @@ const PermissionsDialog = @import("../../dialog/page/permissions.zig").Permissio
 const AddonsDialog = @import("../../dialog/page/addons.zig").AddonsDialog;
 const VersionHistoryDialog = @import("../../dialog/page/version_history.zig").VersionHistoryDialog;
 const Entry = @import("../../dialog/page/version_history.zig").Entry;
+const Flatpak = @import("../../models/flatpak.zig").Flatpak;
 const translations = @import("../../helpers/translations.zig");
 
 extern fn g_get_user_data_dir() [*:0]const u8;
@@ -1057,11 +1058,32 @@ pub const FlatpakInstallView = extern struct {
         const cli: ShellyCli = .{ .allocator = alloc, .io = io };
         cli.sync_remote_appstream_flatpak() catch {};
         std.log.debug("sync_remote_appstream_flatpak completed", .{});
-        result.parsed = cli.get_remote_appstream_apps() catch {
+        result.parsed = cli.getRemoteAppstreamApps() catch {
             result.failed = true;
             _ = glib.idleAdd(&loadComplete, result);
             return;
         };
+
+        const icli = ShellyCli{ .allocator = alloc, .io = threaded.io() };
+        const installed = icli.getInstalledFlatpaks() catch null;
+
+        if (installed) |inst| {
+            defer inst.deinit();
+
+            var installed_map: std.StringHashMapUnmanaged(void) = .empty;
+            defer installed_map.deinit(alloc);
+
+            for (inst.value) |pkg| {
+                installed_map.put(alloc, pkg.Name, {}) catch {};
+            }
+
+            if (result.parsed) |parsed| {
+                for (parsed.value) |*app| {
+                    if (installed_map.contains(app.Name))
+                        app.Installed = true;
+                }
+            }
+        }
 
         var flathub = FlatHubApiService.init(std.heap.c_allocator, io);
         defer flathub.deinit();
