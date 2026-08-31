@@ -458,8 +458,8 @@ pub const FlatpakInstallView = extern struct {
         const app = gobject.ext.cast(AppstreamAppObject, item) orelse return;
         app.setInstalled(installed);
 
-        gtk.Widget.setVisible(self.priv().overlay_install_button.as(gtk.Widget), !installed);
-        gtk.Widget.setVisible(self.priv().overlay_uninstall_button.as(gtk.Widget), installed);
+        gtk.Widget.setVisible(self.priv().overlay_install_button.as(gtk.Widget), if (installed) 0 else 1);
+        gtk.Widget.setVisible(self.priv().overlay_uninstall_button.as(gtk.Widget), if (installed) 1 else 0);
     }
 
     fn onRemoteSelected(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
