@@ -1399,17 +1399,17 @@ test "Flatpak details find the first usable screenshot URL" {
 }
 
 test "Flatpak details map AppStream URL types to C# icons" {
-    try std.testing.expectEqualStrings("go-home", FlatpakInstallView.icon_for_url_type("Homepage"));
-    try std.testing.expectEqualStrings("dialog-warning", FlatpakInstallView.icon_for_url_type("bugtracker"));
-    try std.testing.expectEqualStrings("folder-saved-search", FlatpakInstallView.icon_for_url_type("vcs-browser"));
-    try std.testing.expectEqualStrings("web-browser", FlatpakInstallView.icon_for_url_type("unknown"));
+    try std.testing.expectEqualStrings("go-home", FlatpakInstallView.iconForUrlType("Homepage"));
+    try std.testing.expectEqualStrings("dialog-warning", FlatpakInstallView.iconForUrlType("bugtracker"));
+    try std.testing.expectEqualStrings("folder-saved-search", FlatpakInstallView.iconForUrlType("vcs-browser"));
+    try std.testing.expectEqualStrings("web-browser", FlatpakInstallView.iconForUrlType("unknown"));
 }
 
 test "Flatpak details capitalize AppStream URL type labels" {
     var buffer: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("Homepage", FlatpakInstallView.format_url_type(&buffer, "homepage"));
-    try std.testing.expectEqualStrings("Vcs-browser", FlatpakInstallView.format_url_type(&buffer, "vcs-browser"));
-    try std.testing.expectEqualStrings("", FlatpakInstallView.format_url_type(&buffer, ""));
+    try std.testing.expectEqualStrings("Homepage", FlatpakInstallView.formatUrlType(&buffer, "homepage"));
+    try std.testing.expectEqualStrings("Vcs-browser", FlatpakInstallView.formatUrlType(&buffer, "vcs-browser"));
+    try std.testing.expectEqualStrings("", FlatpakInstallView.formatUrlType(&buffer, ""));
 }
 
 test "Flatpak details prefer the search hit published on the selected remote" {
