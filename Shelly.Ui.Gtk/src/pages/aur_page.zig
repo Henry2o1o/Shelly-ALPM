@@ -860,15 +860,8 @@ pub const AurPage = extern struct {
     fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
         const self: *AurPage = @ptrCast(@alignCast(ctx));
         if (!success) return;
-
-        const p = self.priv();
         self.clear_selection();
-
-        if (p.installed_mode) {
-            self.start_load(.installed);
-        } else if (p.last_query_len > 0) {
-            self.start_load(.search);
-        }
+        restore_current_view(self);
     }
 
     const template_children = .{
