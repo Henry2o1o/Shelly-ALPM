@@ -164,14 +164,14 @@ pub const FlatpakInstallView = extern struct {
         p.addon_generation = 0;
         p.suppress_remote_notify = false;
         p.search_len = 0;
-        self.setup_grid();
-        _ = gtk.Button.signals.clicked.connect(p.overlay_back_button, *Self, &on_back_clicked, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.description_reveal_button, *Self, &on_description_reveal_clicked, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.overlay_install_button, *Self, &on_install_clicked, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.overlay_show_plugin_button, *Self, &on_addons_clicked, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.overlay_permissions_button, *Self, &on_permissions_clicked, self, .{});
-        _ = gtk.Button.signals.clicked.connect(p.version_history_button, *Self, &on_version_history_clicked, self, .{});
-        _ = gobject.Object.signals.notify.connect(p.overlay_remote_selection.as(gobject.Object), *Self, &on_remote_selected, self, .{ .detail = "selected" });
+        self.setupGrid();
+        _ = gtk.Button.signals.clicked.connect(p.overlay_back_button, *Self, &onBackClicked, self, .{});
+        _ = gtk.Button.signals.clicked.connect(p.description_reveal_button, *Self, &onDescriptionRevealClicked, self, .{});
+        _ = gtk.Button.signals.clicked.connect(p.overlay_install_button, *Self, &onInstallClicked, self, .{});
+        _ = gtk.Button.signals.clicked.connect(p.overlay_show_plugin_button, *Self, &onAddonsClicked, self, .{});
+        _ = gtk.Button.signals.clicked.connect(p.overlay_permissions_button, *Self, &onPermissionsClicked, self, .{});
+        _ = gtk.Button.signals.clicked.connect(p.version_history_button, *Self, &onVersionHistoryClicked, self, .{});
+        _ = gobject.Object.signals.notify.connect(p.overlay_remote_selection.as(gobject.Object), *Self, &onRemoteSelected, self, .{ .detail = "selected" });
         gtk.Stack.setVisibleChild(p.content_stack, p.list_overlay.as(gtk.Widget));
         support.connectLifecycle(Self, self);
     }
@@ -181,7 +181,7 @@ pub const FlatpakInstallView = extern struct {
         if (p.loaded) return;
         p.loaded = true;
         p.load_generation +%= 1;
-        self.load_apps(p.load_generation);
+        self.loadApps(p.load_generation);
     }
 
     pub fn onUnmap(self: *Self) void {
@@ -190,17 +190,17 @@ pub const FlatpakInstallView = extern struct {
         p.loaded = false;
         p.load_generation +%= 1;
         gtk.Widget.setVisible(p.loading_overlay.as(gtk.Widget), 0);
-        self.show_list();
+        self.showList();
         if (p.model) |model| gio.ListStore.removeAll(model);
         _ = malloc_trim(0);
     }
 
-    fn setup_grid(self: *Self) void {
+    fn setupGrid(self: *Self) void {
         const p = self.priv();
         const model = gio.ListStore.new(AppstreamAppObject.getGObjectType());
         p.model = model;
 
-        const filter = gtk.CustomFilter.new(&filter_app, self, null);
+        const filter = gtk.CustomFilter.new(&filterApp, self, null);
         p.filter = filter;
         _ = model.as(gobject.Object).ref();
         _ = filter.as(gobject.Object).ref();
@@ -210,7 +210,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.GridView.setModel(p.list_flatpaks, selection.as(gtk.SelectionModel));
         gtk.GridView.setMinColumns(p.list_flatpaks, 1);
         gtk.GridView.setMaxColumns(p.list_flatpaks, 4);
-        _ = gtk.GridView.signals.activate.connect(p.list_flatpaks, *Self, &on_app_activated, self, .{});
+        _ = gtk.GridView.signals.activate.connect(p.list_flatpaks, *Self, &onAppActivated, self, .{});
 
         const factory = gtk.SignalListItemFactory.new();
         const callbacks = struct {
@@ -304,7 +304,7 @@ pub const FlatpakInstallView = extern struct {
                 gtk.Label.setMarkup(name_label, markup);
                 gtk.Label.setLabel(summary_label, object.getSummary());
                 gtk.Widget.setVisible(verified_icon, @intFromBool(object.isVerified()));
-                set_app_icon(icon, object);
+                setAppIcon(icon, object);
             }
         };
         _ = gtk.SignalListItemFactory.signals.setup.connect(factory, *Self, &callbacks.setup, self, .{});
@@ -313,26 +313,26 @@ pub const FlatpakInstallView = extern struct {
         factory.as(gobject.Object).unref();
     }
 
-    fn on_app_activated(_: *gtk.GridView, position: c_uint, self: *Self) callconv(.c) void {
+    fn onAppActivated(_: *gtk.GridView, position: c_uint, self: *Self) callconv(.c) void {
         const selection = self.priv().selection orelse return;
         const item: *gobject.Object = @ptrCast(@alignCast(gio.ListModel.getItem(selection.as(gio.ListModel), position) orelse return));
         defer item.unref();
         const app = gobject.ext.cast(AppstreamAppObject, item) orelse return;
-        self.show_details(app);
+        self.showDetails(app);
     }
 
-    fn on_back_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
-        self.show_list();
+    fn onBackClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        self.showList();
     }
 
-    fn on_description_reveal_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+    fn onDescriptionRevealClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const p = self.priv();
         const revealed = gtk.Revealer.getRevealChild(p.description_revealer) != 0;
         gtk.Revealer.setRevealChild(p.description_revealer, @intFromBool(!revealed));
         gtk.Button.setLabel(p.description_reveal_button, if (revealed) translations._("Show more") else translations._("Show less"));
     }
 
-    fn on_install_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+    fn onInstallClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const p = self.priv();
         const app = p.selected_app orelse return;
         const remotes = app.getRemotes();
@@ -358,43 +358,43 @@ pub const FlatpakInstallView = extern struct {
                 .title = translations._("Installing flatpak"),
                 .argv = argv,
                 .packages = names.items,
-                .on_complete = &on_transaction_complete,
+                .on_complete = &onTransactionComplete,
                 .privileged = false,
                 .ctx = self,
             });
         }
     }
 
-    fn on_transaction_complete(ctx: *anyopaque, success: bool) void {
+    fn onTransactionComplete(ctx: *anyopaque, success: bool) void {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx));
         if (!success) return;
 
         gtk.Widget.setSensitive(self.priv().overlay_install_button.as(gtk.Widget), 1);
     }
 
-    fn on_remote_selected(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+    fn onRemoteSelected(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         if (self.priv().suppress_remote_notify) return;
-        self.request_selected_remote_info();
+        self.requestSelectedRemoteInfo();
     }
 
-    fn on_permissions_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+    fn onPermissionsClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const app = self.priv().selected_app orelse return;
 
-        const dlg = PermissionsDialog.new(translations._("Permissions"), app.getName(), app.getPermissions(), &on_close, self);
+        const dlg = PermissionsDialog.new(translations._("Permissions"), app.getName(), app.getPermissions(), &onClose, self);
         if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dlg.as(gtk.Widget));
     }
 
-    fn on_addons_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+    fn onAddonsClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const p = self.priv();
         const app = p.selected_app orelse return;
         const addons = app.getAddons();
         if (addons.len == 0) return;
 
-        const dlg = AddonsDialog.new(translations._("Available Addons"), app.getName(), addons, &on_addon_install, &on_close, self);
+        const dlg = AddonsDialog.new(translations._("Available Addons"), app.getName(), addons, &onAddonInstall, &onClose, self);
         if (support.getWindow(ShellyWindow, self)) |win| win.showLockout(dlg.as(gtk.Widget));
     }
 
-    fn on_addon_install(opaque_ctx: ?*anyopaque, addon: *const flatpak.AppstreamApp, button: *gtk.Button) void {
+    fn onAddonInstall(opaque_ctx: ?*anyopaque, addon: *const flatpak.AppstreamApp, button: *gtk.Button) void {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(opaque_ctx orelse return));
         const p = self.priv();
         if (p.disposed) return;
@@ -426,7 +426,7 @@ pub const FlatpakInstallView = extern struct {
                 .title = translations._("Installing flatpak addon"),
                 .argv = argv,
                 .packages = names.items,
-                .on_complete = &on_addon_transaction_complete,
+                .on_complete = &onAddonTransactionComplete,
                 .privileged = false,
                 .ctx = ctx,
             });
@@ -436,7 +436,7 @@ pub const FlatpakInstallView = extern struct {
         }
     }
 
-    fn on_addon_transaction_complete(opaque_ctx: *anyopaque, success: bool) void {
+    fn onAddonTransactionComplete(opaque_ctx: *anyopaque, success: bool) void {
         const ctx: *AddonInstallCtx = @ptrCast(@alignCast(opaque_ctx));
         defer std.heap.c_allocator.destroy(ctx);
 
@@ -452,7 +452,7 @@ pub const FlatpakInstallView = extern struct {
         }
     }
 
-    fn on_version_history_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+    fn onVersionHistoryClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const app = self.priv().selected_app orelse return;
 
         var entries: std.ArrayListUnmanaged(Entry) = .empty;
@@ -478,34 +478,34 @@ pub const FlatpakInstallView = extern struct {
         }
 
         const owned = entries.toOwnedSlice(std.heap.c_allocator) catch return;
-        const dlg = VersionHistoryDialog.new(translations._("Version History"), app.getName(), owned, &on_close, self);
+        const dlg = VersionHistoryDialog.new(translations._("Version History"), app.getName(), owned, &onClose, self);
 
         if (support.getWindow(ShellyWindow, self)) |win| {
             win.showLockout(dlg.as(gtk.Widget));
         }
     }
 
-    fn on_close(ctx: ?*anyopaque) void {
+    fn onClose(ctx: ?*anyopaque) void {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx.?));
 
         if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
     }
 
-    pub fn show_list(self: *Self) void {
+    pub fn showList(self: *Self) void {
         const p = self.priv();
         gtk.Stack.setVisibleChild(p.content_stack, p.list_overlay.as(gtk.Widget));
-        self.clear_details();
+        self.clearDetails();
     }
 
-    fn show_details(self: *Self, app: *AppstreamAppObject) void {
+    fn showDetails(self: *Self, app: *AppstreamAppObject) void {
         const p = self.priv();
-        self.clear_details();
+        self.clearDetails();
         p.selected_app = app;
         _ = app.as(gobject.Object).ref();
 
         gtk.Label.setLabel(p.overlay_name_label, if (app.getName().len > 0) app.getName() else app.getId());
         gtk.Label.setLabel(p.overlay_author_label, if (app.getDeveloperName().len > 0) app.getDeveloperName() else translations._("Unknown developer"));
-        set_app_icon(p.overlay_icon, app);
+        setAppIcon(p.overlay_icon, app);
 
         var version_buffer: [256]u8 = undefined;
         const releases = app.getReleases();
@@ -530,15 +530,15 @@ pub const FlatpakInstallView = extern struct {
             var addons_buffer: [128]u8 = undefined;
             gtk.Button.setLabel(p.overlay_show_plugin_button, std.fmt.bufPrintZ(&addons_buffer, "{s} ({d})", .{ translations._("Addons"), addon_count }) catch translations._("Addons"));
         }
-        self.populate_remotes(app);
-        self.set_description(app.getDescription());
-        self.populate_screenshots(app);
-        self.populate_links(app);
+        self.populateRemotes(app);
+        self.setDescription(app.getDescription());
+        self.populateScreenshots(app);
+        self.populateLinks(app);
         gtk.Stack.setVisibleChild(p.content_stack, p.overlay_panel.as(gtk.Widget));
         _ = gtk.Widget.grabFocus(p.overlay_install_button.as(gtk.Widget));
     }
 
-    fn populate_remotes(self: *Self, app: *AppstreamAppObject) void {
+    fn populateRemotes(self: *Self, app: *AppstreamAppObject) void {
         const p = self.priv();
         const strings = gtk.StringList.new(null);
         defer strings.as(gobject.Object).unref();
@@ -559,20 +559,20 @@ pub const FlatpakInstallView = extern struct {
         gtk.DropDown.setSelected(p.overlay_remote_selection, 0);
         gtk.Widget.setSensitive(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len > 0));
         gtk.Widget.setSensitive(p.overlay_install_button.as(gtk.Widget), @intFromBool(remotes.len > 0));
-        if (remotes.len > 0) self.request_remote_info(remotes[0].Name, app);
+        if (remotes.len > 0) self.requestRemoteInfo(remotes[0].Name, app);
         gtk.Widget.setVisible(p.overlay_remote_selection.as(gtk.Widget), @intFromBool(remotes.len > 1));
     }
 
-    fn request_selected_remote_info(self: *Self) void {
+    fn requestSelectedRemoteInfo(self: *Self) void {
         const p = self.priv();
         const app = p.selected_app orelse return;
         const remotes = app.getRemotes();
         const selected = gtk.DropDown.getSelected(p.overlay_remote_selection);
         if (selected == std.math.maxInt(u32) or selected >= remotes.len) return;
-        self.request_remote_info(remotes[selected].Name, app);
+        self.requestRemoteInfo(remotes[selected].Name, app);
     }
 
-    fn request_remote_info(self: *Self, remote: []const u8, app: *AppstreamAppObject) void {
+    fn requestRemoteInfo(self: *Self, remote: []const u8, app: *AppstreamAppObject) void {
         const p = self.priv();
         p.remote_info_generation +%= 1;
         const request_generation = p.remote_info_generation;
@@ -602,28 +602,28 @@ pub const FlatpakInstallView = extern struct {
             .app_id = owned_app_id,
         };
         _ = self.as(gobject.Object).ref();
-        const thread = std.Thread.spawn(.{}, remote_info_worker, .{load}) catch {
-            cleanup_remote_info_load(load);
+        const thread = std.Thread.spawn(.{}, remoteInfoWorker, .{load}) catch {
+            cleanupRemoteInfoLoad(load);
             gtk.Label.setLabel(p.overlay_size_label, translations._("Size: Unavailable"));
             return;
         };
         thread.detach();
     }
 
-    fn remote_info_worker(load: *RemoteInfoLoad) void {
+    fn remoteInfoWorker(load: *RemoteInfoLoad) void {
         var threaded: std.Io.Threaded = .init(std.heap.c_allocator, .{});
         defer threaded.deinit();
         const cli: ShellyCli = .{ .allocator = std.heap.c_allocator, .io = threaded.io() };
         const parsed = cli.get_flatpak_remote_info(load.app_id) catch {
             load.failed = true;
-            _ = glib.idleAdd(&remote_info_complete, load);
+            _ = glib.idleAdd(&remoteInfoComplete, load);
             return;
         };
 
         defer parsed.deinit();
         if (parsed.value.hits.len == 0) {
             load.failed = true;
-            _ = glib.idleAdd(&remote_info_complete, load);
+            _ = glib.idleAdd(&remoteInfoComplete, load);
             return;
         }
         const hit = selectRemoteHit(parsed.value.hits, load.remote);
@@ -634,7 +634,7 @@ pub const FlatpakInstallView = extern struct {
         if (perms.len > 0) {
             const owned_perms_slices = std.heap.c_allocator.alloc([]const u8, perms.len) catch {
                 load.failed = true;
-                _ = glib.idleAdd(&remote_info_complete, load);
+                _ = glib.idleAdd(&remoteInfoComplete, load);
                 return;
             };
             for (perms, 0..) |perm, i| {
@@ -647,10 +647,10 @@ pub const FlatpakInstallView = extern struct {
             load.permissions_alloc = null;
         }
 
-        _ = glib.idleAdd(&remote_info_complete, load);
+        _ = glib.idleAdd(&remoteInfoComplete, load);
     }
 
-    fn remote_info_complete(data: ?*anyopaque) callconv(.c) c_int {
+    fn remoteInfoComplete(data: ?*anyopaque) callconv(.c) c_int {
         const load: *RemoteInfoLoad = @ptrCast(@alignCast(data orelse return 0));
         const p = load.page.priv();
         if (!p.disposed and p.selected_app != null and
@@ -675,11 +675,11 @@ pub const FlatpakInstallView = extern struct {
                 load.app.setPermissions(load.permissions);
             }
         }
-        cleanup_remote_info_load(load);
+        cleanupRemoteInfoLoad(load);
         return 0;
     }
 
-    fn cleanup_remote_info_load(load: *RemoteInfoLoad) void {
+    fn cleanupRemoteInfoLoad(load: *RemoteInfoLoad) void {
         load.page.as(gobject.Object).unref();
         std.heap.c_allocator.free(load.remote);
         std.heap.c_allocator.free(load.app_id);
@@ -694,7 +694,7 @@ pub const FlatpakInstallView = extern struct {
         std.heap.c_allocator.destroy(load);
     }
 
-    fn set_description(self: *Self, description: [:0]const u8) void {
+    fn setDescription(self: *Self, description: [:0]const u8) void {
         const p = self.priv();
         if (descriptionSplitIndex(description)) |index| {
             const preview = g_strndup(description.ptr, index);
@@ -711,7 +711,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.Button.setLabel(p.description_reveal_button, translations._("Show more"));
     }
 
-    fn populate_screenshots(self: *Self, app: *AppstreamAppObject) void {
+    fn populateScreenshots(self: *Self, app: *AppstreamAppObject) void {
         const p = self.priv();
         const carousel = Carousel.new();
         var count: usize = 0;
@@ -726,7 +726,7 @@ pub const FlatpakInstallView = extern struct {
             gtk.Widget.setHalign(picture.as(gtk.Widget), .center);
             gtk.Widget.setValign(picture.as(gtk.Widget), .center);
             carousel.addWidget(picture.as(gtk.Widget));
-            self.load_screenshot(picture, screenshot_url, p.details_generation);
+            self.loadScreenshot(picture, screenshot_url, p.details_generation);
             count += 1;
         }
 
@@ -741,7 +741,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.Box.append(p.overlay_screenshots_container, dots.as(gtk.Widget));
     }
 
-    fn load_screenshot(self: *Self, picture: *gtk.Picture, url: [:0]const u8, generation: u64) void {
+    fn loadScreenshot(self: *Self, picture: *gtk.Picture, url: [:0]const u8, generation: u64) void {
         const load = std.heap.c_allocator.create(ScreenshotLoad) catch {
             gtk.Widget.setTooltipText(picture.as(gtk.Widget), translations._("Unable to load screenshot"));
             return;
@@ -759,30 +759,30 @@ pub const FlatpakInstallView = extern struct {
         };
         _ = self.as(gobject.Object).ref();
         _ = picture.as(gobject.Object).ref();
-        const thread = std.Thread.spawn(.{}, screenshot_worker, .{load}) catch {
-            cleanup_screenshot_load(load);
+        const thread = std.Thread.spawn(.{}, screenshotWorker, .{load}) catch {
+            cleanupScreenshotLoad(load);
             gtk.Widget.setTooltipText(picture.as(gtk.Widget), translations._("Unable to load screenshot"));
             return;
         };
         thread.detach();
     }
 
-    fn screenshot_worker(load: *ScreenshotLoad) void {
+    fn screenshotWorker(load: *ScreenshotLoad) void {
         var threaded: std.Io.Threaded = .init(std.heap.c_allocator, .{});
         defer threaded.deinit();
-        const bytes = download_screenshot(threaded.io(), load.url) catch {
+        const bytes = downloadScreenshot(threaded.io(), load.url) catch {
             load.failed = true;
-            _ = glib.idleAdd(&screenshot_complete, load);
+            _ = glib.idleAdd(&screenshotComplete, load);
             return;
         };
         load.data = bytes;
-        _ = glib.idleAdd(&screenshot_complete, load);
+        _ = glib.idleAdd(&screenshotComplete, load);
     }
 
     // Downloads the screenshot fully into memory rather than caching it on
     // disk. The returned buffer is owned by the caller and must be freed with
     // the C allocator once the texture has been created from it.
-    fn download_screenshot(io: std.Io, url: []const u8) ![]u8 {
+    fn downloadScreenshot(io: std.Io, url: []const u8) ![]u8 {
         var allocating: std.Io.Writer.Allocating = .init(std.heap.c_allocator);
         errdefer allocating.deinit();
 
@@ -800,14 +800,14 @@ pub const FlatpakInstallView = extern struct {
         return try allocating.toOwnedSlice();
     }
 
-    fn screenshot_complete(data: ?*anyopaque) callconv(.c) c_int {
+    fn screenshotComplete(data: ?*anyopaque) callconv(.c) c_int {
         const load: *ScreenshotLoad = @ptrCast(@alignCast(data orelse return 0));
         const p = load.page.priv();
         if (!p.disposed and p.selected_app != null and p.details_generation == load.generation) {
             if (load.failed or load.data == null) {
                 gtk.Picture.setPaintable(load.picture, null);
                 gtk.Widget.setTooltipText(load.picture.as(gtk.Widget), translations._("Unable to download screenshot"));
-            } else if (texture_from_bytes(load.data.?)) |texture| {
+            } else if (textureFromBytes(load.data.?)) |texture| {
                 gtk.Picture.setPaintable(load.picture, texture.as(gdk.Paintable));
                 texture.unref();
                 gtk.Widget.setTooltipText(load.picture.as(gtk.Widget), null);
@@ -816,20 +816,20 @@ pub const FlatpakInstallView = extern struct {
                 gtk.Widget.setTooltipText(load.picture.as(gtk.Widget), translations._("Unable to display screenshot"));
             }
         }
-        cleanup_screenshot_load(load);
+        cleanupScreenshotLoad(load);
         return 0;
     }
 
     // Decodes the in-memory image bytes into a GdkTexture. The picture keeps its
     // own reference to the texture, so the raw bytes can be freed immediately
     // afterwards and nothing is left behind on disk.
-    fn texture_from_bytes(data: []const u8) ?*gdk.Texture {
+    fn textureFromBytes(data: []const u8) ?*gdk.Texture {
         const bytes = glib.Bytes.new(data.ptr, data.len);
         defer bytes.unref();
         return gdk.Texture.newFromBytes(bytes, null);
     }
 
-    fn cleanup_screenshot_load(load: *ScreenshotLoad) void {
+    fn cleanupScreenshotLoad(load: *ScreenshotLoad) void {
         load.picture.as(gobject.Object).unref();
         load.page.as(gobject.Object).unref();
         std.heap.c_allocator.free(load.url);
@@ -837,7 +837,7 @@ pub const FlatpakInstallView = extern struct {
         std.heap.c_allocator.destroy(load);
     }
 
-    fn populate_links(self: *Self, app: *AppstreamAppObject) void {
+    fn populateLinks(self: *Self, app: *AppstreamAppObject) void {
         var iterator = app.getUrls().map.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.*.len == 0) continue;
@@ -849,7 +849,7 @@ pub const FlatpakInstallView = extern struct {
             gtk.Widget.setMarginStart(content.as(gtk.Widget), 6);
             gtk.Widget.setMarginEnd(content.as(gtk.Widget), 6);
 
-            const icon = gtk.Image.newFromIconName(icon_for_url_type(entry.key_ptr.*));
+            const icon = gtk.Image.newFromIconName(iconForUrlType(entry.key_ptr.*));
             gtk.Widget.setMarginStart(icon.as(gtk.Widget), 6);
             gtk.Widget.setMarginEnd(icon.as(gtk.Widget), 6);
             gtk.Widget.setValign(icon.as(gtk.Widget), .center);
@@ -860,7 +860,7 @@ pub const FlatpakInstallView = extern struct {
             gtk.Widget.setValign(labels.as(gtk.Widget), .center);
 
             var type_buffer: [128]u8 = undefined;
-            const type_label = gtk.Label.new(format_url_type(&type_buffer, entry.key_ptr.*));
+            const type_label = gtk.Label.new(formatUrlType(&type_buffer, entry.key_ptr.*));
             gtk.Widget.setHalign(type_label.as(gtk.Widget), .start);
             gtk.Label.setXalign(type_label, 0);
             gtk.Box.append(labels, type_label.as(gtk.Widget));
@@ -890,7 +890,7 @@ pub const FlatpakInstallView = extern struct {
         }
     }
 
-    fn icon_for_url_type(url_type: []const u8) [:0]const u8 {
+    fn iconForUrlType(url_type: []const u8) [:0]const u8 {
         if (std.ascii.eqlIgnoreCase(url_type, "homepage")) return "go-home";
         if (std.ascii.eqlIgnoreCase(url_type, "bugtracker")) return "dialog-warning";
         if (std.ascii.eqlIgnoreCase(url_type, "donation")) return "emblem-favorite";
@@ -902,7 +902,7 @@ pub const FlatpakInstallView = extern struct {
         return "web-browser";
     }
 
-    fn format_url_type(buffer: *[128]u8, url_type: []const u8) [:0]const u8 {
+    fn formatUrlType(buffer: *[128]u8, url_type: []const u8) [:0]const u8 {
         if (url_type.len == 0) return "";
         if (std.ascii.eqlIgnoreCase(url_type, "homepage")) return translations._("Homepage");
         if (std.ascii.eqlIgnoreCase(url_type, "bugtracker")) return translations._("Bug tracker");
@@ -919,7 +919,7 @@ pub const FlatpakInstallView = extern struct {
         return buffer[0..len :0];
     }
 
-    fn clear_details(self: *Self) void {
+    fn clearDetails(self: *Self) void {
         const p = self.priv();
         p.details_generation +%= 1;
         p.remote_info_generation +%= 1;
@@ -939,7 +939,7 @@ pub const FlatpakInstallView = extern struct {
         }
     }
 
-    fn filter_app(item: *gobject.Object, data: ?*anyopaque) callconv(.c) c_int {
+    fn filterApp(item: *gobject.Object, data: ?*anyopaque) callconv(.c) c_int {
         const self: *Self = @ptrCast(@alignCast(data orelse return 0));
         const p = self.priv();
         const app = gobject.ext.cast(AppstreamAppObject, item) orelse return 0;
@@ -969,16 +969,16 @@ pub const FlatpakInstallView = extern struct {
         return @intFromBool(search.matchesAnyIgnoreCase(query, &.{ app.getName(), app.getId(), app.getSummary() }));
     }
 
-    pub fn apply_search(self: *Self, text: []const u8) void {
+    pub fn applySearch(self: *Self, text: []const u8) void {
         const p = self.priv();
         const len = @min(text.len, p.search_text.len);
         @memcpy(p.search_text[0..len], text[0..len]);
         p.search_len = len;
         if (p.filter) |filter| gtk.Filter.changed(filter.as(gtk.Filter), .different);
-        self.update_no_results();
+        self.updateNoResults();
     }
 
-    fn update_no_results(self: *Self) void {
+    fn updateNoResults(self: *Self) void {
         const p = self.priv();
         const selection = p.selection orelse return;
         const loaded = if (p.model) |m| gio.ListModel.getNItems(m.as(gio.ListModel)) else 0;
@@ -986,14 +986,14 @@ pub const FlatpakInstallView = extern struct {
         gtk.Widget.setVisible(p.no_results_overlay.as(gtk.Widget), @intFromBool(visible));
     }
 
-    pub fn apply_category(self: *Self, category: Category) void {
+    pub fn applyCategory(self: *Self, category: Category) void {
         const p = self.priv();
         p.category = category;
-        self.show_list();
+        self.showList();
         if (p.filter) |filter| gtk.Filter.changed(filter.as(gtk.Filter), .different);
     }
 
-    fn set_app_icon(icon: *gtk.Image, object: *AppstreamAppObject) void {
+    fn setAppIcon(icon: *gtk.Image, object: *AppstreamAppObject) void {
         const remotes = object.getRemotes();
         if (remotes.len == 0 or object.getId().len == 0) {
             gtk.Image.setFromIconName(icon, "package-x-generic");
@@ -1016,7 +1016,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.Image.setFromIconName(icon, "package-x-generic");
     }
 
-    fn load_apps(self: *Self, generation: u64) void {
+    fn loadApps(self: *Self, generation: u64) void {
         const p = self.priv();
         if (p.model) |model| gio.ListStore.removeAll(model);
         gtk.Label.setLabel(p.loading_label, translations._("Loading Flatpak Data..."));
@@ -1025,25 +1025,25 @@ pub const FlatpakInstallView = extern struct {
         gtk.Widget.setVisible(p.loading_overlay.as(gtk.Widget), 1);
 
         const result = std.heap.c_allocator.create(LoadResult) catch {
-            self.show_status(translations._("Unable to allocate memory while loading Flatpak data."), false);
+            self.showStatus(translations._("Unable to allocate memory while loading Flatpak data."), false);
             return;
         };
         result.* = .{ .page = self, .generation = generation };
         _ = self.as(gobject.Object).ref();
 
-        const thread = std.Thread.spawn(.{}, load_worker, .{result}) catch {
+        const thread = std.Thread.spawn(.{}, loadWorker, .{result}) catch {
             self.as(gobject.Object).unref();
             std.heap.c_allocator.destroy(result);
-            self.show_status(translations._("Unable to start the Flatpak data loader."), false);
+            self.showStatus(translations._("Unable to start the Flatpak data loader."), false);
             return;
         };
         thread.detach();
     }
 
-    fn load_worker(result: *LoadResult) void {
+    fn loadWorker(result: *LoadResult) void {
         const arena = std.heap.c_allocator.create(std.heap.ArenaAllocator) catch {
             result.failed = true;
-            _ = glib.idleAdd(&load_complete, result);
+            _ = glib.idleAdd(&loadComplete, result);
             return;
         };
         arena.* = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -1059,7 +1059,7 @@ pub const FlatpakInstallView = extern struct {
         std.log.debug("sync_remote_appstream_flatpak completed", .{});
         result.parsed = cli.get_remote_appstream_apps() catch {
             result.failed = true;
-            _ = glib.idleAdd(&load_complete, result);
+            _ = glib.idleAdd(&loadComplete, result);
             return;
         };
 
@@ -1071,7 +1071,7 @@ pub const FlatpakInstallView = extern struct {
         result.recently_updated_set = collectionSet(alloc, &flathub, .recently_updated);
         result.recently_added_set = collectionSet(alloc, &flathub, .recently_added);
 
-        _ = glib.idleAdd(&load_complete, result);
+        _ = glib.idleAdd(&loadComplete, result);
     }
 
     fn collectionSet(alloc: std.mem.Allocator, flathub: *FlatHubApiService, which: AppstreamAppObject.Collection) std.StringHashMapUnmanaged(void) {
@@ -1091,24 +1091,24 @@ pub const FlatpakInstallView = extern struct {
         return set;
     }
 
-    fn load_complete(data: ?*anyopaque) callconv(.c) c_int {
+    fn loadComplete(data: ?*anyopaque) callconv(.c) c_int {
         const result: *LoadResult = @ptrCast(@alignCast(data orelse return 0));
         const page = result.page;
         const p = page.priv();
         if (p.disposed or !p.loaded or p.load_generation != result.generation) {
-            cleanup_result(result);
+            cleanupResult(result);
             return 0;
         }
         if (result.failed or result.parsed == null) {
-            page.show_status(translations._("Unable to load Flatpak applications."), false);
-            cleanup_result(result);
+            page.showStatus(translations._("Unable to load Flatpak applications."), false);
+            cleanupResult(result);
             return 0;
         }
 
         const apps = result.parsed.?.value;
         const end = @min(result.next_index + batch_size, apps.len);
         const model = p.model orelse {
-            cleanup_result(result);
+            cleanupResult(result);
             return 0;
         };
         for (apps[result.next_index..end]) |app| {
@@ -1128,16 +1128,16 @@ pub const FlatpakInstallView = extern struct {
         if (end < apps.len) return 1;
 
         if (gio.ListModel.getNItems(model.as(gio.ListModel)) == 0) {
-            page.show_status(translations._("No Flatpak applications are available."), false);
+            page.showStatus(translations._("No Flatpak applications are available."), false);
         } else {
             gtk.Spinner.stop(p.loading_spinner);
             gtk.Widget.setVisible(p.loading_overlay.as(gtk.Widget), 0);
         }
-        cleanup_result(result);
+        cleanupResult(result);
         return 0;
     }
 
-    fn show_status(self: *Self, message: [:0]const u8, spinning: bool) void {
+    fn showStatus(self: *Self, message: [:0]const u8, spinning: bool) void {
         const p = self.priv();
         gtk.Label.setLabel(p.loading_label, message);
         gtk.Widget.setVisible(p.loading_spinner.as(gtk.Widget), @intFromBool(spinning));
@@ -1145,7 +1145,7 @@ pub const FlatpakInstallView = extern struct {
         gtk.Widget.setVisible(p.loading_overlay.as(gtk.Widget), 1);
     }
 
-    fn cleanup_result(result: *LoadResult) void {
+    fn cleanupResult(result: *LoadResult) void {
         if (result.parsed) |*parsed| parsed.deinit();
         if (result.arena) |arena| {
             arena.deinit();
@@ -1166,7 +1166,7 @@ pub const FlatpakInstallView = extern struct {
             p.loaded = false;
             p.load_generation +%= 1;
 
-            self.clear_details();
+            self.clearDetails();
             gtk.GridView.setModel(p.list_flatpaks, null);
             gtk.GridView.setFactory(p.list_flatpaks, null);
             if (p.selection) |selection| {
