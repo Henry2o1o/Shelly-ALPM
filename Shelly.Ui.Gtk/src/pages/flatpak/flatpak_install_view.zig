@@ -66,6 +66,7 @@ pub const FlatpakInstallView = extern struct {
         description_reveal_button: *gtk.Button,
         overlay_remote_selection: *gtk.DropDown,
         overlay_install_button: *gtk.Button,
+        overlay_uninstall_button: *gtk.Button,
         overlay_show_plugin_button: *gtk.Button,
         overlay_permissions_button: *gtk.Button,
         version_history_button: *gtk.Button,
@@ -169,6 +170,7 @@ pub const FlatpakInstallView = extern struct {
         _ = gtk.Button.signals.clicked.connect(p.overlay_back_button, *Self, &onBackClicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.description_reveal_button, *Self, &onDescriptionRevealClicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.overlay_install_button, *Self, &onInstallClicked, self, .{});
+        _ = gtk.Button.signals.clicked.connect(p.overlay_uninstall_button, *Self, &onUninstallClicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.overlay_show_plugin_button, *Self, &onAddonsClicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.overlay_permissions_button, *Self, &onPermissionsClicked, self, .{});
         _ = gtk.Button.signals.clicked.connect(p.version_history_button, *Self, &onVersionHistoryClicked, self, .{});
@@ -346,7 +348,7 @@ pub const FlatpakInstallView = extern struct {
             if (remote.Scope == .user) "user" else "system",
         });
 
-        const argv = ShellyCommands.install_flatpak(std.heap.c_allocator, app.getId(), remote.Scope, remote.Name) catch return;
+        const argv = ShellyCommands.installFlatpak(std.heap.c_allocator, app.getId(), remote.Scope, remote.Name) catch return;
         defer std.mem.Allocator.free(std.heap.c_allocator, argv);
 
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -364,6 +366,20 @@ pub const FlatpakInstallView = extern struct {
                 .ctx = self,
             });
         }
+    }
+
+    fn onUninstallClicked(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        const app = p.selected_app orelse return;
+        const remotes = app.getRemotes();
+        const selected: usize = @intCast(gtk.DropDown.getSelected(p.overlay_remote_selection));
+        if (selected >= remotes.len) return;
+        const remote = remotes[selected];
+        std.log.info("Flatpak Remove: app={s} remote={s} scope={s}", .{
+            app.getId(),
+            remote.Name,
+            if (remote.Scope == .user) "user" else "system",
+        });
     }
 
     fn onTransactionComplete(ctx: *anyopaque, success: bool) void {
@@ -535,8 +551,17 @@ pub const FlatpakInstallView = extern struct {
         self.setDescription(app.getDescription());
         self.populateScreenshots(app);
         self.populateLinks(app);
+
+        if (app.isInstalled()) {
+            _ = gtk.Widget.setVisible(p.overlay_uninstall_button.as(gtk.Widget), 1);
+            _ = gtk.Widget.setVisible(p.overlay_install_button.as(gtk.Widget), 0);
+        } else {
+            _ = gtk.Widget.setVisible(p.overlay_uninstall_button.as(gtk.Widget), 0);
+            _ = gtk.Widget.setVisible(p.overlay_install_button.as(gtk.Widget), 1);
+            _ = gtk.Widget.grabFocus(p.overlay_install_button.as(gtk.Widget));
+        }
+
         gtk.Stack.setVisibleChild(p.content_stack, p.overlay_panel.as(gtk.Widget));
-        _ = gtk.Widget.grabFocus(p.overlay_install_button.as(gtk.Widget));
     }
 
     fn populateRemotes(self: *Self, app: *AppstreamAppObject) void {
@@ -1233,6 +1258,7 @@ pub const FlatpakInstallView = extern struct {
         .{ "description_reveal_button", @offsetOf(Private, "description_reveal_button") },
         .{ "overlay_remote_selection", @offsetOf(Private, "overlay_remote_selection") },
         .{ "overlay_install_button", @offsetOf(Private, "overlay_install_button") },
+        .{ "overlay_uninstall_button", @offsetOf(Private, "overlay_uninstall_button") },
         .{ "overlay_show_plugin_button", @offsetOf(Private, "overlay_show_plugin_button") },
         .{ "overlay_permissions_button", @offsetOf(Private, "overlay_permissions_button") },
         .{ "version_history_button", @offsetOf(Private, "version_history_button") },

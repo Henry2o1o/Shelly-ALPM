@@ -255,7 +255,7 @@ pub const FlatpakRemoveView = extern struct {
             return;
         }
 
-        const argv = ShellyCommands.remove_flatpak(std.heap.c_allocator, pkg.getId(), remove_config) catch {
+        const argv = ShellyCommands.removeFlatpak(std.heap.c_allocator, pkg.getId(), remove_config) catch {
             self.clearPending();
             return;
         };
