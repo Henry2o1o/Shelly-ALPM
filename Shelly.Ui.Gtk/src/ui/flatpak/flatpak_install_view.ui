@@ -178,7 +178,7 @@
                     </child>
                     <child>
                       <object class="GtkButton" id="overlay_uninstall_button">
-                        <property name="label" translatable="yes">Uninstall</property>
+                        <property name="label" translatable="yes">Remove</property>
                         <property name="visible">false</property>
                         <style>
                           <class name="destructive-action"/>

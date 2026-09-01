@@ -258,14 +258,14 @@ pub const FlatpakInstallView = extern struct {
                 gtk.Label.setMaxWidthChars(name_label, 30);
                 gtk.Grid.attach(title_grid, name_label.as(gtk.Widget), 0, 0, 1, 1);
 
-                const verified_icon = gtk.Image.newFromIconName("security-high-symbolic");
-                gtk.Image.setPixelSize(verified_icon, 14);
-                gtk.Widget.setValign(verified_icon.as(gtk.Widget), .center);
-                gtk.Widget.setHalign(verified_icon.as(gtk.Widget), .start);
-                gtk.Widget.setHexpand(verified_icon.as(gtk.Widget), 0);
-                gtk.Widget.setVexpand(verified_icon.as(gtk.Widget), 0);
-                gtk.Widget.setTooltipText(verified_icon.as(gtk.Widget), translations._("Verified"));
-                gtk.Grid.attach(title_grid, verified_icon.as(gtk.Widget), 1, 0, 1, 1);
+                const status_icon = gtk.Image.newFromIconName("security-high-symbolic");
+                gtk.Image.setPixelSize(status_icon, 14);
+                gtk.Widget.setValign(status_icon.as(gtk.Widget), .center);
+                gtk.Widget.setHalign(status_icon.as(gtk.Widget), .start);
+                gtk.Widget.setHexpand(status_icon.as(gtk.Widget), 0);
+                gtk.Widget.setVexpand(status_icon.as(gtk.Widget), 0);
+                gtk.Widget.setTooltipText(status_icon.as(gtk.Widget), translations._("Verified"));
+                gtk.Grid.attach(title_grid, status_icon.as(gtk.Widget), 1, 0, 1, 1);
                 gtk.Box.append(right_box, title_grid.as(gtk.Widget));
 
                 const summary_label = gtk.Label.new("");
@@ -300,7 +300,7 @@ pub const FlatpakInstallView = extern struct {
                 const right_box = gobject.ext.cast(gtk.Box, gtk.Grid.getChildAt(content_grid, 1, 0) orelse return) orelse return;
                 const title_grid = gobject.ext.cast(gtk.Grid, gtk.Widget.getFirstChild(right_box.as(gtk.Widget)) orelse return) orelse return;
                 const name_label = gobject.ext.cast(gtk.Label, gtk.Grid.getChildAt(title_grid, 0, 0) orelse return) orelse return;
-                const verified_icon = gtk.Grid.getChildAt(title_grid, 1, 0) orelse return;
+                const status_icon = gobject.ext.cast(gtk.Image, gtk.Grid.getChildAt(title_grid, 1, 0) orelse return) orelse return;
                 const summary_label = gobject.ext.cast(gtk.Label, gtk.Widget.getLastChild(right_box.as(gtk.Widget)) orelse return) orelse return;
 
                 var markup_buffer: [512]u8 = undefined;
@@ -309,7 +309,16 @@ pub const FlatpakInstallView = extern struct {
                 const markup = std.fmt.bufPrintZ(&markup_buffer, "<b>{s}</b>", .{escaped}) catch object.getName();
                 gtk.Label.setMarkup(name_label, markup);
                 gtk.Label.setLabel(summary_label, object.getSummary());
-                gtk.Widget.setVisible(verified_icon, @intFromBool(object.isVerified()));
+
+                if (object.isInstalled()) {
+                    gtk.Image.setFromIconName(status_icon, "object-select-symbolic");
+                    gtk.Widget.setTooltipText(status_icon.as(gtk.Widget), translations._("Installed"));
+                    gtk.Widget.setVisible(status_icon.as(gtk.Widget), 1);
+                } else {
+                    gtk.Image.setFromIconName(status_icon, "security-high-symbolic");
+                    gtk.Widget.setTooltipText(status_icon.as(gtk.Widget), translations._("Verified"));
+                    gtk.Widget.setVisible(status_icon.as(gtk.Widget), @intFromBool(object.isVerified()));
+                }
                 setAppIcon(icon, object);
             }
         };
@@ -407,7 +416,7 @@ pub const FlatpakInstallView = extern struct {
         const self: *FlatpakInstallView = @ptrCast(@alignCast(ctx.?));
         if (support.getWindow(ShellyWindow, self)) |win| win.hideLockout();
 
-        _ = confirmed;
+        if (!confirmed) return;
 
         const p = self.priv();
         const pkg = p.selected_app orelse return;
