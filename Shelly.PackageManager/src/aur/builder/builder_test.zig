@@ -2614,6 +2614,56 @@ test "PackageBuilder extracts source archives into srcdir" {
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/source.txt", .{});
 }
 
+test "PackageBuilder detects source archives by content including zip and tar zstd" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('renamed-payload.data' 'payload.tar.zst' 'ordinary.zip')
+        \\sha256sums=('SKIP' 'SKIP' 'SKIP')
+        \\build() {
+        \\  test "$(cat "$srcdir/from-zip.txt")" = zip
+        \\  test "$(cat "$srcdir/from-zstd.txt")" = zstd
+        \\  test "$(cat "$srcdir/ordinary.zip")" = plain
+        \\}
+        \\package() {
+        \\  mkdir -p "$pkgdir/usr/share/demo"
+        \\  cp "$srcdir/from-zip.txt" "$srcdir/from-zstd.txt" "$pkgdir/usr/share/demo/"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+
+    const zip_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "renamed-payload.data" });
+    defer allocator.free(zip_path);
+    try archive.writeZipFixture(allocator, zip_path, &.{
+        .{ .path = "from-zip.txt", .contents = "zip\n" },
+    });
+
+    const tar_zstd_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "payload.tar.zst" });
+    defer allocator.free(tar_zstd_path);
+    try archive.writeFixture(allocator, tar_zstd_path, .zstd, &.{
+        .{ .path = "from-zstd.txt", .contents = "zstd\n" },
+    });
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "ordinary.zip", .data = "plain\n" });
+
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try testing.expectEqual(@as(usize, 1), artifacts.len);
+    try fixture.temporary.dir.access(io, "src/renamed-payload.data", .{});
+    try fixture.temporary.dir.access(io, "src/payload.tar.zst", .{});
+    try fixture.temporary.dir.access(io, "src/ordinary.zip", .{});
+    try fixture.temporary.dir.access(io, "src/from-zip.txt", .{});
+    try fixture.temporary.dir.access(io, "src/from-zstd.txt", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/from-zip.txt", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/from-zstd.txt", .{});
+}
+
 test "PackageBuilder preserves source archive modification timestamps" {
     const allocator = testing.allocator;
     const io = testing.io;
