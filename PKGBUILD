@@ -121,11 +121,11 @@ package_shelly() {
       'json-glib'
   )
   optdepends=(
-      'arch-install-scripts: provision fresh roots for --isolated builds'
       'fish: Fish shell completions'
       'zsh: Zsh shell completions'
       'libstarfish: dependency viewer for arch packages'
       'shelly-flatpak-backend: Flatpak package management support'
+      'util-linux: isolate fresh-root provisioning for --isolated builds'
       'fuse2: run AppImages that require FUSE 2'
   )
 

@@ -5,7 +5,10 @@ fresh, operation-scoped Arch root through `systemd-nspawn`.
 
 The elevated process is a coordinator only. It reviews the host PKGBUILD and
 local inputs, materializes only those byte-exact reviewed inputs in the guest,
-provisions the guest, and starts nspawn. PKGBUILD lifecycle functions run as
+provisions the guest with Shelly's libalpm-based `shellystrap` helper, and
+starts nspawn. The helper runs in a short-lived private mount/PID namespace,
+copies the host pacman trust database into the operation root, and keeps its
+database, cache, and log under that root. PKGBUILD lifecycle functions run as
 the fixed unprivileged `shelly-build` guest account. Private UID mapping is
 required, and the command fails closed when systemd cannot provide it.
 
@@ -26,7 +29,7 @@ authorized elevation. Existing artifacts are rejected with `--no-overwrite`.
 Requirements:
 
 - `systemd-nspawn` (provided by Arch's `systemd` package)
-- `pacstrap` (provided by `arch-install-scripts`) for fresh-root provisioning
+- `unshare` (provided by Arch's `util-linux` package) for private provisioning
 - an invoking-user-preserving elevator such as sudo, doas, run0, or pkexec
 
 Current limitations are deliberately fail-closed:

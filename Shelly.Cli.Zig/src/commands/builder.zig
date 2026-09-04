@@ -10,6 +10,7 @@ const ui_operation = @import("../output/ui_operation.zig");
 const ShellyBuildConfiguration = Zigalpm.builder.ShellyBuildConfiguration;
 const aur_url = @import("../config/aur_url.zig");
 const isolated_build = @import("isolated_build.zig");
+const signals = @import("../runtime/signals.zig");
 
 const command_path = "shelly build build";
 
@@ -252,6 +253,10 @@ const Real = struct {
         operation_context: *Zigalpm.OperationContext,
         invocation: *const parser.Invocation,
     ) !void {
+        var cancellation_watcher: signals.CancellationWatcher = .{};
+        try cancellation_watcher.start(context.io, operation_context);
+        defer cancellation_watcher.deinit();
+
         if (isolatedRequested(invocation))
             return runIsolatedCoordinator(context, operation_context, invocation);
         if (syncDepsRequested(invocation))
@@ -756,13 +761,13 @@ fn runIsolatedCoordinator(
 
     var root = try isolated_build.Root.create(context.allocator, context.io);
     defer root.deinit();
-    operation.status(.information, "Provisioning clean build root", "build.isolation.provision", null);
-    try root.bootstrap(bootstrap_packages.items);
-    try root.stageReviewedInputs(pkgbuild_content, review.reviewed_files);
-
     const executable_allocated = try std.process.executablePathAlloc(context.io, context.allocator);
     defer context.allocator.free(executable_allocated);
     const executable = std.mem.trimEnd(u8, executable_allocated, " (deleted)");
+    operation.status(.information, "Provisioning clean build root", "build.isolation.provision", null);
+    try root.bootstrap(context.environ, executable, bootstrap_packages.items, &operation);
+    try root.stageReviewedInputs(context.environ, pkgbuild_content, review.reviewed_files, &operation);
+
     try root.stageExecutable(executable);
 
     const guest_configuration = try renderIsolatedConfiguration(
@@ -781,7 +786,7 @@ fn runIsolatedCoordinator(
     );
     defer context.allocator.free(child_arguments);
     operation.status(.information, "Running unprivileged nspawn build", "build.isolation.execute", null);
-    try root.run(child_arguments);
+    try root.run(context.environ, child_arguments, &operation);
 
     const expected_names = try context.allocator.alloc([]const u8, request.package_builds.len);
     defer context.allocator.free(expected_names);

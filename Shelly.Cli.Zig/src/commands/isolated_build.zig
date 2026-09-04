@@ -5,6 +5,7 @@
 //! bind mounted into the container.
 
 const std = @import("std");
+const Zigalpm = @import("Zigalpm");
 
 pub const build_uid = "1000";
 pub const build_user = "shelly-build";
@@ -14,6 +15,20 @@ const guest_executable_relative = "usr/local/libexec/shelly/shelly";
 pub const guest_executable = "/" ++ guest_executable_relative;
 
 const operation_parent = "/var/lib/shelly/build-roots/v1/operations";
+
+const BootstrapOutputContext = struct {
+    operation: *const Zigalpm.Operation,
+
+    fn handle(data: ?*anyopaque, stream: Zigalpm.process_runner.StreamKind, line: []const u8) void {
+        const self: *BootstrapOutputContext = @ptrCast(@alignCast(data.?));
+        self.operation.status(
+            if (stream == .stderr) .warning else .information,
+            line,
+            "build.isolation.bootstrap",
+            null,
+        );
+    }
+};
 
 pub const Root = struct {
     allocator: std.mem.Allocator,
@@ -56,6 +71,13 @@ pub const Root = struct {
         errdefer allocator.free(artifact_path);
         try std.Io.Dir.cwd().createDirPath(io, source_path);
         try std.Io.Dir.cwd().createDirPath(io, artifact_path);
+        const marker_path = try std.fs.path.join(allocator, &.{ root_path, Zigalpm.alpm.bootstrap.marker_name });
+        defer allocator.free(marker_path);
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = marker_path,
+            .data = "managed by shelly isolated build\n",
+            .flags = .{ .permissions = .fromMode(0o600) },
+        });
 
         return .{
             .allocator = allocator,
@@ -77,35 +99,51 @@ pub const Root = struct {
         self.* = undefined;
     }
 
-    /// Bootstraps a clean Arch root. pacstrap is restricted to provisioning;
-    /// the package build itself is always Shelly's native builder in nspawn.
-    pub fn bootstrap(self: *Root, extra_packages: []const []const u8) !void {
-        var argv: std.ArrayList([]const u8) = .empty;
-        defer argv.deinit(self.allocator);
-        try argv.appendSlice(self.allocator, &.{
-            "/usr/bin/pacstrap",
-            "-C",
-            "/etc/pacman.conf",
-            "-c",
+    /// Bootstraps a clean Arch root through Shelly's own libalpm backend. The
+    /// helper process is isolated in a private mount/PID namespace so package
+    /// scriptlets receive the standard virtual filesystems without introducing
+    /// mounts into the coordinator's namespace.
+    pub fn bootstrap(
+        self: *Root,
+        environ: std.process.Environ,
+        executable: []const u8,
+        extra_packages: []const []const u8,
+        operation: *const Zigalpm.Operation,
+    ) !void {
+        const argv = try shellystrapArguments(
+            self.allocator,
+            executable,
             self.root_path,
-            "base",
-            "base-devel",
-            "git",
-            "ca-certificates",
-        });
-        try argv.appendSlice(self.allocator, extra_packages);
-        try runInherited(self.io, argv.items);
+            extra_packages,
+        );
+        defer self.allocator.free(argv);
+        var output_context: BootstrapOutputContext = .{ .operation = operation };
+        const exit_code = try Zigalpm.process_runner.runStreamingWithEnvironmentOperation(
+            self.allocator,
+            self.io,
+            environ,
+            argv,
+            null,
+            null,
+            .{ .function = BootstrapOutputContext.handle, .data = &output_context },
+            operation,
+        );
+        if (exit_code != 0) return error.IsolatedBootstrapFailed;
+
+        const marker_path = try self.rootJoin(Zigalpm.alpm.bootstrap.marker_name);
+        defer self.allocator.free(marker_path);
+        std.Io.Dir.cwd().deleteFile(self.io, marker_path) catch {};
 
         const root_argument = try std.fmt.allocPrint(self.allocator, "--root={s}", .{self.root_path});
         defer self.allocator.free(root_argument);
-        try runInherited(self.io, &.{
+        try self.runCancellable(environ, &.{
             "/usr/bin/systemd-sysusers",
             root_argument,
             "--inline",
             "g shelly-build 1000",
             "--inline",
             "u shelly-build 1000:1000 \"Shelly build user\" /home/shelly-build /usr/bin/bash",
-        });
+        }, operation);
 
         const home_path = try self.rootJoin("home/shelly-build");
         defer self.allocator.free(home_path);
@@ -122,7 +160,7 @@ pub const Root = struct {
         try std.Io.Dir.cwd().createDirPath(self.io, work_path);
         try std.Io.Dir.cwd().createDirPath(self.io, sources_path);
         try std.Io.Dir.cwd().createDirPath(self.io, logs_path);
-        try runInherited(self.io, &.{
+        try self.runCancellable(environ, &.{
             "/usr/bin/chown",
             "-R",
             "--",
@@ -133,7 +171,7 @@ pub const Root = struct {
             sources_path,
             logs_path,
             home_path,
-        });
+        }, operation);
     }
 
     /// Materializes only byte-exact inputs accepted by the host review. This
@@ -141,19 +179,21 @@ pub const Root = struct {
     /// guest, and makes the guest digest check independent of copy timing.
     pub fn stageReviewedInputs(
         self: *Root,
+        environ: std.process.Environ,
         pkgbuild_contents: []const u8,
         reviewed_files: anytype,
+        operation: *const Zigalpm.Operation,
     ) !void {
         try self.writeReviewedInput("PKGBUILD", pkgbuild_contents, 0o644);
         for (reviewed_files) |file|
             try self.writeReviewedInput(file.name, file.contents, file.permissions);
-        try runInherited(self.io, &.{
+        try self.runCancellable(environ, &.{
             "/usr/bin/chown",
             "-R",
             "--",
             "1000:1000",
             self.source_path,
-        });
+        }, operation);
     }
 
     fn writeReviewedInput(
@@ -194,10 +234,15 @@ pub const Root = struct {
         });
     }
 
-    pub fn run(self: *Root, child_arguments: []const []const u8) !void {
+    pub fn run(
+        self: *Root,
+        environ: std.process.Environ,
+        child_arguments: []const []const u8,
+        operation: *const Zigalpm.Operation,
+    ) !void {
         const argv = try nspawnArguments(self.allocator, self.root_path, child_arguments);
         defer self.allocator.free(argv);
-        try runInherited(self.io, argv);
+        try self.runCancellable(environ, argv, operation);
     }
 
     pub fn exportArtifacts(
@@ -276,7 +321,64 @@ pub const Root = struct {
     fn rootJoin(self: *Root, relative: []const u8) ![]u8 {
         return std.fs.path.join(self.allocator, &.{ self.root_path, relative });
     }
+
+    fn runCancellable(
+        self: *Root,
+        environ: std.process.Environ,
+        argv: []const []const u8,
+        operation: *const Zigalpm.Operation,
+    ) !void {
+        var output_context: BootstrapOutputContext = .{ .operation = operation };
+        const exit_code = try Zigalpm.process_runner.runStreamingWithEnvironmentOperation(
+            self.allocator,
+            self.io,
+            environ,
+            argv,
+            null,
+            null,
+            .{ .function = BootstrapOutputContext.handle, .data = &output_context },
+            operation,
+        );
+        if (exit_code != 0) return error.IsolatedCommandFailed;
+    }
 };
+
+/// Constructs the re-exec boundary used instead of pacstrap. All returned
+/// strings are borrowed; only the slice itself is owned by the caller.
+pub fn shellystrapArguments(
+    allocator: std.mem.Allocator,
+    executable: []const u8,
+    root_path: []const u8,
+    extra_packages: []const []const u8,
+) ![]const []const u8 {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.appendSlice(allocator, &.{
+        "/usr/bin/unshare",
+        "--fork",
+        "--pid",
+        "--mount",
+        "--propagation",
+        "private",
+        "--kill-child=KILL",
+        "--forward-signals",
+        executable,
+        Zigalpm.alpm.bootstrap.wrapper_argument,
+        "--root",
+        root_path,
+        "--config",
+        "/etc/pacman.conf",
+        "--gpgdir",
+        "/etc/pacman.d/gnupg",
+        "--",
+        "base",
+        "base-devel",
+        "git",
+        "ca-certificates",
+    });
+    try argv.appendSlice(allocator, extra_packages);
+    return argv.toOwnedSlice(allocator);
+}
 
 pub fn nspawnArguments(
     allocator: std.mem.Allocator,
@@ -342,19 +444,28 @@ pub fn isPackageArtifact(name: []const u8) bool {
     return true;
 }
 
-fn runInherited(io: std.Io, argv: []const []const u8) !void {
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .inherit,
-        .stdout = .inherit,
-        .stderr = .inherit,
-    });
-    errdefer child.kill(io);
-    const term = try child.wait(io);
-    switch (term) {
-        .exited => |code| if (code != 0) return error.IsolatedCommandFailed,
-        else => return error.IsolatedCommandFailed,
-    }
+test "shellystrap invocation uses a private cancellable namespace and native helper" {
+    const root_path = "/var/lib/shelly/build-roots/v1/operations/0123456789abcdef0123456789abcdef/root";
+    const argv = try shellystrapArguments(
+        std.testing.allocator,
+        "/usr/bin/shelly",
+        root_path,
+        &.{ "cmake", "ninja" },
+    );
+    defer std.testing.allocator.free(argv);
+
+    try std.testing.expectEqualStrings("/usr/bin/unshare", argv[0]);
+    try std.testing.expect(containsArgument(argv, "--mount"));
+    try std.testing.expect(containsArgument(argv, "--pid"));
+    try std.testing.expect(containsArgument(argv, "private"));
+    try std.testing.expect(containsArgument(argv, "--kill-child=KILL"));
+    try std.testing.expect(containsArgument(argv, "--forward-signals"));
+    try std.testing.expect(containsArgument(argv, Zigalpm.alpm.bootstrap.wrapper_argument));
+    try std.testing.expect(containsArgument(argv, root_path));
+    try std.testing.expect(containsArgument(argv, "base-devel"));
+    try std.testing.expect(containsArgument(argv, "cmake"));
+    try std.testing.expect(containsArgument(argv, "ninja"));
+    try std.testing.expect(!containsArgument(argv, "/usr/bin/pacstrap"));
 }
 
 test "nspawn invocation is unprivileged namespaced and contains no host binds" {
