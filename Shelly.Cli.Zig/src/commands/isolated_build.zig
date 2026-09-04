@@ -11,6 +11,38 @@ pub const build_uid = "1000";
 pub const build_user = "shelly-build";
 pub const guest_source = "/build/source";
 pub const guest_artifacts = "/build/artifacts";
+
+/// Package identity retained from libalpm validation. Filenames are kept
+/// separately from package names because archive naming is not an API.
+pub const ValidatedArtifact = struct {
+    package_name: []u8,
+    filename: []u8,
+
+    pub fn deinit(self: ValidatedArtifact, allocator: std.mem.Allocator) void {
+        allocator.free(self.package_name);
+        allocator.free(self.filename);
+    }
+};
+
+pub fn deinitValidatedArtifacts(allocator: std.mem.Allocator, artifacts: []ValidatedArtifact) void {
+    for (artifacts) |artifact| artifact.deinit(allocator);
+    allocator.free(artifacts);
+}
+
+pub const ExportedArtifact = struct {
+    package_name: []u8,
+    path: []u8,
+
+    pub fn deinit(self: ExportedArtifact, allocator: std.mem.Allocator) void {
+        allocator.free(self.package_name);
+        allocator.free(self.path);
+    }
+};
+
+pub fn deinitExportedArtifacts(allocator: std.mem.Allocator, artifacts: []ExportedArtifact) void {
+    for (artifacts) |artifact| artifact.deinit(allocator);
+    allocator.free(artifacts);
+}
 const guest_executable_relative = "usr/local/libexec/shelly/shelly";
 pub const guest_executable = "/" ++ guest_executable_relative;
 
@@ -248,10 +280,11 @@ pub const Root = struct {
     pub fn exportArtifacts(
         self: *Root,
         destination: []const u8,
+        validated_artifacts: []const ValidatedArtifact,
         overwrite: bool,
         owner_uid: std.Io.File.Uid,
         owner_gid: std.Io.File.Gid,
-    ) !usize {
+    ) ![]ExportedArtifact {
         var directory = try std.Io.Dir.cwd().openDir(self.io, self.artifact_path, .{ .iterate = true });
         defer directory.close(self.io);
         // The destination must already exist. Opening it once gives every
@@ -259,10 +292,12 @@ pub const Root = struct {
         // untrusted user concurrently changes the path name.
         var destination_directory = try std.Io.Dir.cwd().openDir(self.io, destination, .{ .iterate = true });
         defer destination_directory.close(self.io);
-        var iterator = directory.iterate();
-        var count: usize = 0;
-        while (try iterator.next(self.io)) |entry| {
-            if (entry.kind != .file or !isPackageArtifact(entry.name)) continue;
+        var exported: std.ArrayList(ExportedArtifact) = .empty;
+        errdefer {
+            for (exported.items) |artifact| artifact.deinit(self.allocator);
+            exported.deinit(self.allocator);
+        }
+        for (validated_artifacts) |validated| {
             var random: [16]u8 = undefined;
             self.io.random(&random);
             const suffix = std.fmt.bytesToHex(random, .lower);
@@ -273,15 +308,17 @@ pub const Root = struct {
                 .{suffix},
             );
 
-            var source = try directory.openFile(self.io, entry.name, .{});
-            defer source.close(self.io);
+            var source = try directory.openFile(self.io, validated.filename, .{});
+            var source_open = true;
+            defer if (source_open) source.close(self.io);
             var temporary = try destination_directory.createFile(self.io, temporary_name, .{
                 .exclusive = true,
                 .permissions = .fromMode(0o644),
             });
+            var temporary_open = true;
             var temporary_exists = true;
             defer {
-                temporary.close(self.io);
+                if (temporary_open) temporary.close(self.io);
                 if (temporary_exists)
                     destination_directory.deleteFile(self.io, temporary_name) catch {};
             }
@@ -292,19 +329,26 @@ pub const Root = struct {
             _ = try reader.interface.streamRemaining(&writer.interface);
             try writer.interface.flush();
             try temporary.setOwner(self.io, owner_uid, owner_gid);
+            // Both descriptors are closed before publication, so a returned
+            // artifact is guaranteed to be completely flushed and no guest
+            // archive remains open across the atomic rename.
+            temporary.close(self.io);
+            temporary_open = false;
+            source.close(self.io);
+            source_open = false;
 
             if (overwrite) {
                 try destination_directory.rename(
                     temporary_name,
                     destination_directory,
-                    entry.name,
+                    validated.filename,
                     self.io,
                 );
             } else {
                 destination_directory.renamePreserve(
                     temporary_name,
                     destination_directory,
-                    entry.name,
+                    validated.filename,
                     self.io,
                 ) catch |err| switch (err) {
                     error.PathAlreadyExists => return error.ArtifactAlreadyExists,
@@ -312,10 +356,16 @@ pub const Root = struct {
                 };
             }
             temporary_exists = false;
-            count += 1;
+            const package_name = try self.allocator.dupe(u8, validated.package_name);
+            errdefer self.allocator.free(package_name);
+            const path = try std.fs.path.join(self.allocator, &.{ destination, validated.filename });
+            try exported.append(self.allocator, .{
+                .package_name = package_name,
+                .path = path,
+            });
         }
-        if (count == 0) return error.NoBuildArtifacts;
-        return count;
+        if (exported.items.len == 0) return error.NoBuildArtifacts;
+        return exported.toOwnedSlice(self.allocator);
     }
 
     fn rootJoin(self: *Root, relative: []const u8) ![]u8 {
@@ -541,4 +591,82 @@ test "artifact export accepts package archives but not detached signatures" {
     try std.testing.expect(isPackageArtifact("demo-1-1-any.pkg.tar.zst"));
     try std.testing.expect(!isPackageArtifact("demo-1-1-any.pkg.tar.zst.sig"));
     try std.testing.expect(!isPackageArtifact("build.log"));
+}
+
+test "artifact export returns validated package names and exact final absolute paths" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.createDirPath(io, "guest");
+    try temporary.dir.createDirPath(io, "destination");
+    try temporary.dir.writeFile(io, .{
+        .sub_path = "guest/demo-1-1-any.pkg.tar.zst",
+        .data = "archive bytes",
+    });
+    const root_path = try temporary.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root_path);
+    const artifact_path = try temporary.dir.realPathFileAlloc(io, "guest", allocator);
+    defer allocator.free(artifact_path);
+    const destination = try temporary.dir.realPathFileAlloc(io, "destination", allocator);
+    defer allocator.free(destination);
+    var root: Root = .{
+        .allocator = allocator,
+        .io = io,
+        .operation_path = root_path,
+        .root_path = root_path,
+        .source_path = root_path,
+        .artifact_path = artifact_path,
+    };
+    const validated = [_]ValidatedArtifact{.{
+        .package_name = @constCast("demo"),
+        .filename = @constCast("demo-1-1-any.pkg.tar.zst"),
+    }};
+    const exported = try root.exportArtifacts(
+        destination,
+        &validated,
+        false,
+        @intCast(std.os.linux.geteuid()),
+        @intCast(std.os.linux.getegid()),
+    );
+    defer deinitExportedArtifacts(allocator, exported);
+    try std.testing.expectEqual(@as(usize, 1), exported.len);
+    try std.testing.expectEqualStrings("demo", exported[0].package_name);
+    const expected = try std.fs.path.join(allocator, &.{ destination, "demo-1-1-any.pkg.tar.zst" });
+    defer allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, exported[0].path);
+    const contents = try temporary.dir.readFileAlloc(
+        io,
+        "destination/demo-1-1-any.pkg.tar.zst",
+        allocator,
+        .limited(1024),
+    );
+    defer allocator.free(contents);
+    try std.testing.expectEqualStrings("archive bytes", contents);
+}
+
+test "failed or cancelled isolated roots remove their complete operation directory" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.createDirPath(io, "operation/root/build/artifacts");
+    const operation_path = try temporary.dir.realPathFileAlloc(io, "operation", allocator);
+    const root_path = try temporary.dir.realPathFileAlloc(io, "operation/root", allocator);
+    const source_path = try std.fs.path.join(allocator, &.{ root_path, "build/source" });
+    const artifact_path = try temporary.dir.realPathFileAlloc(io, "operation/root/build/artifacts", allocator);
+    var root: Root = .{
+        .allocator = allocator,
+        .io = io,
+        .operation_path = operation_path,
+        .root_path = root_path,
+        .source_path = source_path,
+        .artifact_path = artifact_path,
+        .succeeded = false,
+    };
+    root.deinit();
+    try std.testing.expectError(
+        error.FileNotFound,
+        temporary.dir.access(io, "operation", .{}),
+    );
 }

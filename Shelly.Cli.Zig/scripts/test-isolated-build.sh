@@ -15,17 +15,26 @@ printf '%s\n' \
   "pkgrel=1" \
   "arch=('any')" \
   "license=('MIT')" \
+  "build() {" \
+  "  test -s /etc/ld.so.cache" \
+  "  grep -q '^systemd-network:' /etc/passwd" \
+  "  test -d /var/lib/private" \
+  "  test -s /etc/ssl/certs/ca-certificates.crt" \
+  "}" \
   "package() {" \
   "  install -Dm644 /dev/null \"\$pkgdir/usr/share/shelly-isolated-smoke/marker\"" \
   "  chown root:root \"\$pkgdir/usr/share/shelly-isolated-smoke/marker\"" \
   "}" >"$fixture_dir/PKGBUILD"
 
-if [[ ! -x "$project_dir/zig-out/bin/shelly" ]]; then
+if [[ -z ${SHELLY_BIN:-} ]]; then
   env ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-/tmp/shelly-zig-global-cache}" \
     zig build --build-file "$project_dir/build.zig"
+  shelly_bin="$project_dir/zig-out/bin/shelly"
+else
+  shelly_bin=$SHELLY_BIN
 fi
 
-"$project_dir/zig-out/bin/shelly" build \
+"$shelly_bin" build \
   --isolated \
   --reviewed \
   --no-confirm \

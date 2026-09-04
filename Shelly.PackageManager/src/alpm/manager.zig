@@ -1570,8 +1570,8 @@ pub const Manager = struct {
     /// refreshes that re-initialize libalpm and re-apply the configuration.
     /// Hook directories are replaced with a nonexistent path because
     /// clearing the list falls back to libalpm's compiled-in default
-    /// directory. Intended for hermetic tests that commit transactions
-    /// against fixture roots and must not execute host system hooks.
+    /// directory. Intended for hermetic tests and initial root provisioning,
+    /// which must not execute host system hooks in a foreign or empty root.
     pub fn disable_transaction_hooks(self: *Manager) void {
         self.hooks_disabled = true;
         if (self.handle) |handle| {

@@ -6,6 +6,8 @@
 
 const std = @import("std");
 const manager_module = @import("manager.zig");
+const events = @import("events.zig");
+const process_runner = @import("../aur/builder.zig");
 
 pub const wrapper_argument = "__shellystrap";
 pub const marker_name = ".shelly-bootstrap-root";
@@ -34,7 +36,7 @@ pub fn runInternal(
         stderr.print("shellystrap: invalid request: {t}\n", .{err}) catch {};
         return 2;
     };
-    _ = bootstrap(allocator, io, environ, options) catch |err| {
+    _ = bootstrapReporting(allocator, io, environ, options, stderr) catch |err| {
         stderr.print("shellystrap: provisioning failed: {t}\n", .{err}) catch {};
         return 1;
     };
@@ -83,6 +85,120 @@ pub fn bootstrap(
     environ: std.process.Environ,
     options: Options,
 ) !Result {
+    return bootstrapReporting(allocator, io, environ, options, null);
+}
+
+const DiagnosticOutput = struct {
+    stderr: *std.Io.Writer,
+
+    fn handleError(data: ?*anyopaque, args: events.ErrorArgs) void {
+        const self: *DiagnosticOutput = @ptrCast(@alignCast(data.?));
+        self.stderr.print("shellystrap: libalpm: {s}\n", .{
+            std.mem.trimEnd(u8, args.message, "\r\n"),
+        }) catch {};
+    }
+
+    fn handleScriptlet(data: ?*anyopaque, args: events.ScriptletArgs) void {
+        const self: *DiagnosticOutput = @ptrCast(@alignCast(data.?));
+        self.stderr.print("shellystrap: scriptlet: {s}\n", .{
+            std.mem.trimEnd(u8, args.line, "\r\n"),
+        }) catch {};
+    }
+};
+
+const RootFinalizer = struct {
+    name: []const u8,
+    arguments: []const []const u8,
+};
+
+const root_finalizers = [_]RootFinalizer{
+    .{ .name = "ldconfig", .arguments = &.{"/usr/bin/ldconfig"} },
+    .{ .name = "systemd-sysusers", .arguments = &.{"/usr/bin/systemd-sysusers"} },
+    .{ .name = "systemd-tmpfiles", .arguments = &.{ "/usr/bin/systemd-tmpfiles", "--create" } },
+    .{ .name = "update-ca-trust", .arguments = &.{"/usr/bin/update-ca-trust"} },
+};
+
+const FinalizerOutput = struct {
+    writer: ?*std.Io.Writer,
+    name: []const u8,
+
+    fn handle(data: ?*anyopaque, _: process_runner.StreamKind, line: []const u8) void {
+        const self: *FinalizerOutput = @ptrCast(@alignCast(data.?));
+        const writer = self.writer orelse return;
+        writer.print("shellystrap: {s}: {s}\n", .{ self.name, line }) catch {};
+    }
+};
+
+fn rootFinalizerArguments(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    finalizer: RootFinalizer,
+) ![]const []const u8 {
+    const argv = try allocator.alloc([]const u8, finalizer.arguments.len + 2);
+    argv[0] = "/usr/bin/chroot";
+    argv[1] = root_path;
+    @memcpy(argv[2..], finalizer.arguments);
+    return argv;
+}
+
+fn reportFinalizerFailure(
+    writer: ?*std.Io.Writer,
+    name: []const u8,
+    detail: []const u8,
+) void {
+    const destination = writer orelse return;
+    destination.print("shellystrap: {s}: {s}\n", .{ name, detail }) catch {};
+}
+
+fn finalizeRoot(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    root_path: []const u8,
+    diagnostic_writer: ?*std.Io.Writer,
+) !void {
+    for (root_finalizers) |finalizer| {
+        const executable = std.mem.trimStart(u8, finalizer.arguments[0], "/");
+        try requireFile(io, allocator, root_path, executable);
+        const argv = try rootFinalizerArguments(allocator, root_path, finalizer);
+        defer allocator.free(argv);
+        var output: FinalizerOutput = .{
+            .writer = diagnostic_writer,
+            .name = finalizer.name,
+        };
+        const exit_code = process_runner.runStreamingWithEnvironmentOperation(
+            allocator,
+            io,
+            environ,
+            argv,
+            null,
+            null,
+            .{ .function = FinalizerOutput.handle, .data = &output },
+            null,
+        ) catch |err| {
+            var detail_buffer: [256]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buffer, "unable to start: {t}", .{err}) catch
+                "unable to start";
+            reportFinalizerFailure(diagnostic_writer, finalizer.name, detail);
+            return error.BootstrapFinalizerFailed;
+        };
+        if (exit_code != 0) {
+            var detail_buffer: [64]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buffer, "exited with status {d}", .{exit_code}) catch
+                "exited unsuccessfully";
+            reportFinalizerFailure(diagnostic_writer, finalizer.name, detail);
+            return error.BootstrapFinalizerFailed;
+        }
+    }
+}
+
+fn bootstrapReporting(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
+    options: Options,
+    diagnostic_writer: ?*std.Io.Writer,
+) !Result {
     if (std.os.linux.geteuid() != 0) return error.RootPrivilegesRequired;
     try validateRoot(allocator, io, options.root_path);
     if (!std.fs.path.isAbsolute(options.config_path) or
@@ -115,6 +231,28 @@ pub fn bootstrap(
     });
     defer manager.deinit();
 
+    // The configured hook directories belong to the host. Loading them while
+    // creating an empty root can run host-specific pre-transaction hooks (for
+    // example snap-pac or boot-loader hooks) inside a root where their
+    // executables do not exist yet. A freshly provisioned root has no prior
+    // transaction hooks of its own, so suppress hooks for this initial install.
+    // Hooks shipped by the installed packages remain available to subsequent
+    // package operations in the completed root.
+    manager.disable_transaction_hooks();
+
+    var diagnostic_output: DiagnosticOutput = undefined;
+    if (diagnostic_writer) |writer| {
+        diagnostic_output = .{ .stderr = writer };
+        _ = try manager.dispatcher.addErrorHandler(.{
+            .function = DiagnosticOutput.handleError,
+            .data = &diagnostic_output,
+        });
+        _ = try manager.dispatcher.addScriptletHandler(.{
+            .function = DiagnosticOutput.handleScriptlet,
+            .data = &diagnostic_output,
+        });
+    }
+
     try manager.sync(false);
     var package_names = try allocator.alloc([:0]const u8, options.packages.len);
     defer allocator.free(package_names);
@@ -135,6 +273,11 @@ pub fn bootstrap(
     if (installed.len == 0) return error.EmptyBootstrapRoot;
     try requireFile(io, allocator, options.root_path, "usr/bin/bash");
     try requireDirectory(io, allocator, options.root_path, "var/lib/pacman/local");
+    try finalizeRoot(allocator, io, environ, options.root_path, diagnostic_writer);
+    try requireFile(io, allocator, options.root_path, "etc/ld.so.cache");
+    try requireFile(io, allocator, options.root_path, "etc/passwd");
+    try requireDirectory(io, allocator, options.root_path, "var/tmp");
+    try requireFile(io, allocator, options.root_path, "etc/ssl/certs/ca-certificates.crt");
     return .{ .installed_package_count = installed.len };
 }
 
@@ -332,4 +475,65 @@ test "bootstrap package targets reject option injection and line breaks" {
     try std.testing.expect(validPackageTarget("core/linux"));
     try std.testing.expect(!validPackageTarget("--nodeps"));
     try std.testing.expect(!validPackageTarget("bad\nname"));
+}
+
+test "internal bootstrap diagnostics write libalpm failures only to stderr" {
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var diagnostics: DiagnosticOutput = .{ .stderr = &output.writer };
+
+    DiagnosticOutput.handleError(&diagnostics, .{
+        .message = "invalid or corrupted package (PGP signature)\n",
+    });
+    DiagnosticOutput.handleScriptlet(&diagnostics, .{
+        .line = "a package scriptlet failed\n",
+    });
+
+    try std.testing.expectEqualStrings(
+        "shellystrap: libalpm: invalid or corrupted package (PGP signature)\n" ++
+            "shellystrap: scriptlet: a package scriptlet failed\n",
+        output.written(),
+    );
+}
+
+test "root finalizers use target binaries through chroot in stable order" {
+    try std.testing.expectEqualStrings("ldconfig", root_finalizers[0].name);
+    try std.testing.expectEqualStrings("systemd-sysusers", root_finalizers[1].name);
+    try std.testing.expectEqualStrings("systemd-tmpfiles", root_finalizers[2].name);
+    try std.testing.expectEqualStrings("update-ca-trust", root_finalizers[3].name);
+
+    const argv = try rootFinalizerArguments(
+        std.testing.allocator,
+        "/var/lib/shelly/build-roots/v1/operations/a/root",
+        root_finalizers[2],
+    );
+    defer std.testing.allocator.free(argv);
+    try std.testing.expectEqualSlices(
+        []const u8,
+        &.{
+            "/usr/bin/chroot",
+            "/var/lib/shelly/build-roots/v1/operations/a/root",
+            "/usr/bin/systemd-tmpfiles",
+            "--create",
+        },
+        argv,
+    );
+}
+
+test "root finalizer output is redirected to the diagnostic writer" {
+    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer output.deinit();
+    var context: FinalizerOutput = .{
+        .writer = &output.writer,
+        .name = "ldconfig",
+    };
+    FinalizerOutput.handle(&context, .stdout, "generated cache");
+    FinalizerOutput.handle(&context, .stderr, "warning");
+    reportFinalizerFailure(&output.writer, "update-ca-trust", "exited with status 7");
+    try std.testing.expectEqualStrings(
+        "shellystrap: ldconfig: generated cache\n" ++
+            "shellystrap: ldconfig: warning\n" ++
+            "shellystrap: update-ca-trust: exited with status 7\n",
+        output.written(),
+    );
 }
