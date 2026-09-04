@@ -248,13 +248,23 @@ fn prepareReviewOnly(
             .{ .use_root = false, .operation_context = operation_context },
         );
         defer manager.deinit();
-        var resolver_context: IsolatedResolverContext = .{ .manager = manager };
-        dependency_plan = try resolveSyncDependencies(
-            context.allocator,
-            builder.package_builds,
-            request.no_check,
-            resolver_context.backend(),
-        );
+        if (optionEnabled(invocation, "--review-host-dependencies")) {
+            var resolver_context: AlpmResolverContext = .{ .manager = manager };
+            dependency_plan = try resolveSyncDependencies(
+                context.allocator,
+                builder.package_builds,
+                request.no_check,
+                resolver_context.backend(),
+            );
+        } else {
+            var resolver_context: IsolatedResolverContext = .{ .manager = manager };
+            dependency_plan = try resolveSyncDependencies(
+                context.allocator,
+                builder.package_builds,
+                request.no_check,
+                resolver_context.backend(),
+            );
+        }
     }
     const package_names = try context.allocator.alloc([]u8, builder.package_builds.len);
     var copied_names: usize = 0;
@@ -725,15 +735,8 @@ const Real = struct {
 
             parsed_count += 1;
         }
-        var review = try Zigalpm.builder.preparePkgbuildReview(
-            context.allocator,
-            context.io,
-            build_directory,
-            pkgbuild_content,
-            package_builds,
-        );
-        defer review.deinit();
-
+        const initial_package_base = try packageBaseFromBuilds(package_builds);
+        try self.setPendingResult(context.allocator, initial_package_base, null, false);
         const coordinator_child = optionEnabled(invocation, "--coordinator-child");
         const supplied_digest = if (optionValue(invocation, "--review-digest")) |encoded|
             try parseReviewDigest(encoded)
@@ -742,8 +745,14 @@ const Real = struct {
         else
             null;
 
-        const initial_package_base = package_builds[0].variables.get("pkgbase") orelse
-            package_builds[0].pkg_name orelse return error.MissingPackageName;
+        var review = try Zigalpm.builder.preparePkgbuildReview(
+            context.allocator,
+            context.io,
+            build_directory,
+            pkgbuild_content,
+            package_builds,
+        );
+        defer review.deinit();
         const package_destination = if (optionValue(invocation, "--package-destination")) |path| blk: {
             try validatePackageDestination(path);
             break :blk path;
@@ -804,8 +813,7 @@ const Real = struct {
         defer builder.deinit();
         var final_review = try builder.prepareFinalReviewWithOperation(&operation);
         defer final_review.deinit();
-        const package_base = builder.package_builds[0].variables.get("pkgbase") orelse
-            builder.package_builds[0].pkg_name orelse return error.MissingPackageName;
+        const package_base = try packageBaseFromBuilds(builder.package_builds);
         try self.setPendingResult(context.allocator, package_base, null, false);
         const expected_digest = if (supplied_digest) |digest| digest: {
             if (!std.mem.eql(u8, &digest, &final_review.digest))
@@ -991,6 +999,14 @@ const BuildRequest = struct {
     }
 };
 
+fn packageBaseFromBuilds(
+    package_builds: []const Zigalpm.pkgbuild.parser.Pkgbuild,
+) ![]const u8 {
+    if (package_builds.len == 0) return error.MissingPackageName;
+    return package_builds[0].variables.get("pkgbase") orelse
+        package_builds[0].pkg_name orelse error.MissingPackageName;
+}
+
 /// Parses the PKGBUILD targeted by the invocation once per requested
 /// split-package member, shared by the pre-elevation check and the elevated
 /// coordinator.
@@ -1094,13 +1110,18 @@ fn runIsolatedCoordinator(
     invocation: *const parser.Invocation,
 ) !BuildCommandResult {
     if (!elevation.isRoot()) return error.ElevationRequired;
+    var request = try parseBuildRequest(context, invocation);
+    defer request.deinit(context);
+    try runner.setPendingResult(
+        context.allocator,
+        try packageBaseFromBuilds(request.package_builds),
+        null,
+        true,
+    );
     const invoking_ids = (try elevation.invokingUserIds(context)) orelse
         return error.InvokingUserUnavailable;
     if (optionEnabled(invocation, "--sign") and !optionEnabled(invocation, "--nosign"))
         return error.IsolatedSigningUnsupported;
-
-    var request = try parseBuildRequest(context, invocation);
-    defer request.deinit(context);
     // Isolated export deliberately never creates the host job directory. Its
     // existence is part of the caller's ownership boundary and is verified
     // before the expensive root provisioning begins.
@@ -1117,7 +1138,13 @@ fn runIsolatedCoordinator(
     var completion: Zigalpm.OperationCompletionStatus = .failed;
     defer operation.finish(completion);
 
-    var review = try captureIsolatedReview(context, operation_context, invocation, request.pkgbuild_path);
+    var review = try captureCoordinatorReview(
+        context,
+        operation_context,
+        invocation,
+        request.pkgbuild_path,
+        .isolated,
+    );
     defer review.deinit(context.allocator);
     try runner.setPendingResult(context.allocator, review.package_base, null, true);
     const pkgbuild_content = try std.Io.Dir.cwd().readFileAlloc(
@@ -1420,6 +1447,14 @@ fn runSyncDepsCoordinator(
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
 ) !void {
+    var request = try parseBuildRequest(context, invocation);
+    defer request.deinit(context);
+    try runner.setPendingResult(
+        context.allocator,
+        try packageBaseFromBuilds(request.package_builds),
+        null,
+        false,
+    );
     if (!elevation.isRoot()) {
         try context.stderr.print(
             "Cannot install build dependencies without elevated privileges.\n",
@@ -1428,8 +1463,30 @@ fn runSyncDepsCoordinator(
         return error.ElevationRequired;
     }
 
-    var request = try parseBuildRequest(context, invocation);
-    defer request.deinit(context);
+    const supplied_digest = if (optionValue(invocation, "--review-digest")) |encoded|
+        try parseReviewDigest(encoded)
+    else
+        null;
+    var coordinator_review: ?CapturedReview = null;
+    defer if (coordinator_review) |*review| review.deinit(context.allocator);
+    if (supplied_digest) |digest| {
+        coordinator_review = try captureCoordinatorReview(
+            context,
+            operation_context,
+            invocation,
+            request.pkgbuild_path,
+            .host,
+        );
+        const review = &coordinator_review.?;
+        try acceptAutomationReview(
+            runner,
+            context.allocator,
+            review.package_base,
+            review.digest,
+            digest,
+            false,
+        );
+    }
 
     const manager = try Zigalpm.AlpmManager.init(
         context.allocator,
@@ -1452,12 +1509,19 @@ fn runSyncDepsCoordinator(
     var backend_context: AlpmResolverContext = .{ .manager = manager };
     const backend = backend_context.backend();
 
-    var plan = try resolveSyncDependencies(
-        context.allocator,
-        request.package_builds,
-        request.no_check,
-        backend,
-    );
+    var plan = if (coordinator_review) |*review|
+        try dependencyPlanFromReview(
+            context.allocator,
+            review.repository_dependencies,
+            review.aur_dependencies,
+        )
+    else
+        try resolveSyncDependencies(
+            context.allocator,
+            request.package_builds,
+            request.no_check,
+            backend,
+        );
     defer plan.deinit(context.allocator);
 
     if (plan.aur_dependencies.len > 0) {
@@ -1520,6 +1584,22 @@ fn runSyncDepsCoordinator(
     };
 
     if (exit_code != 0) return error.BuildFailed;
+}
+
+fn acceptAutomationReview(
+    runner: *Real,
+    allocator: std.mem.Allocator,
+    package_base: []const u8,
+    reviewed_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8,
+    supplied_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8,
+    isolated: bool,
+) !void {
+    // Keep the digest null until every reviewed input has matched. This makes
+    // failure JSON distinguish an accepted review from a rejected request.
+    try runner.setPendingResult(allocator, package_base, null, isolated);
+    if (!std.mem.eql(u8, &supplied_digest, &reviewed_digest))
+        return error.ReviewedPkgbuildChanged;
+    runner.result.?.review_digest = supplied_digest;
 }
 
 fn checkOverride(invocation: *const parser.Invocation) ?bool {
@@ -1592,6 +1672,44 @@ const SyncDependencyPlan = struct {
         self.* = undefined;
     }
 };
+
+fn dependencyPlanFromReview(
+    allocator: std.mem.Allocator,
+    repository_dependencies: []const []const u8,
+    aur_dependencies: []const []const u8,
+) !SyncDependencyPlan {
+    const repo = try allocator.alloc(
+        Zigalpm.aur.dependency_resolver.RepoDependency,
+        repository_dependencies.len,
+    );
+    var repo_count: usize = 0;
+    errdefer {
+        for (repo[0..repo_count]) |dependency| allocator.free(dependency.name);
+        allocator.free(repo);
+    }
+    for (repository_dependencies, repo) |name, *dependency| {
+        dependency.* = .{
+            .name = try allocator.dupe(u8, name),
+            // Roles have already influenced dependency selection during the
+            // reviewed evaluation. The coordinator only needs names for its
+            // all-dependencies transaction and delta-based cleanup.
+            .role = .runtime,
+        };
+        repo_count += 1;
+    }
+
+    const aur = try allocator.alloc([]u8, aur_dependencies.len);
+    var aur_count: usize = 0;
+    errdefer {
+        for (aur[0..aur_count]) |name| allocator.free(name);
+        allocator.free(aur);
+    }
+    for (aur_dependencies, aur) |name, *owned_name| {
+        owned_name.* = try allocator.dupe(u8, name);
+        aur_count += 1;
+    }
+    return .{ .repo_dependencies = repo, .aur_dependencies = aur };
+}
 
 /// Resolves dependencies for every requested split-package member and merges
 /// the results, keeping the strongest role per repository package and a
@@ -2064,14 +2182,22 @@ fn writeReviewOnlyJson(writer: *std.Io.Writer, result: *ReviewOnlyResult) !void 
     try json.endObject();
 }
 
-fn isolatedReviewArguments(
+const CoordinatorReviewDependencyMode = enum {
+    host,
+    isolated,
+};
+
+fn coordinatorReviewArguments(
     allocator: std.mem.Allocator,
     invocation: *const parser.Invocation,
     pkgbuild_path: []const u8,
+    dependency_mode: CoordinatorReviewDependencyMode,
 ) ![]const []const u8 {
     var arguments: std.ArrayList([]const u8) = .empty;
     defer arguments.deinit(allocator);
     try arguments.appendSlice(allocator, &.{ "build", "--review-only", "--review-dependencies", "--json", "--no-confirm" });
+    if (dependency_mode == .host)
+        try arguments.append(allocator, "--review-host-dependencies");
     for (invocation.options) |option| {
         if (!std.mem.eql(u8, option.name, "--package")) continue;
         try arguments.append(allocator, "--package");
@@ -2081,13 +2207,19 @@ fn isolatedReviewArguments(
     return arguments.toOwnedSlice(allocator);
 }
 
-fn captureIsolatedReview(
+fn captureCoordinatorReview(
     context: *runtime.RuntimeContext,
     operation_context: *Zigalpm.OperationContext,
     invocation: *const parser.Invocation,
     pkgbuild_path: []const u8,
+    dependency_mode: CoordinatorReviewDependencyMode,
 ) !CapturedReview {
-    const arguments = try isolatedReviewArguments(context.allocator, invocation, pkgbuild_path);
+    const arguments = try coordinatorReviewArguments(
+        context.allocator,
+        invocation,
+        pkgbuild_path,
+        dependency_mode,
+    );
     defer context.allocator.free(arguments);
     const captured = (try elevation.runAsInvokingUserCapture(context, arguments, operation_context)) orelse
         return error.InvokingUserUnavailable;
@@ -2823,6 +2955,105 @@ test "build JSON failure uses the same envelope and structured error" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"artifacts\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"code\":\"ReviewedPkgbuildChanged\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "The reviewed PKGBUILD inputs changed.") != null);
+}
+
+test "automation review mismatch retains package context without accepting the digest" {
+    const allocator = std.testing.allocator;
+    var runner: Real = .{};
+    defer runner.deinit(allocator);
+    const reviewed = [_]u8{0x5a} ** std.crypto.hash.sha2.Sha256.digest_length;
+    const supplied = [_]u8{0xa5} ** std.crypto.hash.sha2.Sha256.digest_length;
+
+    try std.testing.expectError(
+        error.ReviewedPkgbuildChanged,
+        acceptAutomationReview(&runner, allocator, "evaluated-base", reviewed, supplied, false),
+    );
+    try std.testing.expectEqualStrings("evaluated-base", runner.result.?.package_base);
+    try std.testing.expect(runner.result.?.review_digest == null);
+
+    try runner.setFailure(allocator, error.ReviewedPkgbuildChanged);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try writeBuildJson(&output.writer, runner.result, error.ReviewedPkgbuildChanged, false);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\"packageBase\":\"evaluated-base\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\"reviewDigest\":null") != null);
+}
+
+test "accepted automation review remains in later coordinator failure JSON" {
+    const allocator = std.testing.allocator;
+    var runner: Real = .{};
+    defer runner.deinit(allocator);
+    const digest = [_]u8{0x5a} ** std.crypto.hash.sha2.Sha256.digest_length;
+    try acceptAutomationReview(&runner, allocator, "evaluated-base", digest, digest, false);
+    try runner.setFailure(allocator, error.SyncDbFailed);
+
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try writeBuildJson(&output.writer, runner.result, error.SyncDbFailed, false);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\"packageBase\":\"evaluated-base\"") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        output.written(),
+        "\"reviewDigest\":\"" ++ ("5a" ** std.crypto.hash.sha2.Sha256.digest_length) ++ "\"",
+    ) != null);
+}
+
+test "coordinator dependency plans own the evaluated review dependencies" {
+    const allocator = std.testing.allocator;
+    var plan = try dependencyPlanFromReview(
+        allocator,
+        &.{ "cmake", "ninja" },
+        &.{"aur-tool"},
+    );
+    defer plan.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), plan.repo_dependencies.len);
+    try std.testing.expectEqualStrings("cmake", plan.repo_dependencies[0].name);
+    try std.testing.expectEqualStrings("ninja", plan.repo_dependencies[1].name);
+    try std.testing.expectEqual(@as(usize, 1), plan.aur_dependencies.len);
+    try std.testing.expectEqualStrings("aur-tool", plan.aur_dependencies[0]);
+}
+
+test "coordinator review arguments select host or isolated dependency state" {
+    const spec = @import("../cli/spec.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const manifest = try spec.Manifest.load(arena.allocator());
+    const digest_text = "5a" ** std.crypto.hash.sha2.Sha256.digest_length;
+    const outcome = try parser.parse(arena.allocator(), &manifest, &.{
+        "build",
+        "--sync-deps",
+        "--review-digest",
+        digest_text,
+        "--package",
+        "demo",
+        "/host/PKGBUILD",
+    });
+
+    const host = try coordinatorReviewArguments(
+        std.testing.allocator,
+        &outcome.dispatch,
+        "/host/PKGBUILD",
+        .host,
+    );
+    defer std.testing.allocator.free(host);
+    try std.testing.expect(containsString(host, "--review-dependencies"));
+    try std.testing.expect(containsString(host, "--review-host-dependencies"));
+    try std.testing.expect(containsString(host, "demo"));
+    try std.testing.expect(!containsString(host, "--review-digest"));
+    try std.testing.expect(!containsString(host, digest_text));
+    const parsed_host = try parser.parse(arena.allocator(), &manifest, host);
+    try std.testing.expect(optionEnabled(&parsed_host.dispatch, "--review-only"));
+    try std.testing.expect(optionEnabled(&parsed_host.dispatch, "--review-host-dependencies"));
+
+    const isolated = try coordinatorReviewArguments(
+        std.testing.allocator,
+        &outcome.dispatch,
+        "/host/PKGBUILD",
+        .isolated,
+    );
+    defer std.testing.allocator.free(isolated);
+    try std.testing.expect(containsString(isolated, "--review-dependencies"));
+    try std.testing.expect(!containsString(isolated, "--review-host-dependencies"));
 }
 
 test "isolated argument rewriting removes JSON and both package destination spellings" {

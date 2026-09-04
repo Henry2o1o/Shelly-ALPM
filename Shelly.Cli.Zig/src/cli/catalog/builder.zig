@@ -36,6 +36,7 @@ pub const variants = [_]types.Variant{.{
         flag("--isolated", &.{"-i"}, "Builds as an unprivileged user in a fresh systemd-nspawn root"),
         hiddenFlag("--coordinator-child", "Runs as a non-root child of an elevated package operation"),
         hiddenFlag("--review-dependencies", "Includes evaluated dependency resolution in coordinator review transport"),
+        hiddenFlag("--review-host-dependencies", "Resolves coordinator review dependencies against the host package state"),
         hiddenStringOption("--package", "Builds only the selected split-package member; repeatable"),
         hiddenFlag("--skip-source-pgp-verification", "Skips source PGP verification for coordinator builds"),
         hiddenFlag("--no-overwrite", "Rejects an existing package artifact"),
