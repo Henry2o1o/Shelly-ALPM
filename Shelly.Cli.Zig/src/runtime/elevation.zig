@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const Zigalpm = @import("Zigalpm");
 const context_module = @import("context.zig");
 
 pub const Error = error{
@@ -119,6 +120,98 @@ pub fn runAsInvokingUser(
     });
     errdefer child.kill(context.io);
     return @as(?u8, try exitCode(try child.wait(context.io)));
+}
+
+pub const CapturedRun = struct {
+    exit_code: u8,
+    stdout: []u8,
+
+    pub fn deinit(self: CapturedRun, allocator: std.mem.Allocator) void {
+        allocator.free(self.stdout);
+    }
+};
+
+/// Runs Shelly as the original user while retaining its stdout. Stderr stays
+/// inherited so a coordinator can forward progress without contaminating a
+/// machine-readable result document.
+pub fn runAsInvokingUserCapture(
+    context: *context_module.RuntimeContext,
+    arguments: []const []const u8,
+    operation_context: *Zigalpm.OperationContext,
+) !?CapturedRun {
+    const identity = (try invokingUser(context)) orelse return null;
+    defer identity.deinit(context.allocator);
+    const home = try invokingUserHome(context, identity.username);
+    defer context.allocator.free(home);
+    const executable_allocated = try std.process.executablePathAlloc(context.io, context.allocator);
+    defer context.allocator.free(executable_allocated);
+    const executable = std.mem.trimEnd(u8, executable_allocated, " (deleted)");
+    const home_environment = try std.fmt.allocPrint(context.allocator, "HOME={s}", .{home});
+    defer context.allocator.free(home_environment);
+    const config_environment = try std.fmt.allocPrint(context.allocator, "XDG_CONFIG_HOME={s}/.config", .{home});
+    defer context.allocator.free(config_environment);
+    const data_environment = try std.fmt.allocPrint(context.allocator, "XDG_DATA_HOME={s}/.local/share", .{home});
+    defer context.allocator.free(data_environment);
+    const cache_environment = try std.fmt.allocPrint(context.allocator, "XDG_CACHE_HOME={s}/.cache", .{home});
+    defer context.allocator.free(cache_environment);
+    const bin_environment = try std.fmt.allocPrint(context.allocator, "XDG_BIN_HOME={s}/.local/bin", .{home});
+    defer context.allocator.free(bin_environment);
+    const runtime_environment = try std.fmt.allocPrint(context.allocator, "XDG_RUNTIME_DIR=/run/user/{s}", .{identity.uid});
+    defer context.allocator.free(runtime_environment);
+    const bus_environment = try std.fmt.allocPrint(context.allocator, "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{s}/bus", .{identity.uid});
+    defer context.allocator.free(bus_environment);
+    const child_arguments = try buildInvokingUserArguments(
+        context.allocator,
+        findElevator(context),
+        identity.username,
+        executable,
+        home_environment,
+        config_environment,
+        data_environment,
+        cache_environment,
+        bin_environment,
+        runtime_environment,
+        bus_environment,
+        arguments,
+    );
+    defer context.allocator.free(child_arguments);
+
+    var child = try std.process.spawn(context.io, .{
+        .argv = child_arguments,
+        .stdin = .inherit,
+        .stdout = .pipe,
+        .stderr = .inherit,
+    });
+    errdefer child.kill(context.io);
+    const Cancellation = struct {
+        child: *std.process.Child,
+        io: std.Io,
+        cancelled: std.atomic.Value(bool) = .init(false),
+
+        fn cancel(data: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(data.?));
+            self.cancelled.store(true, .release);
+            self.child.kill(self.io);
+        }
+    };
+    var cancellation: Cancellation = .{ .child = &child, .io = context.io };
+    const subscription = try operation_context.subscribeCancellation(.{
+        .function = Cancellation.cancel,
+        .data = &cancellation,
+    });
+    defer {
+        _ = operation_context.unsubscribeCancellation(subscription);
+        operation_context.waitForCancellationCallbacks();
+    }
+    if (operation_context.isCancelled()) Cancellation.cancel(&cancellation);
+    var buffered: std.Io.Writer.Allocating = .init(context.allocator);
+    errdefer buffered.deinit();
+    var read_buffer: [64 * 1024]u8 = undefined;
+    var reader = child.stdout.?.reader(context.io, &read_buffer);
+    _ = try reader.interface.streamRemaining(&buffered.writer);
+    const code = try exitCode(try child.wait(context.io));
+    if (cancellation.cancelled.load(.acquire)) return error.Cancelled;
+    return .{ .exit_code = code, .stdout = try buffered.toOwnedSlice() };
 }
 
 pub const UserIds = struct {

@@ -214,6 +214,13 @@ fn digestLoadedReview(pkgbuild_content: []const u8, files: anytype) Digest {
     return digest;
 }
 
+/// Computes the canonical digest from already-owned PKGBUILD and related-file
+/// snapshots. Coordinators use this before provisioning so a PKGBUILD changed
+/// after review is rejected without reopening or restaging related inputs.
+pub fn digestPreparedReview(pkgbuild_content: []const u8, files: anytype) Digest {
+    return digestLoadedReview(pkgbuild_content, files);
+}
+
 fn digestReview(
     allocator: std.mem.Allocator,
     io: std.Io,
