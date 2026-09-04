@@ -3,6 +3,9 @@
 `shelly build --isolated` executes the native Shelly package builder in a
 fresh, operation-scoped Arch root through `systemd-nspawn`.
 
+The stable JSON schemas, capability probe, and exit behavior for unattended
+callers are defined by the [Remora automation contract](remora-automation.md).
+
 The elevated process is a coordinator only. It reviews the host PKGBUILD and
 local inputs, materializes only those byte-exact reviewed inputs in the guest,
 provisions the guest with Shelly's libalpm-based `shellystrap` helper, and
