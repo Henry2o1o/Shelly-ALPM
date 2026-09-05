@@ -60,9 +60,9 @@ pub fn main(init: std.process.Init) !void {
     const effective_environment_map = proxy_environment.map(init.environ_map);
     Zigalpm.HttpClient.setDefaultProxyEnvironment(effective_environment_map);
 
-    const graceful_cancellation = for (effective_arguments) |argument| {
-        if (std.mem.eql(u8, argument, "--isolated")) break true;
-    } else false;
+    const graceful_cancellation = Shelly_Cli_Zig.signals.argumentsRequestGracefulCancellation(
+        effective_arguments,
+    );
     Shelly_Cli_Zig.signals.installInterruptHandler(graceful_cancellation);
     var session_log = Shelly_Cli_Zig.log.SessionLog.tryOpen(io);
     defer if (session_log) |*log| log.close();

@@ -29,6 +29,14 @@ the operation boundary, and is removed after success, failure, or
 cancellation. Artifacts are copied out explicitly and returned to the user who
 authorized elevation. Existing artifacts are rejected with `--no-overwrite`.
 
+SIGINT and SIGTERM are handled gracefully across the initial privilege
+elevation boundary. Sending either signal to the original, unprivileged Shelly
+process forwards cancellation to the elevator and elevated coordinator, waits
+for the active child tree to stop, and then lets the coordinator unwind its
+normal cleanup. If a child does not stop, Shelly escalates to SIGTERM and then
+SIGKILL. A cancelled JSON build still emits exactly one result document and
+exits with status 130.
+
 Requirements:
 
 - `systemd-nspawn` (provided by Arch's `systemd` package)
@@ -68,4 +76,21 @@ Run the root-required smoke test from a normal user session with:
 
 ```sh
 Shelly.Cli.Zig/scripts/test-isolated-build.sh
+```
+
+Cancellation across the elevation boundary has a rootless integration fixture
+that uses a deterministic fake elevator:
+
+```sh
+Shelly.Cli.Zig/scripts/test-elevation-cancellation.sh
+```
+
+The full fixture requires a working invoking-user-preserving elevator and the
+same privileges as a real isolated build. It sends SIGINT and SIGTERM only to
+the original Shelly process and verifies that nspawn descendants and the
+operation root are gone. When sudo is selected, the fixture authenticates once
+in the foreground before starting Shelly as the background process under test:
+
+```sh
+Shelly.Cli.Zig/scripts/test-isolated-cancellation.sh
 ```
