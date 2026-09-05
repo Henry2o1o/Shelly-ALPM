@@ -271,6 +271,11 @@ package first); for bash and zsh use a clean shell, and regenerate
 - [ ] Root/sudo operations work correctly
 - [ ] Permission errors are handled gracefully
 - [ ] User is prompted for elevation when needed
+- [ ] `Shelly.Cli.Zig/scripts/test-elevation-cancellation.sh` passes without
+  privileges for both SIGINT and SIGTERM
+- [ ] From a normal user session with a working elevator,
+  `Shelly.Cli.Zig/scripts/test-isolated-cancellation.sh` exits successfully and
+  leaves neither nspawn descendants nor an isolated operation directory
 
 ### File System
 

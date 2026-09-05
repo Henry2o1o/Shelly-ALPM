@@ -62,17 +62,80 @@ pub fn dispatch(
     if (shouldElevateBuildCoordinator(invocation, elevation.isRoot())) {
         const elevated_arguments = try aur_url.argumentsWithEffectiveBase(context, invocation);
         defer context.allocator.free(elevated_arguments);
-        const elevated_exit = elevation.relaunchIfNeeded(context, elevated_arguments) catch |err| {
-            try context.stderr.print("Unable to elevate build dependency installation: {t}\n", .{err});
-            return 1;
-        };
-        if (elevated_exit) |exit_code| return exit_code;
+        if (isolatedRequested(invocation)) {
+            const elevated = elevation.relaunchIfNeededCancellable(
+                context,
+                elevated_arguments,
+                invocation.globals.json,
+            ) catch |err| {
+                try context.stderr.print("Unable to elevate isolated build: {t}\n", .{err});
+                if (invocation.globals.json) {
+                    try writeBuildJson(context.stdout, null, err, true);
+                    try context.stdout.writeByte('\n');
+                    try context.stdout.flush();
+                }
+                return exitCodeForBuildError(err);
+            };
+            if (elevated) |result| {
+                defer result.deinit(context.allocator);
+                if (invocation.globals.json)
+                    return try finishElevatedJsonBuild(context, result, true);
+                return result.exit_code;
+            }
+        } else {
+            const elevated_exit = elevation.relaunchIfNeeded(context, elevated_arguments) catch |err| {
+                try context.stderr.print("Unable to elevate build dependency installation: {t}\n", .{err});
+                return 1;
+            };
+            if (elevated_exit) |exit_code| return exit_code;
+        }
     }
     var runner: Real = .{};
     defer runner.deinit(context.allocator);
     if (invocation.globals.json)
         return try executeJson(context, invocation, &runner);
     return try executeWithRunner(context, invocation, &runner);
+}
+
+fn finishElevatedJsonBuild(
+    context: *runtime.RuntimeContext,
+    elevated: elevation.CancellableRelaunchResult,
+    isolated: bool,
+) !u8 {
+    const output = elevated.stdout orelse "";
+    const valid_json = isSingleJsonDocument(context.allocator, output);
+    if (valid_json and (!elevated.cancelled or isCancellationBuildJson(context.allocator, output))) {
+        try context.stdout.writeAll(output);
+        if (output.len == 0 or output[output.len - 1] != '\n')
+            try context.stdout.writeByte('\n');
+        try context.stdout.flush();
+        return elevated.exit_code;
+    }
+
+    const failure = if (elevated.cancelled) error.Cancelled else error.InvalidElevatedBuildResult;
+    try writeBuildJson(context.stdout, null, failure, isolated);
+    try context.stdout.writeByte('\n');
+    try context.stdout.flush();
+    return if (elevated.cancelled) 130 else 1;
+}
+
+fn isSingleJsonDocument(allocator: std.mem.Allocator, document: []const u8) bool {
+    if (document.len == 0) return false;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, document, .{}) catch return false;
+    defer parsed.deinit();
+    return parsed.value == .object;
+}
+
+fn isCancellationBuildJson(allocator: std.mem.Allocator, document: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, document, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const success = parsed.value.object.get("success") orelse return false;
+    if (success != .bool or success.bool) return false;
+    const failure = parsed.value.object.get("error") orelse return false;
+    if (failure != .object) return false;
+    const code = failure.object.get("code") orelse return false;
+    return code == .string and std.mem.eql(u8, code.string, "Cancelled");
 }
 
 const ReviewOnlyResult = struct {
@@ -2955,6 +3018,94 @@ test "build JSON failure uses the same envelope and structured error" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"artifacts\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"code\":\"ReviewedPkgbuildChanged\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "The reviewed PKGBUILD inputs changed.") != null);
+}
+
+test "cancelled initial elevation emits one JSON envelope without child output" {
+    const allocator = std.testing.allocator;
+    var stdout = std.Io.Writer.Allocating.init(allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const exit_code = try finishElevatedJsonBuild(&context, .{
+        .exit_code = 130,
+        .stdout = null,
+        .cancelled = true,
+    }, true);
+    try std.testing.expectEqual(@as(u8, 130), exit_code);
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stdout.written(), .{});
+    defer parsed.deinit();
+    try std.testing.expect(!parsed.value.object.get("success").?.bool);
+    try std.testing.expect(parsed.value.object.get("isolated").?.bool);
+    try std.testing.expectEqualStrings(
+        "Cancelled",
+        parsed.value.object.get("error").?.object.get("code").?.string,
+    );
+}
+
+test "cancelled initial elevation replaces partial child JSON" {
+    const allocator = std.testing.allocator;
+    var stdout = std.Io.Writer.Allocating.init(allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const partial = try allocator.dupe(u8, "{\"schemaVersion\":1");
+    const elevated: elevation.CancellableRelaunchResult = .{
+        .exit_code = 130,
+        .stdout = partial,
+        .cancelled = true,
+    };
+    defer elevated.deinit(allocator);
+    try std.testing.expectEqual(
+        @as(u8, 130),
+        try finishElevatedJsonBuild(&context, elevated, true),
+    );
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stdout.written(), .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings(
+        "Cancelled",
+        parsed.value.object.get("error").?.object.get("code").?.string,
+    );
+    try std.testing.expect(std.mem.count(u8, stdout.written(), "\"schemaVersion\"") == 1);
+}
+
+test "complete elevated cancellation JSON is forwarded unchanged" {
+    const allocator = std.testing.allocator;
+    var stdout = std.Io.Writer.Allocating.init(allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(allocator);
+    defer stderr.deinit();
+    var context: runtime.RuntimeContext = .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .stdout = &stdout.writer,
+        .stderr = &stderr.writer,
+    };
+    const document =
+        "{\"schemaVersion\":1,\"success\":false,\"error\":{\"code\":\"Cancelled\",\"message\":\"cancelled\"}}\n";
+    const owned_document = try allocator.dupe(u8, document);
+    const elevated: elevation.CancellableRelaunchResult = .{
+        .exit_code = 130,
+        .stdout = owned_document,
+        .cancelled = true,
+    };
+    defer elevated.deinit(allocator);
+    try std.testing.expectEqual(
+        @as(u8, 130),
+        try finishElevatedJsonBuild(&context, elevated, true),
+    );
+    try std.testing.expectEqualStrings(document, stdout.written());
 }
 
 test "automation review mismatch retains package context without accepting the digest" {
