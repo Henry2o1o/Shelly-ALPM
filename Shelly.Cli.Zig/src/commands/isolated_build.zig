@@ -5,15 +5,62 @@
 //! bind mounted into the container.
 
 const std = @import("std");
+const Zigalpm = @import("Zigalpm");
 
 pub const build_uid = "1000";
 pub const build_user = "shelly-build";
 pub const guest_source = "/build/source";
 pub const guest_artifacts = "/build/artifacts";
+
+/// Package identity retained from libalpm validation. Filenames are kept
+/// separately from package names because archive naming is not an API.
+pub const ValidatedArtifact = struct {
+    package_name: []u8,
+    filename: []u8,
+
+    pub fn deinit(self: ValidatedArtifact, allocator: std.mem.Allocator) void {
+        allocator.free(self.package_name);
+        allocator.free(self.filename);
+    }
+};
+
+pub fn deinitValidatedArtifacts(allocator: std.mem.Allocator, artifacts: []ValidatedArtifact) void {
+    for (artifacts) |artifact| artifact.deinit(allocator);
+    allocator.free(artifacts);
+}
+
+pub const ExportedArtifact = struct {
+    package_name: []u8,
+    path: []u8,
+
+    pub fn deinit(self: ExportedArtifact, allocator: std.mem.Allocator) void {
+        allocator.free(self.package_name);
+        allocator.free(self.path);
+    }
+};
+
+pub fn deinitExportedArtifacts(allocator: std.mem.Allocator, artifacts: []ExportedArtifact) void {
+    for (artifacts) |artifact| artifact.deinit(allocator);
+    allocator.free(artifacts);
+}
 const guest_executable_relative = "usr/local/libexec/shelly/shelly";
 pub const guest_executable = "/" ++ guest_executable_relative;
 
 const operation_parent = "/var/lib/shelly/build-roots/v1/operations";
+
+const BootstrapOutputContext = struct {
+    operation: *const Zigalpm.Operation,
+
+    fn handle(data: ?*anyopaque, stream: Zigalpm.process_runner.StreamKind, line: []const u8) void {
+        const self: *BootstrapOutputContext = @ptrCast(@alignCast(data.?));
+        self.operation.status(
+            if (stream == .stderr) .warning else .information,
+            line,
+            "build.isolation.bootstrap",
+            null,
+        );
+    }
+};
 
 pub const Root = struct {
     allocator: std.mem.Allocator,
@@ -56,6 +103,13 @@ pub const Root = struct {
         errdefer allocator.free(artifact_path);
         try std.Io.Dir.cwd().createDirPath(io, source_path);
         try std.Io.Dir.cwd().createDirPath(io, artifact_path);
+        const marker_path = try std.fs.path.join(allocator, &.{ root_path, Zigalpm.alpm.bootstrap.marker_name });
+        defer allocator.free(marker_path);
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = marker_path,
+            .data = "managed by shelly isolated build\n",
+            .flags = .{ .permissions = .fromMode(0o600) },
+        });
 
         return .{
             .allocator = allocator,
@@ -77,35 +131,51 @@ pub const Root = struct {
         self.* = undefined;
     }
 
-    /// Bootstraps a clean Arch root. pacstrap is restricted to provisioning;
-    /// the package build itself is always Shelly's native builder in nspawn.
-    pub fn bootstrap(self: *Root, extra_packages: []const []const u8) !void {
-        var argv: std.ArrayList([]const u8) = .empty;
-        defer argv.deinit(self.allocator);
-        try argv.appendSlice(self.allocator, &.{
-            "/usr/bin/pacstrap",
-            "-C",
-            "/etc/pacman.conf",
-            "-c",
+    /// Bootstraps a clean Arch root through Shelly's own libalpm backend. The
+    /// helper process is isolated in a private mount/PID namespace so package
+    /// scriptlets receive the standard virtual filesystems without introducing
+    /// mounts into the coordinator's namespace.
+    pub fn bootstrap(
+        self: *Root,
+        environ: std.process.Environ,
+        executable: []const u8,
+        extra_packages: []const []const u8,
+        operation: *const Zigalpm.Operation,
+    ) !void {
+        const argv = try shellystrapArguments(
+            self.allocator,
+            executable,
             self.root_path,
-            "base",
-            "base-devel",
-            "git",
-            "ca-certificates",
-        });
-        try argv.appendSlice(self.allocator, extra_packages);
-        try runInherited(self.io, argv.items);
+            extra_packages,
+        );
+        defer self.allocator.free(argv);
+        var output_context: BootstrapOutputContext = .{ .operation = operation };
+        const exit_code = try Zigalpm.process_runner.runStreamingWithEnvironmentOperation(
+            self.allocator,
+            self.io,
+            environ,
+            argv,
+            null,
+            null,
+            .{ .function = BootstrapOutputContext.handle, .data = &output_context },
+            operation,
+        );
+        if (exit_code != 0) return error.IsolatedBootstrapFailed;
+
+        const marker_path = try self.rootJoin(Zigalpm.alpm.bootstrap.marker_name);
+        defer self.allocator.free(marker_path);
+        std.Io.Dir.cwd().deleteFile(self.io, marker_path) catch {};
 
         const root_argument = try std.fmt.allocPrint(self.allocator, "--root={s}", .{self.root_path});
         defer self.allocator.free(root_argument);
-        try runInherited(self.io, &.{
+        try self.runCancellable(environ, &.{
             "/usr/bin/systemd-sysusers",
             root_argument,
             "--inline",
             "g shelly-build 1000",
             "--inline",
             "u shelly-build 1000:1000 \"Shelly build user\" /home/shelly-build /usr/bin/bash",
-        });
+        }, operation);
 
         const home_path = try self.rootJoin("home/shelly-build");
         defer self.allocator.free(home_path);
@@ -122,7 +192,7 @@ pub const Root = struct {
         try std.Io.Dir.cwd().createDirPath(self.io, work_path);
         try std.Io.Dir.cwd().createDirPath(self.io, sources_path);
         try std.Io.Dir.cwd().createDirPath(self.io, logs_path);
-        try runInherited(self.io, &.{
+        try self.runCancellable(environ, &.{
             "/usr/bin/chown",
             "-R",
             "--",
@@ -133,7 +203,7 @@ pub const Root = struct {
             sources_path,
             logs_path,
             home_path,
-        });
+        }, operation);
     }
 
     /// Materializes only byte-exact inputs accepted by the host review. This
@@ -141,19 +211,21 @@ pub const Root = struct {
     /// guest, and makes the guest digest check independent of copy timing.
     pub fn stageReviewedInputs(
         self: *Root,
+        environ: std.process.Environ,
         pkgbuild_contents: []const u8,
         reviewed_files: anytype,
+        operation: *const Zigalpm.Operation,
     ) !void {
         try self.writeReviewedInput("PKGBUILD", pkgbuild_contents, 0o644);
         for (reviewed_files) |file|
             try self.writeReviewedInput(file.name, file.contents, file.permissions);
-        try runInherited(self.io, &.{
+        try self.runCancellable(environ, &.{
             "/usr/bin/chown",
             "-R",
             "--",
             "1000:1000",
             self.source_path,
-        });
+        }, operation);
     }
 
     fn writeReviewedInput(
@@ -194,19 +266,25 @@ pub const Root = struct {
         });
     }
 
-    pub fn run(self: *Root, child_arguments: []const []const u8) !void {
+    pub fn run(
+        self: *Root,
+        environ: std.process.Environ,
+        child_arguments: []const []const u8,
+        operation: *const Zigalpm.Operation,
+    ) !void {
         const argv = try nspawnArguments(self.allocator, self.root_path, child_arguments);
         defer self.allocator.free(argv);
-        try runInherited(self.io, argv);
+        try self.runCancellable(environ, argv, operation);
     }
 
     pub fn exportArtifacts(
         self: *Root,
         destination: []const u8,
+        validated_artifacts: []const ValidatedArtifact,
         overwrite: bool,
         owner_uid: std.Io.File.Uid,
         owner_gid: std.Io.File.Gid,
-    ) !usize {
+    ) ![]ExportedArtifact {
         var directory = try std.Io.Dir.cwd().openDir(self.io, self.artifact_path, .{ .iterate = true });
         defer directory.close(self.io);
         // The destination must already exist. Opening it once gives every
@@ -214,10 +292,12 @@ pub const Root = struct {
         // untrusted user concurrently changes the path name.
         var destination_directory = try std.Io.Dir.cwd().openDir(self.io, destination, .{ .iterate = true });
         defer destination_directory.close(self.io);
-        var iterator = directory.iterate();
-        var count: usize = 0;
-        while (try iterator.next(self.io)) |entry| {
-            if (entry.kind != .file or !isPackageArtifact(entry.name)) continue;
+        var exported: std.ArrayList(ExportedArtifact) = .empty;
+        errdefer {
+            for (exported.items) |artifact| artifact.deinit(self.allocator);
+            exported.deinit(self.allocator);
+        }
+        for (validated_artifacts) |validated| {
             var random: [16]u8 = undefined;
             self.io.random(&random);
             const suffix = std.fmt.bytesToHex(random, .lower);
@@ -228,15 +308,17 @@ pub const Root = struct {
                 .{suffix},
             );
 
-            var source = try directory.openFile(self.io, entry.name, .{});
-            defer source.close(self.io);
+            var source = try directory.openFile(self.io, validated.filename, .{});
+            var source_open = true;
+            defer if (source_open) source.close(self.io);
             var temporary = try destination_directory.createFile(self.io, temporary_name, .{
                 .exclusive = true,
                 .permissions = .fromMode(0o644),
             });
+            var temporary_open = true;
             var temporary_exists = true;
             defer {
-                temporary.close(self.io);
+                if (temporary_open) temporary.close(self.io);
                 if (temporary_exists)
                     destination_directory.deleteFile(self.io, temporary_name) catch {};
             }
@@ -247,19 +329,26 @@ pub const Root = struct {
             _ = try reader.interface.streamRemaining(&writer.interface);
             try writer.interface.flush();
             try temporary.setOwner(self.io, owner_uid, owner_gid);
+            // Both descriptors are closed before publication, so a returned
+            // artifact is guaranteed to be completely flushed and no guest
+            // archive remains open across the atomic rename.
+            temporary.close(self.io);
+            temporary_open = false;
+            source.close(self.io);
+            source_open = false;
 
             if (overwrite) {
                 try destination_directory.rename(
                     temporary_name,
                     destination_directory,
-                    entry.name,
+                    validated.filename,
                     self.io,
                 );
             } else {
                 destination_directory.renamePreserve(
                     temporary_name,
                     destination_directory,
-                    entry.name,
+                    validated.filename,
                     self.io,
                 ) catch |err| switch (err) {
                     error.PathAlreadyExists => return error.ArtifactAlreadyExists,
@@ -267,16 +356,79 @@ pub const Root = struct {
                 };
             }
             temporary_exists = false;
-            count += 1;
+            const package_name = try self.allocator.dupe(u8, validated.package_name);
+            errdefer self.allocator.free(package_name);
+            const path = try std.fs.path.join(self.allocator, &.{ destination, validated.filename });
+            try exported.append(self.allocator, .{
+                .package_name = package_name,
+                .path = path,
+            });
         }
-        if (count == 0) return error.NoBuildArtifacts;
-        return count;
+        if (exported.items.len == 0) return error.NoBuildArtifacts;
+        return exported.toOwnedSlice(self.allocator);
     }
 
     fn rootJoin(self: *Root, relative: []const u8) ![]u8 {
         return std.fs.path.join(self.allocator, &.{ self.root_path, relative });
     }
+
+    fn runCancellable(
+        self: *Root,
+        environ: std.process.Environ,
+        argv: []const []const u8,
+        operation: *const Zigalpm.Operation,
+    ) !void {
+        var output_context: BootstrapOutputContext = .{ .operation = operation };
+        const exit_code = try Zigalpm.process_runner.runStreamingWithEnvironmentOperation(
+            self.allocator,
+            self.io,
+            environ,
+            argv,
+            null,
+            null,
+            .{ .function = BootstrapOutputContext.handle, .data = &output_context },
+            operation,
+        );
+        if (exit_code != 0) return error.IsolatedCommandFailed;
+    }
 };
+
+/// Constructs the re-exec boundary used instead of pacstrap. All returned
+/// strings are borrowed; only the slice itself is owned by the caller.
+pub fn shellystrapArguments(
+    allocator: std.mem.Allocator,
+    executable: []const u8,
+    root_path: []const u8,
+    extra_packages: []const []const u8,
+) ![]const []const u8 {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.appendSlice(allocator, &.{
+        "/usr/bin/unshare",
+        "--fork",
+        "--pid",
+        "--mount",
+        "--propagation",
+        "private",
+        "--kill-child=KILL",
+        "--forward-signals",
+        executable,
+        Zigalpm.alpm.bootstrap.wrapper_argument,
+        "--root",
+        root_path,
+        "--config",
+        "/etc/pacman.conf",
+        "--gpgdir",
+        "/etc/pacman.d/gnupg",
+        "--",
+        "base",
+        "base-devel",
+        "git",
+        "ca-certificates",
+    });
+    try argv.appendSlice(allocator, extra_packages);
+    return argv.toOwnedSlice(allocator);
+}
 
 pub fn nspawnArguments(
     allocator: std.mem.Allocator,
@@ -342,19 +494,28 @@ pub fn isPackageArtifact(name: []const u8) bool {
     return true;
 }
 
-fn runInherited(io: std.Io, argv: []const []const u8) !void {
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .inherit,
-        .stdout = .inherit,
-        .stderr = .inherit,
-    });
-    errdefer child.kill(io);
-    const term = try child.wait(io);
-    switch (term) {
-        .exited => |code| if (code != 0) return error.IsolatedCommandFailed,
-        else => return error.IsolatedCommandFailed,
-    }
+test "shellystrap invocation uses a private cancellable namespace and native helper" {
+    const root_path = "/var/lib/shelly/build-roots/v1/operations/0123456789abcdef0123456789abcdef/root";
+    const argv = try shellystrapArguments(
+        std.testing.allocator,
+        "/usr/bin/shelly",
+        root_path,
+        &.{ "cmake", "ninja" },
+    );
+    defer std.testing.allocator.free(argv);
+
+    try std.testing.expectEqualStrings("/usr/bin/unshare", argv[0]);
+    try std.testing.expect(containsArgument(argv, "--mount"));
+    try std.testing.expect(containsArgument(argv, "--pid"));
+    try std.testing.expect(containsArgument(argv, "private"));
+    try std.testing.expect(containsArgument(argv, "--kill-child=KILL"));
+    try std.testing.expect(containsArgument(argv, "--forward-signals"));
+    try std.testing.expect(containsArgument(argv, Zigalpm.alpm.bootstrap.wrapper_argument));
+    try std.testing.expect(containsArgument(argv, root_path));
+    try std.testing.expect(containsArgument(argv, "base-devel"));
+    try std.testing.expect(containsArgument(argv, "cmake"));
+    try std.testing.expect(containsArgument(argv, "ninja"));
+    try std.testing.expect(!containsArgument(argv, "/usr/bin/pacstrap"));
 }
 
 test "nspawn invocation is unprivileged namespaced and contains no host binds" {
@@ -430,4 +591,82 @@ test "artifact export accepts package archives but not detached signatures" {
     try std.testing.expect(isPackageArtifact("demo-1-1-any.pkg.tar.zst"));
     try std.testing.expect(!isPackageArtifact("demo-1-1-any.pkg.tar.zst.sig"));
     try std.testing.expect(!isPackageArtifact("build.log"));
+}
+
+test "artifact export returns validated package names and exact final absolute paths" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.createDirPath(io, "guest");
+    try temporary.dir.createDirPath(io, "destination");
+    try temporary.dir.writeFile(io, .{
+        .sub_path = "guest/demo-1-1-any.pkg.tar.zst",
+        .data = "archive bytes",
+    });
+    const root_path = try temporary.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root_path);
+    const artifact_path = try temporary.dir.realPathFileAlloc(io, "guest", allocator);
+    defer allocator.free(artifact_path);
+    const destination = try temporary.dir.realPathFileAlloc(io, "destination", allocator);
+    defer allocator.free(destination);
+    var root: Root = .{
+        .allocator = allocator,
+        .io = io,
+        .operation_path = root_path,
+        .root_path = root_path,
+        .source_path = root_path,
+        .artifact_path = artifact_path,
+    };
+    const validated = [_]ValidatedArtifact{.{
+        .package_name = @constCast("demo"),
+        .filename = @constCast("demo-1-1-any.pkg.tar.zst"),
+    }};
+    const exported = try root.exportArtifacts(
+        destination,
+        &validated,
+        false,
+        @intCast(std.os.linux.geteuid()),
+        @intCast(std.os.linux.getegid()),
+    );
+    defer deinitExportedArtifacts(allocator, exported);
+    try std.testing.expectEqual(@as(usize, 1), exported.len);
+    try std.testing.expectEqualStrings("demo", exported[0].package_name);
+    const expected = try std.fs.path.join(allocator, &.{ destination, "demo-1-1-any.pkg.tar.zst" });
+    defer allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, exported[0].path);
+    const contents = try temporary.dir.readFileAlloc(
+        io,
+        "destination/demo-1-1-any.pkg.tar.zst",
+        allocator,
+        .limited(1024),
+    );
+    defer allocator.free(contents);
+    try std.testing.expectEqualStrings("archive bytes", contents);
+}
+
+test "failed or cancelled isolated roots remove their complete operation directory" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.createDirPath(io, "operation/root/build/artifacts");
+    const operation_path = try temporary.dir.realPathFileAlloc(io, "operation", allocator);
+    const root_path = try temporary.dir.realPathFileAlloc(io, "operation/root", allocator);
+    const source_path = try std.fs.path.join(allocator, &.{ root_path, "build/source" });
+    const artifact_path = try temporary.dir.realPathFileAlloc(io, "operation/root/build/artifacts", allocator);
+    var root: Root = .{
+        .allocator = allocator,
+        .io = io,
+        .operation_path = operation_path,
+        .root_path = root_path,
+        .source_path = source_path,
+        .artifact_path = artifact_path,
+        .succeeded = false,
+    };
+    root.deinit();
+    try std.testing.expectError(
+        error.FileNotFound,
+        temporary.dir.access(io, "operation", .{}),
+    );
 }

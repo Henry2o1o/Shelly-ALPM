@@ -3,9 +3,15 @@
 `shelly build --isolated` executes the native Shelly package builder in a
 fresh, operation-scoped Arch root through `systemd-nspawn`.
 
+The stable JSON schemas, capability probe, and exit behavior for unattended
+callers are defined by the [Remora automation contract](remora-automation.md).
+
 The elevated process is a coordinator only. It reviews the host PKGBUILD and
 local inputs, materializes only those byte-exact reviewed inputs in the guest,
-provisions the guest, and starts nspawn. PKGBUILD lifecycle functions run as
+provisions the guest with Shelly's libalpm-based `shellystrap` helper, and
+starts nspawn. The helper runs in a short-lived private mount/PID namespace,
+copies the host pacman trust database into the operation root, and keeps its
+database, cache, and log under that root. PKGBUILD lifecycle functions run as
 the fixed unprivileged `shelly-build` guest account. Private UID mapping is
 required, and the command fails closed when systemd cannot provide it.
 
@@ -23,10 +29,18 @@ the operation boundary, and is removed after success, failure, or
 cancellation. Artifacts are copied out explicitly and returned to the user who
 authorized elevation. Existing artifacts are rejected with `--no-overwrite`.
 
+SIGINT and SIGTERM are handled gracefully across the initial privilege
+elevation boundary. Sending either signal to the original, unprivileged Shelly
+process forwards cancellation to the elevator and elevated coordinator, waits
+for the active child tree to stop, and then lets the coordinator unwind its
+normal cleanup. If a child does not stop, Shelly escalates to SIGTERM and then
+SIGKILL. A cancelled JSON build still emits exactly one result document and
+exits with status 130.
+
 Requirements:
 
 - `systemd-nspawn` (provided by Arch's `systemd` package)
-- `pacstrap` (provided by `arch-install-scripts`) for fresh-root provisioning
+- `unshare` (provided by Arch's `util-linux` package) for private provisioning
 - an invoking-user-preserving elevator such as sudo, doas, run0, or pkexec
 
 Current limitations are deliberately fail-closed:
@@ -62,4 +76,21 @@ Run the root-required smoke test from a normal user session with:
 
 ```sh
 Shelly.Cli.Zig/scripts/test-isolated-build.sh
+```
+
+Cancellation across the elevation boundary has a rootless integration fixture
+that uses a deterministic fake elevator:
+
+```sh
+Shelly.Cli.Zig/scripts/test-elevation-cancellation.sh
+```
+
+The full fixture requires a working invoking-user-preserving elevator and the
+same privileges as a real isolated build. It sends SIGINT and SIGTERM only to
+the original Shelly process and verifies that nspawn descendants and the
+operation root are gone. When sudo is selected, the fixture authenticates once
+in the foreground before starting Shelly as the background process under test:
+
+```sh
+Shelly.Cli.Zig/scripts/test-isolated-cancellation.sh
 ```

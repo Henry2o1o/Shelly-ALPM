@@ -19,6 +19,7 @@ pub const Action = enum {
     run,
     keyring,
     build,
+    resolve,
 
     pub fn name(self: Action) []const u8 {
         return switch (self) {
@@ -47,6 +48,7 @@ pub const Action = enum {
             .run => 'X',
             .keyring => 'K',
             .build => 'A',
+            .resolve => 'Q',
         };
     }
 
@@ -70,6 +72,7 @@ pub const Action = enum {
             .config => "Read and modify Shelly configuration.",
             .run => "Launch or stop a Flatpak or AppImage application.",
             .build => "Builds a PKGBUILD into an installable package",
+            .resolve => "Resolve exact package names to source package bases without changing package state.",
         };
     }
 
@@ -85,7 +88,7 @@ pub const Action = enum {
     }
 
     pub fn bareCodeMeansHelp(self: Action) bool {
-        return self == .keyring or self == .build;
+        return self == .keyring or self == .build or self == .resolve;
     }
 };
 

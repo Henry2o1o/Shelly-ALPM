@@ -3262,6 +3262,19 @@ test "Manager.init applies configured libalpm options and callback contexts" {
     var usage: c_int = 0;
     try testing.expectEqual(@as(c_int, 0), rawLibalpm.alpm_db_get_usage(database.ptr, &usage));
     try testing.expectEqual(rawLibalpm.ALPM_DB_USAGE_SYNC | rawLibalpm.ALPM_DB_USAGE_SEARCH, usage);
+
+    mgr.disable_transaction_hooks();
+    try testing.expect(!rawDirectoryListContains(rawLibalpm.alpm_option_get_hookdirs(mgr.handle), hook_path));
+    try testing.expect(rawDirectoryListContains(
+        rawLibalpm.alpm_option_get_hookdirs(mgr.handle),
+        "/nonexistent/shelly-no-hooks",
+    ));
+    try mgr.refresh();
+    try testing.expect(!rawDirectoryListContains(rawLibalpm.alpm_option_get_hookdirs(mgr.handle), hook_path));
+    try testing.expect(rawDirectoryListContains(
+        rawLibalpm.alpm_option_get_hookdirs(mgr.handle),
+        "/nonexistent/shelly-no-hooks",
+    ));
 }
 
 test "get_foreign_packages hides ignored packages until hidden packages are enabled" {

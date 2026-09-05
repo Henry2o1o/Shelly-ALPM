@@ -1307,6 +1307,9 @@ test "PackageBuilder requires supplemental review for a dynamically discovered l
 
     try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
     try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "package-ran", .{}));
+    fixture.builder.options.review_digest_is_automation = true;
+    try testing.expectError(error.ReviewedPkgbuildChanged, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "package-ran", .{}));
 }
 
 test "PackageBuilder rejects a legacy unwritable package tree" {
@@ -2664,6 +2667,64 @@ test "PackageBuilder detects source archives by content including zip and tar zs
     try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/from-zstd.txt", .{});
 }
 
+test "PackageBuilder extracts an extensionless source over its matching archive root" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('Fork-Awesome-1.2.0')
+        \\sha256sums=('SKIP')
+        \\package() {
+        \\  test -d "$srcdir/Fork-Awesome-1.2.0"
+        \\  install -Dm644 "$srcdir/Fork-Awesome-1.2.0/fonts/font.woff2" "$pkgdir/usr/share/demo/font.woff2"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "Fork-Awesome-1.2.0" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "Fork-Awesome-1.2.0", .kind = .directory, .permissions = 0o755 },
+        .{ .path = "Fork-Awesome-1.2.0/fonts/font.woff2", .contents = "font\n" },
+    });
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/Fork-Awesome-1.2.0/fonts/font.woff2", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/usr/share/demo/font.woff2", .{});
+}
+
+test "PackageBuilder rejects an archive root colliding with another staged source" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\source=('victim.txt' 'collision')
+        \\sha256sums=('SKIP' 'SKIP')
+        \\package() { mkdir -p "$pkgdir"; }
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "victim.txt", .data = "victim\n" });
+    const archive_path = try std.fs.path.join(allocator, &.{ fixture.build_dir, "collision" });
+    defer allocator.free(archive_path);
+    try archive.writeFixture(allocator, archive_path, .gzip, &.{
+        .{ .path = "victim.txt", .contents = "archive overwrite\n" },
+    });
+    fixture.builder.options.sources_prepared = false;
+    try fixture.temporary.dir.deleteTree(io, "src");
+
+    try testing.expectError(error.BuildFailed, fixture.builder.BuildPackage());
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
+    try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, ".src.shelly-staging", .{}));
+}
+
 test "PackageBuilder preserves source archive modification timestamps" {
     const allocator = testing.allocator;
     const io = testing.io;
@@ -3910,6 +3971,30 @@ test "PackageBuilder cleans work directories only after successful configured bu
     try std.Io.Dir.cwd().access(io, artifacts[0].path, .{});
     try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "src", .{}));
     try testing.expectError(error.FileNotFound, fixture.temporary.dir.access(io, "pkg", .{}));
+}
+
+test "PackageBuilder keeps work directories after successful retained builds" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+    var fixture = try Fixture.create(allocator,
+        \\pkgname=demo
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  mkdir -p "$pkgdir"
+        \\  echo payload > "$pkgdir/file"
+        \\}
+    , null, null);
+    defer fixture.destroy();
+    try fixture.temporary.dir.createDirPath(io, "src");
+    try fixture.temporary.dir.writeFile(io, .{ .sub_path = "src/source", .data = "source" });
+    fixture.builder.options.clean_after_success = false;
+
+    const artifacts = try fixture.builder.BuildPackage();
+    defer builder_mod.deinitArtifacts(allocator, artifacts);
+    try fixture.temporary.dir.access(io, "src/source", .{});
+    try fixture.temporary.dir.access(io, "pkg/demo/file", .{});
 }
 
 test "PackageBuilder rolls back completed split artifacts when a later member fails" {

@@ -168,7 +168,32 @@ pub const InitOptions = struct {
     use_root: bool = false,
     temp_root_path: ?[]const u8 = null,
     operation_context: ?*operation_api.OperationContext = null,
+    /// Explicit libalpm paths used when provisioning a new root. These are
+    /// applied after parsing pacman.conf so repository and signature policy is
+    /// retained while all mutable transaction state stays under the target.
+    root_directory: ?[]const u8 = null,
+    database_path: ?[]const u8 = null,
+    cache_directory: ?[]const u8 = null,
+    log_file: ?[]const u8 = null,
+    gpg_directory: ?[]const u8 = null,
 };
+
+fn applyInitPathOverrides(
+    config: *configuration.Configuration.Config,
+    options: InitOptions,
+) std.mem.Allocator.Error!void {
+    const allocator = config.arena.allocator();
+    if (options.root_directory) |value|
+        config.root_directory = try allocator.dupeSentinel(u8, value, 0);
+    if (options.database_path) |value|
+        config.database_path = try allocator.dupeSentinel(u8, value, 0);
+    if (options.cache_directory) |value|
+        config.cache_directory = try allocator.dupeSentinel(u8, value, 0);
+    if (options.log_file) |value|
+        config.log_file = try allocator.dupeSentinel(u8, value, 0);
+    if (options.gpg_directory) |value|
+        config.gpg_directory = try allocator.dupeSentinel(u8, value, 0);
+}
 
 pub const Manager = struct {
     handle: libalpm.Handle = null,
@@ -249,6 +274,7 @@ pub const Manager = struct {
         };
         errdefer self.config.deinitialize();
         errdefer self.sync_dbs.deinit(self.allocator);
+        applyInitPathOverrides(&self.config, options) catch return InitError.InitFailed;
         if (os_tool.prettyName(self.allocator, self.io())) |pretty_name| {
             defer self.allocator.free(pretty_name);
             if (std.ascii.eqlIgnoreCase("cachyos", pretty_name)) self.detected_cachyos = true;
@@ -1544,8 +1570,8 @@ pub const Manager = struct {
     /// refreshes that re-initialize libalpm and re-apply the configuration.
     /// Hook directories are replaced with a nonexistent path because
     /// clearing the list falls back to libalpm's compiled-in default
-    /// directory. Intended for hermetic tests that commit transactions
-    /// against fixture roots and must not execute host system hooks.
+    /// directory. Intended for hermetic tests and initial root provisioning,
+    /// which must not execute host system hooks in a foreign or empty root.
     pub fn disable_transaction_hooks(self: *Manager) void {
         self.hooks_disabled = true;
         if (self.handle) |handle| {
@@ -5385,4 +5411,25 @@ fn choiceResponder(data: ?*anyopaque, args: events.QuestionArgs) void {
     _ = args;
     const ctx: *ChoiceResponder = @ptrCast(@alignCast(data));
     ctx.disp.respond(ctx.io, .{ .choice = ctx.choice });
+}
+
+test "ALPM init path overrides replace parsed host paths for target provisioning" {
+    const arena = try testing.allocator.create(std.heap.ArenaAllocator);
+    arena.* = .init(testing.allocator);
+    var config = try configuration.Configuration.Config.initialize_with_defaults(arena);
+    defer config.deinitialize();
+
+    try applyInitPathOverrides(&config, .{
+        .root_directory = "/target",
+        .database_path = "/target/var/lib/pacman",
+        .cache_directory = "/target/var/cache/pacman/pkg",
+        .log_file = "/target/var/log/pacman.log",
+        .gpg_directory = "/target/etc/pacman.d/gnupg",
+    });
+
+    try testing.expectEqualStrings("/target", config.root_directory);
+    try testing.expectEqualStrings("/target/var/lib/pacman", config.database_path);
+    try testing.expectEqualStrings("/target/var/cache/pacman/pkg", config.cache_directory);
+    try testing.expectEqualStrings("/target/var/log/pacman.log", config.log_file);
+    try testing.expectEqualStrings("/target/etc/pacman.d/gnupg", config.gpg_directory);
 }
