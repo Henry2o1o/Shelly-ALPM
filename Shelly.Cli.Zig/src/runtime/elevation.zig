@@ -222,6 +222,38 @@ fn processExists(pid: std.posix.pid_t) bool {
     return true;
 }
 
+/// `kill(pid, 0)` also succeeds for a zombie. That is useful to the process
+/// supervisor while a direct child is awaiting `wait`, but cancellation tests
+/// need to distinguish an executing descendant from an already-dead orphan
+/// that the container's PID 1 has not reaped yet.
+fn processIsRunning(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    pid: std.posix.pid_t,
+) bool {
+    if (!processExists(pid)) return false;
+    if (builtin.os.tag != .linux) return true;
+    const path = std.fmt.allocPrint(allocator, "/proc/{d}/stat", .{pid}) catch return true;
+    defer allocator.free(path);
+    const stat = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        path,
+        allocator,
+        .limited(4096),
+    ) catch return processExists(pid);
+    defer allocator.free(stat);
+    return processStatIsRunning(stat);
+}
+
+fn processStatIsRunning(stat: []const u8) bool {
+    // Field two is parenthesized and may itself contain spaces or `)`, so use
+    // the final delimiter before field three (the one-byte process state).
+    const command_end = std.mem.lastIndexOf(u8, stat, ") ") orelse return true;
+    const state_index = command_end + 2;
+    if (state_index >= stat.len) return true;
+    return stat[state_index] != 'Z' and stat[state_index] != 'X';
+}
+
 /// Runs the current executable as the user who invoked sudo/doas/pkexec/run0. This
 /// keeps per-user package stores (notably Flatpak) attached to the calling
 /// user when an aggregate command is already running as root. The child also
@@ -742,8 +774,11 @@ fn expectCancellableProcessTreeStops(
     var pids = std.mem.tokenizeAny(u8, pid_contents, " \t\r\n");
     const leader = try std.fmt.parseInt(std.posix.pid_t, pids.next() orelse return error.InvalidPid, 10);
     const descendant = try std.fmt.parseInt(std.posix.pid_t, pids.next() orelse return error.InvalidPid, 10);
+    // The direct child must have been waited and fully reaped. A force-killed
+    // grandchild can briefly remain as a zombie owned by PID 1 in containers;
+    // it is dead and cannot retain an nspawn root or perform work.
     try std.testing.expect(!processExists(leader));
-    try std.testing.expect(!processExists(descendant));
+    try std.testing.expect(!processIsRunning(allocator, io, descendant));
     if (!ignore_signals)
         try temporary.dir.access(io, "cleaned", .{});
 }
@@ -760,8 +795,14 @@ test "interactive elevation preserves its process group and forwards cancellatio
     try expectCancellableProcessTreeStops(.TERM, false, false);
 }
 
-test "cancellable elevation forcibly reaps a process group that ignores termination" {
+test "cancellable elevation forcibly stops a process group that ignores termination" {
     try expectCancellableProcessTreeStops(.TERM, true, true);
+}
+
+test "process stat distinguishes running and unreaped dead descendants" {
+    try std.testing.expect(processStatIsRunning("42 (worker with ) name) S 1 2 3"));
+    try std.testing.expect(!processStatIsRunning("42 (worker with ) name) Z 1 2 3"));
+    try std.testing.expect(!processStatIsRunning("42 (worker) X 1 2 3"));
 }
 
 test "elevated arguments preserve the canonical invocation" {
