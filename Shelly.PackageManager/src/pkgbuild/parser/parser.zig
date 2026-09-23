@@ -2352,6 +2352,28 @@ test "parser_content: execution step expansion does not mistake here-strings for
     try std.testing.expectEqualStrings("echo \"hello\"", steps[1].expanded_body);
 }
 
+test "parser_content: selected package here-string does not fail install resolution" {
+    const parser = PkgbuildParser{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .selected_package_name = "filesystem",
+    };
+    const content =
+        \\pkgname=filesystem
+        \\pkgver=1
+        \\pkgrel=1
+        \\arch=('any')
+        \\package() {
+        \\  cat <<< 'filesystem' > "$pkgdir/release"
+        \\}
+    ;
+    var info = try parse_test_pkgbuild(parser, content, null);
+    defer info.deinit(std.testing.allocator);
+    try std.testing.expect(info.install_file == null);
+    try std.testing.expect(info.changelog_file == null);
+    try std.testing.expect(std.mem.indexOf(u8, info.execution.?.steps[0].body, "<<< 'filesystem'") != null);
+}
+
 test "parser_content: architecture sources and b2 sums follow makepkg ordering" {
     const parser = PkgbuildParser{
         .allocator = std.testing.allocator,

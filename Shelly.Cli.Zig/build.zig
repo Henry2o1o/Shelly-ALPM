@@ -98,6 +98,7 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "makesrcinfo emits clean stdout and never runs lifecycle functions",
             "review-only accepts Heroic array trimming",
+            "review-only accepts filesystem here-strings",
             "sync deps",
             "isolated source key",
             "isolated source public keys",
