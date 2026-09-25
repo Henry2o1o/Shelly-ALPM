@@ -34,6 +34,14 @@
             </child>
           </object>
         </child>
+        <child>
+          <object class="GtkDropDown" id="search_by_selection">
+            <property name="tooltip-text" translatable="yes">Search By</property>
+            <property name="expression">
+              <lookup name='string' type="GtkStringObject"></lookup>
+            </property>
+          </object>
+        </child>
          <child>
             <object class="GtkCheckButton" id="installed_toggle">
                 <property name="label" translatable="yes">Installed Only</property>

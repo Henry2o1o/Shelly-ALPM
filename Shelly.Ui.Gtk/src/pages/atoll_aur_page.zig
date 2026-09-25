@@ -55,6 +55,7 @@ pub const AtollAurPage = extern struct {
         prev_page_button: *gtk.Button,
         next_page_button: *gtk.Button,
         page_label: *gtk.Label,
+        search_by_selection: *gtk.DropDown,
         show_detail_pane: bool,
         arena: ?*std.heap.ArenaAllocator,
         generation: u64,
@@ -63,6 +64,7 @@ pub const AtollAurPage = extern struct {
         applying_config: bool,
         installed_mode: bool,
         mode: Mode,
+        search_by: AtollApiService.By,
         current_page: u32,
         total_pages: u32,
         last_query: [256]u8,
@@ -75,6 +77,13 @@ pub const AtollAurPage = extern struct {
 
     const index_sort_by = AtollApiService.SortBy.votes;
     const index_order = AtollApiService.Order.desc;
+
+    const search_by_items = [_]struct { by: AtollApiService.By, label: [:0]const u8 }{
+        .{ .by = .relevance, .label = "Best Match" },
+        .{ .by = .name, .label = "Name" },
+        .{ .by = .provides, .label = "Provides" },
+        .{ .by = .words, .label = "Words" },
+    };
 
     const LoadResult = struct {
         page: *Self,
@@ -117,6 +126,7 @@ pub const AtollAurPage = extern struct {
         p.generation = 0;
         p.installed_mode = false;
         p.mode = .browse;
+        p.search_by = .relevance;
         p.current_page = 1;
         p.total_pages = 0;
         p.last_query_len = 0;
@@ -149,6 +159,15 @@ pub const AtollAurPage = extern struct {
         _ = gtk.ColumnView.signals.activate.connect(p.package_grid, *Self, &on_row_activated, self, .{});
         _ = gobject.Object.signals.notify.connect(p.selection.as(gobject.Object), *Self, &on_selection_changed, self, .{ .detail = "selected" });
         _ = gtk.CheckButton.signals.toggled.connect(p.run_checks_check, *Self, &on_run_checks_toggled, self, .{});
+
+        const by_list = gtk.StringList.new(null);
+        for (search_by_items) |item| {
+            gtk.StringList.append(by_list, translations._(item.label));
+        }
+        gtk.DropDown.setModel(p.search_by_selection, by_list.as(gio.ListModel));
+        by_list.as(gobject.Object).unref();
+        gtk.DropDown.setSelected(p.search_by_selection, 0);
+        _ = gobject.Object.signals.notify.connect(p.search_by_selection.as(gobject.Object), *Self, &on_search_by_notify, self, .{ .detail = "selected" });
 
         const detail = AurPackageDetail.new();
         detail.setLinkBase(AtollApiService.base_url ++ "/package/");
@@ -575,6 +594,7 @@ pub const AtollAurPage = extern struct {
     fn start_load(self: *Self, mode: Mode) void {
         const p = self.priv();
         p.mode = mode;
+        p.search_by = self.selectedBy();
         p.generation += 1;
         p.loading = true;
         gio.ListStore.removeAll(p.list_store);
@@ -633,7 +653,7 @@ pub const AtollAurPage = extern struct {
                     post_failure(page, arena_ptr, generation);
                     return;
                 };
-                const packages = atoll.search(query) catch |err| {
+                const packages = atoll.search(query, p.search_by) catch |err| {
                     std.debug.print("atoll_search failed: {t}\n", .{err});
                     post_failure(page, arena_ptr, generation);
                     return;
@@ -861,6 +881,18 @@ pub const AtollAurPage = extern struct {
         restore_current_view(self);
     }
 
+    fn on_search_by_notify(_: *gobject.Object, _: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        const p = self.priv();
+        if (p.mode != .search or p.last_query_len == 0) return;
+        self.start_load(.search);
+    }
+
+    fn selectedBy(self: *Self) AtollApiService.By {
+        const idx = gtk.DropDown.getSelected(self.priv().search_by_selection);
+        if (idx >= search_by_items.len) return .relevance;
+        return search_by_items[idx].by;
+    }
+
     fn on_install_clicked(self: *Self) callconv(.c) void {
         const p = self.priv();
         if (self.selection_count() == 0) return;
@@ -996,6 +1028,7 @@ pub const AtollAurPage = extern struct {
         .{ "prev_page_button", @offsetOf(Private, "prev_page_button") },
         .{ "next_page_button", @offsetOf(Private, "next_page_button") },
         .{ "page_label", @offsetOf(Private, "page_label") },
+        .{ "search_by_selection", @offsetOf(Private, "search_by_selection") },
     };
 
     const template_callbacks = .{

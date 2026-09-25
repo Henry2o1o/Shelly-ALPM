@@ -35,6 +35,22 @@ pub const AtollApiService = struct {
         }
     };
 
+    pub const By = enum {
+        relevance,
+        name,
+        provides,
+        words,
+
+        fn param(self: By) []const u8 {
+            return switch (self) {
+                .relevance => "Relevance",
+                .name => "Name",
+                .provides => "Provides",
+                .words => "Words",
+            };
+        }
+    };
+
     pub const IndexPage = struct {
         packages: []AurPackage,
         page: u32,
@@ -78,14 +94,14 @@ pub const AtollApiService = struct {
         return self.parseIndexPage(body);
     }
 
-    pub fn search(self: *AtollApiService, query: []const u8) ![]AurPackage {
+    pub fn search(self: *AtollApiService, query: []const u8, by: By) ![]AurPackage {
         const encoded = try self.percentEncode(query);
         defer self.allocator.free(encoded);
 
         const url = try std.fmt.allocPrint(
             self.allocator,
-            "{s}/v1/search?query={s}&by=Words",
-            .{ base_url, encoded },
+            "{s}/v1/search?query={s}&by={s}",
+            .{ base_url, encoded, by.param() },
         );
         defer self.allocator.free(url);
 
@@ -532,7 +548,7 @@ test "live: search finds a package by name" {
     var svc = makeService(&arena, event_loop.io());
     defer svc.deinit();
 
-    const packages = try svc.search("yay");
+    const packages = try svc.search("yay", .name);
 
     try testing.expect(packages.len > 0);
     try testing.expectEqualStrings("yay", packages[0].Name);
